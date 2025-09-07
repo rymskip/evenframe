@@ -218,11 +218,11 @@ fn field_type_to_effect_schema(
         field_type_to_effect_schema(inner, structs, current, rec, processed)
     };
     match field_type {
-        FieldType::String => "Schema.String".to_string(),
-        FieldType::Char => "Schema.String".to_string(),
+        FieldType::String => "Schema.NonEmptyString".to_string(),
+        FieldType::Char => "Schema.String.pipe(Schema.maxLength(1))".to_string(),
         FieldType::Bool => "Schema.Boolean".to_string(),
         FieldType::Unit => "Schema.Null".to_string(),
-        FieldType::Decimal => "Schema.Number".to_string(),
+        FieldType::Decimal => "Schema.NumberFromString".to_string(),
         FieldType::OrderedFloat(_) => "Schema.Number".to_string(),
         FieldType::F32 | FieldType::F64 => "Schema.Number".to_string(),
         FieldType::I8
@@ -307,8 +307,8 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
             "| Schema.DurationEncoded |readonly [seconds: number, nanos: number]".into()
         }
         FieldType::Unit => "null".into(),
-        FieldType::Decimal
-        | FieldType::OrderedFloat(_)
+        FieldType::Decimal => "string".into(),
+        FieldType::OrderedFloat(_)
         | FieldType::F32
         | FieldType::F64
         | FieldType::I8

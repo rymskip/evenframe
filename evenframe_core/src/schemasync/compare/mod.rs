@@ -941,8 +941,32 @@ impl Comparator {
                 let deep_changes =
                     Self::compare_object_types(field, &old_field.field_type, &new_field.field_type);
                 if !deep_changes.is_empty() {
-                    // If we have granular changes, use those instead
-                    table_changes.modified_fields.extend(deep_changes);
+                    // For object type changes, we need to regenerate the entire field definition
+                    // not just the individual sub-fields
+                    if matches!(&old_field.field_type, ObjectType::Object(_)) || 
+                       matches!(&new_field.field_type, ObjectType::Object(_)) {
+                        // TODO: Eventually implement fine-grained updates to objects by:
+                        // 1. Creating a copy of the existing object definition
+                        // 2. Removing the old field from the copy
+                        // 3. Preserving all existing data from unchanged fields
+                        // 4. Inserting new/modified fields with their updated definitions
+                        // 5. Replacing the old object with this new merged version
+                        // This would allow for more granular updates without full regeneration
+                        // and better preservation of existing data during schema changes.
+                        
+                        // For now, mark the entire field as changed so it gets regenerated
+                        table_changes.modified_fields.push(FieldChange {
+                            field_name: field.to_string(),
+                            old_type: old_field.field_type.to_string(),
+                            new_type: new_field.field_type.to_string(),
+                            change_type: ChangeType::Modified,
+                            required_changed: false,
+                            default_changed: false,
+                        });
+                    } else {
+                        // For non-object types, we can use granular changes
+                        table_changes.modified_fields.extend(deep_changes);
+                    }
                 } else {
                     // Otherwise fall back to regular comparison
                     if let Some(field_change) = Self::compare_fields(field, old_field, new_field) {
