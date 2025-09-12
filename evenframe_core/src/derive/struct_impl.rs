@@ -3,10 +3,10 @@ use crate::{
         attributes::{parse_format_attribute, parse_mock_data_attribute, parse_relation_attribute},
         deserialization_impl::generate_custom_deserialize,
         imports::generate_struct_imports,
-        type_parser::parse_data_type,
         validator_parser::parse_field_validators,
     },
     schemasync::{DefineConfig, EdgeConfig, PermissionsConfig},
+    types::FieldType,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -115,7 +115,8 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
 
             // Build the field type token.
             let ty = &field.ty;
-            let field_type = parse_data_type(ty);
+            trace!("Parsing data type: {}", quote! {#ty}.to_string());
+            let field_type = FieldType::parse_syn_ty(ty);
 
             // Parse any edge attribute.
             let edge_config = match EdgeConfig::parse(field) {
