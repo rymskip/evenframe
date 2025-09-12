@@ -360,7 +360,7 @@ impl<'a> FieldValueGenerator<'a> {
                 }
                 WorkItem::AssembleTuple { count } => {
                     let items: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
-                    value_stack.push(format!("({})", items.join(", ")));
+                    value_stack.push(format!("[{}]", items.join(", ")));
                 }
                 WorkItem::AssembleStruct { field_names } => {
                     let count = field_names.len();
