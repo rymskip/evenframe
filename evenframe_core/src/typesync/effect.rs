@@ -113,16 +113,31 @@ pub fn generate_effect_schema_string(
                 // ---- STRUCT -------------------------------------------------
                 // Generate the schema class for the struct.
                 out_classes.push_str(&format!(
-                    "export class {} extends Schema.Class<{}>(\"{}\")( {{\n",
+                    "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
                     name, name, name
                 ));
                 for (idx, f) in struct_config.fields.iter().enumerate() {
                     let schema = to_schema(&f.field_type, &name, &processed);
-                    let schema_with_validators = apply_validators_to_schema(schema, &f.validators);
+                    let schema_with_validators =
+                        apply_validators_to_schema(schema, &f.validators, &f.field_name);
+                    let field_name_camel = f.field_name.to_case(Case::Camel);
+                    let field_name_title = f.field_name.to_case(Case::Title);
+
+                    let is_optional = matches!(f.field_type, FieldType::Option(_));
+
+                    let final_schema = if !is_optional {
+                        format!(
+                            "Schema.propertySignature({}).annotations({{ missingMessage: () => `'{}' is required` }})",
+                            schema_with_validators, field_name_title
+                        )
+                    } else {
+                        schema_with_validators
+                    };
+
                     out_classes.push_str(&format!(
                         "  {}: {}{}",
-                        f.field_name.to_case(Case::Camel),
-                        schema_with_validators,
+                        field_name_camel,
+                        final_schema,
                         if idx + 1 == struct_config.fields.len() {
                             ""
                         } else {
@@ -218,7 +233,10 @@ fn field_type_to_effect_schema(
         field_type_to_effect_schema(inner, structs, current, rec, processed)
     };
     match field_type {
-        FieldType::String => "Schema.NonEmptyString".to_string(),
+        FieldType::String => {
+            "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
+                .to_string()
+        }
         FieldType::Char => "Schema.String.pipe(Schema.maxLength(1))".to_string(),
         FieldType::Bool => "Schema.Boolean".to_string(),
         FieldType::Unit => "Schema.Null".to_string(),
@@ -255,7 +273,13 @@ fn field_type_to_effect_schema(
                 .join(", ");
             format!("Schema.Struct({{ {} }})", inner)
         }
-        FieldType::RecordLink(i) => format!("Schema.Union(Schema.String, {})", field(i)),
+        FieldType::RecordLink(i) => format!(
+            "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
+                message: `Please enter a valid value`,
+                override: true,
+            }}), }})",
+            field(i)
+        ),
         FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
             format!(
                 "Schema.Record({{ key: {}, value: {} }})",
@@ -352,203 +376,263 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
 // ----- Validator Application Logic -----------------------------------------
 
 /// Applies a series of validators to a schema string by chaining `.pipe()` calls.
-fn apply_validators_to_schema(schema: String, validators: &[Validator]) -> String {
+fn apply_validators_to_schema(
+    schema: String,
+    validators: &[Validator],
+    field_name: &str,
+) -> String {
     if validators.is_empty() {
         return schema;
     }
 
     let mut result = schema;
+    let field_name_title = field_name.to_case(Case::Title);
 
     for validator in validators {
         result = match validator {
             // String validators
             Validator::StringValidator(sv) => match sv {
-                StringValidator::MinLength(len) => {
-                    format!("{}.pipe(Schema.minLength({}))", result, len)
-                }
-                StringValidator::MaxLength(len) => {
-                    format!("{}.pipe(Schema.maxLength({}))", result, len)
-                }
-                StringValidator::Length(len) => format!("{}.pipe(Schema.length({}))", result, len),
-                StringValidator::NonEmpty => format!("{}.pipe(Schema.nonEmpty())", result), // Corrected from nonEmptyString
-                StringValidator::StartsWith(prefix) => {
-                    format!("{}.pipe(Schema.startsWith(\"{}\"))", result, prefix)
-                }
-                StringValidator::EndsWith(suffix) => {
-                    format!("{}.pipe(Schema.endsWith(\"{}\"))", result, suffix)
-                }
-                StringValidator::Includes(substring) => {
-                    format!("{}.pipe(Schema.includes(\"{}\"))", result, substring)
-                }
-                StringValidator::Trimmed => format!("{}.pipe(Schema.trimmed)", result), // Corrected to be property access
-                StringValidator::Lowercased => format!("{}.pipe(Schema.toLowerCase)", result), // Corrected to be property access
-                StringValidator::Uppercased => format!("{}.pipe(Schema.toUpperCase)", result), // Corrected to be property access
-                StringValidator::Capitalized => format!("{}.pipe(Schema.capitalize)", result), // Corrected to be property access
-                StringValidator::Uncapitalized => format!("{}.pipe(Schema.uncapitalize)", result), // Corrected to be property access
-                StringValidator::RegexLiteral(format_variant) => format!(
-                    "{}.pipe(Schema.pattern(/{}/))",
-                    result,
-                    format_variant.to_owned().into_regex().as_str()
+                StringValidator::MinLength(len) => format!(
+                    "{}.pipe(Schema.minLength({}, {{ message: () => `{}` must be at least {} characters long` }}))",
+                    result, len, field_name_title, len
                 ),
-                _ => result, // Other validators may not have direct Effect Schema equivalents
+                StringValidator::MaxLength(len) => format!(
+                    "{}.pipe(Schema.maxLength({}, {{ message: () => `{}` must be at most {} characters long` }}))",
+                    result, len, field_name_title, len
+                ),
+                StringValidator::Length(len) => format!(
+                    "{}.pipe(Schema.length({}, {{ message: () => `{}` must be exactly {} characters long` }}))",
+                    result, len, field_name_title, len
+                ),
+                StringValidator::NonEmpty => format!(
+                    "{}.pipe(Schema.nonEmptyString({{ message: () => `{}` Please enter a value` }}))",
+                    result, field_name_title
+                ),
+                StringValidator::StartsWith(prefix) => format!(
+                    "{}.pipe(Schema.startsWith(\"{}\", {{ message: () => `{}` must start with \"{}\" }})",
+                    result, prefix, field_name_title, prefix
+                ),
+                StringValidator::EndsWith(suffix) => format!(
+                    "{}.pipe(Schema.endsWith(\"{}\", {{ message: () => `{}` must end with \"{}\" }})",
+                    result, suffix, field_name_title, suffix
+                ),
+                StringValidator::Includes(substring) => format!(
+                    "{}.pipe(Schema.includes(\"{}\", {{ message: () => `{}` must include \"{}\" }})",
+                    result, substring, field_name_title, substring
+                ),
+                StringValidator::Trimmed => format!("{}.pipe(Schema.trimmed)", result),
+                StringValidator::Lowercased => format!("{}.pipe(Schema.toLowerCase", result),
+                StringValidator::Uppercased => format!("{}.pipe(Schema.toUpperCase", result),
+                StringValidator::Capitalized => format!("{}.pipe(Schema.capitalize", result),
+                StringValidator::Uncapitalized => format!("{}.pipe(Schema.uncapitalize", result),
+                StringValidator::RegexLiteral(format_variant) => format!(
+                    "{}.pipe(Schema.pattern(/{}/, {{ message: () => `{}` has an invalid format` }}))",
+                    result,
+                    format_variant.to_owned().into_regex().as_str(),
+                    field_name_title
+                ),
+                _ => result,
             },
 
             // Number validators
             Validator::NumberValidator(nv) => match nv {
-                NumberValidator::GreaterThan(value) => {
-                    format!("{}.pipe(Schema.greaterThan({}))", result, value.0)
-                }
-                NumberValidator::GreaterThanOrEqualTo(value) => {
-                    format!("{}.pipe(Schema.greaterThanOrEqualTo({}))", result, value.0)
-                }
-                NumberValidator::LessThan(value) => {
-                    format!("{}.pipe(Schema.lessThan({}))", result, value.0)
-                }
-                NumberValidator::LessThanOrEqualTo(value) => {
-                    format!("{}.pipe(Schema.lessThanOrEqualTo({}))", result, value.0)
-                }
-                NumberValidator::Between(start, end) => {
-                    format!("{}.pipe(Schema.between({}, {}))", result, start.0, end.0)
-                }
-                NumberValidator::Int => format!("{}.pipe(Schema.int())", result),
-                NumberValidator::NonNaN => format!("{}.pipe(Schema.nonNaN())", result),
-                NumberValidator::Finite => format!("{}.pipe(Schema.finite())", result),
-                NumberValidator::Positive => format!("{}.pipe(Schema.positive())", result),
-                NumberValidator::NonNegative => format!("{}.pipe(Schema.nonNegative())", result),
-                NumberValidator::Negative => format!("{}.pipe(Schema.negative())", result),
-                NumberValidator::NonPositive => format!("{}.pipe(Schema.nonPositive())", result),
-                NumberValidator::MultipleOf(value) => {
-                    format!("{}.pipe(Schema.multipleOf({}))", result, value.0)
-                }
-                NumberValidator::Uint8 => result, // Schema.Uint8 should be used as base type instead
+                NumberValidator::GreaterThan(value) => format!(
+                    "{}.pipe(Schema.greaterThan({}, {{ message: () => `{}` must be greater than {}` }}))",
+                    result, value.0, field_name_title, value.0
+                ),
+                NumberValidator::GreaterThanOrEqualTo(value) => format!(
+                    "{}.pipe(Schema.greaterThanOrEqualTo({}, {{ message: () => `{}` must be greater than or equal to {}` }}))",
+                    result, value.0, field_name_title, value.0
+                ),
+                NumberValidator::LessThan(value) => format!(
+                    "{}.pipe(Schema.lessThan({}, {{ message: () => `{}` must be less than {}` }}))",
+                    result, value.0, field_name_title, value.0
+                ),
+                NumberValidator::LessThanOrEqualTo(value) => format!(
+                    "{}.pipe(Schema.lessThanOrEqualTo({}, {{ message: () => `{}` must be less than or equal to {}` }}))",
+                    result, value.0, field_name_title, value.0
+                ),
+                NumberValidator::Between(start, end) => format!(
+                    "{}.pipe(Schema.between({}, {}, {{ message: () => `{}` must be between {} and {}` }}))",
+                    result, start.0, end.0, field_name_title, start.0, end.0
+                ),
+                NumberValidator::Int => format!(
+                    "{}.pipe(Schema.int({{ message: () => `{}` must be an integer` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::NonNaN => format!(
+                    "{}.pipe(Schema.nonNaN({{ message: () => `{}` must not be NaN` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::Finite => format!(
+                    "{}.pipe(Schema.finite({{ message: () => `{}` must be a finite number` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::Positive => format!(
+                    "{}.pipe(Schema.positive({{ message: () => `{}` must be a positive number` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::NonNegative => format!(
+                    "{}.pipe(Schema.nonNegative({{ message: () => `{}` must be a non-negative number` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::Negative => format!(
+                    "{}.pipe(Schema.negative({{ message: () => `{}` must be a negative number` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::NonPositive => format!(
+                    "{}.pipe(Schema.nonPositive({{ message: () => `{}` must be a non-positive number` }}))",
+                    result, field_name_title
+                ),
+                NumberValidator::MultipleOf(value) => format!(
+                    "{}.pipe(Schema.multipleOf({}, {{ message: () => `{}` must be a multiple of {}` }}))",
+                    result, value.0, field_name_title, value.0
+                ),
+                NumberValidator::Uint8 => result,
             },
 
             // Array validators
             Validator::ArrayValidator(av) => match av {
-                ArrayValidator::MinItems(count) => {
-                    format!("{}.pipe(Schema.minItems({}))", result, count)
-                }
-                ArrayValidator::MaxItems(count) => {
-                    format!("{}.pipe(Schema.maxItems({}))", result, count)
-                }
-                ArrayValidator::ItemsCount(count) => {
-                    format!("{}.pipe(Schema.itemsCount({}))", result, count)
-                }
+                ArrayValidator::MinItems(count) => format!(
+                    "{}.pipe(Schema.minItems({}, {{ message: () => `{}` must contain at least {} items` }}))",
+                    result, count, field_name_title, count
+                ),
+                ArrayValidator::MaxItems(count) => format!(
+                    "{}.pipe(Schema.maxItems({}, {{ message: () => `{}` must contain at most {} items` }}))",
+                    result, count, field_name_title, count
+                ),
+                ArrayValidator::ItemsCount(count) => format!(
+                    "{}.pipe(Schema.itemsCount({}, {{ message: () => `{}` must contain exactly {} items` }}))",
+                    result, count, field_name_title, count
+                ),
             },
 
             // Date validators
             Validator::DateValidator(dv) => match dv {
-                DateValidator::ValidDate => format!("{}.pipe(Schema.ValidDate)", result), // Assuming this exists
+                DateValidator::ValidDate => format!("{}.pipe(Schema.ValidDate)", result),
                 DateValidator::GreaterThanDate(date) => format!(
-                    "{}.pipe(Schema.greaterThan(new Date(\"{}\")))",
-                    result, date
+                    "{}.pipe(Schema.greaterThan(new Date(\"{}\"), {{ message: () => `{}` must be after `{}` }}))",
+                    result, date, field_name_title, date
                 ),
                 DateValidator::GreaterThanOrEqualToDate(date) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualTo(new Date(\"{}\")))",
-                    result, date
+                    "{}.pipe(Schema.greaterThanOrEqualTo(new Date(\"{}\"), {{ message: () => `{}` must be on or after `{}` }}))",
+                    result, date, field_name_title, date
                 ),
-                DateValidator::LessThanDate(date) => {
-                    format!("{}.pipe(Schema.lessThan(new Date(\"{}\")))", result, date)
-                }
+                DateValidator::LessThanDate(date) => format!(
+                    "{}.pipe(Schema.lessThan(new Date(\"{}\"), {{ message: () => `{}` must be before `{}` }}))",
+                    result, date, field_name_title, date
+                ),
                 DateValidator::LessThanOrEqualToDate(date) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualTo(new Date(\"{}\")))",
-                    result, date
+                    "{}.pipe(Schema.lessThanOrEqualTo(new Date(\"{}\"), {{ message: () => `{}` must be on or before `{}` }}))",
+                    result, date, field_name_title, date
                 ),
                 DateValidator::BetweenDate(start, end) => format!(
-                    "{}.pipe(Schema.between(new Date(\"{}\"), new Date(\"{}\")))",
-                    result, start, end
+                    "{}.pipe(Schema.between(new Date(\"{}\"), new Date(\"{}\"), {{ message: () => `{}` must be between `{}` and `{}` }}))",
+                    result, start, end, field_name_title, start, end
                 ),
             },
 
             // BigInt validators
             Validator::BigIntValidator(biv) => match biv {
-                BigIntValidator::GreaterThanBigInt(value) => {
-                    format!("{}.pipe(Schema.greaterThanBigInt({}n))", result, value)
-                }
-                BigIntValidator::GreaterThanOrEqualToBigInt(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToBigInt({}n))",
-                    result, value
+                BigIntValidator::GreaterThanBigInt(value) => format!(
+                    "{}.pipe(Schema.greaterThanBigInt({}n, {{ message: () => `{}` must be greater than {}` }}))",
+                    result, value, field_name_title, value
                 ),
-                BigIntValidator::LessThanBigInt(value) => {
-                    format!("{}.pipe(Schema.lessThanBigInt({}n))", result, value)
-                }
+                BigIntValidator::GreaterThanOrEqualToBigInt(value) => format!(
+                    "{}.pipe(Schema.greaterThanOrEqualToBigInt({}n, {{ message: () => `{}` must be greater than or equal to {}` }}))",
+                    result, value, field_name_title, value
+                ),
+                BigIntValidator::LessThanBigInt(value) => format!(
+                    "{}.pipe(Schema.lessThanBigInt({}n, {{ message: () => `{}` must be less than {}` }}))",
+                    result, value, field_name_title, value
+                ),
                 BigIntValidator::LessThanOrEqualToBigInt(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToBigInt({}n))",
-                    result, value
+                    "{}.pipe(Schema.lessThanOrEqualToBigInt({}n, {{ message: () => `{}` must be less than or equal to {}` }}))",
+                    result, value, field_name_title, value
                 ),
                 BigIntValidator::BetweenBigInt(start, end) => format!(
-                    "{}.pipe(Schema.betweenBigInt({}n, {}n))",
-                    result, start, end
+                    "{}.pipe(Schema.betweenBigInt({}n, {}n, {{ message: () => `{}` must be between {} and {}` }}))",
+                    result, start, end, field_name_title, start, end
                 ),
-                BigIntValidator::PositiveBigInt => {
-                    format!("{}.pipe(Schema.positiveBigInt())", result)
-                }
-                BigIntValidator::NonNegativeBigInt => {
-                    format!("{}.pipe(Schema.nonNegativeBigInt())", result)
-                }
-                BigIntValidator::NegativeBigInt => {
-                    format!("{}.pipe(Schema.negativeBigInt())", result)
-                }
-                BigIntValidator::NonPositiveBigInt => {
-                    format!("{}.pipe(Schema.nonPositiveBigInt())", result)
-                }
+                BigIntValidator::PositiveBigInt => format!(
+                    "{}.pipe(Schema.positiveBigInt({{ message: () => `{}` must be a positive BigInt` }}))",
+                    result, field_name_title
+                ),
+                BigIntValidator::NonNegativeBigInt => format!(
+                    "{}.pipe(Schema.nonNegativeBigInt({{ message: () => `{}` must be a non-negative BigInt` }}))",
+                    result, field_name_title
+                ),
+                BigIntValidator::NegativeBigInt => format!(
+                    "{}.pipe(Schema.negativeBigInt({{ message: () => `{}` must be a negative BigInt` }}))",
+                    result, field_name_title
+                ),
+                BigIntValidator::NonPositiveBigInt => format!(
+                    "{}.pipe(Schema.nonPositiveBigInt({{ message: () => `{}` must be a non-positive BigInt` }}))",
+                    result, field_name_title
+                ),
             },
 
             // BigDecimal validators
             Validator::BigDecimalValidator(bdv) => match bdv {
                 BigDecimalValidator::GreaterThanBigDecimal(value) => format!(
-                    "{}.pipe(Schema.greaterThanBigDecimal(BigDecimal.fromNumber({})))",
-                    result, value
+                    "{}.pipe(Schema.greaterThanBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be greater than {}` }}))",
+                    result, value, field_name_title, value
                 ),
                 BigDecimalValidator::GreaterThanOrEqualToBigDecimal(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToBigDecimal(BigDecimal.fromNumber({})))",
-                    result, value
+                    "{}.pipe(Schema.greaterThanOrEqualToBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be greater than or equal to {}` }}))",
+                    result, value, field_name_title, value
                 ),
                 BigDecimalValidator::LessThanBigDecimal(value) => format!(
-                    "{}.pipe(Schema.lessThanBigDecimal(BigDecimal.fromNumber({})))",
-                    result, value
+                    "{}.pipe(Schema.lessThanBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be less than {}` }}))",
+                    result, value, field_name_title, value
                 ),
                 BigDecimalValidator::LessThanOrEqualToBigDecimal(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToBigDecimal(BigDecimal.fromNumber({})))",
-                    result, value
+                    "{}.pipe(Schema.lessThanOrEqualToBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be less than or equal to {}` }}))",
+                    result, value, field_name_title, value
                 ),
                 BigDecimalValidator::BetweenBigDecimal(start, end) => format!(
-                    "{}.pipe(Schema.betweenBigDecimal(BigDecimal.fromNumber({}), BigDecimal.fromNumber({})))",
-                    result, start, end
+                    "{}.pipe(Schema.betweenBigDecimal(BigDecimal.fromNumber({}), BigDecimal.fromNumber({}), {{ message: () => `{}` must be between {} and {}` }}))",
+                    result, start, end, field_name_title, start, end
                 ),
-                BigDecimalValidator::PositiveBigDecimal => {
-                    format!("{}.pipe(Schema.positiveBigDecimal())", result)
-                }
-                BigDecimalValidator::NonNegativeBigDecimal => {
-                    format!("{}.pipe(Schema.nonNegativeBigDecimal())", result)
-                }
-                BigDecimalValidator::NegativeBigDecimal => {
-                    format!("{}.pipe(Schema.negativeBigDecimal())", result)
-                }
-                BigDecimalValidator::NonPositiveBigDecimal => {
-                    format!("{}.pipe(Schema.nonPositiveBigDecimal())", result)
-                }
+                BigDecimalValidator::PositiveBigDecimal => format!(
+                    "{}.pipe(Schema.positiveBigDecimal({{ message: () => `{}` must be a positive BigDecimal` }}))",
+                    result, field_name_title
+                ),
+                BigDecimalValidator::NonNegativeBigDecimal => format!(
+                    "{}.pipe(Schema.nonNegativeBigDecimal({{ message: () => `{}` must be a non-negative BigDecimal` }}))",
+                    result, field_name_title
+                ),
+                BigDecimalValidator::NegativeBigDecimal => format!(
+                    "{}.pipe(Schema.negativeBigDecimal({{ message: () => `{}` must be a negative BigDecimal` }}))",
+                    result, field_name_title
+                ),
+                BigDecimalValidator::NonPositiveBigDecimal => format!(
+                    "{}.pipe(Schema.nonPositiveBigDecimal({{ message: () => `{}` must be a non-positive BigDecimal` }}))",
+                    result, field_name_title
+                ),
             },
 
             // Duration validators
             Validator::DurationValidator(dv) => match dv {
-                DurationValidator::GreaterThanDuration(value) => {
-                    format!("{}.pipe(Schema.greaterThanDuration(\"{}\"))", result, value)
-                }
-                DurationValidator::GreaterThanOrEqualToDuration(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToDuration(\"{}\"))",
-                    result, value
+                DurationValidator::GreaterThanDuration(value) => format!(
+                    "{}.pipe(Schema.greaterThanDuration(\"{}\", {{ message: () => `{}` must be longer than `{}` }}))",
+                    result, value, field_name_title, value
                 ),
-                DurationValidator::LessThanDuration(value) => {
-                    format!("{}.pipe(Schema.lessThanDuration(\"{}\"))", result, value)
-                }
+                DurationValidator::GreaterThanOrEqualToDuration(value) => format!(
+                    "{}.pipe(Schema.greaterThanOrEqualToDuration(\"{}\", {{ message: () => `{}` must be at least `{}` long` }}))",
+                    result, value, field_name_title, value
+                ),
+                DurationValidator::LessThanDuration(value) => format!(
+                    "{}.pipe(Schema.lessThanDuration(\"{}\", {{ message: () => `{}` must be shorter than `{}` }}))",
+                    result, value, field_name_title, value
+                ),
                 DurationValidator::LessThanOrEqualToDuration(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToDuration(\"{}\"))",
-                    result, value
+                    "{}.pipe(Schema.lessThanOrEqualToDuration(\"{}\", {{ message: () => `{}` must be at most `{}` long` }}))",
+                    result, value, field_name_title, value
                 ),
                 DurationValidator::BetweenDuration(start, end) => format!(
-                    "{}.pipe(Schema.betweenDuration(\"{}\", \"{}\"))",
-                    result, start, end
+                    "{}.pipe(Schema.betweenDuration(\"{}\", \"{}\", {{ message: () => `{}` must be between `{}` and `{}` long` }}))",
+                    result, start, end, field_name_title, start, end
                 ),
             },
         };
