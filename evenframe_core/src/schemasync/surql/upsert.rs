@@ -1,5 +1,5 @@
 use crate::{
-    mockmake::{field_value::FieldValueGenerator, Mockmaker},
+    mockmake::{Mockmaker, field_value::FieldValueGenerator},
     schemasync::table::TableConfig,
 };
 use convert_case::{Case, Casing};
@@ -43,54 +43,49 @@ impl Mockmaker {
             // Then, process remaining fields that weren't coordinated
             for table_field in &table_config.struct_config.fields {
                 if table_field.edge_config.is_none()
-                    || (table_field.define_config.is_some()
-                        && !table_field.define_config.as_ref().unwrap().should_skip)
+                    && (table_field.define_config.is_some()
+                        && !table_field.define_config.as_ref().unwrap().should_skip
+                        // Skip readonly fields
+                        && table_field
+                            .define_config
+                            .as_ref()
+                            .unwrap()
+                            .readonly
+                            .is_none())
                 {
-                    // Skip readonly fields
-                    let should_skip = if let Some(ref define_config) = table_field.define_config {
-                        define_config.readonly.unwrap_or(false)
+                    let field_val = FieldValueGenerator::builder()
+                        .field(table_field)
+                        .id_index(&i)
+                        .mockmaker(self)
+                        .table_config(table_config)
+                        .build()
+                        .run();
+
+                    // Check if this field needs null preservation
+                    let needs_conditional =
+                        super::needs_null_preservation(table_field, self.tables.get(table_name));
+
+                    if needs_conditional {
+                        // Wrap in conditional to preserve NULL state
+                        field_assignments.push(format!(
+                            "{}: (IF {} != NULL THEN {} ELSE NULL END)",
+                            table_field.field_name, table_field.field_name, field_val
+                        ));
                     } else {
-                        false
-                    };
-                    
-                    if !should_skip {
-                        let field_val = FieldValueGenerator::builder()
-                            .field(table_field)
-                            .id_index(&i)
-                            .mockmaker(self)
-                            .table_config(table_config)
-                            .build()
-                            .run();
-
-                        // Check if this field needs null preservation
-                        let needs_conditional = super::needs_null_preservation(
-                            table_field,
-                            self.tables.get(table_name),
-                        );
-
-                        if needs_conditional {
-                            // Wrap in conditional to preserve NULL state
-                            field_assignments.push(format!(
-                                "{}: (IF {} != NULL THEN {} ELSE NULL END)",
-                                table_field.field_name, table_field.field_name, field_val
-                            ));
-                        } else {
-                            field_assignments
-                                .push(format!("{}: {field_val}", table_field.field_name));
-                        }
+                        field_assignments.push(format!("{}: {field_val}", table_field.field_name));
                     }
                 }
             }
 
             let fields_str = field_assignments.join(", ");
 
-            // Generate UPSERT statement with MERGE for each record
+            // Generate UPSERT statement with CONTENT for each record
             if table_config.relation.is_some() {
                 // For relation tables, we need special handling
-                output.push_str(&format!("UPSERT {record_id} MERGE {{ {fields_str} }};\n"));
+                output.push_str(&format!("UPSERT {record_id} CONTENT {{ {fields_str} }};\n"));
             } else {
-                // For regular tables, use UPSERT with MERGE
-                output.push_str(&format!("UPSERT {record_id} MERGE {{ {fields_str} }};\n"));
+                // For regular tables, use UPSERT with CONTENT
+                output.push_str(&format!("UPSERT {record_id} CONTENT {{ {fields_str} }};\n"));
             }
         }
 
