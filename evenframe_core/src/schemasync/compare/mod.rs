@@ -943,8 +943,9 @@ impl Comparator {
                 if !deep_changes.is_empty() {
                     // For object type changes, we need to regenerate the entire field definition
                     // not just the individual sub-fields
-                    if matches!(&old_field.field_type, ObjectType::Object(_)) || 
-                       matches!(&new_field.field_type, ObjectType::Object(_)) {
+                    if matches!(&old_field.field_type, ObjectType::Object(_))
+                        || matches!(&new_field.field_type, ObjectType::Object(_))
+                    {
                         // TODO: Eventually implement fine-grained updates to objects by:
                         // 1. Creating a copy of the existing object definition
                         // 2. Removing the old field from the copy
@@ -953,7 +954,7 @@ impl Comparator {
                         // 5. Replacing the old object with this new merged version
                         // This would allow for more granular updates without full regeneration
                         // and better preservation of existing data during schema changes.
-                        
+
                         // For now, mark the entire field as changed so it gets regenerated
                         table_changes.modified_fields.push(FieldChange {
                             field_name: field.to_string(),

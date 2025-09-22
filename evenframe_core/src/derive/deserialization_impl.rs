@@ -1,8 +1,8 @@
-use tracing::{debug, error, info, trace, warn};
 use crate::derive::imports::generate_deserialize_imports;
 use crate::derive::validator_parser::parse_field_validators_with_logic;
 use quote::quote;
-use syn::{spanned::Spanned, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, spanned::Spanned};
+use tracing::{debug, error, info, trace, warn};
 
 /// Converts snake_case to PascalCase for enum variant names
 /// Example: "my_field" -> "MyField"
@@ -24,7 +24,10 @@ fn to_pascal_case(s: &str) -> String {
 /// This is used when structs have validators that need to be applied during deserialization
 pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
-    info!("Generating custom deserialize implementation for struct: {}", struct_name);
+    info!(
+        "Generating custom deserialize implementation for struct: {}",
+        struct_name
+    );
 
     // Extract fields from the struct
     debug!("Extracting fields from struct definition");
@@ -35,7 +38,7 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
                 Fields::Named(fields) => {
                     debug!("Found {} named fields", fields.named.len());
                     &fields.named
-                },
+                }
                 Fields::Unnamed(_) => {
                     error!("Unsupported field type: tuple struct");
                     return syn::Error::new(
@@ -78,14 +81,17 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
     }
 
     // Generate field deserialization with validation
-    debug!("Generating field deserialization code for {} fields", fields.len());
+    debug!(
+        "Generating field deserialization code for {} fields",
+        fields.len()
+    );
     let field_deserializations = fields.iter().enumerate().map(|(field_index, field)| {
         trace!("Processing field {} of {}", field_index + 1, fields.len());
         let field_name = match field.ident.as_ref() {
             Some(ident) => {
                 trace!("Processing field: {}", ident);
                 ident
-            },
+            }
             None => {
                 error!("Named field missing identifier");
                 return syn::Error::new(
@@ -107,14 +113,21 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
             match parse_field_validators_with_logic(&field.attrs, &temp_var_name) {
                 Ok(tokens) => {
                     if !tokens.1.is_empty() {
-                        debug!("Found {} validation logic tokens for field: {}", tokens.1.len(), field_name);
+                        debug!(
+                            "Found {} validation logic tokens for field: {}",
+                            tokens.1.len(),
+                            field_name
+                        );
                     }
                     tokens
-                },
+                }
                 Err(err) => {
-                    error!("Failed to parse validators for field {}: {}", field_name, err);
+                    error!(
+                        "Failed to parse validators for field {}: {}",
+                        field_name, err
+                    );
                     return err.to_compile_error();
-                },
+                }
             };
 
         if !validation_logic_tokens.is_empty() {
@@ -149,9 +162,17 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
     let field_names: Vec<_> = fields.iter().filter_map(|f| f.ident.as_ref()).collect();
 
     // Validate that all fields have names (this should always be true after our earlier check)
-    debug!("Collected {} field names from {} fields", field_names.len(), fields.len());
+    debug!(
+        "Collected {} field names from {} fields",
+        field_names.len(),
+        fields.len()
+    );
     if field_names.len() != fields.len() {
-        error!("Some fields are missing identifiers: expected {}, got {}", fields.len(), field_names.len());
+        error!(
+            "Some fields are missing identifiers: expected {}, got {}",
+            fields.len(),
+            field_names.len()
+        );
         return syn::Error::new(
             input.span(),
             "Internal error: Some fields are missing identifiers after validation",
@@ -163,12 +184,18 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
         .map(|name| quote::format_ident!("{}", to_pascal_case(&name.to_string())))
         .collect();
 
-    debug!("Generated {} enum variants for field names", enum_variants.len());
-    
+    debug!(
+        "Generated {} enum variants for field names",
+        enum_variants.len()
+    );
+
     debug!("Generating deserialize imports");
     let imports = generate_deserialize_imports();
 
-    info!("Successfully generated custom deserialize implementation for struct: {}", struct_name);
+    info!(
+        "Successfully generated custom deserialize implementation for struct: {}",
+        struct_name
+    );
     quote! {
         const _: () = {
             #imports

@@ -1164,6 +1164,7 @@ dependencies = [
  "dotenv",
  "evenframe_core",
  "evenframe_derive",
+ "linkme",
  "regex",
  "syn 2.0.106",
  "tokio",
@@ -1187,6 +1188,8 @@ dependencies = [
  "dotenv",
  "futures",
  "heck",
+ "linkme",
+ "once_cell",
  "ordered-float 5.0.0",
  "petgraph 0.8.2",
  "proc-macro2",
@@ -2056,6 +2059,26 @@ dependencies = [
  "num-traits",
  "rand 0.8.5",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "linkme"
+version = "0.3.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1b1703c00b2a6a70738920544aa51652532cacddfec2e162d2e29eae01e665c"
+dependencies = [
+ "linkme-impl",
+]
+
+[[package]]
+name = "linkme-impl"
+version = "0.3.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d55ca5d5a14363da83bf3c33874b8feaa34653e760d5216d7ef9829c88001a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]

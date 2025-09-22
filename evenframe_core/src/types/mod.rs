@@ -5,6 +5,7 @@ use crate::{
     EvenframeError, Result, evenframe_log,
     format::Format,
     schemasync::{DefineConfig, EdgeConfig, TableConfig},
+    traits::EvenframePersistableStruct,
     validator::Validator,
     wrappers::EvenframeRecordId,
 };
@@ -21,41 +22,51 @@ pub struct TaggedUnion {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
-pub enum RecordLink<T> {
+pub enum RecordLink<T: EvenframePersistableStruct> {
     Id(EvenframeRecordId),
     Object(T),
 }
 
-impl<'de, T> Deserialize<'de> for RecordLink<T>
+impl<'de, T: EvenframePersistableStruct> Deserialize<'de> for RecordLink<T>
 where
     T: Deserialize<'de>,
 {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<RecordLink<T>, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        // Deserialize the input into a serde_json::Value so we can attempt multiple deserializations.
         let value = Value::deserialize(deserializer)?;
 
-        // Try to deserialize into EvenframeRecordId (the Id variant)
-        let id_attempt = EvenframeRecordId::deserialize(value.clone());
-        // Try to deserialize into T (the Object variant)
-        let obj_attempt = T::deserialize(value);
+        if value.is_string() {
+            // If it's a string, it can only be an Id
+            EvenframeRecordId::deserialize(value)
+                .map(RecordLink::Id)
+                .map_err(|e| {
+                    serde::de::Error::custom(format!(
+                        "Failed to deserialize RecordLink from string as Id: {}",
+                        e
+                    ))
+                })
+        } else if value.is_object() {
+            // If it's an object, it could be an Id or an Object
+            let id_attempt = EvenframeRecordId::deserialize(value.clone());
+            let obj_attempt = T::deserialize(value.clone());
 
-        match (id_attempt, obj_attempt) {
-            // If the Id variant works and the Object variant fails, choose Id.
-            (Ok(id), Err(_)) => Ok(RecordLink::Id(id)),
-            // If the Object variant works and the Id variant fails, choose Object.
-            (Err(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
-            // If both variants succeed, it's ambiguous.
-            (Ok(_), Ok(_)) => Err(serde::de::Error::custom(
-                "Ambiguous value: it matches both RecordLink::Id and RecordLink::Object",
-            )),
-            // If both attempts fail, combine their error messages.
-            (Err(err_id), Err(err_obj)) => Err(serde::de::Error::custom(format!(
-                "Failed to deserialize RecordLink. Tried Id variant: {}. Tried Object variant: {}.",
-                err_id, err_obj
-            ))),
+            match (id_attempt, obj_attempt) {
+                (Ok(id), Err(_)) => Ok(RecordLink::Id(id)),
+                (Err(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
+                (Ok(_), Ok(_)) => Err(serde::de::Error::custom(
+                    "Ambiguous object: it can be deserialized as both RecordLink::Id and RecordLink::Object",
+                )),
+                (Err(err_id), Err(err_obj)) => Err(serde::de::Error::custom(format!(
+                    "Failed to deserialize object as RecordLink: {:#?}. Tried Id variant: {}. Tried Object variant: {}.",
+                    value, err_id, err_obj
+                ))),
+            }
+        } else {
+            Err(serde::de::Error::custom(
+                "RecordLink must be a string or an object",
+            ))
         }
     }
 }
@@ -367,7 +378,7 @@ impl StructField {
                                 );
                             }
                             items.reverse();
-                            value_stack.push((format!("array<{}>", items.join(", ")), false, None));
+                            value_stack.push((format!("[{}]", items.join(", ")), false, None));
                         }
                         WorkItem::AssembleStruct { count, names } => {
                             let mut items = Vec::with_capacity(count);

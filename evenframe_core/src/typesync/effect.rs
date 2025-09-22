@@ -353,7 +353,7 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
         FieldType::Vec(inner) => format!("ReadonlyArray<{}>", enc(inner)),
         FieldType::Tuple(items) => {
             let elems = items.iter().map(enc).collect::<Vec<_>>().join(", ");
-            format!("[{}]", elems)
+            format!("readonly [{}]", elems)
         }
         FieldType::Struct(fs) => {
             let body = fs

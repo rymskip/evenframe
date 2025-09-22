@@ -8,7 +8,7 @@ pub fn generate_struct_trait_imports() -> proc_macro2::TokenStream {
         use evenframe::{
             prelude::*,
             traits::EvenframePersistableStruct,
-            types::{StructConfig, StructField},
+            types::{StructConfig, StructField, FieldType},
             validator::{StringValidator, Validator},
         };
     }
@@ -59,18 +59,29 @@ pub fn generate_deserialize_imports() -> proc_macro2::TokenStream {
     }
 }
 
+/// Generate registry imports for table registration
+pub fn generate_registry_imports() -> proc_macro2::TokenStream {
+    trace!("Generating registry imports");
+    quote! {
+        use evenframe::registry;
+        use evenframe::prelude::linkme;
+    }
+}
+
 /// Generate combined imports for struct implementations
 pub fn generate_struct_imports() -> proc_macro2::TokenStream {
     debug!("Generating combined struct imports");
     let trait_imports = generate_struct_trait_imports();
     let table_imports = generate_table_config_imports();
     let parsing_imports = generate_struct_parsing_imports();
+    let registry_imports = generate_registry_imports();
 
     debug!("Successfully generated combined struct imports");
     quote! {
         #trait_imports
         #table_imports
         #parsing_imports
+        #registry_imports
     }
 }
 

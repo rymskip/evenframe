@@ -331,7 +331,9 @@ impl<'a> Schemasync<'a> {
                     debug!("Defining new table: {}", table_name);
                     for stmt in define_stmt.split_inclusive(';') {
                         let trimmed = stmt.trim_start();
-                        if trimmed.starts_with("DEFINE TABLE") || trimmed.starts_with("DEFINE FIELD") {
+                        if trimmed.starts_with("DEFINE TABLE")
+                            || trimmed.starts_with("DEFINE FIELD")
+                        {
                             execute(table_name, stmt).await?;
                         }
                     }
