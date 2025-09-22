@@ -513,82 +513,129 @@ impl<'a> SchemaImporter<'a> {
         parts
     }
 
-    /// Parse a type string into an ObjectType
+    /// Parse a type string into an ObjectType using an iterative work stack
     fn parse_type_string(type_str: &str) -> ObjectType {
-        let trimmed = type_str.trim();
+        let mut work_stack: Vec<WorkItem> = Vec::new();
+        let mut value_stack: Vec<ObjectType> = Vec::new();
 
-        // Prevent stack overflow on malformed input
-        if trimmed.len() > 10000 {
+        #[derive(Clone)]
+        enum WorkItem {
+            Parse(String),
+            WrapArray,
+            BuildUnion { count: usize },
+        }
+
+        // Quick bound to avoid pathological inputs
+        let trimmed = type_str.trim();
+        if trimmed.len() > 100_000 {
             return ObjectType::Simple(trimmed.to_string());
         }
 
-        // Handle array types first (e.g., "array<string>")
-        if trimmed.starts_with("array<") && trimmed.ends_with('>') {
-            let inner = &trimmed[6..trimmed.len() - 1];
-            return ObjectType::Array(Box::new(Self::parse_type_string(inner)));
-        }
+        work_stack.push(WorkItem::Parse(trimmed.to_string()));
 
-        // Check if this is a single object (starts and ends with braces and has balanced braces)
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            // Check if the braces are balanced (i.e., this is a single object, not a union)
-            let mut brace_count = 0;
-            let mut found_union_outside_object = false;
-            let chars: Vec<char> = trimmed.chars().collect();
+        while let Some(item) = work_stack.pop() {
+            match item {
+                WorkItem::Parse(s) => {
+                    let t = s.trim();
 
-            for i in 0..chars.len() {
-                match chars[i] {
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    '|' if brace_count == 0
-                        && i > 0
-                        && i < chars.len() - 1
-                        && chars[i - 1] == ' '
-                        && chars[i + 1] == ' ' =>
-                    {
-                        found_union_outside_object = true;
-                        break;
+                    // Object literal not part of a union: { ... }
+                    if t.starts_with('{') && t.ends_with('}') {
+                        // Ensure the outer braces are a single object and not a union at top level
+                        let mut brace_count = 0;
+                        let mut union_at_top = false;
+                        let chars: Vec<char> = t.chars().collect();
+                        for i in 0..chars.len() {
+                            match chars[i] {
+                                '{' => brace_count += 1,
+                                '}' => brace_count -= 1,
+                                '|' if brace_count == 0
+                                    && i > 0
+                                    && i < chars.len() - 1
+                                    && chars[i - 1] == ' '
+                                    && chars[i + 1] == ' ' =>
+                                {
+                                    union_at_top = true;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if !union_at_top {
+                            let inner = &t[1..t.len() - 1];
+                            value_stack.push(Self::parse_object_fields(inner));
+                            continue;
+                        }
                     }
-                    _ => {}
-                }
-            }
 
-            if !found_union_outside_object {
-                // This is a single object, not part of a union
-                let inner = &trimmed[1..trimmed.len() - 1].trim();
-                return Self::parse_object_fields(inner);
+                    // array<...>
+                    if t.starts_with("array<") && t.ends_with('>') {
+                        // Find matching > for the first < after "array<"
+                        let inner = &t[6..t.len() - 1];
+                        work_stack.push(WorkItem::WrapArray);
+                        work_stack.push(WorkItem::Parse(inner.to_string()));
+                        continue;
+                    }
+
+                    // Top-level union: split into parts without recursion
+                    if t.contains(" | ") {
+                        let parts = Self::split_union_types(t);
+                        if parts.len() > 1 {
+                            work_stack.push(WorkItem::BuildUnion { count: parts.len() });
+                            // Parse in reverse so first part ends on top of value_stack
+                            for part in parts.into_iter().rev() {
+                                work_stack.push(WorkItem::Parse(part.to_string()));
+                            }
+                            continue;
+                        }
+                    }
+
+                    // Fallback: simple type
+                    value_stack.push(ObjectType::Simple(t.to_string()));
+                }
+                WorkItem::WrapArray => {
+                    if let Some(inner) = value_stack.pop() {
+                        value_stack.push(ObjectType::Array(Box::new(inner)));
+                    } else {
+                        value_stack.push(ObjectType::Simple("array<unknown>".to_string()));
+                    }
+                }
+                WorkItem::BuildUnion { count } => {
+                    // Pop 'count' values, reverse to restore original order
+                    let mut items = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        if let Some(v) = value_stack.pop() {
+                            items.push(v);
+                        }
+                    }
+                    items.reverse();
+
+                    // Nullable special-case
+                    if items.len() == 2
+                        && items
+                            .iter()
+                            .any(|t| matches!(t, ObjectType::Simple(s) if s == "null"))
+                    {
+                        if let Some(non_null) = items
+                            .into_iter()
+                            .find(|t| !matches!(t, ObjectType::Simple(s) if s == "null"))
+                        {
+                            value_stack.push(ObjectType::Nullable(Box::new(non_null)));
+                        } else {
+                            value_stack.push(ObjectType::Union(vec![
+                                ObjectType::Simple("null".to_string()),
+                                ObjectType::Simple("null".to_string()),
+                            ]));
+                        }
+                    } else {
+                        value_stack.push(ObjectType::Union(items));
+                    }
+                }
             }
         }
 
-        // Handle union types (e.g., "null | string" or "string | int")
-        // We need to be careful not to split on | inside objects or arrays
-        if trimmed.contains(" | ") {
-            let parts = Self::split_union_types(trimmed);
-            let types: Vec<ObjectType> = parts
-                .iter()
-                .map(|part| Self::parse_type_string(part))
-                .collect();
-
-            // Special case for nullable types
-            if types.len() == 2
-                && types
-                    .iter()
-                    .any(|t| matches!(t, ObjectType::Simple(s) if s == "null"))
-            {
-                if let Some(non_null_type) = types
-                    .iter()
-                    .find(|t| !matches!(t, ObjectType::Simple(s) if s == "null"))
-                {
-                    return ObjectType::Nullable(Box::new(non_null_type.clone()));
-                }
-                // If we can't find a non-null type, treat it as a union
-                return ObjectType::Union(types);
-            }
-
-            return ObjectType::Union(types);
-        }
-
-        // Everything else is a simple type
-        ObjectType::Simple(trimmed.to_string())
+        // Result
+        value_stack.pop().unwrap_or_else(|| ObjectType::Simple("unknown".to_string()))
     }
 
     /// Parse object field definitions

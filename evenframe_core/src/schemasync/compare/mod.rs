@@ -796,11 +796,17 @@ impl Comparator {
         // Find modified tables
         for table in old_tables.intersection(&new_tables) {
             tracing::trace!(table = %table, "Comparing table");
-            if let Some(table_changes) = Self::compare_tables(
-                table,
-                old.tables.get(table).unwrap(),
-                new.tables.get(table).unwrap(),
-            )? {
+            let (old_table, new_table) = match (old.tables.get(table), new.tables.get(table)) {
+                (Some(o), Some(n)) => (o, n),
+                _ => {
+                    let msg = format!(
+                        "Table '{table}' present in key set but missing in schema maps"
+                    );
+                    tracing::error!(table = %table, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+            if let Some(table_changes) = Self::compare_tables(table, old_table, new_table)? {
                 tracing::trace!(
                     table = %table,
                     new_fields = table_changes.new_fields.len(),
@@ -825,11 +831,17 @@ impl Comparator {
         }
 
         for edge in old_edges.intersection(&new_edges) {
-            if let Some(edge_changes) = Self::compare_tables(
-                edge,
-                old.edges.get(edge).unwrap(),
-                new.edges.get(edge).unwrap(),
-            )? {
+            let (old_edge, new_edge) = match (old.edges.get(edge), new.edges.get(edge)) {
+                (Some(o), Some(n)) => (o, n),
+                _ => {
+                    let msg = format!(
+                        "Edge '{edge}' present in key set but missing in schema maps"
+                    );
+                    tracing::error!(edge = %edge, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+            if let Some(edge_changes) = Self::compare_tables(edge, old_edge, new_edge)? {
                 changes.modified_tables.push(edge_changes);
             }
         }
@@ -852,16 +864,26 @@ impl Comparator {
 
         // Find modified accesses
         for access_name in old_access_names.intersection(&new_access_names) {
-            let old_access = old
-                .accesses
-                .iter()
-                .find(|a| &a.name == access_name)
-                .unwrap();
-            let new_access = new
-                .accesses
-                .iter()
-                .find(|a| &a.name == access_name)
-                .unwrap();
+            let old_access = match old.accesses.iter().find(|a| &a.name == access_name) {
+                Some(a) => a,
+                None => {
+                    let msg = format!(
+                        "Access '{access_name}' present in key set but missing in old schema list"
+                    );
+                    tracing::error!(access = %access_name, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+            let new_access = match new.accesses.iter().find(|a| &a.name == access_name) {
+                Some(a) => a,
+                None => {
+                    let msg = format!(
+                        "Access '{access_name}' present in key set but missing in new schema list"
+                    );
+                    tracing::error!(access = %access_name, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
 
             if let Some(access_change) = Self::compare_accesses(old_access, new_access) {
                 changes.modified_accesses.push(access_change);
@@ -922,58 +944,40 @@ impl Comparator {
 
         // Find modified fields
         for field in old_fields.intersection(&new_fields) {
-            let old_field = old_table.fields.get(field).unwrap_or_else(|| {
-                panic!(
-                    "Something went wrong getting the old field from old_table.fields: {:#?}",
-                    field
-                )
-            });
-            let new_field = new_table.fields.get(field).unwrap_or_else(|| {
-                panic!(
-                    "Something went wrong getting the new field from new_table.fields: {:#?}",
-                    field
-                )
-            });
-
-            // First check if the types are different for deep comparison
-            if old_field.field_type != new_field.field_type {
-                // For complex types, do deep comparison
-                let deep_changes =
-                    Self::compare_object_types(field, &old_field.field_type, &new_field.field_type);
-                if !deep_changes.is_empty() {
-                    // For object type changes, we need to regenerate the entire field definition
-                    // not just the individual sub-fields
-                    if matches!(&old_field.field_type, ObjectType::Object(_))
-                        || matches!(&new_field.field_type, ObjectType::Object(_))
-                    {
-                        // TODO: Eventually implement fine-grained updates to objects by:
-                        // 1. Creating a copy of the existing object definition
-                        // 2. Removing the old field from the copy
-                        // 3. Preserving all existing data from unchanged fields
-                        // 4. Inserting new/modified fields with their updated definitions
-                        // 5. Replacing the old object with this new merged version
-                        // This would allow for more granular updates without full regeneration
-                        // and better preservation of existing data during schema changes.
-
-                        // For now, mark the entire field as changed so it gets regenerated
-                        table_changes.modified_fields.push(FieldChange {
-                            field_name: field.to_string(),
-                            old_type: old_field.field_type.to_string(),
-                            new_type: new_field.field_type.to_string(),
-                            change_type: ChangeType::Modified,
-                            required_changed: false,
-                            default_changed: false,
-                        });
-                    } else {
-                        // For non-object types, we can use granular changes
-                        table_changes.modified_fields.extend(deep_changes);
-                    }
-                } else {
-                    // Otherwise fall back to regular comparison
-                    if let Some(field_change) = Self::compare_fields(field, old_field, new_field) {
-                        table_changes.modified_fields.push(field_change);
-                    }
+            let old_field = match old_table.fields.get(field) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "Field '{field}' present in old/new intersection but missing in old_table '{}'",
+                        table_name
+                    );
+                    tracing::error!(table = %table_name, field = %field, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
                 }
+            };
+            let new_field = match new_table.fields.get(field) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "Field '{field}' present in old/new intersection but missing in new_table '{}'",
+                        table_name
+                    );
+                    tracing::error!(table = %table_name, field = %field, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+
+            // If the field types differ, record a modification without deep recursion
+            if old_field.field_type != new_field.field_type {
+                // Mark entire field as modified; avoid recursive descent to prevent stack overflows
+                table_changes.modified_fields.push(FieldChange {
+                    field_name: field.to_string(),
+                    old_type: old_field.field_type.to_string(),
+                    new_type: new_field.field_type.to_string(),
+                    change_type: ChangeType::Modified,
+                    required_changed: false,
+                    default_changed: false,
+                });
             } else {
                 // Types are the same, check for other changes (required, default)
                 if let Some(field_change) = Self::compare_fields(field, old_field, new_field) {
@@ -1000,11 +1004,31 @@ impl Comparator {
 
         // Find modified wildcard fields
         for field in old_wildcard_fields.intersection(&new_wildcard_fields) {
-            if let Some(field_change) = Self::compare_fields(
-                &format!("{}[*]", field),
-                old_table.array_wildcard_fields.get(field).unwrap(),
-                new_table.array_wildcard_fields.get(field).unwrap(),
-            ) {
+            let old_wild = match old_table.array_wildcard_fields.get(field) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "Wildcard field '{field}[*]' present in intersection but missing in old_table '{}'",
+                        table_name
+                    );
+                    tracing::error!(table = %table_name, field = %field, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+            let new_wild = match new_table.array_wildcard_fields.get(field) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "Wildcard field '{field}[*]' present in intersection but missing in new_table '{}'",
+                        table_name
+                    );
+                    tracing::error!(table = %table_name, field = %field, "{}", msg);
+                    return Err(EvenframeError::comparison(msg));
+                }
+            };
+            if let Some(field_change) =
+                Self::compare_fields(&format!("{}[*]", field), old_wild, new_wild)
+            {
                 table_changes.modified_fields.push(field_change);
             }
         }
@@ -1318,14 +1342,30 @@ pub async fn compare_schemas(
     tracing::debug!("Parsing and comparing schema exports");
     let importer = SchemaImporter::new(db);
 
-    let schema_changes = Comparator::compare(
-        &importer
-            .parse_schema_from_export(remote_schema_string)
-            .expect("something went wrong parsing remote schema export"),
-        &importer
-            .parse_schema_from_export(new_schema_string)
-            .expect("something went wrong parsing new schema export"),
-    )?;
+    // Parse exports with error propagation instead of panicking
+    let remote_schema = importer
+        .parse_schema_from_export(remote_schema_string)
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                remote_len = remote_schema_string.len(),
+                "Failed parsing remote schema export"
+            );
+            e
+        })?;
+
+    let new_schema = importer
+        .parse_schema_from_export(new_schema_string)
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                new_len = new_schema_string.len(),
+                "Failed parsing new schema export"
+            );
+            e
+        })?;
+
+    let schema_changes = Comparator::compare(&remote_schema, &new_schema)?;
 
     evenframe_log!(format!("{:#?}", schema_changes), "changes.log");
     Ok(schema_changes)
