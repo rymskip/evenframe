@@ -238,6 +238,9 @@ impl FieldType {
                 "Vec" if type_args.len() == 1 => {
                     return FieldType::Vec(Box::new(Self::parse_syn_ty(type_args[0])));
                 }
+                "Box" if type_args.len() == 1 => {
+                    return Self::parse_syn_ty(type_args[0]);
+                }
                 "HashMap" if type_args.len() == 2 => {
                     return FieldType::HashMap(
                         Box::new(Self::parse_syn_ty(type_args[0])),
@@ -348,6 +351,7 @@ impl FieldType {
                                 let inner_type = Self::parse_type_str(inner);
                                 FieldType::Vec(Box::new(inner_type))
                             }
+                            "Box" => Self::parse_type_str(inner),
                             "DateTime" => FieldType::DateTime,
                             "EvenframeDuration" => FieldType::EvenframeDuration,
                             _ => FieldType::Other(clean_str),
