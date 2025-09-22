@@ -181,17 +181,62 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                             }
                             FieldType::RecordLink(inner_type) => {
-                                // RecordLink should ALWAYS reference a table and generate a record ID
+                                // RecordLink should ultimately reference a persistable table.
+                                // If the inner type is an enum (persistable struct union), choose a variant that maps to a table.
                                 match inner_type.as_ref() {
                                     FieldType::Other(type_name) => {
-                                        if let Some(table_config) = self
-                                            .mockmaker
-                                            .tables
-                                            .get(&type_name.to_case(Case::Snake))
-                                        {
-                                            // Generate a record ID for this table
+                                        // Helper: resolve a type name to a table key in self.mockmaker.tables
+                                        // Closure uses RNG; mark as mut so it implements FnMut
+                                        let mut resolve_table = |name: &str,
+                                                            tables: &std::collections::HashMap<String, crate::schemasync::table::TableConfig>,
+                                                            enums: &std::collections::HashMap<String, crate::types::TaggedUnion>,
+                                        | -> Option<String> {
+                                            // 1) Direct match: type name corresponds to a table
+                                            let snake = name.to_case(Case::Snake);
+                                            if tables.contains_key(&snake) {
+                                                return Some(snake);
+                                            }
+                                            // 2) Enum (persistable struct union): pick a variant that maps to a table
+                                            if let Some(tagged) = enums.get(name) {
+                                                // Collect candidate table names from variants
+                                                let mut candidates: Vec<String> = Vec::new();
+                                                for v in &tagged.variants {
+                                                    if let Some(data) = &v.data {
+                                                        match data {
+                                                            crate::types::VariantData::InlineStruct(enum_struct) => {
+                                                                let t = enum_struct.struct_name.to_case(Case::Snake);
+                                                                if tables.contains_key(&t) {
+                                                                    candidates.push(t);
+                                                                }
+                                                            }
+                                                            crate::types::VariantData::DataStructureRef(fty) => {
+                                                                if let crate::types::FieldType::Other(inner_name) = fty {
+                                                                    let t = inner_name.to_case(Case::Snake);
+                                                                    if tables.contains_key(&t) {
+                                                                        candidates.push(t);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if !candidates.is_empty() {
+                                                    // Choose a random candidate
+                                                    let idx = rng.random_range(0..candidates.len());
+                                                    return Some(candidates[idx].clone());
+                                                }
+                                            }
+                                            None
+                                        };
+
+                                        if let Some(table_key) = resolve_table(
+                                            type_name,
+                                            &self.mockmaker.tables,
+                                            &self.mockmaker.enums,
+                                        ) {
+                                            // Generate a record ID for the resolved table
                                             if let Some(possible_ids) =
-                                                self.mockmaker.id_map.get(&table_config.table_name)
+                                                self.mockmaker.id_map.get(&table_key)
                                             {
                                                 if !possible_ids.is_empty() {
                                                     let id = format!(
@@ -203,25 +248,25 @@ impl<'a> FieldValueGenerator<'a> {
                                                 } else {
                                                     panic!(
                                                         "No IDs generated for table {} in RecordLink",
-                                                        &table_config.table_name
+                                                        table_key
                                                     );
                                                 }
                                             } else {
-                                                panic!(
-                                                    "No ID map entry for table {} in RecordLink",
-                                                    &table_config.table_name
-                                                );
+                                                // Fallback: synthesize a plausible ID using current index
+                                                let id =
+                                                    format!("r'{}:{}'", table_key, &self.id_index);
+                                                value_stack.push(id);
                                             }
                                         } else {
                                             panic!(
-                                                "RecordLink references non-table type '{}' in field {}. RecordLink should only reference tables.",
+                                                "RecordLink references type '{}' which does not map to a persistable table or persistable union in field {}",
                                                 type_name, ctx.field.field_name
                                             );
                                         }
                                     }
                                     _ => {
                                         panic!(
-                                            "RecordLink contains non-Other type {:?} in field {}. RecordLink should only contain Other(table_name).",
+                                            "RecordLink contains non-Other type {:?} in field {}. RecordLink should reference a type name or a persistable union.",
                                             inner_type, ctx.field.field_name
                                         );
                                     }
