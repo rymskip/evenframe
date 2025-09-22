@@ -376,30 +376,45 @@ impl<'a> Schemasync<'a> {
                         for stmt in define_stmt.split_inclusive(';') {
                             let trimmed = stmt.trim_start();
                             if trimmed.starts_with("DEFINE FIELD") {
-                                // Extract field name from the statement
-                                // DEFINE FIELD field_name ON TABLE ...
-                                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                                if parts.len() > 2 {
-                                    let field_name = parts[2];
+                                // Extract field name from the statement, handling optional OVERWRITE
+                                // Formats:
+                                //   DEFINE FIELD <name> ON TABLE ...
+                                //   DEFINE FIELD OVERWRITE <name> ON TABLE ...
+                                let mut tokens = trimmed.split_whitespace();
+                                let _ = tokens.next(); // DEFINE
+                                let _ = tokens.next(); // FIELD
+                                let mut name_tok = tokens.next().unwrap_or("");
+                                if name_tok.eq_ignore_ascii_case("OVERWRITE") {
+                                    name_tok = tokens.next().unwrap_or("");
+                                }
+                                if name_tok.is_empty() {
+                                    continue;
+                                }
+                                // Normalize backticks and wildcard suffix
+                                let mut norm = name_tok.trim_matches('`');
+                                if let Some(stripped) = norm.strip_suffix(".*") {
+                                    norm = stripped;
+                                }
 
-                                    // Check if this field is new or modified
-                                    if table_change.new_fields.contains(&field_name.to_string())
-                                        || table_change
-                                            .modified_fields
-                                            .iter()
-                                            .any(|fc| fc.field_name == field_name)
-                                    {
-                                        trace!(
-                                            "Defining field: {} on table: {}",
-                                            field_name, table_name
-                                        );
-                                        execute(table_name, stmt).await?;
-                                    } else {
-                                        trace!(
-                                            "Skipping unchanged field: {} on table: {}",
-                                            field_name, table_name
-                                        );
-                                    }
+                                // Check if this field is new or modified
+                                if table_change
+                                    .new_fields
+                                    .contains(&norm.to_string())
+                                    || table_change
+                                        .modified_fields
+                                        .iter()
+                                        .any(|fc| fc.field_name == norm)
+                                {
+                                    trace!(
+                                        "Defining field: {} on table: {}",
+                                        norm, table_name
+                                    );
+                                    execute(table_name, stmt).await?;
+                                } else {
+                                    trace!(
+                                        "Skipping unchanged field: {} on table: {}",
+                                        norm, table_name
+                                    );
                                 }
                             }
                         }
