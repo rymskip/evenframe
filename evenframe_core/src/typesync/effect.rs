@@ -228,149 +228,290 @@ fn field_type_to_effect_schema(
     rec: &RecursionInfo,
     processed: &HashSet<String>,
 ) -> String {
-    // Helper to recurse with the same context.
-    let field = |inner: &FieldType| -> String {
-        field_type_to_effect_schema(inner, structs, current, rec, processed)
-    };
-    match field_type {
-        FieldType::String => {
-            "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
-                .to_string()
-        }
-        FieldType::Char => "Schema.String.pipe(Schema.maxLength(1))".to_string(),
-        FieldType::Bool => "Schema.Boolean".to_string(),
-        FieldType::Unit => "Schema.Null".to_string(),
-        FieldType::Decimal => "Schema.NumberFromString".to_string(),
-        FieldType::OrderedFloat(_) => "Schema.Number".to_string(),
-        FieldType::F32 | FieldType::F64 => "Schema.Number".to_string(),
-        FieldType::I8
-        | FieldType::I16
-        | FieldType::I32
-        | FieldType::I64
-        | FieldType::I128
-        | FieldType::Isize => "Schema.Number".to_string(),
-        FieldType::U8
-        | FieldType::U16
-        | FieldType::U32
-        | FieldType::U64
-        | FieldType::U128
-        | FieldType::Usize => "Schema.Number".to_string(),
-        FieldType::EvenframeRecordId => "Schema.String".to_string(),
-        FieldType::DateTime => "Schema.DateTimeUtc".to_string(),
-        FieldType::EvenframeDuration => "Schema.Duration".to_string(),
-        FieldType::Timezone => "Schema.TimeZoneNamed".to_string(),
-        FieldType::Option(i) => format!("Schema.OptionFromNullishOr({}, null)", field(i)),
-        FieldType::Vec(i) => format!("Schema.Array({})", field(i)),
-        FieldType::Tuple(v) => format!(
-            "Schema.Tuple({})",
-            v.iter().map(field).collect::<Vec<_>>().join(", ")
-        ),
-        FieldType::Struct(fs) => {
-            let inner = fs
-                .iter()
-                .map(|(n, f)| format!("{}: {}", n, field(f)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Schema.Struct({{ {} }})", inner)
-        }
-        FieldType::RecordLink(i) => format!(
-            "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
+    enum WorkItem<'a> {
+        Generate(&'a FieldType),
+        AssembleOption,
+        AssembleVec,
+        AssembleTuple { count: usize },
+        AssembleStruct { field_names: Vec<String> },
+        AssembleRecordLink,
+        AssembleMap,
+    }
+
+    let mut work_stack: Vec<WorkItem> = Vec::new();
+    let mut value_stack: Vec<String> = Vec::new();
+
+    work_stack.push(WorkItem::Generate(field_type));
+
+    while let Some(work_item) = work_stack.pop() {
+        match work_item {
+            WorkItem::Generate(field_type) => match field_type {
+                FieldType::String => {
+                    value_stack.push(
+                        "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
+                            .to_string(),
+                    )
+                }
+                FieldType::Char => {
+                    value_stack.push("Schema.String.pipe(Schema.maxLength(1))".to_string())
+                }
+                FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
+                FieldType::Unit => value_stack.push("Schema.Null".to_string()),
+                FieldType::Decimal => value_stack.push("Schema.NumberFromString".to_string()),
+                FieldType::OrderedFloat(_) => value_stack.push("Schema.Number".to_string()),
+                FieldType::F32 | FieldType::F64 => value_stack.push("Schema.Number".to_string()),
+                FieldType::I8
+                | FieldType::I16
+                | FieldType::I32
+                | FieldType::I64
+                | FieldType::I128
+                | FieldType::Isize => value_stack.push("Schema.Number".to_string()),
+                FieldType::U8
+                | FieldType::U16
+                | FieldType::U32
+                | FieldType::U64
+                | FieldType::U128
+                | FieldType::Usize => value_stack.push("Schema.Number".to_string()),
+                FieldType::EvenframeRecordId => value_stack.push("Schema.String".to_string()),
+                FieldType::DateTime => value_stack.push("Schema.DateTimeUtc".to_string()),
+                FieldType::EvenframeDuration => value_stack.push("Schema.Duration".to_string()),
+                FieldType::Timezone => value_stack.push("Schema.TimeZoneNamed".to_string()),
+                FieldType::Option(i) => {
+                    work_stack.push(WorkItem::AssembleOption);
+                    work_stack.push(WorkItem::Generate(i));
+                }
+                FieldType::Vec(i) => {
+                    work_stack.push(WorkItem::AssembleVec);
+                    work_stack.push(WorkItem::Generate(i));
+                }
+                FieldType::Tuple(v) => {
+                    work_stack.push(WorkItem::AssembleTuple { count: v.len() });
+                    for inner_type in v.iter().rev() {
+                        work_stack.push(WorkItem::Generate(inner_type));
+                    }
+                }
+                FieldType::Struct(fs) => {
+                    let field_names: Vec<String> =
+                        fs.iter().map(|(name, _)| name.clone()).collect();
+                    work_stack.push(WorkItem::AssembleStruct { field_names });
+                    for (_, ftype) in fs.iter().rev() {
+                        work_stack.push(WorkItem::Generate(ftype));
+                    }
+                }
+                FieldType::RecordLink(i) => {
+                    work_stack.push(WorkItem::AssembleRecordLink);
+                    work_stack.push(WorkItem::Generate(i));
+                }
+                FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
+                    work_stack.push(WorkItem::AssembleMap);
+                    work_stack.push(WorkItem::Generate(v));
+                    work_stack.push(WorkItem::Generate(k));
+                }
+                FieldType::Other(name) => {
+                    let pascal = name.to_case(Case::Pascal);
+                    let wrap_id = format!("{}Ref", pascal);
+                    // Decide whether we need Schema.suspend for recursion.
+                    if rec.is_recursive_pair(current, &pascal) && !processed.contains(&pascal) {
+                        // Forward edge *inside* a recursive SCC requires suspension.
+                        if structs
+                            .values()
+                            .any(|sc| sc.struct_name.to_case(Case::Pascal) == pascal)
+                        {
+                            value_stack.push(format!(
+                                "Schema.suspend((): Schema.Schema<{}, {}Encoded> => {}).annotations({{ identifier: `{}` }})",
+                                pascal, pascal, pascal, wrap_id
+                            ));
+                        } else {
+                            value_stack.push(format!(
+                                "Schema.suspend((): Schema.Schema<typeof {}.Type, {}Encoded> => {}).annotations({{ identifier: `{}` }})",
+                                pascal, pascal, pascal, wrap_id
+                            ));
+                        }
+                    } else {
+                        // Direct reference for non-recursive or already processed types.
+                        value_stack.push(pascal);
+                    }
+                }
+            },
+            WorkItem::AssembleOption => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("Schema.OptionFromNullishOr({}, null)", inner));
+            }
+            WorkItem::AssembleVec => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("Schema.Array({})", inner));
+            }
+            WorkItem::AssembleTuple { count } => {
+                let items: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                value_stack.push(format!("Schema.Tuple({})", items.join(", ")));
+            }
+            WorkItem::AssembleStruct { field_names } => {
+                let count = field_names.len();
+                let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                let assignments: Vec<String> = field_names
+                    .into_iter()
+                    .zip(values.into_iter())
+                    .map(|(name, value)| format!("{}: {}", name, value))
+                    .collect();
+                value_stack.push(format!("Schema.Struct({{ {} }})", assignments.join(", ")));
+            }
+            WorkItem::AssembleRecordLink => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!(
+                    "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
                 message: `Please enter a valid value`,
                 override: true,
             }}), }})",
-            field(i)
-        ),
-        FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-            format!(
-                "Schema.Record({{ key: {}, value: {} }})",
-                field(k),
-                field(v)
-            )
-        }
-        FieldType::Other(name) => {
-            let pascal = name.to_case(Case::Pascal);
-            let wrap_id = format!("{}Ref", pascal);
-            // Decide whether we need Schema.suspend for recursion.
-            if rec.is_recursive_pair(current, &pascal) && !processed.contains(&pascal) {
-                // Forward edge *inside* a recursive SCC requires suspension.
-                if structs
-                    .values()
-                    .any(|sc| sc.struct_name.to_case(Case::Pascal) == pascal)
-                {
-                    format!(
-                        "Schema.suspend((): Schema.Schema<{}, {}Encoded> => {}).annotations({{ identifier: `{}` }})",
-                        pascal, pascal, pascal, wrap_id
-                    )
-                } else {
-                    format!(
-                        "Schema.suspend((): Schema.Schema<typeof {}.Type, {}Encoded> => {}).annotations({{ identifier: `{}` }})",
-                        pascal, pascal, pascal, wrap_id
-                    )
-                }
-            } else {
-                // Direct reference for non-recursive or already processed types.
-                pascal
+                    inner
+                ));
+            }
+            WorkItem::AssembleMap => {
+                let v = value_stack.pop().unwrap();
+                let k = value_stack.pop().unwrap();
+                value_stack.push(format!("Schema.Record({{ key: {}, value: {} }})", k, v));
             }
         }
     }
+
+    assert_eq!(
+        value_stack.len(),
+        1,
+        "Generation ended with not exactly one value on the stack."
+    );
+    value_stack.pop().unwrap()
 }
 
 /// Converts a `FieldType` into its corresponding raw TypeScript type for the `...Encoded` interface.
 fn field_type_to_ts_encoded(ft: &FieldType) -> String {
-    let enc = |f: &FieldType| field_type_to_ts_encoded(f);
-
-    match ft {
-        // Primitives
-        FieldType::String
-        | FieldType::Char
-        | FieldType::EvenframeRecordId
-        | FieldType::Timezone => "string".into(),
-        FieldType::Bool => "boolean".into(),
-        FieldType::DateTime => "string".into(), // ISO 8601 string
-        FieldType::EvenframeDuration => {
-            "| Schema.DurationEncoded |readonly [seconds: number, nanos: number]".into()
-        }
-        FieldType::Unit => "null".into(),
-        FieldType::Decimal => "string".into(),
-        FieldType::OrderedFloat(_)
-        | FieldType::F32
-        | FieldType::F64
-        | FieldType::I8
-        | FieldType::I16
-        | FieldType::I32
-        | FieldType::I64
-        | FieldType::I128
-        | FieldType::Isize
-        | FieldType::U8
-        | FieldType::U16
-        | FieldType::U32
-        | FieldType::U64
-        | FieldType::U128
-        | FieldType::Usize => "number".into(),
-
-        // Containers
-        FieldType::Option(inner) => format!("{} | null | undefined", enc(inner)),
-        FieldType::Vec(inner) => format!("ReadonlyArray<{}>", enc(inner)),
-        FieldType::Tuple(items) => {
-            let elems = items.iter().map(enc).collect::<Vec<_>>().join(", ");
-            format!("readonly [{}]", elems)
-        }
-        FieldType::Struct(fs) => {
-            let body = fs
-                .iter()
-                .map(|(n, f)| format!("  readonly {}: {};", n, enc(f)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("{{\n{}\n}}", body)
-        }
-        FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-            format!("Record<{}, {}>", enc(k), enc(v))
-        }
-        FieldType::RecordLink(inner) => format!("string | {}", enc(inner)),
-
-        // User-defined types
-        FieldType::Other(name) => format!("{}Encoded", name.to_case(Case::Pascal)),
+    enum WorkItem<'a> {
+        Generate(&'a FieldType),
+        AssembleOption,
+        AssembleVec,
+        AssembleTuple { count: usize },
+        AssembleStruct { field_names: Vec<String> },
+        AssembleRecordLink,
+        AssembleMap,
     }
+
+    let mut work_stack: Vec<WorkItem> = Vec::new();
+    let mut value_stack: Vec<String> = Vec::new();
+
+    work_stack.push(WorkItem::Generate(ft));
+
+    while let Some(work_item) = work_stack.pop() {
+        match work_item {
+            WorkItem::Generate(ft) => {
+                match ft {
+                    // Primitives
+                    FieldType::String
+                    | FieldType::Char
+                    | FieldType::EvenframeRecordId
+                    | FieldType::Timezone => value_stack.push("string".to_string()),
+                    FieldType::Bool => value_stack.push("boolean".to_string()),
+                    FieldType::DateTime => value_stack.push("string".to_string()), // ISO 8601 string
+                    FieldType::EvenframeDuration => {
+                        value_stack.push(
+                            "| Schema.DurationEncoded |readonly [seconds: number, nanos: number]"
+                                .to_string(),
+                        );
+                    }
+                    FieldType::Unit => value_stack.push("null".to_string()),
+                    FieldType::Decimal => value_stack.push("string".to_string()),
+                    FieldType::OrderedFloat(_)
+                    | FieldType::F32
+                    | FieldType::F64
+                    | FieldType::I8
+                    | FieldType::I16
+                    | FieldType::I32
+                    | FieldType::I64
+                    | FieldType::I128
+                    | FieldType::Isize
+                    | FieldType::U8
+                    | FieldType::U16
+                    | FieldType::U32
+                    | FieldType::U64
+                    | FieldType::U128
+                    | FieldType::Usize => value_stack.push("number".to_string()),
+
+                    // Containers
+                    FieldType::Option(inner) => {
+                        work_stack.push(WorkItem::AssembleOption);
+                        work_stack.push(WorkItem::Generate(inner));
+                    }
+                    FieldType::Vec(inner) => {
+                        work_stack.push(WorkItem::AssembleVec);
+                        work_stack.push(WorkItem::Generate(inner));
+                    }
+                    FieldType::Tuple(items) => {
+                        work_stack.push(WorkItem::AssembleTuple { count: items.len() });
+                        for item in items.iter().rev() {
+                            work_stack.push(WorkItem::Generate(item));
+                        }
+                    }
+                    FieldType::Struct(fs) => {
+                        let field_names: Vec<String> =
+                            fs.iter().map(|(name, _)| name.clone()).collect();
+                        work_stack.push(WorkItem::AssembleStruct { field_names });
+                        for (_, ftype) in fs.iter().rev() {
+                            work_stack.push(WorkItem::Generate(ftype));
+                        }
+                    }
+                    FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
+                        work_stack.push(WorkItem::AssembleMap);
+                        work_stack.push(WorkItem::Generate(v));
+                        work_stack.push(WorkItem::Generate(k));
+                    }
+                    FieldType::RecordLink(inner) => {
+                        work_stack.push(WorkItem::AssembleRecordLink);
+                        work_stack.push(WorkItem::Generate(inner));
+                    }
+
+                    // User-defined types
+                    FieldType::Other(name) => {
+                        value_stack.push(format!("{}Encoded", name.to_case(Case::Pascal)))
+                    }
+                }
+            }
+            WorkItem::AssembleOption => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("{} | null | undefined", inner));
+            }
+            WorkItem::AssembleVec => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("ReadonlyArray<{}>", inner));
+            }
+            WorkItem::AssembleTuple { count } => {
+                let items: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                value_stack.push(format!("readonly [{}]", items.join(", ")));
+            }
+            WorkItem::AssembleStruct { field_names } => {
+                let count = field_names.len();
+                let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                let assignments: Vec<String> = field_names
+                    .into_iter()
+                    .zip(values.into_iter())
+                    .map(|(name, value)| format!("  readonly {}: {};", name, value))
+                    .collect();
+                value_stack.push(format!("{{\n{}\n}}", assignments.join("\n")));
+            }
+            WorkItem::AssembleMap => {
+                let v = value_stack.pop().unwrap();
+                let k = value_stack.pop().unwrap();
+                value_stack.push(format!("Record<{}, {}>", k, v));
+            }
+            WorkItem::AssembleRecordLink => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("string | {}", inner));
+            }
+        }
+    }
+
+    assert_eq!(
+        value_stack.len(),
+        1,
+        "Generation ended with not exactly one value on the stack."
+    );
+    value_stack.pop().unwrap()
 }
 
 // ----- Validator Application Logic -----------------------------------------
