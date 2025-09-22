@@ -1,4 +1,4 @@
-use crate::types::FieldType;
+use evenframe_core::types::FieldType;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};

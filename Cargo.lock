@@ -1214,6 +1214,7 @@ dependencies = [
 name = "evenframe_derive"
 version = "0.1.0"
 dependencies = [
+ "convert_case",
  "evenframe_core",
  "proc-macro2",
  "quote",

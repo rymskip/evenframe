@@ -1,8 +1,7 @@
-use crate::{
+use crate::{deserialization_impl::generate_custom_deserialize, imports::generate_struct_imports};
+use evenframe_core::{
     derive::{
         attributes::{parse_format_attribute, parse_mock_data_attribute, parse_relation_attribute},
-        deserialization_impl::generate_custom_deserialize,
-        imports::generate_struct_imports,
         validator_parser::parse_field_validators,
     },
     schemasync::{DefineConfig, EdgeConfig, PermissionsConfig},

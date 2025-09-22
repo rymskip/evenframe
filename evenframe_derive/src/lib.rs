@@ -1,6 +1,10 @@
-use evenframe_core::derive::{enum_impl, struct_impl, union_impl};
 use proc_macro::TokenStream;
 use syn::{Data, DeriveInput, parse_macro_input};
+mod deserialization_impl;
+mod enum_impl;
+mod imports;
+mod struct_impl;
+mod union_impl;
 
 /// For structs it generates both:
 /// - A `table_schema()` function returning a `helpers::TableSchema`
