@@ -96,6 +96,15 @@ impl Mockmaker {
                     log_name,
                     true
                 );
+                // Skip explicit 'id' here because we already added it above
+                if table_field.field_name == "id" {
+                    evenframe_log!(
+                        "Skipping field 'id' because it is set from record_id",
+                        log_name,
+                        true
+                    );
+                    continue;
+                }
                 if table_field.edge_config.is_none()
                     || (table_field.define_config.is_some()
                         && !table_field.define_config.as_ref().unwrap().should_skip)
@@ -120,15 +129,30 @@ impl Mockmaker {
                         .build()
                         .run();
 
+                    // For relation tables, preserve existing 'in'/'out' endpoints if the edge already exists.
+                    // Use a selective fetch from ONLY r'<id>' to keep prior endpoints; otherwise use the newly generated value.
+                    let assigned_value = if table_config.relation.is_some()
+                        && (table_field.field_name == "in" || table_field.field_name == "out")
+                    {
+                        format!(
+                            "(IF (SELECT {fname} FROM ONLY r'{{rid}}') != NONE THEN (SELECT {fname} FROM ONLY r'{{rid}}').{fname} ELSE {gen} END)",
+                            fname = table_field.field_name,
+                            gen = field_val
+                        )
+                        .replace("{rid}", &record_id)
+                    } else {
+                        field_val
+                    };
+
                     evenframe_log!(
                         format!(
                             "Generated value for field '{}': {}",
-                            table_field.field_name, field_val
+                            table_field.field_name, assigned_value
                         ),
                         log_name,
                         true
                     );
-                    field_assignments.push(format!("{}: {field_val}", table_field.field_name));
+                    field_assignments.push(format!("{}: {assigned_value}", table_field.field_name));
 
                     // For relations, we don't update in/out fields
                     if !(table_config.relation.is_some()
