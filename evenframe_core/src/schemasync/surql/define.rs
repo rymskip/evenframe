@@ -258,7 +258,9 @@ pub fn generate_define_statements(
     enums: &HashMap<String, TaggedUnion>,
     full_refresh_mode: bool,
 ) -> String {
-    info!(table_name = %table_name, full_refresh_mode = %full_refresh_mode, "Generating define statements for table");
+    info!(
+        "Generating define statements for table {table_name}, full_refresh_mode: {full_refresh_mode}"
+    );
     debug!(
         query_details_count = query_details.len(),
         server_only_count = server_only.len(),
@@ -268,7 +270,11 @@ pub fn generate_define_statements(
     trace!("Table config: {:?}", table_config);
     let table_type = if table_config.relation.is_some() {
         let relation = table_config.relation.as_ref().unwrap();
-        debug!(table_name = %table_name, from = %relation.from, to = %relation.to, "Table is a relation");
+        debug!(
+            "Table is a relation. table_name: {table_name}, from: {from}, to: {to}",
+            from = relation.from,
+            to = relation.to,
+        );
         &format!("RELATION FROM {} TO {}", relation.from, relation.to)
     } else {
         debug!(table_name = %table_name, "Table is normal type");
