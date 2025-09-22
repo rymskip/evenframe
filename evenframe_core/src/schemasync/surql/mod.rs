@@ -750,11 +750,6 @@ pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> Resu
                 }
             };
 
-            let expected_table_config = registry::get_table_config(&expected_struct_name)
-                .ok_or_else(|| format!("Validation failed: No table config found for struct '{}' specified in RecordLink.", expected_struct_name))?;
-
-            let expected_table_name = &expected_table_config.table_name;
-
             // Parse the table name from the provided record_id.
             let id_parts: Vec<&str> = record_id.split(':').collect();
             if id_parts.len() < 2 || id_parts[0].is_empty() {
@@ -765,14 +760,43 @@ pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> Resu
             }
             let table_name_from_id = id_parts[0];
 
-            // Compare the table name from the ID with the expected table name.
-            if table_name_from_id != expected_table_name {
+            // First try to get table config directly
+            if let Some(expected_table_config) = registry::get_table_config(&expected_struct_name) {
+                let expected_table_name = &expected_table_config.table_name;
+
+                // Compare the table name from the ID with the expected table name.
+                if table_name_from_id != expected_table_name {
+                    return Err(format!(
+                        "Mismatched table for record ID '{}'. Expected table for struct '{}' is '{}', but ID has table '{}'.",
+                        record_id, expected_struct_name, expected_table_name, table_name_from_id
+                    ));
+                }
+                return Ok(());
+            }
+
+            // Fallback: Check if it's a union of tables
+            if let Some(union_table_names) = registry::get_union_of_tables(&expected_struct_name) {
+                // Convert table name from ID to Pascal case for comparison
+                let table_name_pascal = table_name_from_id.to_case(Case::Pascal);
+
+                // Check if the table from the ID matches any table in the union
+                for union_table_name in union_table_names {
+                    if table_name_pascal == *union_table_name {
+                        return Ok(());
+                    }
+                }
+
                 return Err(format!(
-                    "Mismatched table for record ID '{}'. Expected table for struct '{}' is '{}', but ID has table '{}'.",
-                    record_id, expected_struct_name, expected_table_name, table_name_from_id
+                    "Mismatched table for record ID '{}'. Expected one of the tables from union '{}' ({}), but ID has table '{}' (converted to Pascal: '{}').",
+                    record_id, expected_struct_name, union_table_names.join(", "), table_name_from_id, table_name_pascal
                 ));
             }
-            Ok(())
+
+            // Neither table nor union found
+            Err(format!(
+                "Validation failed: No table config or union of tables found for struct '{}' specified in RecordLink.",
+                expected_struct_name
+            ))
         }
         FieldType::Option(inner_type) => {
             // Recurse for optional types

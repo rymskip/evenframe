@@ -27,6 +27,13 @@ pub struct EnumRegistryEntry {
     pub tagged_union_fn: fn() -> TaggedUnion,
 }
 
+/// Registry entry for union of tables
+#[derive(Clone, Copy)]
+pub struct UnionOfTablesRegistryEntry {
+    pub type_name: &'static str,
+    pub table_names: &'static [&'static str],
+}
+
 /// Distributed slice that collects table entries from all crates
 #[distributed_slice]
 pub static TABLE_REGISTRY_ENTRIES: [TableRegistryEntry] = [..];
@@ -38,6 +45,10 @@ pub static OBJECT_REGISTRY_ENTRIES: [ObjectRegistryEntry] = [..];
 /// Distributed slice that collects enum entries from all crates
 #[distributed_slice]
 pub static ENUM_REGISTRY_ENTRIES: [EnumRegistryEntry] = [..];
+
+/// Distributed slice that collects union of tables entries from all crates
+#[distributed_slice]
+pub static UNION_OF_TABLES_REGISTRY_ENTRIES: [UnionOfTablesRegistryEntry] = [..];
 
 /// Runtime-accessible table registry
 static TABLE_REGISTRY: Lazy<HashMap<&'static str, &'static TableRegistryEntry>> = Lazy::new(|| {
@@ -64,6 +75,15 @@ static ENUM_REGISTRY: Lazy<HashMap<&'static str, &'static EnumRegistryEntry>> = 
         .collect()
 });
 
+/// Runtime-accessible union of tables registry
+static UNION_OF_TABLES_REGISTRY: Lazy<HashMap<&'static str, &'static UnionOfTablesRegistryEntry>> =
+    Lazy::new(|| {
+        UNION_OF_TABLES_REGISTRY_ENTRIES
+            .iter()
+            .map(|entry| (entry.type_name, entry))
+            .collect()
+    });
+
 /// Get table configuration by type name
 pub fn get_table_config(type_name: &str) -> Option<TableConfig> {
     TABLE_REGISTRY
@@ -85,12 +105,20 @@ pub fn get_tagged_union(type_name: &str) -> Option<TaggedUnion> {
         .map(|entry| (entry.tagged_union_fn)())
 }
 
+/// Get union of tables by type name
+pub fn get_union_of_tables(type_name: &str) -> Option<&'static [&'static str]> {
+    UNION_OF_TABLES_REGISTRY
+        .get(type_name)
+        .map(|entry| entry.table_names)
+}
+
 /// Type category for unified type resolution
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeCategory {
     Table,
     Object,
     Enum,
+    UnionOfTables,
 }
 
 /// Resolve the category of a type by name
@@ -101,6 +129,8 @@ pub fn resolve_type_category(type_name: &str) -> Option<TypeCategory> {
         Some(TypeCategory::Object)
     } else if ENUM_REGISTRY.contains_key(type_name) {
         Some(TypeCategory::Enum)
+    } else if UNION_OF_TABLES_REGISTRY.contains_key(type_name) {
+        Some(TypeCategory::UnionOfTables)
     } else {
         None
     }
@@ -121,11 +151,17 @@ pub fn get_all_enum_names() -> Vec<&'static str> {
     ENUM_REGISTRY.keys().copied().collect()
 }
 
+/// Get all registered union of tables names
+pub fn get_all_union_of_tables_names() -> Vec<&'static str> {
+    UNION_OF_TABLES_REGISTRY.keys().copied().collect()
+}
+
 /// Get all registered type names across all categories
 pub fn get_all_type_names() -> HashMap<TypeCategory, Vec<&'static str>> {
     let mut result = HashMap::new();
     result.insert(TypeCategory::Table, get_all_table_names());
     result.insert(TypeCategory::Object, get_all_object_names());
     result.insert(TypeCategory::Enum, get_all_enum_names());
+    result.insert(TypeCategory::UnionOfTables, get_all_union_of_tables_names());
     result
 }

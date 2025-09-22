@@ -1,23 +1,63 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, spanned::Spanned};
+use syn::{Data, DeriveInput, Fields, spanned::Spanned, Type, TypePath};
+
+/// Extract the innermost type name from a potentially wrapped type (e.g., Box<Account> -> Account)
+fn extract_inner_type_name(ty: &Type) -> String {
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            if let Some(segment) = path.segments.last() {
+                let ident = &segment.ident;
+
+                // Check if this is a generic type like Box<T>, Option<T>, etc.
+                if !segment.arguments.is_empty() {
+                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                        if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                            // Recursively extract from the inner type
+                            return extract_inner_type_name(inner_type);
+                        }
+                    }
+                }
+
+                // Return the current segment name if no generics or can't extract
+                ident.to_string()
+            } else {
+                // Fallback to the quoted representation
+                quote! { #ty }.to_string()
+            }
+        }
+        _ => {
+            // For non-path types, fall back to quoted representation
+            quote! { #ty }.to_string()
+        }
+    }
+}
 
 pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
     let ident = input.ident.clone();
 
     if let Data::Enum(ref data_enum) = input.data {
         let mut table_config_arms = Vec::new();
+        let mut table_names = Vec::new();
 
         for variant in &data_enum.variants {
             let variant_ident = &variant.ident;
 
             match &variant.fields {
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                    let field_type = &fields.unnamed.first().unwrap().ty;
+                    let type_name = extract_inner_type_name(field_type);
+                    table_names.push(type_name);
+
                     table_config_arms.push(quote! {
                         #ident::#variant_ident(inner) => inner.table_config()
                     });
                 }
                 Fields::Named(fields) if fields.named.len() == 1 => {
+                    let field_type = &fields.named.first().unwrap().ty;
+                    let type_name = extract_inner_type_name(field_type);
+                    table_names.push(type_name);
+
                     let field_name = fields.named.first().unwrap().ident.as_ref().unwrap();
                     table_config_arms.push(quote! {
                         #ident::#variant_ident { #field_name } => #field_name.table_config()
@@ -38,6 +78,25 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
             }
         }
 
+        let union_name = ident.to_string();
+        let table_names_static: Vec<_> = table_names.iter().map(|name| quote! { #name }).collect();
+
+        // Generate registry submission for union of tables
+        let registry_var_name = syn::Ident::new(
+            &format!(
+                "{}_UNION_OF_TABLES_REGISTRY_ENTRY",
+                ident.to_string().to_uppercase()
+            ),
+            ident.span(),
+        );
+        let registry_submission = quote! {
+            #[linkme::distributed_slice(::evenframe::registry::UNION_OF_TABLES_REGISTRY_ENTRIES)]
+            static #registry_var_name: ::evenframe::registry::UnionOfTablesRegistryEntry = ::evenframe::registry::UnionOfTablesRegistryEntry {
+                type_name: #union_name,
+                table_names: &[#(#table_names_static),*],
+            };
+        };
+
         quote! {
             const _: () = {
                 impl ::evenframe::traits::EvenframePersistableStruct for #ident {
@@ -51,6 +110,8 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
                         }
                     }
                 }
+
+                #registry_submission
             };
         }
     } else {
