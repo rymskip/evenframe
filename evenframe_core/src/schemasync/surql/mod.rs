@@ -413,9 +413,15 @@ pub fn generate_update_query_with_edges<T: Serialize>(
     table_config: &TableConfig,
     object: &T,
     explicit_id: Option<String>,
+    filters: Option<Vec<FilterValue>>,
 ) -> (String, String) {
-    let (main_query, record_id) =
-        generate_query(QueryType::Update, table_config, object, explicit_id);
+    let (main_query, record_id) = generate_query(
+        QueryType::Update,
+        table_config,
+        object,
+        explicit_id,
+        filters,
+    );
     let edge_query = generate_edge_update_query(table_config, object, &record_id);
 
     if edge_query.is_empty() {
@@ -699,11 +705,53 @@ pub(crate) fn generate_recursive(
     (main_query, generated_id)
 }
 
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FilterPrimitive {
+    String,
+    Number,
+    Boolean,
+    Date,
+    Select,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FilterOperator {
+    Contains,
+    Equals,
+    StartsWith,
+    EndsWith,
+    GreaterThan,
+    LessThan,
+    Is,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterDefinition {
+    pub key: String,
+    pub label: String,
+    pub filter_type: FilterPrimitive,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterValue {
+    pub field_key: String,
+    pub filter_type: FilterPrimitive,
+    pub operator: FilterOperator,
+    pub value: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _tag: Option<String>,
+}
+
 pub fn generate_query<T: Serialize>(
     query_type: QueryType,
     table_config: &TableConfig,
     object: &T,
     explicit_id: Option<String>,
+    filters: Option<Vec<FilterValue>>,
 ) -> (String, String) {
     let value = serde_json::to_value(object).expect("Failed to serialize object to JSON Value");
     let mut all_let_statements = Vec::new();
@@ -788,7 +836,11 @@ pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> Resu
 
                 return Err(format!(
                     "Mismatched table for record ID '{}'. Expected one of the tables from union '{}' ({}), but ID has table '{}' (converted to Pascal: '{}').",
-                    record_id, expected_struct_name, union_table_names.join(", "), table_name_from_id, table_name_pascal
+                    record_id,
+                    expected_struct_name,
+                    union_table_names.join(", "),
+                    table_name_from_id,
+                    table_name_pascal
                 ));
             }
 
