@@ -131,20 +131,40 @@ impl RegexValGen {
     /// * Literals: `abc`, `\+`, `\.`
     pub fn generate(&mut self, pattern: &str) -> Result<String> {
         tracing::trace!(pattern = %pattern, "Generating string from regex pattern");
-        let components = self.parse_pattern(pattern)?;
+        let trimmed_pattern = pattern.trim_start_matches('^').trim_end_matches('$');
+        let components = self.parse_pattern(trimmed_pattern)?;
         #[cfg(test)]
         println!("Parsed components: {:?}", components);
         tracing::trace!(
             component_count = components.len(),
             "Pattern parsed successfully"
         );
-        let result = self.generate_from_components(&components);
-        tracing::trace!(
-            pattern = %pattern,
-            result_length = result.len(),
-            "Generated string from pattern"
-        );
-        Ok(result)
+
+        let should_validate_duration = Self::is_duration_pattern(trimmed_pattern);
+        let mut attempts = 0;
+
+        loop {
+            let candidate = self.generate_from_components(&components);
+            if !should_validate_duration || Self::is_valid_duration(&candidate) {
+                tracing::trace!(
+                    pattern = %pattern,
+                    result_length = candidate.len(),
+                    attempts,
+                    "Generated string from pattern"
+                );
+                return Ok(candidate);
+            }
+
+            attempts += 1;
+            if attempts >= 10 {
+                tracing::debug!(
+                    pattern = %pattern,
+                    candidate = %candidate,
+                    "Returning last candidate after repeated duration validation failures"
+                );
+                return Ok(candidate);
+            }
+        }
     }
 
     fn parse_pattern(&self, pattern: &str) -> Result<Vec<RegexComponent>> {
@@ -307,6 +327,129 @@ impl RegexValGen {
         }
 
         Ok(components)
+    }
+
+    fn is_duration_pattern(pattern: &str) -> bool {
+        pattern.contains("P((\\d{1,2}Y)?")
+            && pattern.contains("(0?[0-9]|1[0-1]M)?")
+            && pattern.contains("(\\d{1,4}W)?")
+            && pattern.contains("([0-2]?[0-9]D)?")
+            && pattern.contains("T([0-1]?[0-9]|2[0-3]H)?")
+            && pattern.contains("([0-5]?[0-9]M)?")
+            && pattern.contains("([0-5]?[0-9](\\.\\d{1,3})?S)?")
+    }
+
+    fn is_valid_duration(candidate: &str) -> bool {
+        if !candidate.starts_with('P') {
+            return true;
+        }
+
+        let rest = &candidate[1..];
+        let (date_part, time_part) = if let Some(idx) = rest.find('T') {
+            (&rest[..idx], Some(&rest[idx + 1..]))
+        } else {
+            (rest, None)
+        };
+
+        if let Some(month_idx) = date_part.find('M') {
+            if let Some(month_str) = Self::digits_before_index(date_part, month_idx) {
+                if let Ok(month) = month_str.parse::<u32>() {
+                    if month > 11 {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if let Some(day_idx) = date_part.find('D') {
+            if let Some(day_str) = Self::digits_before_index(date_part, day_idx) {
+                if let Ok(day) = day_str.parse::<u32>() {
+                    if day > 29 {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if let Some(time_part) = time_part {
+            if let Some(hour_idx) = time_part.find('H') {
+                if let Some(hour_str) = Self::digits_before_index(time_part, hour_idx) {
+                    if let Ok(hour) = hour_str.parse::<u32>() {
+                        if hour > 23 {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            if let Some(min_idx) = time_part.rfind('M') {
+                let segment_start = time_part.find('H').map(|idx| idx + 1).unwrap_or(0);
+                if min_idx >= segment_start {
+                    let minute_segment = &time_part[segment_start..min_idx];
+                    if minute_segment.is_empty() {
+                        return false;
+                    }
+                    if let Ok(minute) = minute_segment.parse::<u32>() {
+                        if minute > 59 {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+
+            if let Some(sec_idx) = time_part.find('S') {
+                let segment_start = if let Some(min_idx) = time_part.rfind('M') {
+                    min_idx + 1
+                } else if let Some(hour_idx) = time_part.find('H') {
+                    hour_idx + 1
+                } else {
+                    0
+                };
+
+                if sec_idx >= segment_start {
+                    let second_segment = &time_part[segment_start..sec_idx];
+                    if second_segment.is_empty() {
+                        return false;
+                    }
+                    let int_part = second_segment.split('.').next().unwrap_or("");
+                    if int_part.is_empty() {
+                        return false;
+                    }
+                    if let Ok(second) = int_part.parse::<u32>() {
+                        if second > 59 {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    fn digits_before_index(slice: &str, idx: usize) -> Option<String> {
+        if idx == 0 {
+            return None;
+        }
+
+        let mut digits = String::new();
+        for ch in slice[..idx].chars().rev() {
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        if digits.is_empty() {
+            None
+        } else {
+            Some(digits.chars().rev().collect())
+        }
     }
 
     fn parse_char_class(
