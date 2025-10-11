@@ -2,7 +2,7 @@ use crate::format::Format;
 use derive_more::From;
 use ordered_float::OrderedFloat;
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
 use try_from_expr::TryFromExpr;

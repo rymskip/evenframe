@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parenthesized;
 use tracing::{debug, info, trace, warn};
 
@@ -54,7 +54,10 @@ impl ToTokens for PermissionsConfig {
 
 impl PermissionsConfig {
     pub fn parse(attrs: &[syn::Attribute]) -> syn::Result<Option<PermissionsConfig>> {
-        debug!("Parsing permissions configuration from {} attributes", attrs.len());
+        debug!(
+            "Parsing permissions configuration from {} attributes",
+            attrs.len()
+        );
         let mut all_permissions: Option<String> = None;
         let mut select_permissions: Option<String> = None;
         let mut update_permissions: Option<String> = None;
@@ -144,13 +147,17 @@ impl PermissionsConfig {
                     delete_permissions: delete_permissions.clone(),
                     create_permissions: create_permissions.clone(),
                 };
-                
+
                 info!("Successfully parsed permissions configuration");
-                debug!("Permission details - all: {}, select: {}, update: {}, delete: {}, create: {}",
-                       all_permissions.is_some(), select_permissions.is_some(), 
-                       update_permissions.is_some(), delete_permissions.is_some(), 
-                       create_permissions.is_some());
-                
+                debug!(
+                    "Permission details - all: {}, select: {}, update: {}, delete: {}, create: {}",
+                    all_permissions.is_some(),
+                    select_permissions.is_some(),
+                    update_permissions.is_some(),
+                    delete_permissions.is_some(),
+                    create_permissions.is_some()
+                );
+
                 return Ok(Some(permissions_config));
             }
         }

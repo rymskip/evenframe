@@ -799,9 +799,8 @@ impl Comparator {
             let (old_table, new_table) = match (old.tables.get(table), new.tables.get(table)) {
                 (Some(o), Some(n)) => (o, n),
                 _ => {
-                    let msg = format!(
-                        "Table '{table}' present in key set but missing in schema maps"
-                    );
+                    let msg =
+                        format!("Table '{table}' present in key set but missing in schema maps");
                     tracing::error!(table = %table, "{}", msg);
                     return Err(EvenframeError::comparison(msg));
                 }
@@ -834,9 +833,8 @@ impl Comparator {
             let (old_edge, new_edge) = match (old.edges.get(edge), new.edges.get(edge)) {
                 (Some(o), Some(n)) => (o, n),
                 _ => {
-                    let msg = format!(
-                        "Edge '{edge}' present in key set but missing in schema maps"
-                    );
+                    let msg =
+                        format!("Edge '{edge}' present in key set but missing in schema maps");
                     tracing::error!(edge = %edge, "{}", msg);
                     return Err(EvenframeError::comparison(msg));
                 }

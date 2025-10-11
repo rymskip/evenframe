@@ -21,8 +21,9 @@ pub use edge::{Direction, EdgeConfig, Subquery};
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
 pub use surql::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType,
-    define::DefineConfig, generate_query, generate_where_clause,
+    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType, SelectConfig,
+    SortDefinition, SortDirection, SortValue, define::DefineConfig, generate_query,
+    generate_sort_clause, generate_where_clause,
 };
 use surrealdb::{
     Surreal,

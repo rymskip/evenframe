@@ -21,6 +21,7 @@ pub mod schemasync;
 // Re-export commonly used items for convenience
 pub use error::{EvenframeError, Result};
 pub use schemasync::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, compare, generate_where_clause,
-    mockmake, mockmake::coordinate, mockmake::format,
+    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig, SortDefinition,
+    SortDirection, SortValue, compare, generate_sort_clause, generate_where_clause, mockmake,
+    mockmake::coordinate, mockmake::format,
 };

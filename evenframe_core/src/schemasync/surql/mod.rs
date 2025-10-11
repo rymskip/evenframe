@@ -415,18 +415,18 @@ pub fn generate_update_query_with_edges<T: Serialize>(
     table_config: &TableConfig,
     object: &T,
     explicit_id: Option<String>,
-    filters: Option<Vec<FilterValue>>,
+    select_config: Option<SelectConfig>,
 ) -> (String, String) {
     let (main_query, record_id) = generate_query(
         QueryType::Update,
         table_config,
         object,
         explicit_id,
-        filters.clone(),
+        select_config.clone(),
     );
 
-    if let Some(ref f) = filters
-        && !f.is_empty()
+    if let Some(ref config) = select_config
+        && !config.filters.is_empty()
     {
         return (main_query, record_id);
     }
@@ -741,6 +741,14 @@ pub struct SortValue {
     _tag: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SelectConfig {
+    #[serde(default)]
+    pub filters: Vec<FilterValue>,
+    #[serde(default)]
+    pub sorts: Vec<SortValue>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilterPrimitive {
     String,
@@ -850,12 +858,33 @@ pub fn generate_where_clause(filters: &[FilterValue]) -> String {
     format!("WHERE {}", conditions.join(" AND "))
 }
 
+pub fn generate_sort_clause(sorts: &[SortValue]) -> String {
+    if sorts.is_empty() {
+        return String::new();
+    }
+
+    let orderings: Vec<String> = sorts
+        .iter()
+        .map(|sort| {
+            let field = sort.field_key.to_case(Case::Snake);
+            let direction = match sort.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+
+            format!("{} {}", field, direction)
+        })
+        .collect();
+
+    format!("ORDER BY {}", orderings.join(", "))
+}
+
 pub fn generate_query<T: Serialize>(
     query_type: QueryType,
     table_config: &TableConfig,
     object: &T,
     explicit_id: Option<String>,
-    filters: Option<Vec<FilterValue>>,
+    select_config: Option<SelectConfig>,
 ) -> (String, String) {
     if query_type == QueryType::Select {
         let target = if let Some(id) = explicit_id {
@@ -865,11 +894,16 @@ pub fn generate_query<T: Serialize>(
         };
 
         let mut query = format!("SELECT * FROM {}", target);
-        if let Some(f) = filters {
-            let where_clause = generate_where_clause(&f);
+        if let Some(ref config) = select_config {
+            let where_clause = generate_where_clause(&config.filters);
             if !where_clause.is_empty() {
                 query.push(' ');
                 query.push_str(&where_clause);
+            }
+            let sort_clause = generate_sort_clause(&config.sorts);
+            if !sort_clause.is_empty() {
+                query.push(' ');
+                query.push_str(&sort_clause);
             }
         }
         query.push(';');
@@ -890,8 +924,8 @@ pub fn generate_query<T: Serialize>(
         0,
     );
 
-    let where_clause = if let Some(ref f) = filters {
-        let clause = generate_where_clause(f);
+    let where_clause = if let Some(ref config) = select_config {
+        let clause = generate_where_clause(&config.filters);
         if !clause.is_empty() {
             if let QueryType::Update = query_type {
                 let parts: Vec<&str> = main_query.splitn(3, ' ').collect();
@@ -1016,5 +1050,81 @@ pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> Resu
         // The caller should handle iterating over a Vec. This function validates a single ID.
         // Other types are not record links, so validation passes.
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::StructConfig;
+    use serde_json::json;
+
+    fn sample_table_config() -> TableConfig {
+        TableConfig {
+            table_name: "person".to_string(),
+            struct_config: StructConfig {
+                struct_name: "Person".to_string(),
+                fields: Vec::new(),
+                validators: Vec::new(),
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+        }
+    }
+
+    #[test]
+    fn generate_sort_clause_orders_multiple_fields() {
+        let sorts = vec![
+            SortValue {
+                field_key: "Name".to_string(),
+                sort_type: FilterPrimitive::String,
+                direction: SortDirection::Asc,
+                _tag: None,
+            },
+            SortValue {
+                field_key: "createdAt".to_string(),
+                sort_type: FilterPrimitive::Date,
+                direction: SortDirection::Desc,
+                _tag: None,
+            },
+        ];
+
+        let clause = generate_sort_clause(&sorts);
+
+        assert_eq!(clause, "ORDER BY name ASC, created_at DESC");
+    }
+
+    #[test]
+    fn generate_query_select_includes_where_and_order_by() {
+        let table_config = sample_table_config();
+        let filters = vec![FilterValue {
+            field_key: "name".to_string(),
+            filter_type: FilterPrimitive::String,
+            operator: FilterOperator::Equals,
+            value: json!("Alice"),
+            _tag: None,
+        }];
+        let sorts = vec![SortValue {
+            field_key: "createdAt".to_string(),
+            sort_type: FilterPrimitive::Date,
+            direction: SortDirection::Desc,
+            _tag: None,
+        }];
+        let select_config = SelectConfig { filters, sorts };
+
+        let (query, temp_id) = generate_query(
+            QueryType::Select,
+            &table_config,
+            &(),
+            None,
+            Some(select_config),
+        );
+
+        assert_eq!(temp_id, "");
+        assert_eq!(
+            query,
+            "SELECT * FROM person WHERE name = 'Alice' ORDER BY created_at DESC;"
+        );
     }
 }

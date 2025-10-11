@@ -90,7 +90,9 @@ pub enum EvenframeError {
     #[error("Table definition error: {0}")]
     TableDefinition(String),
 
-    #[error("Field definition error:\n{message}\nwork_stack: {work_stack}\nvalue_stack: {value_stack}\nitem: {item}\nvisited_types: {visited_types}\n")]
+    #[error(
+        "Field definition error:\n{message}\nwork_stack: {work_stack}\nvalue_stack: {value_stack}\nitem: {item}\nvisited_types: {visited_types}\n"
+    )]
     FieldDefinition {
         message: String,
         work_stack: String,

@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use std::fmt;
 use std::str::FromStr;
 use syn::parenthesized;
@@ -35,16 +35,24 @@ impl ToTokens for EdgeConfig {
 impl EdgeConfig {
     pub fn parse(field: &syn::Field) -> syn::Result<Option<EdgeConfig>> {
         debug!("Parsing edge configuration from field");
-        let field_name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_else(|| "<unnamed>".to_string());
+        let field_name = field
+            .ident
+            .as_ref()
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "<unnamed>".to_string());
         trace!("Processing field: {}", field_name);
-        
+
         let mut edge_name: Option<String> = None;
         let mut from: Option<String> = None;
         let mut to: Option<String> = None;
         let mut direction: Option<Direction> = None;
 
         // Iterate over all attributes of the field.
-        debug!("Found {} attributes on field {}", field.attrs.len(), field_name);
+        debug!(
+            "Found {} attributes on field {}",
+            field.attrs.len(),
+            field_name
+        );
         for (i, attr) in field.attrs.iter().enumerate() {
             trace!("Processing attribute {} of {}", i + 1, field.attrs.len());
             // Check if the attribute is an "edge" attribute.
@@ -57,7 +65,10 @@ impl EdgeConfig {
                         let content;
                         parenthesized!(content in meta.input);
                         if edge_name.is_some() {
-                            warn!("Duplicate edge_name attribute found on field {}", field_name);
+                            warn!(
+                                "Duplicate edge_name attribute found on field {}",
+                                field_name
+                            );
                             return Err(meta.error("duplicate edge_name attribute"));
                         }
                         let parsed_name = content.parse::<syn::LitStr>()?.value();
@@ -99,50 +110,53 @@ impl EdgeConfig {
                         let content;
                         parenthesized!(content in meta.input);
                         if direction.is_some() {
-                            warn!("Duplicate direction attribute found on field {}", field_name);
+                            warn!(
+                                "Duplicate direction attribute found on field {}",
+                                field_name
+                            );
                             return Err(meta.error("duplicate direction attribute"));
                         }
                         let lit: syn::LitStr = content.parse()?;
                         let direction_str = lit.value();
                         trace!("Parsing direction string: {}", direction_str);
                         // Convert the string into a Direction using FromStr.
-                        let parsed_direction = direction_str
-                            .parse::<Direction>()
-                            .map_err(|e| {
-                                warn!("Invalid direction '{}' on field {}: {}", direction_str, field_name, e);
-                                meta.error(e)
-                            })?;
+                        let parsed_direction = direction_str.parse::<Direction>().map_err(|e| {
+                            warn!(
+                                "Invalid direction '{}' on field {}: {}",
+                                direction_str, field_name, e
+                            );
+                            meta.error(e)
+                        })?;
                         trace!("Parsed direction: {:?}", parsed_direction);
                         direction = Some(parsed_direction);
                         return Ok(());
                     }
                     // If an unexpected attribute is encountered, return an error.
                     let path = meta.path.to_token_stream().to_string();
-                    warn!("Unrecognized edge detail '{}' on field {}", path, field_name);
+                    warn!(
+                        "Unrecognized edge detail '{}' on field {}",
+                        path, field_name
+                    );
                     Err(meta.error("unrecognized edge detail"))
                 })?;
                 // If any of the required attributes is missing, return an error indicating which one.
                 debug!("Validating parsed edge attributes for field {}", field_name);
-                let edge_name = edge_name
-                    .ok_or_else(|| {
-                        error!("Missing edge_name attribute on field {}", field_name);
-                        syn::Error::new(field.span(), "missing edge_name attribute")
-                    })?;
-                let from = from
-                    .ok_or_else(|| {
-                        error!("Missing from attribute on field {}", field_name);
-                        syn::Error::new(field.span(), "missing from attribute")
-                    })?;
-                let to = to
-                    .ok_or_else(|| {
-                        error!("Missing to attribute on field {}", field_name);
-                        syn::Error::new(field.span(), "missing to attribute")
-                    })?;
-                let direction = direction
-                    .ok_or_else(|| {
-                        error!("Missing direction attribute on field {}", field_name);
-                        syn::Error::new(field.span(), "missing direction attribute")
-                    })?;
+                let edge_name = edge_name.ok_or_else(|| {
+                    error!("Missing edge_name attribute on field {}", field_name);
+                    syn::Error::new(field.span(), "missing edge_name attribute")
+                })?;
+                let from = from.ok_or_else(|| {
+                    error!("Missing from attribute on field {}", field_name);
+                    syn::Error::new(field.span(), "missing from attribute")
+                })?;
+                let to = to.ok_or_else(|| {
+                    error!("Missing to attribute on field {}", field_name);
+                    syn::Error::new(field.span(), "missing to attribute")
+                })?;
+                let direction = direction.ok_or_else(|| {
+                    error!("Missing direction attribute on field {}", field_name);
+                    syn::Error::new(field.span(), "missing direction attribute")
+                })?;
 
                 let edge_config = EdgeConfig {
                     edge_name: edge_name.clone(),
@@ -150,8 +164,10 @@ impl EdgeConfig {
                     to: to.clone(),
                     direction: direction.clone(),
                 };
-                info!("Successfully parsed edge configuration for field {}: {} -> {} -> {}, direction: {:?}", 
-                      field_name, from, edge_name, to, direction);
+                info!(
+                    "Successfully parsed edge configuration for field {}: {} -> {} -> {}, direction: {:?}",
+                    field_name, from, edge_name, to, direction
+                );
                 return Ok(Some(edge_config));
             }
         }
@@ -168,11 +184,20 @@ pub struct Subquery {
 
 impl Subquery {
     pub fn parse(field: &syn::Field) -> syn::Result<Option<Subquery>> {
-        let field_name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_else(|| "<unnamed>".to_string());
+        let field_name = field
+            .ident
+            .as_ref()
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "<unnamed>".to_string());
         debug!("Parsing subquery configuration from field {}", field_name);
-        
+
         for (i, attr) in field.attrs.iter().enumerate() {
-            trace!("Processing attribute {} of {} on field {}", i + 1, field.attrs.len(), field_name);
+            trace!(
+                "Processing attribute {} of {} on field {}",
+                i + 1,
+                field.attrs.len(),
+                field_name
+            );
             if attr.path().is_ident("subquery") {
                 debug!("Found subquery attribute on field {}", field_name);
                 // Parse the attribute content as a literal string.
@@ -199,15 +224,9 @@ pub enum Direction {
 impl ToTokens for Direction {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Direction::From => {
-                tokens.extend(quote! { ::evenframe::schemasync::Direction::From })
-            }
-            Direction::To => {
-                tokens.extend(quote! { ::evenframe::schemasync::Direction::To })
-            }
-            Direction::Both => {
-                tokens.extend(quote! { ::evenframe::schemasync::Direction::To })
-            }
+            Direction::From => tokens.extend(quote! { ::evenframe::schemasync::Direction::From }),
+            Direction::To => tokens.extend(quote! { ::evenframe::schemasync::Direction::To }),
+            Direction::Both => tokens.extend(quote! { ::evenframe::schemasync::Direction::To }),
         }
     }
 }
@@ -222,19 +241,19 @@ impl FromStr for Direction {
             "from" => {
                 trace!("Parsed direction: From");
                 Ok(Direction::From)
-            },
+            }
             "to" => {
                 trace!("Parsed direction: To");
                 Ok(Direction::To)
-            },
+            }
             "both" => {
                 trace!("Parsed direction: Both (mapped to To)");
                 Ok(Direction::To)
-            },
+            }
             _ => {
                 error!("Invalid direction string: '{}'", s);
                 Err(format!("Invalid direction: {}", s))
-            },
+            }
         }
     }
 }

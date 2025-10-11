@@ -168,11 +168,11 @@ impl Serialize for EvenframeDuration {
     {
         // Serialize as a tuple [seconds, nanos]
         use serde::ser::SerializeTuple;
-        
+
         // Get the total seconds and the nanosecond part
         let total_seconds = self.0.num_seconds();
         let nanos = self.0.subsec_nanos();
-        
+
         // Create a 2-element tuple
         let mut tuple = serializer.serialize_tuple(2)?;
         tuple.serialize_element(&total_seconds)?;
@@ -245,13 +245,14 @@ impl<'de> Deserialize<'de> for EvenframeDuration {
                 let nanos = seq
                     .next_element::<i32>()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-                
+
                 // Ensure no extra elements
                 if seq.next_element::<de::IgnoredAny>()?.is_some() {
                     return Err(de::Error::invalid_length(3, &self));
                 }
 
-                let td = chrono::TimeDelta::seconds(seconds) + chrono::TimeDelta::nanoseconds(nanos as i64);
+                let td = chrono::TimeDelta::seconds(seconds)
+                    + chrono::TimeDelta::nanoseconds(nanos as i64);
                 Ok(EvenframeDuration(td))
             }
         }

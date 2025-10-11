@@ -114,7 +114,7 @@ pub fn parse_field_validators_with_logic(
                                     - #[validators(StringValidator::MinLength(5), StringValidator::MaxLength(50))]\n\n\
                                     Parse error: {}",
                                     parse_err
-                                )
+                                ),
                             ));
                         }
                     }

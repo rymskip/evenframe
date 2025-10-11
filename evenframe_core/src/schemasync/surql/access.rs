@@ -2,8 +2,8 @@ use crate::evenframe_log;
 use crate::schemasync::config::{AccessConfig, AccessType};
 use std::env;
 use surrealdb::{
-    engine::{local::Db, remote::http::Client},
     Surreal,
+    engine::{local::Db, remote::http::Client},
 };
 use tracing;
 
@@ -80,8 +80,7 @@ pub async fn execute_access_query(
             tracing::error!(db = %db_name, error = %e, "Failed to execute access statements");
             let error_msg = format!(
                 "Failed to execute define access statements for db {}: {}",
-                db_name,
-                e
+                db_name, e
             );
             evenframe_log!(&error_msg, "results.log", true);
             return Err(e.into());
@@ -95,12 +94,12 @@ pub async fn setup_access_definitions(
 ) -> Result<String, Box<dyn std::error::Error>> {
     tracing::info!("Setting up access definitions");
     let mut access_query = String::new();
-    
+
     tracing::debug!(
         access_count = schemasync_config.database.accesses.len(),
         "Processing access configurations"
     );
-    
+
     evenframe_log!(
         &format!("{:#?}", &schemasync_config.database.accesses),
         "access_config.surql"
@@ -124,7 +123,7 @@ pub async fn setup_access_definitions(
         total_query_length = access_query.len(),
         "Access definitions setup complete"
     );
-    
+
     evenframe_log!(&access_query, "access_query.surql");
     Ok(access_query)
 }

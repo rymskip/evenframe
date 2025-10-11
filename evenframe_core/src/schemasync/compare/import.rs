@@ -635,7 +635,9 @@ impl<'a> SchemaImporter<'a> {
         }
 
         // Result
-        value_stack.pop().unwrap_or_else(|| ObjectType::Simple("unknown".to_string()))
+        value_stack
+            .pop()
+            .unwrap_or_else(|| ObjectType::Simple("unknown".to_string()))
     }
 
     /// Parse object field definitions

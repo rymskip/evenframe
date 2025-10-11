@@ -75,10 +75,7 @@ impl DatabaseConfig {
         };
         trace!(
             "Test database config - URL: {}, namespace: {}, database: {}, timeout: {}s",
-            config.url,
-            config.namespace,
-            config.database,
-            config.timeout
+            config.url, config.namespace, config.database, config.timeout
         );
         trace!("Test access configs: {} entries", config.accesses.len());
         config
