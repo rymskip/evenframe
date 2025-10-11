@@ -20,7 +20,10 @@ use tracing::{debug, error, info, trace};
 pub use edge::{Direction, EdgeConfig, Subquery};
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
-pub use surql::{QueryType, define::DefineConfig, generate_query};
+pub use surql::{
+    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType,
+    define::DefineConfig, generate_query, generate_where_clause,
+};
 use surrealdb::{
     Surreal,
     engine::remote::http::{Client, Http},
@@ -397,18 +400,13 @@ impl<'a> Schemasync<'a> {
                                 }
 
                                 // Check if this field is new or modified
-                                if table_change
-                                    .new_fields
-                                    .contains(&norm.to_string())
+                                if table_change.new_fields.contains(&norm.to_string())
                                     || table_change
                                         .modified_fields
                                         .iter()
                                         .any(|fc| fc.field_name == norm)
                                 {
-                                    trace!(
-                                        "Defining field: {} on table: {}",
-                                        norm, table_name
-                                    );
+                                    trace!("Defining field: {} on table: {}", norm, table_name);
                                     execute(table_name, stmt).await?;
                                 } else {
                                     trace!(

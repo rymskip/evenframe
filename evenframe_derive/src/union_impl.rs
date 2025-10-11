@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, spanned::Spanned, Type, TypePath};
+use syn::{Data, DeriveInput, Fields, Type, TypePath, spanned::Spanned};
 
 /// Extract the innermost type name from a potentially wrapped type (e.g., Box<Account> -> Account)
 fn extract_inner_type_name(ty: &Type) -> String {
@@ -10,13 +10,12 @@ fn extract_inner_type_name(ty: &Type) -> String {
                 let ident = &segment.ident;
 
                 // Check if this is a generic type like Box<T>, Option<T>, etc.
-                if !segment.arguments.is_empty() {
-                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                        if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
-                            // Recursively extract from the inner type
-                            return extract_inner_type_name(inner_type);
-                        }
-                    }
+                if !segment.arguments.is_empty()
+                    && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+                {
+                    // Recursively extract from the inner type
+                    return extract_inner_type_name(inner_type);
                 }
 
                 // Return the current segment name if no generics or can't extract

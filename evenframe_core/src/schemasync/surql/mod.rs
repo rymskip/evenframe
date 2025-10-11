@@ -16,9 +16,11 @@ use convert_case::{Case, Casing};
 use serde::Serialize;
 use serde_json::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryType {
     Create,
     Update,
+    Select,
 }
 
 /// Check if a field is nullable (wrapped in Option)
@@ -420,8 +422,15 @@ pub fn generate_update_query_with_edges<T: Serialize>(
         table_config,
         object,
         explicit_id,
-        filters,
+        filters.clone(),
     );
+
+    if let Some(ref f) = filters
+        && !f.is_empty()
+    {
+        return (main_query, record_id);
+    }
+
     let edge_query = generate_edge_update_query(table_config, object, &record_id);
 
     if edge_query.is_empty() {
@@ -472,6 +481,7 @@ pub(crate) fn generate_recursive(
                 )
             }
         }
+        QueryType::Select => unreachable!("Select should not be handled in generate_recursive"),
     };
 
     let record_id = if depth > 0 {
@@ -492,6 +502,7 @@ pub(crate) fn generate_recursive(
                     format!("{}:rand()", table_config.table_name)
                 }
             }
+            QueryType::Select => unreachable!("Select should not be handled in generate_recursive"),
         }
     } else {
         generated_id.clone()
@@ -700,12 +711,35 @@ pub(crate) fn generate_recursive(
     let main_query = match query_type {
         QueryType::Create => format!("CREATE {} CONTENT {{ {} }};", record_id, content_body),
         QueryType::Update => format!("UPDATE {} MERGE {{ {} }};", record_id, content_body),
+        QueryType::Select => unreachable!("Select should not be handled in generate_recursive"),
     };
 
     (main_query, generated_id)
 }
 
 use serde::Deserialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SortDefinition {
+    key: String,
+    label: String,
+    sort_type: FilterPrimitive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SortValue {
+    field_key: String,
+    sort_type: FilterPrimitive,
+    direction: SortDirection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    _tag: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilterPrimitive {
@@ -746,6 +780,76 @@ pub struct FilterValue {
     pub _tag: Option<String>,
 }
 
+fn map_filter_primitive_to_field_type(primitive: &FilterPrimitive) -> FieldType {
+    match primitive {
+        FilterPrimitive::String => FieldType::String,
+        FilterPrimitive::Number => FieldType::Decimal,
+        FilterPrimitive::Boolean => FieldType::Bool,
+        FilterPrimitive::Date => FieldType::DateTime,
+        FilterPrimitive::Select => FieldType::String, // Assuming select options are strings
+    }
+}
+
+pub fn generate_where_clause(filters: &[FilterValue]) -> String {
+    if filters.is_empty() {
+        return String::new();
+    }
+
+    let conditions: Vec<String> = filters
+        .iter()
+        .map(|filter| {
+            let field_type = map_filter_primitive_to_field_type(&filter.filter_type);
+            let surreal_value = value::to_surreal_string(&field_type, &filter.value);
+
+            match filter.operator {
+                FilterOperator::Contains => {
+                    format!(
+                        "{} CONTAINS {}",
+                        filter.field_key.to_case(Case::Snake),
+                        surreal_value
+                    )
+                }
+                FilterOperator::Equals => format!(
+                    "{} = {}",
+                    filter.field_key.to_case(Case::Snake),
+                    surreal_value
+                ),
+                FilterOperator::StartsWith => {
+                    format!(
+                        "string::starts_with({}, {})",
+                        filter.field_key.to_case(Case::Snake),
+                        surreal_value
+                    )
+                }
+                FilterOperator::EndsWith => {
+                    format!(
+                        "string::ends_with({}, {})",
+                        filter.field_key.to_case(Case::Snake),
+                        surreal_value
+                    )
+                }
+                FilterOperator::GreaterThan => format!(
+                    "{} > {}",
+                    filter.field_key.to_case(Case::Snake),
+                    surreal_value
+                ),
+                FilterOperator::LessThan => format!(
+                    "{} < {}",
+                    filter.field_key.to_case(Case::Snake),
+                    surreal_value
+                ),
+                FilterOperator::Is => format!(
+                    "{} IS {}",
+                    filter.field_key.to_case(Case::Snake),
+                    surreal_value
+                ),
+            }
+        })
+        .collect();
+
+    format!("WHERE {}", conditions.join(" AND "))
+}
+
 pub fn generate_query<T: Serialize>(
     query_type: QueryType,
     table_config: &TableConfig,
@@ -753,11 +857,30 @@ pub fn generate_query<T: Serialize>(
     explicit_id: Option<String>,
     filters: Option<Vec<FilterValue>>,
 ) -> (String, String) {
+    if query_type == QueryType::Select {
+        let target = if let Some(id) = explicit_id {
+            id
+        } else {
+            table_config.table_name.clone()
+        };
+
+        let mut query = format!("SELECT * FROM {}", target);
+        if let Some(f) = filters {
+            let where_clause = generate_where_clause(&f);
+            if !where_clause.is_empty() {
+                query.push(' ');
+                query.push_str(&where_clause);
+            }
+        }
+        query.push(';');
+        return (query, String::new());
+    }
+
     let value = serde_json::to_value(object).expect("Failed to serialize object to JSON Value");
     let mut all_let_statements = Vec::new();
     let mut all_relation_statements = Vec::new();
 
-    let (main_query, generated_id) = generate_recursive(
+    let (mut main_query, generated_id) = generate_recursive(
         query_type,
         table_config,
         &value,
@@ -766,6 +889,23 @@ pub fn generate_query<T: Serialize>(
         &mut all_relation_statements,
         0,
     );
+
+    let where_clause = if let Some(ref f) = filters {
+        let clause = generate_where_clause(f);
+        if !clause.is_empty() {
+            if let QueryType::Update = query_type {
+                let parts: Vec<&str> = main_query.splitn(3, ' ').collect();
+                if parts.len() == 3 && parts[0] == "UPDATE" {
+                    main_query = format!("UPDATE {} {}", table_config.table_name, parts[2]);
+                }
+            }
+            format!(" {}", clause)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
 
     let let_prefix = if all_let_statements.is_empty() {
         String::new()
@@ -779,7 +919,26 @@ pub fn generate_query<T: Serialize>(
         format!(" {}", all_relation_statements.join(" "))
     };
 
-    let full_query = format!("{}{}{}", let_prefix, main_query.trim(), relation_suffix);
+    // Inject WHERE clause before the semicolon of the main query
+    let main_query_with_where = if let Some(pos) = main_query.rfind(';') {
+        let (query_part, _) = main_query.split_at(pos);
+        format!("{}{};", query_part, where_clause)
+    } else {
+        // Fallback if no semicolon is found
+        format!(
+            "{}{}{}",
+            main_query,
+            where_clause,
+            if where_clause.is_empty() { "" } else { ";" }
+        )
+    };
+
+    let full_query = format!(
+        "{}{}{}",
+        let_prefix,
+        main_query_with_where.trim(),
+        relation_suffix
+    );
 
     (full_query, generated_id)
 }
