@@ -1,6 +1,7 @@
 pub use evenframe_core::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, config, generate_where_clause,
-    registry, schemasync, traits, types, validator, wrappers,
+    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig, config,
+    generate_sort_clause, generate_where_clause, registry, schemasync, traits, types, validator,
+    wrappers,
 };
 
 pub use evenframe_derive::{Evenframe, EvenframeUnion};
