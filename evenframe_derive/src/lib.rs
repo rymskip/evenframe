@@ -17,7 +17,8 @@ mod union_impl;
         permissions,
         mock_data,
         validators,
-        relation
+        relation,
+        event
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {

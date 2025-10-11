@@ -2,6 +2,7 @@
 pub mod compare;
 pub mod config;
 pub mod edge;
+pub mod event;
 pub mod mockmake;
 pub mod permissions;
 pub mod surql;
@@ -18,6 +19,7 @@ use tracing::{debug, error, info, trace};
 
 // Re-export commonly used types
 pub use edge::{Direction, EdgeConfig, Subquery};
+pub use event::EventConfig;
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
 pub use surql::{

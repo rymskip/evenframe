@@ -347,7 +347,67 @@ pub fn generate_define_statements(
         }
     }
 
+    if !table_config.events.is_empty() {
+        trace!(
+            table_name = %table_name,
+            event_count = table_config.events.len(),
+            "Appending event statements"
+        );
+    }
+
+    for event in &table_config.events {
+        let statement = event.statement.trim();
+        trace!(table_name = %table_name, "Adding event statement: {}", statement);
+        output.push_str(statement);
+        if !statement.ends_with(';') {
+            output.push(';');
+        }
+        output.push('\n');
+    }
+
     info!(table_name = %table_name, output_length = output.len(), "Completed define statements generation");
     trace!(table_name = %table_name, "Generated output: {}", output);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemasync::EventConfig;
+    use crate::types::{StructConfig, TaggedUnion};
+
+    #[test]
+    fn generate_define_statements_appends_events() {
+        let table_config = TableConfig {
+            table_name: "user".to_string(),
+            struct_config: StructConfig {
+                struct_name: "User".to_string(),
+                fields: Vec::new(),
+                validators: Vec::new(),
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: vec![EventConfig {
+                statement: "DEFINE EVENT user_change ON TABLE user WHEN true THEN { RETURN true };"
+                    .to_string(),
+            }],
+        };
+
+        let query_details: HashMap<String, TableConfig> = HashMap::new();
+        let server_only: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        let statements = generate_define_statements(
+            "user",
+            &table_config,
+            &query_details,
+            &server_only,
+            &enums,
+            false,
+        );
+
+        assert!(statements.contains("DEFINE EVENT user_change ON TABLE user"));
+        assert!(statements.trim().ends_with(';'));
+    }
 }

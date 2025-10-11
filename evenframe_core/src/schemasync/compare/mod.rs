@@ -620,6 +620,8 @@ pub struct TableChanges {
     pub modified_fields: Vec<FieldChange>,
     pub permission_changed: bool,
     pub schema_type_changed: bool,
+    pub new_events: Vec<String>,
+    pub removed_events: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -725,6 +727,23 @@ impl SchemaChanges {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+
+        for table in &self.modified_tables {
+            if !table.new_events.is_empty() {
+                summary.push(format!(
+                    "New events on {}: {}",
+                    table.table_name,
+                    table.new_events.join(", ")
+                ));
+            }
+            if !table.removed_events.is_empty() {
+                summary.push(format!(
+                    "Removed events on {}: {}",
+                    table.table_name,
+                    table.removed_events.join(", ")
+                ));
+            }
         }
 
         if !self.new_accesses.is_empty() {
@@ -914,6 +933,8 @@ impl Comparator {
             modified_fields: Vec::new(),
             permission_changed: false,
             schema_type_changed: false,
+            new_events: Vec::new(),
+            removed_events: Vec::new(),
         };
 
         // Check schema type change
@@ -1031,12 +1052,26 @@ impl Comparator {
             }
         }
 
+        // Compare events by statement contents
+        let old_events: HashSet<String> = old_table.events.iter().cloned().collect();
+        let new_events: HashSet<String> = new_table.events.iter().cloned().collect();
+
+        for event in new_events.difference(&old_events) {
+            table_changes.new_events.push(event.clone());
+        }
+
+        for event in old_events.difference(&new_events) {
+            table_changes.removed_events.push(event.clone());
+        }
+
         // Return None if no changes detected
         if table_changes.new_fields.is_empty()
             && table_changes.removed_fields.is_empty()
             && table_changes.modified_fields.is_empty()
             && !table_changes.permission_changed
             && !table_changes.schema_type_changed
+            && table_changes.new_events.is_empty()
+            && table_changes.removed_events.is_empty()
         {
             Ok(None)
         } else {

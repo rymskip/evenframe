@@ -3,11 +3,11 @@ use convert_case::{Case, Casing};
 use evenframe_core::config::EvenframeConfig;
 use evenframe_core::{
     derive::attributes::{
-        parse_format_attribute_bin, parse_mock_data_attribute, parse_relation_attribute,
-        parse_table_validators,
+        parse_event_attributes, parse_format_attribute_bin, parse_mock_data_attribute,
+        parse_relation_attribute, parse_table_validators,
     },
     schemasync::table::TableConfig,
-    schemasync::{DefineConfig, EdgeConfig, PermissionsConfig},
+    schemasync::{DefineConfig, EdgeConfig, EventConfig, PermissionsConfig},
     types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData},
     validator::{StringValidator, Validator},
 };
@@ -111,6 +111,18 @@ pub fn build_all_configs() -> (
                                 let mock_generation_config =
                                     parse_mock_data_attribute(&item_struct.attrs).ok().flatten();
 
+                                let events = match parse_event_attributes(&item_struct.attrs) {
+                                    Ok(events) => events,
+                                    Err(e) => {
+                                        warn!(
+                                            error = %e,
+                                            struct_name = %struct_config.struct_name,
+                                            "Failed to parse event attributes, skipping"
+                                        );
+                                        Vec::new()
+                                    }
+                                };
+
                                 let table_config = TableConfig {
                                     table_name: table_name.clone(),
                                     struct_config: struct_config.clone(),
@@ -121,6 +133,10 @@ pub fn build_all_configs() -> (
                                         .ok()
                                         .flatten(),
                                     mock_generation_config,
+                                    events: events
+                                        .into_iter()
+                                        .map(|statement| EventConfig { statement })
+                                        .collect(),
                                 };
                                 trace!(
                                     "Inserting table config {:?}: {:#?}",

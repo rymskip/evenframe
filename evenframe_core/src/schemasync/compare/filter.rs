@@ -214,6 +214,8 @@ impl Mockmaker {
                             c.permission_changed
                                 || c.schema_type_changed
                                 || !c.removed_fields.is_empty()
+                                || !c.new_events.is_empty()
+                                || !c.removed_events.is_empty()
                         },
                     );
 

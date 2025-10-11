@@ -71,6 +71,7 @@ pub struct TableDefinition {
     pub array_wildcard_fields: HashMap<String, FieldDefinition>,
     pub permissions: Option<PermissionSet>,
     pub indexes: Vec<IndexDefinition>,
+    pub events: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,6 +139,11 @@ impl SchemaDefinition {
                 array_wildcard_fields: HashMap::new(), // TODO: Extract wildcard fields from config if available
                 permissions: Self::extract_permissions_from_config(config),
                 indexes: Vec::new(), // TODO: Extract indexes from config if available
+                events: config
+                    .events
+                    .iter()
+                    .map(|event| event.statement.clone())
+                    .collect(),
             };
 
             if config.relation.is_some() {
@@ -335,6 +341,7 @@ impl<'a> SchemaImporter<'a> {
         let mut current_table_statement: Option<String> = None;
         let mut current_fields: HashMap<String, FieldDefinition> = HashMap::new();
         let mut current_wildcard_fields: HashMap<String, FieldDefinition> = HashMap::new();
+        let mut table_events: HashMap<String, Vec<String>> = HashMap::new();
 
         for statement in statements {
             let trimmed = statement.trim();
@@ -356,6 +363,7 @@ impl<'a> SchemaImporter<'a> {
                         array_wildcard_fields: current_wildcard_fields.clone(),
                         permissions: None,   // TODO: Parse permissions
                         indexes: Vec::new(), // TODO: Parse indexes
+                        events: table_events.remove(&table_name).unwrap_or_default(),
                     };
                     tables.insert(table_name, table_def);
                     current_fields.clear();
@@ -372,6 +380,15 @@ impl<'a> SchemaImporter<'a> {
             else if trimmed.starts_with("DEFINE ACCESS") {
                 if let Some(access_def) = Self::parse_access_definition(trimmed) {
                     accesses.push(access_def);
+                }
+            }
+            // Parse DEFINE EVENT statements
+            else if trimmed.starts_with("DEFINE EVENT") {
+                if let Some((table_name, event_statement)) = Self::parse_event_definition(trimmed) {
+                    table_events
+                        .entry(table_name)
+                        .or_default()
+                        .push(event_statement);
                 }
             }
             // Parse DEFINE FIELD statements
@@ -406,6 +423,7 @@ impl<'a> SchemaImporter<'a> {
                 array_wildcard_fields: current_wildcard_fields,
                 permissions: None,
                 indexes: Vec::new(),
+                events: table_events.remove(&table_name).unwrap_or_default(),
             };
             tables.insert(table_name, table_def);
         }
@@ -898,6 +916,26 @@ impl<'a> SchemaImporter<'a> {
             assertions,
             parent_array_field: parent_array,
         })
+    }
+
+    /// Parse a DEFINE EVENT statement and extract the associated table
+    fn parse_event_definition(statement: &str) -> Option<(String, String)> {
+        if !statement.starts_with("DEFINE EVENT") {
+            return None;
+        }
+
+        let uppercase = statement.to_uppercase();
+        let on_table = " ON TABLE ";
+        let on_table_index = uppercase.find(on_table)?;
+        let after_on_table = &statement[on_table_index + on_table.len()..];
+        let mut parts = after_on_table.split_whitespace();
+        let table_token = parts.next()?;
+        let table_name = table_token
+            .trim_matches('`')
+            .trim_end_matches(';')
+            .to_string();
+
+        Some((table_name, statement.trim().to_string()))
     }
 
     /// Parse a DEFINE ACCESS statement

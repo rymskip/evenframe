@@ -1,5 +1,5 @@
 use quote::quote;
-use syn::{Attribute, Expr, ExprArray, ExprLit, Lit, Meta, spanned::Spanned};
+use syn::{Attribute, Expr, ExprArray, ExprLit, Lit, LitStr, Meta, spanned::Spanned};
 use tracing::{debug, error, info, trace};
 
 use crate::{
@@ -193,6 +193,48 @@ pub fn parse_mock_data_attribute(
     }
     debug!("No mock_data attribute found");
     Ok(None)
+}
+
+pub fn parse_event_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
+    info!(
+        "Starting event attribute parsing for {} attributes",
+        attrs.len()
+    );
+
+    let mut events = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("event") {
+            debug!("Found event attribute");
+            let lit: LitStr = attr.parse_args().map_err(|e| {
+                syn::Error::new(
+                    attr.span(),
+                    format!(
+                        "Failed to parse event attribute: {}\n\nExpected usage: #[event(\"DEFINE EVENT name ON TABLE table WHEN ... THEN ...\")]",
+                        e
+                    ),
+                )
+            })?;
+
+            let value = lit.value();
+            trace!(event_statement = %value, "Parsed event attribute");
+
+            if value.trim().is_empty() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "Event statement cannot be empty.\n\nExample: #[event(\"DEFINE EVENT my_event ON TABLE user WHEN $before != $after THEN ...\")]",
+                ));
+            }
+
+            events.push(value);
+        }
+    }
+
+    debug!(
+        event_count = events.len(),
+        "Completed event attribute parsing"
+    );
+    Ok(events)
 }
 
 pub fn parse_table_validators(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
@@ -607,4 +649,36 @@ pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<Format>,
     }
     debug!("No format attribute found");
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn parse_event_attributes_collects_events() {
+        let attrs: Vec<Attribute> = vec![
+            parse_quote!(#[mock_data(n = 10)]),
+            parse_quote!(#[event("DEFINE EVENT foo ON TABLE user WHEN true THEN { RETURN true }")]),
+            parse_quote!(#[event("DEFINE EVENT bar ON TABLE user WHEN true THEN { RETURN false }")]),
+        ];
+
+        let events = parse_event_attributes(&attrs).expect("expected events to parse");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events,
+            vec![
+                "DEFINE EVENT foo ON TABLE user WHEN true THEN { RETURN true }".to_string(),
+                "DEFINE EVENT bar ON TABLE user WHEN true THEN { RETURN false }".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_event_attributes_rejects_empty_statements() {
+        let attrs: Vec<Attribute> = vec![parse_quote!(#[event("")])];
+        let result = parse_event_attributes(&attrs);
+        assert!(result.is_err());
+    }
 }

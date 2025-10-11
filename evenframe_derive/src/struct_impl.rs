@@ -1,16 +1,19 @@
 use crate::{deserialization_impl::generate_custom_deserialize, imports::generate_struct_imports};
 use evenframe_core::{
     derive::{
-        attributes::{parse_format_attribute, parse_mock_data_attribute, parse_relation_attribute},
+        attributes::{
+            parse_event_attributes, parse_format_attribute, parse_mock_data_attribute,
+            parse_relation_attribute,
+        },
         validator_parser::parse_field_validators,
     },
     schemasync::{DefineConfig, EdgeConfig, PermissionsConfig},
     types::FieldType,
 };
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, LitStr};
 
 pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
     let ident = input.ident.clone();
@@ -64,6 +67,21 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
         let relation_config = match parse_relation_attribute(&input.attrs) {
             Ok(config) => config,
             Err(err) => return err.to_compile_error(),
+        };
+
+        // Parse table-level event attributes
+        let events = match parse_event_attributes(&input.attrs) {
+            Ok(events) => events,
+            Err(err) => {
+                return syn::Error::new(
+                    input.span(),
+                    format!(
+                        "Failed to parse event attribute: {}\n\nExample usage:\n#[event(\"DEFINE EVENT my_event ON TABLE my_table WHEN $before != $after THEN ...\")]",
+                        err
+                    ),
+                )
+                .to_compile_error();
+            }
         };
 
         // Check if an "id" field exists.
@@ -233,6 +251,21 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
             quote! { None }
         };
 
+        let event_tokens = if events.is_empty() {
+            quote! { Vec::new() }
+        } else {
+            let event_configs = events.iter().map(|statement| {
+                let lit = LitStr::new(statement, Span::call_site());
+                quote! {
+                    ::evenframe::schemasync::EventConfig {
+                        statement: String::from(#lit),
+                    }
+                }
+            });
+
+            quote! { vec![#(#event_configs),*] }
+        };
+
         let evenframe_persistable_struct_impl = {
             quote! {
                 impl EvenframePersistableStruct for #ident {
@@ -247,6 +280,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,
                             mock_generation_config: #mock_data_tokens,
+                            events: #event_tokens,
                         }
                     }
                 }

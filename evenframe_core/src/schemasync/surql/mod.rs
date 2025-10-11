@@ -1070,6 +1070,7 @@ mod tests {
             relation: None,
             permissions: None,
             mock_generation_config: None,
+            events: Vec::new(),
         }
     }
 
