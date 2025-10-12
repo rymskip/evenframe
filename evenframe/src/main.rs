@@ -15,6 +15,8 @@ async fn main() -> Result<()> {
     dotenv::dotenv().expect("Dotenv failed to initialize env variables");
 
     evenframe_log!("", "tracing.log");
+    evenframe_log!("", "errors.log");
+
     // Initialize tracing with environment variable control
     // Set RUST_LOG=debug for debug output, RUST_LOG=info for info only
     tracing_subscriber::fmt::init();
