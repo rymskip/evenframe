@@ -351,35 +351,29 @@ impl RegexValGen {
             (rest, None)
         };
 
-        if let Some(month_idx) = date_part.find('M') {
-            if let Some(month_str) = Self::digits_before_index(date_part, month_idx) {
-                if let Ok(month) = month_str.parse::<u32>() {
-                    if month > 11 {
-                        return false;
-                    }
-                }
-            }
+        if date_part
+            .find('M')
+            .map(|idx| Self::value_before_index_exceeds(date_part, idx, 11))
+            .unwrap_or(false)
+        {
+            return false;
         }
 
-        if let Some(day_idx) = date_part.find('D') {
-            if let Some(day_str) = Self::digits_before_index(date_part, day_idx) {
-                if let Ok(day) = day_str.parse::<u32>() {
-                    if day > 29 {
-                        return false;
-                    }
-                }
-            }
+        if date_part
+            .find('D')
+            .map(|idx| Self::value_before_index_exceeds(date_part, idx, 29))
+            .unwrap_or(false)
+        {
+            return false;
         }
 
         if let Some(time_part) = time_part {
-            if let Some(hour_idx) = time_part.find('H') {
-                if let Some(hour_str) = Self::digits_before_index(time_part, hour_idx) {
-                    if let Ok(hour) = hour_str.parse::<u32>() {
-                        if hour > 23 {
-                            return false;
-                        }
-                    }
-                }
+            if time_part
+                .find('H')
+                .map(|idx| Self::value_before_index_exceeds(time_part, idx, 23))
+                .unwrap_or(false)
+            {
+                return false;
             }
 
             if let Some(min_idx) = time_part.rfind('M') {
@@ -450,6 +444,13 @@ impl RegexValGen {
         } else {
             Some(digits.chars().rev().collect())
         }
+    }
+
+    fn value_before_index_exceeds(slice: &str, idx: usize, limit: u32) -> bool {
+        Self::digits_before_index(slice, idx)
+            .and_then(|value| value.parse::<u32>().ok())
+            .map(|parsed| parsed > limit)
+            .unwrap_or(false)
     }
 
     fn parse_char_class(
