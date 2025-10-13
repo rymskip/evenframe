@@ -138,55 +138,52 @@ impl<'a> FieldValueGenerator<'a> {
                 };
             } else if field_name == "in" {
                 // safe unwrap, we check if relation is some at the beginning of the function
-                let from_table = &self.table_config.relation.as_ref().unwrap().from;
-
-                let ids = self.mockmaker.id_map.get(from_table).unwrap_or_else(|| {
-                    panic!(
-                        "{}",
-                        format!(
-                            "There were no id's for the table {}, field {}",
-                            table_name, field_name
-                        )
-                    )
-                });
-
-                if ids.is_empty() {
-                    panic!(
-                        "{}",
-                        format!(
-                            "There were no id's for the table {}, field {}",
-                            table_name, field_name
-                        )
-                    )
+                let relation = self.table_config.relation.as_ref().unwrap();
+                for candidate in &relation.from {
+                    if let Some(ids) = self.mockmaker.id_map.get(candidate) {
+                        if ids.is_empty() {
+                            panic!(
+                                "{}",
+                                format!(
+                                    "There were no id's for the table {}, field {}",
+                                    candidate, field_name
+                                )
+                            )
+                        }
+                        return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
+                    }
                 }
-                return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
+                panic!(
+                    "{}",
+                    format!(
+                        "There were no id's for any of the tables {:?}, field {}",
+                        relation.from, field_name
+                    )
+                );
             } else if field_name == "out" {
                 // safe unwrap, we check if relation is some at the beginning of the function
-                let to_table = &self.table_config.relation.as_ref().unwrap().to;
-                let ids = self
-                    .mockmaker
-                    .id_map
-                    .get(&to_table.clone())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "{}",
-                            format!(
-                                "There were no id's for the table {}, field {}",
-                                table_name, field_name
+                let relation = self.table_config.relation.as_ref().unwrap();
+                for candidate in &relation.to {
+                    if let Some(ids) = self.mockmaker.id_map.get(candidate) {
+                        if ids.is_empty() {
+                            panic!(
+                                "{}",
+                                format!(
+                                    "There were no id's for the table {}, field {}",
+                                    candidate, field_name
+                                )
                             )
-                        )
-                    });
-
-                if ids.is_empty() {
-                    panic!(
-                        "{}",
-                        format!(
-                            "There were no id's for the table {}, field {}",
-                            table_name, field_name
-                        )
-                    )
+                        }
+                        return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
+                    }
                 }
-                return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
+                panic!(
+                    "{}",
+                    format!(
+                        "There were no id's for any of the tables {:?}, field {}",
+                        relation.to, field_name
+                    )
+                );
             }
 
             panic!(

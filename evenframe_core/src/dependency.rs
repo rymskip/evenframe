@@ -265,24 +265,28 @@ fn collect_table_dependencies(
         if let Some(relation) = &table.relation {
             tracing::trace!(
                 table = %table_name,
-                from = %relation.from,
-                to = %relation.to,
+                from = ?relation.from,
+                to = ?relation.to,
                 "Processing relation table dependencies"
             );
-            // Add dependency on the 'from' table
-            let from_snake = relation.from.to_case(Case::Snake);
-            if tables.contains_key(&relation.from) {
-                dependencies.insert(relation.from.clone());
-            } else if tables.contains_key(&from_snake) {
-                dependencies.insert(from_snake);
+            // Add dependency on each 'from' table
+            for from_table in &relation.from {
+                let from_snake = from_table.to_case(Case::Snake);
+                if tables.contains_key(from_table) {
+                    dependencies.insert(from_table.clone());
+                } else if tables.contains_key(&from_snake) {
+                    dependencies.insert(from_snake);
+                }
             }
 
-            // Add dependency on the 'to' table
-            let to_snake = relation.to.to_case(Case::Snake);
-            if tables.contains_key(&relation.to) {
-                dependencies.insert(relation.to.clone());
-            } else if tables.contains_key(&to_snake) {
-                dependencies.insert(to_snake);
+            // Add dependency on each 'to' table
+            for to_table in &relation.to {
+                let to_snake = to_table.to_case(Case::Snake);
+                if tables.contains_key(to_table) {
+                    dependencies.insert(to_table.clone());
+                } else if tables.contains_key(&to_snake) {
+                    dependencies.insert(to_snake);
+                }
             }
         }
 

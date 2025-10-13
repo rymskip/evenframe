@@ -9,30 +9,80 @@ use tracing::{debug, error, info, trace, warn};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct EdgeConfig {
     pub edge_name: String,
-    pub from: String,
-    pub to: String,
-    pub direction: Direction,
+
+    pub from: Vec<String>,
+
+    pub to: Vec<String>,
+
+    /* Table implementations of EdgeConfig shouldn't have direction */
+    pub direction: Option<Direction>,
 }
 
 impl ToTokens for EdgeConfig {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let edge_name = &self.edge_name;
-        let from = &self.from;
-        let to = &self.to;
-        let direction = &self.direction;
+        let from_values = self.from.iter();
+        let to_values = self.to.iter();
+        let direction_tokens = match &self.direction {
+            Some(direction) => quote! { Some(#direction) },
+            None => quote! { None },
+        };
 
         tokens.extend(quote! {
             ::evenframe::schemasync::EdgeConfig {
                 edge_name: #edge_name.to_string(),
-                from: #from.to_string(),
-                to: #to.to_string(),
-                direction: #direction
+                from: vec![#(#from_values.to_string()),*],
+                to: vec![#(#to_values.to_string()),*],
+                direction: #direction_tokens
             }
         });
     }
 }
 
 impl EdgeConfig {
+    fn normalize_table_name(name: &str) -> String {
+        name.chars()
+            .filter(|c| !matches!(c, '_' | '-' | ' '))
+            .flat_map(|c| c.to_lowercase())
+            .collect()
+    }
+
+    pub fn matches_from_table(&self, table_name: &str) -> bool {
+        let normalized = Self::normalize_table_name(table_name);
+        self.from
+            .iter()
+            .any(|candidate| Self::normalize_table_name(candidate) == normalized)
+    }
+
+    pub fn matches_to_table(&self, table_name: &str) -> bool {
+        let normalized = Self::normalize_table_name(table_name);
+        self.to
+            .iter()
+            .any(|candidate| Self::normalize_table_name(candidate) == normalized)
+    }
+
+    pub fn resolve_direction_for_table(&self, table_name: &str) -> Direction {
+        if let Some(direction) = self.direction {
+            return direction;
+        }
+
+        let from_match = self.matches_from_table(table_name);
+        let to_match = self.matches_to_table(table_name);
+
+        match (from_match, to_match) {
+            (true, true) => Direction::Both,
+            (true, false) => Direction::From,
+            (false, true) => Direction::To,
+            (false, false) => {
+                warn!(
+                    "Unable to infer direction for table '{}' in edge '{}'. Defaulting to Both.",
+                    table_name, self.edge_name
+                );
+                Direction::Both
+            }
+        }
+    }
+
     pub fn parse(field: &syn::Field) -> syn::Result<Option<EdgeConfig>> {
         debug!("Parsing edge configuration from field");
         let field_name = field
@@ -43,8 +93,8 @@ impl EdgeConfig {
         trace!("Processing field: {}", field_name);
 
         let mut edge_name: Option<String> = None;
-        let mut from: Option<String> = None;
-        let mut to: Option<String> = None;
+        let mut from: Vec<String> = Vec::new();
+        let mut to: Vec<String> = Vec::new();
         let mut direction: Option<Direction> = None;
 
         // Iterate over all attributes of the field.
@@ -81,13 +131,9 @@ impl EdgeConfig {
                         trace!("Parsing from attribute");
                         let content;
                         parenthesized!(content in meta.input);
-                        if from.is_some() {
-                            warn!("Duplicate from attribute found on field {}", field_name);
-                            return Err(meta.error("duplicate from attribute"));
-                        }
                         let parsed_from = content.parse::<syn::LitStr>()?.value();
                         trace!("Parsed from: {}", parsed_from);
-                        from = Some(parsed_from);
+                        from.push(parsed_from);
                         return Ok(());
                     }
                     // For "to", ensure we only set it once.
@@ -95,13 +141,9 @@ impl EdgeConfig {
                         trace!("Parsing to attribute");
                         let content;
                         parenthesized!(content in meta.input);
-                        if to.is_some() {
-                            warn!("Duplicate to attribute found on field {}", field_name);
-                            return Err(meta.error("duplicate to attribute"));
-                        }
                         let parsed_to = content.parse::<syn::LitStr>()?.value();
                         trace!("Parsed to: {}", parsed_to);
-                        to = Some(parsed_to);
+                        to.push(parsed_to);
                         return Ok(());
                     }
 
@@ -145,27 +187,23 @@ impl EdgeConfig {
                     error!("Missing edge_name attribute on field {}", field_name);
                     syn::Error::new(field.span(), "missing edge_name attribute")
                 })?;
-                let from = from.ok_or_else(|| {
+                if from.is_empty() {
                     error!("Missing from attribute on field {}", field_name);
-                    syn::Error::new(field.span(), "missing from attribute")
-                })?;
-                let to = to.ok_or_else(|| {
+                    return Err(syn::Error::new(field.span(), "missing from attribute"));
+                }
+                if to.is_empty() {
                     error!("Missing to attribute on field {}", field_name);
-                    syn::Error::new(field.span(), "missing to attribute")
-                })?;
-                let direction = direction.ok_or_else(|| {
-                    error!("Missing direction attribute on field {}", field_name);
-                    syn::Error::new(field.span(), "missing direction attribute")
-                })?;
+                    return Err(syn::Error::new(field.span(), "missing to attribute"));
+                }
 
                 let edge_config = EdgeConfig {
                     edge_name: edge_name.clone(),
                     from: from.clone(),
                     to: to.clone(),
-                    direction: direction.clone(),
+                    direction,
                 };
                 info!(
-                    "Successfully parsed edge configuration for field {}: {} -> {} -> {}, direction: {:?}",
+                    "Successfully parsed edge configuration for field {}: {:?} -> {} -> {:?}, direction: {:?}",
                     field_name, from, edge_name, to, direction
                 );
                 return Ok(Some(edge_config));
@@ -214,7 +252,7 @@ impl Subquery {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Direction {
     From,
     To,

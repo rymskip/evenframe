@@ -268,17 +268,19 @@ pub fn generate_define_statements(
         "Context sizes"
     );
     trace!("Table config: {:?}", table_config);
-    let table_type = if table_config.relation.is_some() {
-        let relation = table_config.relation.as_ref().unwrap();
+    let table_type = if let Some(relation) = &table_config.relation {
         debug!(
-            "Table is a relation. table_name: {table_name}, from: {from}, to: {to}",
-            from = relation.from,
-            to = relation.to,
+            table = %table_name,
+            from = ?relation.from,
+            to = ?relation.to,
+            "Table is a relation."
         );
-        &format!("RELATION FROM {} TO {}", relation.from, relation.to)
+        let from_clause = relation.from.join(" | ");
+        let to_clause = relation.to.join(" | ");
+        format!("RELATION FROM {} TO {}", from_clause, to_clause)
     } else {
         debug!(table_name = %table_name, "Table is normal type");
-        "NORMAL"
+        "NORMAL".to_string()
     };
     let select_permissions = table_config
         .permissions

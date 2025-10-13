@@ -463,47 +463,33 @@ impl<'a> FieldValueGenerator<'a> {
         table_config: &TableConfig,
         rng: &mut ThreadRng,
     ) -> String {
-        if table_config.relation.is_some() && field_name == "in" {
-            let from_table = &table_config.relation.as_ref().unwrap().from;
-            if let Some(ids) = self.mockmaker.id_map.get(from_table) {
-                if !ids.is_empty() {
-                    format!("r'{}'", ids[rng.random_range(0..ids.len())].clone())
-                } else {
-                    format!("r'{}:1'", from_table.to_lowercase())
+        if let Some(relation) = &table_config.relation {
+            let mut pick_relation_record = |tables: &[String], field_label: &str| -> String {
+                for candidate in tables {
+                    if let Some(ids) = self.mockmaker.id_map.get(candidate) {
+                        if ids.is_empty() {
+                            panic!(
+                                "There were no id's for the table {}, field {}",
+                                candidate, field_label
+                            );
+                        }
+                        return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
+                    }
                 }
-            } else {
                 panic!(
-                    "{}",
-                    format!(
-                        "There were no id's for the table {}, field {}",
-                        table_name, field_name
-                    )
-                )
+                    "There were no id's for any of the tables {:?}, field {}",
+                    tables, field_label
+                );
+            };
+
+            if field_name == "in" {
+                return pick_relation_record(&relation.from, field_name);
+            } else if field_name == "out" {
+                return pick_relation_record(&relation.to, field_name);
             }
-        } else if table_config.relation.is_some() && field_name == "out" {
-            let to_table = &table_config.relation.as_ref().unwrap().to;
-            if let Some(ids) = self.mockmaker.id_map.get(to_table) {
-                if !ids.is_empty() {
-                    format!("r'{}'", ids[rng.random_range(0..ids.len())].clone())
-                } else {
-                    panic!(
-                        "{}",
-                        format!(
-                            "There were no id's for the table {}, field {}",
-                            table_name, field_name
-                        )
-                    )
-                }
-            } else {
-                panic!(
-                    "{}",
-                    format!(
-                        "There were no id's for the table {}, field {}",
-                        table_name, field_name
-                    )
-                )
-            }
-        } else if let Some(ids) = self.mockmaker.id_map.get(table_name) {
+        }
+
+        if let Some(ids) = self.mockmaker.id_map.get(table_name) {
             if *self.id_index < ids.len() {
                 format!("r'{}'", ids[*self.id_index].clone())
             } else {

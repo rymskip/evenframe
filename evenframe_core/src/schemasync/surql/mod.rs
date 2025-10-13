@@ -107,15 +107,16 @@ pub fn generate_edge_update_query<T: Serialize>(
             let edge_table = &edge_config.edge_name;
 
             // Generate incoming edge data array
-            let incoming_edges = extract_incoming_edges_as_surql(
+            let incoming_edges = extract_incoming_edges_as_surql(ExtractEdgesParams {
                 field_value,
                 edge_config,
                 record_id,
                 field,
-                &mut let_statements,
-                &mut relation_statements,
-                0,
-            );
+                let_statements: &mut let_statements,
+                relation_statements: &mut relation_statements,
+                depth: 0,
+                current_table_name: &table_config.table_name,
+            });
 
             if !incoming_edges.is_empty() {
                 let edge_update_query = generate_single_edge_table_update(
@@ -123,6 +124,7 @@ pub fn generate_edge_update_query<T: Serialize>(
                     &formatted_record_id,
                     &incoming_edges,
                     edge_config,
+                    &table_config.table_name,
                 );
                 query_parts.push(edge_update_query);
             }
@@ -200,16 +202,30 @@ fn handle_record_link(
     }
 }
 
-/// Extract incoming edges as SurrealQL array literal
-fn extract_incoming_edges_as_surql(
-    field_value: &Value,
-    edge_config: &EdgeConfig,
-    record_id: &str,
-    field: &StructField,
-    let_statements: &mut Vec<String>,
-    relation_statements: &mut Vec<String>,
+/// Parameters for extracting incoming edges as SurrealQL
+struct ExtractEdgesParams<'a> {
+    field_value: &'a Value,
+    edge_config: &'a EdgeConfig,
+    record_id: &'a str,
+    field: &'a StructField,
+    let_statements: &'a mut Vec<String>,
+    relation_statements: &'a mut Vec<String>,
     depth: u32,
-) -> String {
+    current_table_name: &'a str,
+}
+
+/// Extract incoming edges as SurrealQL array literal
+fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
+    let ExtractEdgesParams {
+        field_value,
+        edge_config,
+        record_id,
+        field,
+        let_statements,
+        relation_statements,
+        depth,
+        current_table_name,
+    } = params;
     // Handle null/missing values - return empty array
     if field_value.is_null() {
         return "[]".to_string();
@@ -233,7 +249,8 @@ fn extract_incoming_edges_as_surql(
             let mut target_record_id = None;
 
             // Determine the direction and extract the target record ID
-            let target_field = match edge_config.direction {
+            let effective_direction = edge_config.resolve_direction_for_table(current_table_name);
+            let target_field = match effective_direction {
                 crate::schemasync::edge::Direction::From => "out",
                 crate::schemasync::edge::Direction::To => "in",
                 crate::schemasync::edge::Direction::Both => "out",
@@ -276,7 +293,7 @@ fn extract_incoming_edges_as_surql(
             }
 
             if let Some(target_id) = target_record_id {
-                let (in_record, out_record) = match edge_config.direction {
+                let (in_record, out_record) = match effective_direction {
                     crate::schemasync::edge::Direction::From => (record_id.to_string(), target_id),
                     crate::schemasync::edge::Direction::To => (target_id, record_id.to_string()),
                     crate::schemasync::edge::Direction::Both => (record_id.to_string(), target_id),
@@ -333,7 +350,8 @@ fn extract_incoming_edges_as_surql(
             }
 
             // Handle case where the value is just an ID string
-            let (in_record, out_record) = match edge_config.direction {
+            let effective_direction = edge_config.resolve_direction_for_table(current_table_name);
+            let (in_record, out_record) = match effective_direction {
                 crate::schemasync::edge::Direction::From => {
                     (record_id.to_string(), id_str.to_string())
                 }
@@ -366,9 +384,10 @@ fn generate_single_edge_table_update(
     record_id: &str,
     incoming_edges: &str,
     edge_config: &EdgeConfig,
+    current_table_name: &str,
 ) -> String {
     // Determine which side of the edge to query based on direction
-    let edge_field = match edge_config.direction {
+    let edge_field = match edge_config.resolve_direction_for_table(current_table_name) {
         crate::schemasync::edge::Direction::From => "in",
         crate::schemasync::edge::Direction::To => "out",
         crate::schemasync::edge::Direction::Both => "in", // Default to 'in' for Both
@@ -520,15 +539,16 @@ pub(crate) fn generate_recursive(
             if matches!(query_type, QueryType::Update) {
                 // For updates, use the database-side edge diffing approach
                 let field_value = value.get(&field.field_name).unwrap_or(&Value::Null);
-                let incoming_edges = extract_incoming_edges_as_surql(
+                let incoming_edges = extract_incoming_edges_as_surql(ExtractEdgesParams {
                     field_value,
                     edge_config,
-                    &record_id,
+                    record_id: &record_id,
                     field,
                     let_statements,
                     relation_statements,
                     depth,
-                );
+                    current_table_name: &table_config.table_name,
+                });
 
                 let formatted_record_id = value::to_surreal_string(
                     &FieldType::EvenframeRecordId,
@@ -539,6 +559,7 @@ pub(crate) fn generate_recursive(
                     &formatted_record_id,
                     &incoming_edges,
                     edge_config,
+                    &table_config.table_name,
                 );
                 relation_statements.push(edge_update_stmt);
                 continue;
@@ -549,6 +570,8 @@ pub(crate) fn generate_recursive(
             if let Some(edge_config) = &field.edge_config {
                 let from_record_id = &record_id;
                 let relation_table = &edge_config.edge_name;
+                let effective_direction =
+                    edge_config.resolve_direction_for_table(&table_config.table_name);
 
                 // Get the relation table config once upfront
                 let relation_table_config =
@@ -566,7 +589,7 @@ pub(crate) fn generate_recursive(
                         let mut to_record_id = None;
 
                         // Determine the direction and extract the target record ID
-                        let target_field = match edge_config.direction {
+                        let target_field = match effective_direction {
                             crate::schemasync::edge::Direction::From => "out",
                             crate::schemasync::edge::Direction::To => "in",
                             crate::schemasync::edge::Direction::Both => "out", // Defaulting to 'out' for Both
@@ -621,7 +644,7 @@ pub(crate) fn generate_recursive(
                                 &serde_json::Value::String(from_record_id.clone()),
                             );
 
-                            let (in_id, out_id) = match edge_config.direction {
+                            let (in_id, out_id) = match effective_direction {
                                 crate::schemasync::edge::Direction::From => {
                                     (formatted_from_id, formatted_to_id)
                                 }
@@ -671,7 +694,7 @@ pub(crate) fn generate_recursive(
                             &serde_json::Value::String(from_record_id.clone()),
                         );
 
-                        let (in_id, out_id) = match edge_config.direction {
+                        let (in_id, out_id) = match effective_direction {
                             crate::schemasync::edge::Direction::From => {
                                 (formatted_from_id, formatted_to_id)
                             }
