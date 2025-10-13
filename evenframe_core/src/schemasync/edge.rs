@@ -1,9 +1,10 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use std::fmt;
 use std::str::FromStr;
 use syn::parenthesized;
 use syn::spanned::Spanned;
+use syn::{Expr, ExprArray, ExprLit, Lit};
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -83,6 +84,68 @@ impl EdgeConfig {
         }
     }
 
+    fn parse_strings_from_expr(
+        expr: Expr,
+        field_name: &str,
+        attr_name: &str,
+    ) -> syn::Result<Vec<String>> {
+        match expr {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(lit), ..
+            }) => Ok(vec![lit.value()]),
+            Expr::Array(ExprArray { elems, .. }) => {
+                let mut values = Vec::new();
+                for elem in elems {
+                    match elem {
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) => values.push(lit.value()),
+                        other => {
+                            return Err(syn::Error::new(
+                                other.span(),
+                                format!(
+                                    "Each element in '{}' on field '{}' must be a string literal.\nExample: {} = [\"value\"]",
+                                    attr_name, field_name, attr_name
+                                ),
+                            ));
+                        }
+                    }
+                }
+                if values.is_empty() {
+                    return Err(syn::Error::new(
+                        Span::call_site(),
+                        format!(
+                            "The '{}' array on field '{}' must contain at least one entry.",
+                            attr_name, field_name
+                        ),
+                    ));
+                }
+                Ok(values)
+            }
+            other => Err(syn::Error::new(
+                other.span(),
+                format!(
+                    "The '{}' attribute on field '{}' must be a string literal or array of string literals.",
+                    attr_name, field_name
+                ),
+            )),
+        }
+    }
+
+    fn parse_single_string(expr: Expr, field_name: &str, attr_name: &str) -> syn::Result<String> {
+        let mut values = Self::parse_strings_from_expr(expr, field_name, attr_name)?;
+        if values.len() != 1 {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!(
+                    "The '{}' attribute on field '{}' expects a single value.",
+                    attr_name, field_name
+                ),
+            ));
+        }
+        Ok(values.remove(0))
+    }
+
     pub fn parse(field: &syn::Field) -> syn::Result<Option<EdgeConfig>> {
         debug!("Parsing edge configuration from field");
         let field_name = field
@@ -109,83 +172,105 @@ impl EdgeConfig {
             if attr.path().is_ident("edge") {
                 debug!("Found edge attribute on field {}", field_name);
                 attr.parse_nested_meta(|meta| {
-                    // For "edge_name", ensure we only set it once.
-                    if meta.path.is_ident("edge_name") {
-                        trace!("Parsing edge_name attribute");
-                        let content;
-                        parenthesized!(content in meta.input);
-                        if edge_name.is_some() {
-                            warn!(
-                                "Duplicate edge_name attribute found on field {}",
-                                field_name
-                            );
-                            return Err(meta.error("duplicate edge_name attribute"));
+                    let ident = meta.path.get_ident().map(|ident| ident.to_string());
+                    match ident.as_deref() {
+                        Some("edge_name") | Some("name") => {
+                            trace!("Parsing edge_name attribute");
+                            if edge_name.is_some() {
+                                warn!(
+                                    "Duplicate edge name attribute found on field {}",
+                                    field_name
+                                );
+                                return Err(meta.error("duplicate edge name attribute"));
+                            }
+                            let expr = if meta.input.peek(syn::token::Paren) {
+                                let content;
+                                parenthesized!(content in meta.input);
+                                content.parse::<Expr>()?
+                            } else {
+                                meta.value()?.parse::<Expr>()?
+                            };
+                            let parsed_name =
+                                Self::parse_single_string(expr, &field_name, "edge_name")?;
+                            trace!("Parsed edge_name: {}", parsed_name);
+                            edge_name = Some(parsed_name);
+                            Ok(())
                         }
-                        let parsed_name = content.parse::<syn::LitStr>()?.value();
-                        trace!("Parsed edge_name: {}", parsed_name);
-                        edge_name = Some(parsed_name);
-                        return Ok(());
-                    }
-                    // For "from", ensure we only set it once.
-                    if meta.path.is_ident("from") {
-                        trace!("Parsing from attribute");
-                        let content;
-                        parenthesized!(content in meta.input);
-                        let parsed_from = content.parse::<syn::LitStr>()?.value();
-                        trace!("Parsed from: {}", parsed_from);
-                        from.push(parsed_from);
-                        return Ok(());
-                    }
-                    // For "to", ensure we only set it once.
-                    if meta.path.is_ident("to") {
-                        trace!("Parsing to attribute");
-                        let content;
-                        parenthesized!(content in meta.input);
-                        let parsed_to = content.parse::<syn::LitStr>()?.value();
-                        trace!("Parsed to: {}", parsed_to);
-                        to.push(parsed_to);
-                        return Ok(());
-                    }
-
-                    if meta.path.is_ident("direction") {
-                        trace!("Parsing direction attribute");
-                        let content;
-                        parenthesized!(content in meta.input);
-                        if direction.is_some() {
-                            warn!(
-                                "Duplicate direction attribute found on field {}",
-                                field_name
-                            );
-                            return Err(meta.error("duplicate direction attribute"));
+                        Some("from") => {
+                            trace!("Parsing from attribute");
+                            let expr = if meta.input.peek(syn::token::Paren) {
+                                let content;
+                                parenthesized!(content in meta.input);
+                                content.parse::<Expr>()?
+                            } else {
+                                meta.value()?.parse::<Expr>()?
+                            };
+                            let mut values =
+                                Self::parse_strings_from_expr(expr, &field_name, "from")?;
+                            trace!("Parsed from values: {:?}", values);
+                            from.append(&mut values);
+                            Ok(())
                         }
-                        let lit: syn::LitStr = content.parse()?;
-                        let direction_str = lit.value();
-                        trace!("Parsing direction string: {}", direction_str);
-                        // Convert the string into a Direction using FromStr.
-                        let parsed_direction = direction_str.parse::<Direction>().map_err(|e| {
+                        Some("to") => {
+                            trace!("Parsing to attribute");
+                            let expr = if meta.input.peek(syn::token::Paren) {
+                                let content;
+                                parenthesized!(content in meta.input);
+                                content.parse::<Expr>()?
+                            } else {
+                                meta.value()?.parse::<Expr>()?
+                            };
+                            let mut values =
+                                Self::parse_strings_from_expr(expr, &field_name, "to")?;
+                            trace!("Parsed to values: {:?}", values);
+                            to.append(&mut values);
+                            Ok(())
+                        }
+                        Some("direction") => {
+                            trace!("Parsing direction attribute");
+                            if direction.is_some() {
+                                warn!(
+                                    "Duplicate direction attribute found on field {}",
+                                    field_name
+                                );
+                                return Err(meta.error("duplicate direction attribute"));
+                            }
+                            let expr = if meta.input.peek(syn::token::Paren) {
+                                let content;
+                                parenthesized!(content in meta.input);
+                                content.parse::<Expr>()?
+                            } else {
+                                meta.value()?.parse::<Expr>()?
+                            };
+                            let direction_str =
+                                Self::parse_single_string(expr, &field_name, "direction")?;
+                            trace!("Parsed direction string: {}", direction_str);
+                            let parsed_direction =
+                                direction_str.parse::<Direction>().map_err(|e| {
+                                    warn!(
+                                        "Invalid direction '{}' on field {}: {}",
+                                        direction_str, field_name, e
+                                    );
+                                    meta.error(e)
+                                })?;
+                            direction = Some(parsed_direction);
+                            Ok(())
+                        }
+                        _ => {
+                            let path = meta.path.to_token_stream().to_string();
                             warn!(
-                                "Invalid direction '{}' on field {}: {}",
-                                direction_str, field_name, e
+                                "Unrecognized edge detail '{}' on field {}",
+                                path, field_name
                             );
-                            meta.error(e)
-                        })?;
-                        trace!("Parsed direction: {:?}", parsed_direction);
-                        direction = Some(parsed_direction);
-                        return Ok(());
+                            Err(meta.error("unrecognized edge detail"))
+                        }
                     }
-                    // If an unexpected attribute is encountered, return an error.
-                    let path = meta.path.to_token_stream().to_string();
-                    warn!(
-                        "Unrecognized edge detail '{}' on field {}",
-                        path, field_name
-                    );
-                    Err(meta.error("unrecognized edge detail"))
                 })?;
                 // If any of the required attributes is missing, return an error indicating which one.
                 debug!("Validating parsed edge attributes for field {}", field_name);
                 let edge_name = edge_name.ok_or_else(|| {
-                    error!("Missing edge_name attribute on field {}", field_name);
-                    syn::Error::new(field.span(), "missing edge_name attribute")
+                    error!("Missing edge_name/name attribute on field {}", field_name);
+                    syn::Error::new(field.span(), "missing edge_name (or name) attribute")
                 })?;
                 if from.is_empty() {
                     error!("Missing from attribute on field {}", field_name);

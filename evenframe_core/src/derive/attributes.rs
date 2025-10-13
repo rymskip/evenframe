@@ -329,7 +329,9 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
 
                     for meta in metas {
                         match meta {
-                            Meta::NameValue(nv) if nv.path.is_ident("edge_name") => {
+                            Meta::NameValue(nv)
+                                if nv.path.is_ident("edge_name") || nv.path.is_ident("name") =>
+                            {
                                 if let Expr::Lit(ExprLit {
                                     lit: Lit::Str(lit), ..
                                 }) = &nv.value
@@ -338,7 +340,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                 } else {
                                     return Err(syn::Error::new(
                                         nv.value.span(),
-                                        "The 'edge_name' parameter must be a string literal.\n\nExample: edge_name = \"has_user\"",
+                                        "The 'edge_name' (or 'name') parameter must be a string literal.\n\nExample: edge_name = \"has_user\"",
                                     ));
                                 }
                             }
@@ -431,7 +433,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                 return Err(syn::Error::new(
                                     nv.path.span(),
                                     format!(
-                                        "Unknown parameter '{}' in relation attribute.\n\nValid parameters are: edge_name, from, to, direction\n\nExample: #[relation(edge_name = \"has_user\", from = \"Order\", to = \"User\", direction = \"from\")]",
+                                        "Unknown parameter '{}' in relation attribute.\n\nValid parameters are: edge_name (or name), from, to, direction\n\nExample: #[relation(edge_name = \"has_user\", from = \"Order\", to = \"User\", direction = \"from\")]",
                                         param_name
                                     ),
                                 ));
@@ -460,7 +462,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                         }
                         _ => {
                             let missing = vec![
-                                edge_name.is_none().then_some("edge_name"),
+                                edge_name.is_none().then_some("edge_name/name"),
                                 from.is_empty().then_some("from"),
                                 to.is_empty().then_some("to"),
                             ]
@@ -472,7 +474,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                             return Err(syn::Error::new(
                                 attr.span(),
                                 format!(
-                                    "Missing required parameters in relation attribute: {}\n\nRequired parameters are: edge_name, from, to.\n\nExamples:\n#[relation(\n    edge_name = \"has_user\",\n    from = \"Order\",\n    to = \"User\"\n)]\n#[relation(\n    edge_name = \"has_user\",\n    from = [\"Order\", \"Shipment\"],\n    to = [\"User\"],\n    direction = \"from\"\n)]",
+                                    "Missing required parameters in relation attribute: {}\n\nRequired parameters are: edge_name (or name), from, to.\n\nExamples:\n#[relation(\n    edge_name = \"has_user\",\n    from = \"Order\",\n    to = \"User\"\n)]\n#[relation(\n    edge_name = \"has_user\",\n    from = [\"Order\", \"Shipment\"],\n    to = [\"User\"],\n    direction = \"from\"\n)]",
                                     missing
                                 ),
                             ));
