@@ -226,7 +226,7 @@ impl ToTokens for Direction {
         match self {
             Direction::From => tokens.extend(quote! { ::evenframe::schemasync::Direction::From }),
             Direction::To => tokens.extend(quote! { ::evenframe::schemasync::Direction::To }),
-            Direction::Both => tokens.extend(quote! { ::evenframe::schemasync::Direction::To }),
+            Direction::Both => tokens.extend(quote! { ::evenframe::schemasync::Direction::Both }),
         }
     }
 }
@@ -248,7 +248,7 @@ impl FromStr for Direction {
             }
             "both" => {
                 trace!("Parsed direction: Both (mapped to To)");
-                Ok(Direction::To)
+                Ok(Direction::Both)
             }
             _ => {
                 error!("Invalid direction string: '{}'", s);

@@ -376,11 +376,12 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                     direction = match lit.value().as_str() {
                                         "from" => Some(Direction::From),
                                         "to" => Some(Direction::To),
+                                        "both" => Some(Direction::Both),
                                         other => {
                                             return Err(syn::Error::new(
                                                 lit.span(),
                                                 format!(
-                                                    "Invalid direction '{}'. Valid values are: \"from\", \"to\"\n\nExample: direction = \"from\"",
+                                                    "Invalid direction '{}'. Valid values are: \"from\", \"to\", \"both\"\n\nExample: direction = \"from\"",
                                                     other
                                                 ),
                                             ));
