@@ -63,7 +63,7 @@ impl Mockmaker<'_> {
 
                     // Check if this field needs null preservation
                     let needs_conditional =
-                        super::needs_null_preservation(table_field, self.tables.get(table_name));
+                        super::query::needs_null_preservation(table_field, self.tables.get(table_name));
 
                     if needs_conditional {
                         // Wrap in conditional to preserve NULL state

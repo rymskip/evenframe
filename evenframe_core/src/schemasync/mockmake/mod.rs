@@ -5,7 +5,7 @@ pub mod format;
 pub mod regex_val_gen;
 
 use crate::{
-    compare::Comparator,
+    compare::surql::SurrealdbComparator,
     coordinate::{
         CoherentDataset, Coordination, CoordinationGroup, CoordinationId, CoordinationPair,
     },
@@ -14,7 +14,7 @@ use crate::{
     mockmake::format::Format,
     schemasync::{
         StructConfig, TableConfig, TaggedUnion, compare::PreservationMode,
-        surql::access::execute_access_query,
+        database::surql::access::execute_access_query,
     },
     types::StructField,
     wrappers::EvenframeRecordId,
@@ -34,7 +34,7 @@ pub struct Mockmaker<'a> {
     objects: &'a HashMap<String, StructConfig>,
     enums: &'a HashMap<String, TaggedUnion>,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
-    pub comparator: Option<Comparator<'a>>,
+    pub comparator: Option<SurrealdbComparator<'a>>,
 
     // Runtime state
     pub(super) id_map: HashMap<String, Vec<String>>,
@@ -58,7 +58,7 @@ impl<'a> Mockmaker<'a> {
             objects,
             enums,
             schemasync_config,
-            comparator: Some(Comparator::new(db, schemasync_config)),
+            comparator: Some(SurrealdbComparator::new(db, schemasync_config)),
             id_map: HashMap::new(),
             record_diffs: HashMap::new(),
             filtered_tables: HashMap::new(),
@@ -312,7 +312,7 @@ impl<'a> Mockmaker<'a> {
                     evenframe_log!(&stmts, "all_statements.surql", true);
 
                     // Execute and validate upsert statements
-                    use crate::schemasync::surql::execute::execute_and_validate;
+                    use crate::schemasync::database::surql::execute::execute_and_validate;
 
                     match execute_and_validate(self.db, &stmts, "UPSERT", table_name).await {
                         Ok(_results) => {

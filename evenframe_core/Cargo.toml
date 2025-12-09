@@ -11,6 +11,22 @@ readme = "../README.md"
 keywords = ["typescript", "codegen", "surrealdb", "schema", "types"]
 categories = ["development-tools", "database"]
 
+[features]
+default = ["surrealdb"]
+
+# Database providers
+surrealdb = ["dep:surrealdb"]
+sql = ["dep:sqlx"]
+postgres = ["sql", "sqlx?/postgres"]
+mysql = ["sql", "sqlx?/mysql"]
+sqlite = ["sql", "sqlx?/sqlite"]
+
+# Convenience feature for all SQL databases
+sql-all = ["postgres", "mysql", "sqlite"]
+
+# All providers
+all-providers = ["surrealdb", "sql-all"]
+
 [dependencies]
 # workspace dependencies
 serde_json = { workspace = true }
@@ -22,7 +38,12 @@ convert_case = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 
-surrealdb = { version = "2.3.7", features = ["kv-mem", "protocol-http"] }
+# Database providers (optional based on features)
+surrealdb = { version = "2.3.7", features = ["kv-mem", "protocol-http"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls"], optional = true }
+
+# Required for async traits in provider abstraction
+async-trait = "0.1"
 dotenv = "0.15.0"
 proc-macro2 = "1.0.95"
 quote = "1.0.40"

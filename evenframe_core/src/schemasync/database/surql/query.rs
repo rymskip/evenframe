@@ -1,11 +1,9 @@
-pub mod access;
-pub mod assert;
-pub mod define;
-pub mod execute;
-pub mod insert;
-pub mod remove;
-pub mod upsert;
-pub mod value;
+//! SurrealQL query generation
+//!
+//! This module contains all SurrealQL query generation logic including:
+//! - CRUD queries (SELECT, CREATE, UPDATE, DELETE)
+//! - Edge/relationship queries
+//! - Filtering and sorting
 
 use crate::{
     registry,
@@ -18,6 +16,8 @@ use crate::{
 use convert_case::{Case, Casing};
 use serde::Serialize;
 use serde_json::{Map, Value};
+
+use super::value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryType {
@@ -49,7 +49,7 @@ fn is_nullable_partial_struct(field: &StructField, original_table: Option<&Table
 }
 
 /// Check if any field needs null-preserving conditional logic
-fn needs_null_preservation(field: &StructField, original_table: Option<&TableConfig>) -> bool {
+pub fn needs_null_preservation(field: &StructField, original_table: Option<&TableConfig>) -> bool {
     // Direct nullable check
     if is_nullable_field(field) {
         return true;

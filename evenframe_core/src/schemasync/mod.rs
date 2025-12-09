@@ -5,14 +5,14 @@ pub mod edge;
 pub mod event;
 pub mod mockmake;
 pub mod permissions;
-pub mod surql;
+pub mod database;
 pub mod table;
 
 use crate::{
     compare::SchemaChanges,
     config::EvenframeConfig,
     error::{EvenframeError, Result},
-    schemasync::surql::{define::generate_define_statements, execute::execute_and_validate},
+    schemasync::database::surql::{define::generate_define_statements, execute::execute_and_validate},
 };
 use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
@@ -22,10 +22,13 @@ pub use edge::{Direction, EdgeConfig, Subquery};
 pub use event::EventConfig;
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
-pub use surql::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType, SelectConfig,
-    SortDefinition, SortDirection, SortValue, define::DefineConfig, generate_query,
-    generate_sort_clause, generate_where_clause,
+pub use database::surql::{
+    define::DefineConfig,
+    query::{
+        FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType, SelectConfig,
+        SortDefinition, SortDirection, SortValue, generate_query, generate_sort_clause,
+        generate_where_clause,
+    },
 };
 use surrealdb::{
     Surreal,

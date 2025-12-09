@@ -1,164 +1,94 @@
-// Schemasync Merge - SurrealDB Native Implementation with Data Preservation
-// This module provides a simplified schema synchronization system
-// that leverages SurrealDB's native export/import functionality
+//! Schema comparison module - Database-agnostic core
+//!
+//! This module provides schema comparison functionality that works across
+//! different database providers. Provider-specific implementations are in
+//! submodules (surrealdb.rs, sql.rs).
 
 pub mod filter;
 pub mod import;
+pub mod types;
+pub mod surql;
+#[cfg(feature = "sql")]
+pub mod sql;
 
+// Re-export commonly used types
 pub use crate::schemasync::mockmake::MockGenerationConfig;
+pub use import::SchemaImporter;
+pub use types::{
+    AccessDefinition, FieldDefinition, ObjectType, PermissionSet, SchemaDefinition,
+    SchemaType, TableDefinition,
+};
+pub use surql::SurrealdbComparator;
+
 use crate::{
-    EvenframeError, Result, compare, evenframe_log,
+    EvenframeError, Result,
     schemasync::{
         TableConfig,
         config::{PerformanceConfig, SchemasyncMockGenConfig},
-        surql::access::setup_access_definitions,
     },
     types::{FieldType, TaggedUnion, VariantData},
 };
-pub use import::SchemaImporter;
-use import::{AccessDefinition, FieldDefinition, ObjectType, SchemaDefinition, TableDefinition};
+use async_trait::async_trait;
 use quote::{ToTokens, quote};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use surrealdb::engine::local::{Db, Mem};
-use surrealdb::{Surreal, engine::remote::http::Client};
+use ::surrealdb::engine::remote::http::Client;
+use ::surrealdb::Surreal;
 use tracing;
 
-#[derive(Debug)]
-pub struct Comparator<'a> {
-    db: &'a Surreal<Client>,
-    schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
+use crate::schemasync::database::types::SchemaExport;
 
-    // Runtime state
-    remote_schema: Option<Surreal<Db>>,
-    new_schema: Option<Surreal<Db>>,
-    access_query: String,
-    remote_schema_string: String,
-    new_schema_string: String,
-    schema_changes: Option<SchemaChanges>,
+// ============================================================================
+// SchemaComparator Trait - Database-agnostic interface
+// ============================================================================
+
+/// Trait for database schema comparison strategies
+#[async_trait]
+pub trait SchemaComparator: Send + Sync {
+    /// Compare the current database schema with the expected schema from Rust structs
+    async fn compare_schemas(
+        &self,
+        tables: &HashMap<String, TableConfig>,
+        objects: &HashMap<String, crate::types::StructConfig>,
+        enums: &HashMap<String, TaggedUnion>,
+    ) -> Result<SchemaChanges>;
+
+    /// Get the current schema from the database
+    async fn get_current_schema(&self) -> Result<SchemaExport>;
+
+    /// Check if this comparator supports embedded mode for comparison
+    fn supports_embedded_comparison(&self) -> bool;
 }
 
-impl<'a> Comparator<'a> {
-    pub fn new(
-        db: &'a Surreal<Client>,
-        schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
-    ) -> Self {
-        Self {
-            db,
-            schemasync_config,
-            remote_schema: None,
-            new_schema: None,
-            access_query: String::new(),
-            remote_schema_string: String::new(),
-            new_schema_string: String::new(),
-            schema_changes: None,
-        }
+/// Factory function to create the appropriate comparator for a provider
+pub fn create_comparator<'a>(
+    _provider: &'a dyn crate::schemasync::database::DatabaseProvider,
+) -> Box<dyn SchemaComparator + 'a> {
+    #[cfg(feature = "sql")]
+    {
+        Box::new(sql::SqlSchemaComparator::new(_provider))
     }
-
-    pub async fn run(&mut self, define_statements: &str) -> Result<()> {
-        tracing::info!("Starting Comparator pipeline");
-
-        tracing::debug!("Setting up schemas");
-        self.setup_schemas(define_statements).await?;
-
-        tracing::debug!("Setting up access definitions");
-        self.setup_access().await?;
-
-        tracing::debug!("Exporting schemas for comparison");
-        self.export_schemas().await?;
-
-        tracing::debug!("Comparing schemas");
-        self.compare_schemas().await?;
-
-        tracing::info!("Comparator pipeline completed successfully");
-        Ok(())
-    }
-
-    /// Setup backup and create in-memory schemas
-    async fn setup_schemas(&mut self, define_statements: &str) -> Result<()> {
-        tracing::trace!("Creating backup and in-memory schemas");
-        let (remote_schema, new_schema) = setup_backup_and_schemas(self.db).await?;
-        self.remote_schema = Some(remote_schema);
-        // Execute and check define statements
-        let _ = new_schema.query(define_statements).await.map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem executing the define statements on the new_schema embedded db: {e}"
-            ))
-        });
-
-        self.new_schema = Some(new_schema);
-
-        tracing::trace!("Schemas setup complete");
-        Ok(())
-    }
-
-    /// Setup access definitions
-    async fn setup_access(&mut self) -> Result<()> {
-        tracing::trace!("Setting up access definitions");
-        let new_schema = self.new_schema.as_ref().unwrap();
-        self.access_query = setup_access_definitions(new_schema, self.schemasync_config).await?;
-        tracing::trace!(
-            access_query_length = self.access_query.len(),
-            "Access query generated"
-        );
-        Ok(())
-    }
-
-    /// Export schemas for comparison
-    async fn export_schemas(&mut self) -> Result<()> {
-        tracing::trace!("Exporting schemas");
-        let remote_schema = self.remote_schema.as_ref().unwrap();
-        let new_schema = self.new_schema.as_ref().unwrap();
-
-        let (remote_schema_string, new_schema_string) =
-            export_schemas(remote_schema, new_schema).await?;
-
-        tracing::trace!(
-            remote_schema_size = remote_schema_string.len(),
-            new_schema_size = new_schema_string.len(),
-            "Schemas exported"
-        );
-
-        self.remote_schema_string = remote_schema_string;
-        self.new_schema_string = new_schema_string;
-        Ok(())
-    }
-
-    /// Compare schemas to find changes
-    async fn compare_schemas(&mut self) -> Result<()> {
-        tracing::trace!("Starting schema comparison");
-        let changes = compare_schemas(
-            self.db,
-            &self.remote_schema_string,
-            &self.new_schema_string,
-        )
-        .await?;
-
-        tracing::info!(
-            new_tables = changes.new_tables.len(),
-            removed_tables = changes.removed_tables.len(),
-            modified_tables = changes.modified_tables.len(),
-            "Schema changes detected"
-        );
-
-        self.schema_changes = Some(changes);
-        Ok(())
-    }
-
-    // Getters for Mockmaker to access the results
-    pub fn get_new_schema(&self) -> Option<&Surreal<Db>> {
-        self.new_schema.as_ref()
-    }
-
-    pub fn get_access_query(&self) -> &str {
-        &self.access_query
-    }
-
-    pub fn get_schema_changes(&self) -> Option<&compare::SchemaChanges> {
-        self.schema_changes.as_ref()
+    #[cfg(not(feature = "sql"))]
+    {
+        // For non-SQL providers, we'd need a different implementation
+        // For now, this is a placeholder that should be replaced with
+        // the appropriate comparator based on provider type
+        panic!("No SQL feature enabled - use SurrealdbComparator directly for SurrealDB")
     }
 }
+
+// ============================================================================
+// Comparator - Legacy struct for backward compatibility with static methods
+// ============================================================================
+
+/// Legacy Comparator struct - provides static comparison methods
+/// For SurrealDB-specific comparator, use SurrealdbComparator
+pub struct Comparator;
+
+// ============================================================================
+// Schema Change Types
+// ============================================================================
 
 #[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
 pub enum PreservationMode {
@@ -185,375 +115,6 @@ impl ToTokens for PreservationMode {
             }
         };
         tokens.extend(variant_tokens);
-    }
-}
-
-/// Main entry point for Schemasync Merge functionality
-pub struct Merger<'a> {
-    pub client: &'a Surreal<Client>,
-    pub default_mock_gen_config: SchemasyncMockGenConfig,
-    pub performance: PerformanceConfig,
-}
-
-impl<'a> Merger<'a> {
-    /// Create a new Merger instance
-    pub async fn new(
-        client: &'a Surreal<Client>,
-        default_mock_gen_config: SchemasyncMockGenConfig,
-        performance: PerformanceConfig,
-    ) -> Result<Self> {
-        Ok(Self {
-            client,
-            default_mock_gen_config,
-            performance,
-        })
-    }
-
-    /// Import schema from production database
-    pub async fn import_schema_from_db(&self) -> Result<import::SchemaDefinition> {
-        tracing::debug!("Importing schema from production database");
-        let importer = SchemaImporter::new(self.client);
-        let schema = importer.import_schema_only().await?;
-        tracing::debug!(
-            tables = schema.tables.len(),
-            edges = schema.edges.len(),
-            accesses = schema.accesses.len(),
-            "Schema imported"
-        );
-        Ok(schema)
-    }
-
-    /// Generate schema from Rust structs
-    pub fn generate_schema_from_structs(
-        &self,
-        tables: &HashMap<String, TableConfig>,
-    ) -> Result<import::SchemaDefinition> {
-        tracing::debug!(
-            table_count = tables.len(),
-            "Generating schema from Rust structs"
-        );
-        let schema = import::SchemaDefinition::from_table_configs(tables)?;
-        tracing::debug!(
-            tables = schema.tables.len(),
-            edges = schema.edges.len(),
-            "Schema generated from structs"
-        );
-        Ok(schema)
-    }
-
-    pub fn compare_schemas(
-        &self,
-        old: &import::SchemaDefinition,
-        new: &import::SchemaDefinition,
-    ) -> Result<SchemaChanges> {
-        tracing::debug!("Comparing schemas using legacy method");
-        Comparator::compare(old, new)
-    }
-
-    /// Export mock data to file
-    pub async fn export_mock_data(&self, _file_path: &str) -> Result<()> {
-        // Implementation will use the generated statements
-        // and write them to the specified file
-        todo!("Implement export_mock_data")
-    }
-
-    /// Generate preserved data for a specific table
-    pub async fn generate_preserved_data(
-        &self,
-        table_name: &str,
-        table_config: &TableConfig,
-        mock_config: MockGenerationConfig,
-        existing_records: Vec<serde_json::Value>,
-        target_count: usize,
-        schema_changes: Option<&SchemaChanges>,
-    ) -> Vec<serde_json::Value> {
-        use serde_json::Value;
-
-        // Determine how many records to preserve vs generate
-        let existing_count = existing_records.len();
-        let mut result = Vec::new();
-
-        match mock_config.preservation_mode {
-            PreservationMode::None => {
-                // No preservation - generate all new data
-                result = self.generate_new_records(table_name, table_config, target_count);
-            }
-            PreservationMode::Smart => {
-                // Smart preservation - keep unchanged fields, regenerate specified fields
-                if existing_count > 0 {
-                    // Determine which fields need regeneration
-                    let mut fields_to_regenerate = mock_config.regenerate_fields.clone();
-
-                    // If schema changes are provided, add fields that changed
-                    if let Some(changes) = schema_changes {
-                        // Get fields that need regeneration based on schema changes
-                        let schema_fields_needing_generation =
-                            changes.get_fields_needing_generation(table_name);
-
-                        // If all fields need generation (new table), regenerate everything
-                        if schema_fields_needing_generation.contains(&"*".to_string()) {
-                            // Generate all new records for new tables
-                            result =
-                                self.generate_new_records(table_name, table_config, target_count);
-                            return result;
-                        }
-
-                        // Add schema-detected fields to the regeneration list
-                        for field in schema_fields_needing_generation {
-                            if !fields_to_regenerate.contains(&field) {
-                                fields_to_regenerate.push(field);
-                            }
-                        }
-                    }
-
-                    for mut record in existing_records {
-                        // Regenerate specified fields
-                        if let Value::Object(ref mut map) = record {
-                            // First, add any new fields that don't exist in the record
-                            for field in &table_config.struct_config.fields {
-                                if !map.contains_key(&field.field_name) {
-                                    // This is a new field, generate value
-                                    let new_value = Self::generate_field_value(field, table_config);
-                                    map.insert(field.field_name.clone(), new_value);
-                                }
-                            }
-
-                            // Then, regenerate fields that need it
-                            for field_name in &fields_to_regenerate {
-                                if let Some(field) = table_config
-                                    .struct_config
-                                    .fields
-                                    .iter()
-                                    .find(|f| &f.field_name == field_name)
-                                {
-                                    // Generate new value for this field
-                                    let new_value = Self::generate_field_value(field, table_config);
-                                    map.insert(field_name.clone(), new_value);
-                                }
-                            }
-                        }
-
-                        result.push(record);
-                    }
-
-                    // Generate additional records if needed
-                    if target_count > existing_count {
-                        let additional = self.generate_new_records(
-                            table_name,
-                            table_config,
-                            target_count - existing_count,
-                        );
-                        result.extend(additional);
-                    }
-                } else {
-                    // No existing data or preservation disabled
-                    result = self.generate_new_records(table_name, table_config, target_count);
-                }
-            }
-            PreservationMode::Full => {
-                // Full preservation - keep all data, only add new fields
-                if existing_count > 0 {
-                    // Check if target count is less than existing count
-                    if target_count < existing_count {
-                        eprintln!(
-                            "\n⚠️  WARNING: Full preservation mode with data reduction detected!"
-                        );
-                        eprintln!(
-                            "   Table '{}' has {} existing records but target count is set to {}",
-                            table_name, existing_count, target_count
-                        );
-                        eprintln!(
-                            "   This will DELETE {} records!",
-                            existing_count - target_count
-                        );
-                        eprintln!("\n   Options:");
-                        eprintln!(
-                            "   1. Change the target count (n) to {} or higher to preserve all records",
-                            existing_count
-                        );
-                        eprintln!("   2. Use Smart preservation mode instead of Full");
-                        eprintln!(
-                            "   3. Set preservation_mode to None if you want to regenerate all data"
-                        );
-                        eprintln!(
-                            "\n   In a production environment, this would require user confirmation."
-                        );
-                        eprintln!(
-                            "   For now, proceeding with target count of {} records.\n",
-                            target_count
-                        );
-
-                        for mut record in existing_records {
-                            // Only add new fields that don't exist
-                            if let Value::Object(ref mut map) = record {
-                                for field in &table_config.struct_config.fields {
-                                    if !map.contains_key(&field.field_name) {
-                                        // This is a new field, generate value
-                                        let new_value =
-                                            Self::generate_field_value(field, table_config);
-                                        map.insert(field.field_name.clone(), new_value);
-                                    }
-                                }
-                            }
-
-                            result.push(record);
-                        }
-                    } else {
-                        // Normal case: preserve all existing records
-                        for mut record in existing_records {
-                            // Only add new fields that don't exist
-                            if let Value::Object(ref mut map) = record {
-                                for field in &table_config.struct_config.fields {
-                                    if !map.contains_key(&field.field_name) {
-                                        // This is a new field, generate value
-                                        let new_value =
-                                            Self::generate_field_value(field, table_config);
-                                        map.insert(field.field_name.clone(), new_value);
-                                    }
-                                }
-                            }
-
-                            result.push(record);
-                        }
-
-                        // Generate additional records if needed
-                        if target_count > existing_count {
-                            let additional = self.generate_new_records(
-                                table_name,
-                                table_config,
-                                target_count - existing_count,
-                            );
-                            result.extend(additional);
-                        }
-                    }
-                } else {
-                    result = self.generate_new_records(table_name, table_config, target_count);
-                }
-            }
-        }
-
-        result
-    }
-
-    /// Generate new records for a table
-    fn generate_new_records(
-        &self,
-        _table_name: &str,
-        table_config: &TableConfig,
-        count: usize,
-    ) -> Vec<serde_json::Value> {
-        use serde_json::Value;
-
-        let mut records = Vec::new();
-
-        for _ in 0..count {
-            let mut record = serde_json::Map::new();
-
-            // Generate values for each field
-            for field in &table_config.struct_config.fields {
-                let value = Self::generate_field_value(field, table_config);
-                record.insert(field.field_name.clone(), value);
-            }
-
-            records.push(Value::Object(record));
-        }
-
-        records
-    }
-
-    /// Generate a value for a specific field
-    fn generate_field_value(
-        field: &crate::types::StructField,
-        _table_config: &TableConfig,
-    ) -> serde_json::Value {
-        use crate::types::FieldType;
-        use serde_json::json;
-
-        // Use format if available
-        if let Some(format) = &field.format {
-            let value = format.generate_formatted_value();
-
-            // Check if the format generates numeric values
-            match format {
-                crate::schemasync::mockmake::format::Format::Percentage
-                | crate::schemasync::mockmake::format::Format::Latitude
-                | crate::schemasync::mockmake::format::Format::Longitude
-                | crate::schemasync::mockmake::format::Format::CurrencyAmount => {
-                    // Try to parse as number
-                    if let Ok(num) = value.parse::<f64>() {
-                        return json!(num);
-                    }
-                }
-                _ => {}
-            }
-
-            return json!(value);
-        }
-
-        // Generate based on field type
-        match &field.field_type {
-            FieldType::String => json!(crate::schemasync::Mockmaker::random_string(8)),
-            FieldType::Bool => json!(rand::random::<bool>()),
-            FieldType::U8
-            | FieldType::U16
-            | FieldType::U32
-            | FieldType::U64
-            | FieldType::U128
-            | FieldType::Usize => json!(rand::random::<u32>() % 100),
-            FieldType::I8
-            | FieldType::I16
-            | FieldType::I32
-            | FieldType::I64
-            | FieldType::I128
-            | FieldType::Isize => json!(rand::random::<i32>() % 100),
-            FieldType::F32 | FieldType::F64 => json!(rand::random::<f64>() * 100.0),
-            FieldType::DateTime => json!(chrono::Utc::now().to_rfc3339()),
-            FieldType::EvenframeDuration => {
-                // Generate random duration in nanoseconds (0 to 1 day)
-                json!(rand::random::<i64>() % 86_400_000_000_000i64)
-            }
-            FieldType::Timezone => {
-                // Generate random IANA timezone string
-                let timezones = [
-                    "UTC",
-                    "America/New_York",
-                    "America/Los_Angeles",
-                    "Europe/London",
-                    "Europe/Paris",
-                    "Asia/Tokyo",
-                    "Asia/Shanghai",
-                    "Australia/Sydney",
-                ];
-                let index = (rand::random::<f64>() * timezones.len() as f64) as usize;
-                json!(timezones[index.min(timezones.len() - 1)])
-            }
-            FieldType::Option(inner) => {
-                if rand::random::<bool>() {
-                    let inner_field = crate::types::StructField {
-                        field_name: field.field_name.clone(),
-                        field_type: *inner.clone(),
-                        format: field.format.clone(),
-                        edge_config: None,
-                        define_config: None,
-                        validators: Vec::new(),
-                        always_regenerate: false,
-                    };
-                    Self::generate_field_value(&inner_field, _table_config)
-                } else {
-                    json!(null)
-                }
-            }
-            FieldType::Vec(_) => json!([]),
-            FieldType::Other(type_name) => {
-                // Handle common types
-                if type_name.contains("DateTime") {
-                    json!(chrono::Utc::now().to_rfc3339())
-                } else {
-                    json!(format!("{}:1", type_name.to_lowercase()))
-                }
-            }
-            _ => json!(null),
-        }
     }
 }
 
@@ -776,7 +337,11 @@ impl SchemaChanges {
     }
 }
 
-impl Comparator<'_> {
+// ============================================================================
+// Comparator Static Methods - Database-agnostic comparison logic
+// ============================================================================
+
+impl Comparator {
     /// Compare two schemas and return the differences
     pub fn compare(old: &SchemaDefinition, new: &SchemaDefinition) -> Result<SchemaChanges> {
         tracing::debug!("Starting detailed schema comparison");
@@ -1316,6 +881,10 @@ impl Comparator<'_> {
     }
 }
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
 /// Helper function to collect object type names referenced in a field type
 pub fn collect_referenced_objects(
     field_type: &FieldType,
@@ -1367,166 +936,375 @@ pub fn collect_referenced_objects(
     }
 }
 
-pub async fn compare_schemas(
-    db: &Surreal<Client>,
-    remote_schema_string: &str,
-    new_schema_string: &str,
-) -> Result<SchemaChanges> {
-    tracing::debug!("Parsing and comparing schema exports");
-    let importer = SchemaImporter::new(db);
+// ============================================================================
+// Merger - Legacy struct for backward compatibility
+// ============================================================================
 
-    // Parse exports with error propagation instead of panicking
-    let remote_schema = importer
-        .parse_schema_from_export(remote_schema_string)
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                remote_len = remote_schema_string.len(),
-                "Failed parsing remote schema export"
-            );
-            e
-        })?;
-
-    let new_schema = importer
-        .parse_schema_from_export(new_schema_string)
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                new_len = new_schema_string.len(),
-                "Failed parsing new schema export"
-            );
-            e
-        })?;
-
-    let schema_changes = Comparator::compare(&remote_schema, &new_schema)?;
-
-    evenframe_log!(format!("{:#?}", schema_changes), "changes.log");
-    Ok(schema_changes)
+/// Main entry point for Schemasync Merge functionality
+pub struct Merger<'a> {
+    pub client: &'a Surreal<Client>,
+    pub default_mock_gen_config: SchemasyncMockGenConfig,
+    pub performance: PerformanceConfig,
 }
 
-pub async fn export_schemas(
-    remote_schema: &Surreal<Db>,
-    new_schema: &Surreal<Db>,
-) -> Result<(String, String)> {
-    use futures::StreamExt;
-
-    tracing::trace!("Exporting remote schema");
-    let mut remote_stream = remote_schema
-        .export(())
-        .with_config()
-        .versions(false)
-        .accesses(true)
-        .analyzers(false)
-        .functions(false)
-        .records(false)
-        .params(false)
-        .users(false)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'remote_schema' embedded database's schema: {e}"
-            ))
-        })?;
-
-    let mut remote_schema_string = String::new();
-    while let Some(result) = remote_stream.next().await {
-        let line = result.map_err(|e| {
-            EvenframeError::database(format!("Error reading remote schema stream: {e}"))
-        })?;
-        remote_schema_string.push_str(&String::from_utf8_lossy(&line));
+impl<'a> Merger<'a> {
+    /// Create a new Merger instance
+    pub async fn new(
+        client: &'a Surreal<Client>,
+        default_mock_gen_config: SchemasyncMockGenConfig,
+        performance: PerformanceConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            client,
+            default_mock_gen_config,
+            performance,
+        })
     }
 
-    evenframe_log!(remote_schema_string, "remote_schema.surql");
-
-    tracing::trace!("Exporting new schema");
-    let mut new_stream = new_schema
-        .export(())
-        .with_config()
-        .versions(false)
-        .accesses(true)
-        .analyzers(false)
-        .functions(false)
-        .records(false)
-        .params(false)
-        .users(false)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'new_schema' embedded database's schema: {e}"
-            ))
-        })?;
-
-    let mut new_schema_string = String::new();
-    while let Some(result) = new_stream.next().await {
-        let line = result.map_err(|e| {
-            EvenframeError::database(format!("Error reading new schema stream: {e}"))
-        })?;
-        new_schema_string.push_str(&String::from_utf8_lossy(&line));
+    /// Import schema from production database
+    pub async fn import_schema_from_db(&self) -> Result<SchemaDefinition> {
+        tracing::debug!("Importing schema from production database");
+        let importer = SchemaImporter::new(self.client);
+        let schema = importer.import_schema_only().await?;
+        tracing::debug!(
+            tables = schema.tables.len(),
+            edges = schema.edges.len(),
+            accesses = schema.accesses.len(),
+            "Schema imported"
+        );
+        Ok(schema)
     }
 
-    evenframe_log!(new_schema_string, "new_schema.surql");
-
-    tracing::trace!("Schema export complete");
-    Ok((remote_schema_string, new_schema_string))
-}
-
-pub async fn setup_backup_and_schemas(db: &Surreal<Client>) -> Result<(Surreal<Db>, Surreal<Db>)> {
-    use futures::StreamExt;
-
-    tracing::trace!("Creating database backup");
-    let mut backup_stream = db.export(()).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "There was a problem exporting the remote database: {e}"
-        ))
-    })?;
-
-    let mut backup = String::new();
-    while let Some(result) = backup_stream.next().await {
-        let line = result
-            .map_err(|e| EvenframeError::database(format!("Error reading backup stream: {e}")))?;
-        backup.push_str(&String::from_utf8_lossy(&line));
+    /// Generate schema from Rust structs
+    pub fn generate_schema_from_structs(
+        &self,
+        tables: &HashMap<String, TableConfig>,
+    ) -> Result<SchemaDefinition> {
+        tracing::debug!(
+            table_count = tables.len(),
+            "Generating schema from Rust structs"
+        );
+        let schema = SchemaDefinition::from_table_configs(tables)?;
+        tracing::debug!(
+            tables = schema.tables.len(),
+            edges = schema.edges.len(),
+            "Schema generated from structs"
+        );
+        Ok(schema)
     }
 
-    evenframe_log!(backup, "backup.surql");
+    pub fn compare_schemas(
+        &self,
+        old: &SchemaDefinition,
+        new: &SchemaDefinition,
+    ) -> Result<SchemaChanges> {
+        tracing::debug!("Comparing schemas using legacy method");
+        Comparator::compare(old, new)
+    }
 
-    let remote_schema = Surreal::new::<Mem>(())
-        .await
-        .expect("Something went wrong starting the remote_schema in-memory db");
+    /// Export mock data to file
+    pub async fn export_mock_data(&self, _file_path: &str) -> Result<()> {
+        // Implementation will use the generated statements
+        // and write them to the specified file
+        todo!("Implement export_mock_data")
+    }
 
-    tracing::trace!("Importing backup to remote in-memory schema");
-    remote_schema
-        .use_ns("remote")
-        .use_db("backup")
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem using the namespace or db for 'remote_schema': {e}"
-            ))
-        })?;
+    /// Generate preserved data for a specific table
+    pub async fn generate_preserved_data(
+        &self,
+        table_name: &str,
+        table_config: &TableConfig,
+        mock_config: MockGenerationConfig,
+        existing_records: Vec<serde_json::Value>,
+        target_count: usize,
+        schema_changes: Option<&SchemaChanges>,
+    ) -> Vec<serde_json::Value> {
+        use serde_json::Value;
 
-    remote_schema.query(&backup).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "Something went wrong importing the remote schema to the in-memory db: {e}"
-        ))
-    })?;
+        // Determine how many records to preserve vs generate
+        let existing_count = existing_records.len();
+        let mut result = Vec::new();
 
-    let new_schema = Surreal::new::<Mem>(()).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "Something went wrong starting the new_schema in-memory db: {e}"
-        ))
-    })?;
+        match mock_config.preservation_mode {
+            PreservationMode::None => {
+                // No preservation - generate all new data
+                result = self.generate_new_records(table_name, table_config, target_count);
+            }
+            PreservationMode::Smart => {
+                // Smart preservation - keep unchanged fields, regenerate specified fields
+                if existing_count > 0 {
+                    // Determine which fields need regeneration
+                    let mut fields_to_regenerate = mock_config.regenerate_fields.clone();
 
-    tracing::trace!("Setting up new in-memory schema");
-    new_schema
-        .use_ns("new")
-        .use_db("memory")
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'remote_schema' embedded database's schema: {e}"
-            ))
-        })?;
+                    // If schema changes are provided, add fields that changed
+                    if let Some(changes) = schema_changes {
+                        // Get fields that need regeneration based on schema changes
+                        let schema_fields_needing_generation =
+                            changes.get_fields_needing_generation(table_name);
 
-    tracing::trace!("In-memory schemas ready");
-    Ok((remote_schema, new_schema))
+                        // If all fields need generation (new table), regenerate everything
+                        if schema_fields_needing_generation.contains(&"*".to_string()) {
+                            // Generate all new records for new tables
+                            result =
+                                self.generate_new_records(table_name, table_config, target_count);
+                            return result;
+                        }
+
+                        // Add schema-detected fields to the regeneration list
+                        for field in schema_fields_needing_generation {
+                            if !fields_to_regenerate.contains(&field) {
+                                fields_to_regenerate.push(field);
+                            }
+                        }
+                    }
+
+                    for mut record in existing_records {
+                        // Regenerate specified fields
+                        if let Value::Object(ref mut map) = record {
+                            // First, add any new fields that don't exist in the record
+                            for field in &table_config.struct_config.fields {
+                                if !map.contains_key(&field.field_name) {
+                                    // This is a new field, generate value
+                                    let new_value = Self::generate_field_value(field, table_config);
+                                    map.insert(field.field_name.clone(), new_value);
+                                }
+                            }
+
+                            // Then, regenerate fields that need it
+                            for field_name in &fields_to_regenerate {
+                                if let Some(field) = table_config
+                                    .struct_config
+                                    .fields
+                                    .iter()
+                                    .find(|f| &f.field_name == field_name)
+                                {
+                                    // Generate new value for this field
+                                    let new_value = Self::generate_field_value(field, table_config);
+                                    map.insert(field_name.clone(), new_value);
+                                }
+                            }
+                        }
+
+                        result.push(record);
+                    }
+
+                    // Generate additional records if needed
+                    if target_count > existing_count {
+                        let additional = self.generate_new_records(
+                            table_name,
+                            table_config,
+                            target_count - existing_count,
+                        );
+                        result.extend(additional);
+                    }
+                } else {
+                    // No existing data or preservation disabled
+                    result = self.generate_new_records(table_name, table_config, target_count);
+                }
+            }
+            PreservationMode::Full => {
+                // Full preservation - keep all data, only add new fields
+                if existing_count > 0 {
+                    // Check if target count is less than existing count
+                    if target_count < existing_count {
+                        eprintln!(
+                            "\n  WARNING: Full preservation mode with data reduction detected!"
+                        );
+                        eprintln!(
+                            "   Table '{}' has {} existing records but target count is set to {}",
+                            table_name, existing_count, target_count
+                        );
+                        eprintln!(
+                            "   This will DELETE {} records!",
+                            existing_count - target_count
+                        );
+                        eprintln!("\n   Options:");
+                        eprintln!(
+                            "   1. Change the target count (n) to {} or higher to preserve all records",
+                            existing_count
+                        );
+                        eprintln!("   2. Use Smart preservation mode instead of Full");
+                        eprintln!(
+                            "   3. Set preservation_mode to None if you want to regenerate all data"
+                        );
+                        eprintln!(
+                            "\n   In a production environment, this would require user confirmation."
+                        );
+                        eprintln!(
+                            "   For now, proceeding with target count of {} records.\n",
+                            target_count
+                        );
+
+                        for mut record in existing_records {
+                            // Only add new fields that don't exist
+                            if let Value::Object(ref mut map) = record {
+                                for field in &table_config.struct_config.fields {
+                                    if !map.contains_key(&field.field_name) {
+                                        // This is a new field, generate value
+                                        let new_value =
+                                            Self::generate_field_value(field, table_config);
+                                        map.insert(field.field_name.clone(), new_value);
+                                    }
+                                }
+                            }
+
+                            result.push(record);
+                        }
+                    } else {
+                        // Normal case: preserve all existing records
+                        for mut record in existing_records {
+                            // Only add new fields that don't exist
+                            if let Value::Object(ref mut map) = record {
+                                for field in &table_config.struct_config.fields {
+                                    if !map.contains_key(&field.field_name) {
+                                        // This is a new field, generate value
+                                        let new_value =
+                                            Self::generate_field_value(field, table_config);
+                                        map.insert(field.field_name.clone(), new_value);
+                                    }
+                                }
+                            }
+
+                            result.push(record);
+                        }
+
+                        // Generate additional records if needed
+                        if target_count > existing_count {
+                            let additional = self.generate_new_records(
+                                table_name,
+                                table_config,
+                                target_count - existing_count,
+                            );
+                            result.extend(additional);
+                        }
+                    }
+                } else {
+                    result = self.generate_new_records(table_name, table_config, target_count);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Generate new records for a table
+    fn generate_new_records(
+        &self,
+        _table_name: &str,
+        table_config: &TableConfig,
+        count: usize,
+    ) -> Vec<serde_json::Value> {
+        use serde_json::Value;
+
+        let mut records = Vec::new();
+
+        for _ in 0..count {
+            let mut record = serde_json::Map::new();
+
+            // Generate values for each field
+            for field in &table_config.struct_config.fields {
+                let value = Self::generate_field_value(field, table_config);
+                record.insert(field.field_name.clone(), value);
+            }
+
+            records.push(Value::Object(record));
+        }
+
+        records
+    }
+
+    /// Generate a value for a specific field
+    fn generate_field_value(
+        field: &crate::types::StructField,
+        _table_config: &TableConfig,
+    ) -> serde_json::Value {
+        use crate::types::FieldType;
+        use serde_json::json;
+
+        // Use format if available
+        if let Some(format) = &field.format {
+            let value = format.generate_formatted_value();
+
+            // Check if the format generates numeric values
+            match format {
+                crate::schemasync::mockmake::format::Format::Percentage
+                | crate::schemasync::mockmake::format::Format::Latitude
+                | crate::schemasync::mockmake::format::Format::Longitude
+                | crate::schemasync::mockmake::format::Format::CurrencyAmount => {
+                    // Try to parse as number
+                    if let Ok(num) = value.parse::<f64>() {
+                        return json!(num);
+                    }
+                }
+                _ => {}
+            }
+
+            return json!(value);
+        }
+
+        // Generate based on field type
+        match &field.field_type {
+            FieldType::String => json!(crate::schemasync::Mockmaker::random_string(8)),
+            FieldType::Bool => json!(rand::random::<bool>()),
+            FieldType::U8
+            | FieldType::U16
+            | FieldType::U32
+            | FieldType::U64
+            | FieldType::U128
+            | FieldType::Usize => json!(rand::random::<u32>() % 100),
+            FieldType::I8
+            | FieldType::I16
+            | FieldType::I32
+            | FieldType::I64
+            | FieldType::I128
+            | FieldType::Isize => json!(rand::random::<i32>() % 100),
+            FieldType::F32 | FieldType::F64 => json!(rand::random::<f64>() * 100.0),
+            FieldType::DateTime => json!(chrono::Utc::now().to_rfc3339()),
+            FieldType::EvenframeDuration => {
+                // Generate random duration in nanoseconds (0 to 1 day)
+                json!(rand::random::<i64>() % 86_400_000_000_000i64)
+            }
+            FieldType::Timezone => {
+                // Generate random IANA timezone string
+                let timezones = [
+                    "UTC",
+                    "America/New_York",
+                    "America/Los_Angeles",
+                    "Europe/London",
+                    "Europe/Paris",
+                    "Asia/Tokyo",
+                    "Asia/Shanghai",
+                    "Australia/Sydney",
+                ];
+                let index = (rand::random::<f64>() * timezones.len() as f64) as usize;
+                json!(timezones[index.min(timezones.len() - 1)])
+            }
+            FieldType::Option(inner) => {
+                if rand::random::<bool>() {
+                    let inner_field = crate::types::StructField {
+                        field_name: field.field_name.clone(),
+                        field_type: *inner.clone(),
+                        format: field.format.clone(),
+                        edge_config: None,
+                        define_config: None,
+                        validators: Vec::new(),
+                        always_regenerate: false,
+                    };
+                    Self::generate_field_value(&inner_field, _table_config)
+                } else {
+                    json!(null)
+                }
+            }
+            FieldType::Vec(_) => json!([]),
+            FieldType::Other(type_name) => {
+                // Handle common types
+                if type_name.contains("DateTime") {
+                    json!(chrono::Utc::now().to_rfc3339())
+                } else {
+                    json!(format!("{}:1", type_name.to_lowercase()))
+                }
+            }
+            _ => json!(null),
+        }
+    }
 }
