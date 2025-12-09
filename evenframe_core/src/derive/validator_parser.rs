@@ -4,6 +4,16 @@ use quote::quote;
 use syn::{Attribute, Error, Result};
 use tracing;
 
+/// Check if a syn::Type represents an Option<T> type
+fn is_option_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "Option";
+        }
+    }
+    false
+}
+
 /// Helper function to suggest validator corrections based on common mistakes
 fn suggest_validator_correction(expr_str: &str) -> String {
     let lower = expr_str.to_lowercase();
@@ -50,8 +60,11 @@ fn suggest_validator_correction(expr_str: &str) -> String {
 pub fn parse_field_validators_with_logic(
     attrs: &[Attribute],
     value_ident: &str,
+    field_type: Option<&syn::Type>,
 ) -> Result<(Vec<TokenStream>, Vec<TokenStream>)> {
     tracing::debug!(attr_count = attrs.len(), value_ident = %value_ident, "Parsing field validators with logic");
+    let is_optional = field_type.map(|ty| is_option_type(ty)).unwrap_or(false);
+
     // Check for common attribute mistakes
     for attr in attrs {
         if attr.path().is_ident("validator") {
@@ -93,7 +106,7 @@ pub fn parse_field_validators_with_logic(
                     let mut logic_tokens = Vec::new();
                     for validator_expr in validators_list {
                         let (val_tokens, log_tokens) =
-                            parse_validator_enum_with_logic(&validator_expr, value_ident)?;
+                            parse_validator_enum_with_logic(&validator_expr, value_ident, is_optional)?;
                         validator_tokens.extend(val_tokens);
                         logic_tokens.extend(log_tokens);
                     }
@@ -102,7 +115,7 @@ pub fn parse_field_validators_with_logic(
                 Err(_err) => {
                     // Try parsing as a single expression for backwards compatibility
                     match attr.parse_args::<syn::Expr>() {
-                        Ok(expr) => return parse_validator_enum_with_logic(&expr, value_ident),
+                        Ok(expr) => return parse_validator_enum_with_logic(&expr, value_ident, is_optional),
                         Err(parse_err) => {
                             return Err(Error::new_spanned(
                                 attr,
@@ -127,7 +140,7 @@ pub fn parse_field_validators_with_logic(
 
 pub fn parse_field_validators(attrs: &[Attribute]) -> Result<Vec<TokenStream>> {
     tracing::debug!(attr_count = attrs.len(), "Parsing field validators");
-    let (validator_tokens, _) = parse_field_validators_with_logic(attrs, "value")?;
+    let (validator_tokens, _) = parse_field_validators_with_logic(attrs, "value", None)?;
     Ok(validator_tokens)
 }
 
@@ -135,8 +148,9 @@ pub fn parse_field_validators(attrs: &[Attribute]) -> Result<Vec<TokenStream>> {
 pub fn parse_validator_enum_with_logic(
     expr: &syn::Expr,
     value_ident: &str,
+    is_optional: bool,
 ) -> Result<(Vec<TokenStream>, Vec<TokenStream>)> {
-    tracing::trace!(value_ident = %value_ident, "Parsing validator enum with logic");
+    tracing::trace!(value_ident = %value_ident, is_optional = %is_optional, "Parsing validator enum with logic");
     let mut validator_tokens = Vec::new();
     let mut logic_tokens = Vec::new();
 
@@ -151,7 +165,7 @@ pub fn parse_validator_enum_with_logic(
         }
 
         for (idx, elem) in array_expr.elems.iter().enumerate() {
-            match parse_validator_enum_with_logic(elem, value_ident) {
+            match parse_validator_enum_with_logic(elem, value_ident, is_optional) {
                 Ok((val_tokens, log_tokens)) => {
                     validator_tokens.extend(val_tokens);
                     logic_tokens.extend(log_tokens);
@@ -169,14 +183,27 @@ pub fn parse_validator_enum_with_logic(
 
     // Handle parenthesized expressions
     if let syn::Expr::Paren(paren) = expr {
-        return parse_validator_enum_with_logic(&paren.expr, value_ident);
+        return parse_validator_enum_with_logic(&paren.expr, value_ident, is_optional);
     }
 
     // Try to parse the expression into a Validator enum using the SynEnum derive
     match Validator::try_from(expr) {
         Ok(validator) => {
             // Get the validation logic tokens
-            let validation_logic = validator.get_validation_logic_tokens(value_ident);
+            let validation_logic = if is_optional {
+                // For Option<T> types, unwrap and validate the inner value
+                let inner_ident = format!("{}_inner", value_ident);
+                let value_token = syn::Ident::new(value_ident, proc_macro2::Span::call_site());
+                let inner_token = syn::Ident::new(&inner_ident, proc_macro2::Span::call_site());
+                let inner_validation = validator.get_validation_logic_tokens(&inner_ident);
+                quote! {
+                    if let Some(ref #inner_token) = #value_token {
+                        #inner_validation
+                    }
+                }
+            } else {
+                validator.get_validation_logic_tokens(value_ident)
+            };
             logic_tokens.push(validation_logic);
 
             validator_tokens.push(quote! {#validator});

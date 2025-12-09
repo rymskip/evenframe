@@ -884,22 +884,22 @@ impl Validator {
                     }
                 },
                 NumberValidator::Positive => quote! {
-                    if #value <= 0.0 {
+                    if (#value as f64) <= 0.0 {
                         return Err(serde::de::Error::custom("value must be positive"));
                     }
                 },
                 NumberValidator::Negative => quote! {
-                    if #value >= 0.0 {
+                    if (#value as f64) >= 0.0 {
                         return Err(serde::de::Error::custom("value must be negative"));
                     }
                 },
                 NumberValidator::NonPositive => quote! {
-                    if #value > 0.0 {
+                    if (#value as f64) > 0.0 {
                         return Err(serde::de::Error::custom("value must be non-positive"));
                     }
                 },
                 NumberValidator::NonNegative => quote! {
-                    if #value < 0.0 {
+                    if (#value as f64) < 0.0 {
                         return Err(serde::de::Error::custom("value must be non-negative"));
                     }
                 },

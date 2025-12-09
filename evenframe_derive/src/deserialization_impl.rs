@@ -68,7 +68,7 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
 
         // Parse validators and get both validator tokens and logic tokens
         let (_, validation_logic_tokens) =
-            match parse_field_validators_with_logic(&field.attrs, &temp_var_name) {
+            match parse_field_validators_with_logic(&field.attrs, &temp_var_name, Some(field_type)) {
                 Ok(tokens) => tokens,
                 Err(err) => {
                     return err.to_compile_error();
