@@ -191,13 +191,23 @@ pub fn parse_validator_enum_with_logic(
         Ok(validator) => {
             // Get the validation logic tokens
             let validation_logic = if is_optional {
-                // For Option<T> types, unwrap and validate the inner value
+                // For Option<T> types, we take a reference to the option, then match on it.
+                // Inside the match, we get a reference to the inner value (&T).
+                // We then clone/copy the inner value to get an owned T for validation.
+                // This works for both:
+                // - String: Clone gives owned String, methods work on it
+                // - Numeric types: Copy gives owned value, casting works
                 let inner_ident = format!("{}_inner", value_ident);
+                let inner_ref_ident = format!("{}_inner_ref", value_ident);
                 let value_token = syn::Ident::new(value_ident, proc_macro2::Span::call_site());
                 let inner_token = syn::Ident::new(&inner_ident, proc_macro2::Span::call_site());
+                let inner_ref_token = syn::Ident::new(&inner_ref_ident, proc_macro2::Span::call_site());
                 let inner_validation = validator.get_validation_logic_tokens(&inner_ident);
                 quote! {
-                    if let Some(ref #inner_token) = #value_token {
+                    if let Some(ref #inner_ref_token) = #value_token {
+                        // Clone/copy the inner value for validation
+                        // This works for both Copy types (integers) and Clone types (String)
+                        let #inner_token = #inner_ref_token.clone();
                         #inner_validation
                     }
                 }

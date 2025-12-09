@@ -481,7 +481,7 @@ impl Validator {
                     }
                 },
                 StringValidator::DateEpoch => quote! {
-                    if &#value.parse::<i64>().is_err() {
+                    if #value.parse::<i64>().is_err() {
                         return Err(serde::de::Error::custom("invalid epoch timestamp"));
                     }
                 },
@@ -530,7 +530,7 @@ impl Validator {
                     }
                 },
                 StringValidator::Integer => quote! {
-                    if &#value.parse::<i64>().is_err() {
+                    if #value.parse::<i64>().is_err() {
                         return Err(serde::de::Error::custom("value must be a valid integer"));
                     }
                 },
@@ -539,17 +539,17 @@ impl Validator {
                         .map_err(|_| serde::de::Error::custom("invalid integer"))?;
                 },
                 StringValidator::Ip => quote! {
-                    if &#value.parse::<std::net::IpAddr>().is_err() {
+                    if #value.parse::<std::net::IpAddr>().is_err() {
                         return Err(serde::de::Error::custom("invalid IP address"));
                     }
                 },
                 StringValidator::IpV4 => quote! {
-                    if &#value.parse::<std::net::Ipv4Addr>().is_err() {
+                    if #value.parse::<std::net::Ipv4Addr>().is_err() {
                         return Err(serde::de::Error::custom("invalid IPv4 address"));
                     }
                 },
                 StringValidator::IpV6 => quote! {
-                    if &#value.parse::<std::net::Ipv6Addr>().is_err() {
+                    if #value.parse::<std::net::Ipv6Addr>().is_err() {
                         return Err(serde::de::Error::custom("invalid IPv6 address"));
                     }
                 },
@@ -615,7 +615,7 @@ impl Validator {
                     }
                 },
                 StringValidator::Numeric => quote! {
-                    if &#value.parse::<f64>().is_err() {
+                    if #value.parse::<f64>().is_err() {
                         return Err(serde::de::Error::custom("value must be numeric"));
                     }
                 },
@@ -835,7 +835,7 @@ impl Validator {
                 NumberValidator::GreaterThan(min) => {
                     let min_val = min.0;
                     quote! {
-                        if #value <= #min_val {
+                        if (#value as f64) <= #min_val {
                             return Err(serde::de::Error::custom(format!("value must be greater than {}", #min_val)));
                         }
                     }
@@ -843,7 +843,7 @@ impl Validator {
                 NumberValidator::GreaterThanOrEqualTo(min) => {
                     let min_val = min.0;
                     quote! {
-                        if #value < #min_val {
+                        if (#value as f64) < #min_val {
                             return Err(serde::de::Error::custom(format!("value must be greater than or equal to {}", #min_val)));
                         }
                     }
@@ -851,7 +851,7 @@ impl Validator {
                 NumberValidator::LessThan(max) => {
                     let max_val = max.0;
                     quote! {
-                        if #value >= #max_val {
+                        if (#value as f64) >= #max_val {
                             return Err(serde::de::Error::custom(format!("value must be less than {}", #max_val)));
                         }
                     }
@@ -859,7 +859,7 @@ impl Validator {
                 NumberValidator::LessThanOrEqualTo(max) => {
                     let max_val = max.0;
                     quote! {
-                        if #value > #max_val {
+                        if (#value as f64) > #max_val {
                             return Err(serde::de::Error::custom(format!("value must be less than or equal to {}", #max_val)));
                         }
                     }
@@ -868,7 +868,7 @@ impl Validator {
                     let min_val = min.0;
                     let max_val = max.0;
                     quote! {
-                        if #value < #min_val || #value > #max_val {
+                        if (#value as f64) < #min_val || (#value as f64) > #max_val {
                             return Err(serde::de::Error::custom(format!("value must be between {} and {} (inclusive)", #min_val, #max_val)));
                         }
                     }
