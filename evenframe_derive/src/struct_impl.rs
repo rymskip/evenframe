@@ -312,7 +312,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 ident.span(),
             );
             let registry_submission = quote! {
-                #[linkme::distributed_slice(registry::TABLE_REGISTRY_ENTRIES)]
+                #[::evenframe::linkme::distributed_slice(::evenframe::registry::TABLE_REGISTRY_ENTRIES)]
                 static #registry_var_name: ::evenframe::registry::TableRegistryEntry = ::evenframe::registry::TableRegistryEntry {
                     type_name: #struct_name,
                     table_config_fn: || #ident::static_table_config(),

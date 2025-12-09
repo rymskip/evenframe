@@ -640,3 +640,1075 @@ pub fn sort_tables_by_dependencies(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData};
+
+    // ==================== RecursionInfo Tests ====================
+
+    #[test]
+    fn test_recursion_info_is_recursive_pair_same_recursive_component() {
+        let mut comp_of = HashMap::new();
+        comp_of.insert("TypeA".to_string(), 0);
+        comp_of.insert("TypeB".to_string(), 0);
+
+        let mut meta = HashMap::new();
+        meta.insert(0, (true, vec!["TypeA".to_string(), "TypeB".to_string()]));
+
+        let info = RecursionInfo { comp_of, meta };
+
+        // Same component and recursive
+        assert!(info.is_recursive_pair("TypeA", "TypeB"));
+        assert!(info.is_recursive_pair("TypeB", "TypeA"));
+    }
+
+    #[test]
+    fn test_recursion_info_is_recursive_pair_same_non_recursive_component() {
+        let mut comp_of = HashMap::new();
+        comp_of.insert("TypeA".to_string(), 0);
+
+        let mut meta = HashMap::new();
+        meta.insert(0, (false, vec!["TypeA".to_string()]));
+
+        let info = RecursionInfo { comp_of, meta };
+
+        // Same component but not recursive
+        assert!(!info.is_recursive_pair("TypeA", "TypeA"));
+    }
+
+    #[test]
+    fn test_recursion_info_is_recursive_pair_different_components() {
+        let mut comp_of = HashMap::new();
+        comp_of.insert("TypeA".to_string(), 0);
+        comp_of.insert("TypeB".to_string(), 1);
+
+        let mut meta = HashMap::new();
+        meta.insert(0, (true, vec!["TypeA".to_string()]));
+        meta.insert(1, (true, vec!["TypeB".to_string()]));
+
+        let info = RecursionInfo { comp_of, meta };
+
+        // Different components
+        assert!(!info.is_recursive_pair("TypeA", "TypeB"));
+    }
+
+    #[test]
+    fn test_recursion_info_is_recursive_pair_unknown_type() {
+        let comp_of = HashMap::new();
+        let meta = HashMap::new();
+        let info = RecursionInfo { comp_of, meta };
+
+        // Unknown types
+        assert!(!info.is_recursive_pair("Unknown", "Other"));
+    }
+
+    #[test]
+    fn test_recursion_info_is_recursive_pair_one_unknown() {
+        let mut comp_of = HashMap::new();
+        comp_of.insert("TypeA".to_string(), 0);
+
+        let mut meta = HashMap::new();
+        meta.insert(0, (true, vec!["TypeA".to_string()]));
+
+        let info = RecursionInfo { comp_of, meta };
+
+        // One known, one unknown
+        assert!(!info.is_recursive_pair("TypeA", "Unknown"));
+        assert!(!info.is_recursive_pair("Unknown", "TypeA"));
+    }
+
+    // ==================== collect_refs Tests ====================
+
+    fn create_struct_field(name: &str, field_type: FieldType) -> StructField {
+        StructField {
+            field_name: name.to_string(),
+            field_type,
+            edge_config: None,
+            define_config: None,
+            format: None,
+            validators: Vec::new(),
+            always_regenerate: false,
+        }
+    }
+
+    #[test]
+    fn test_collect_refs_primitive_types() {
+        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(&FieldType::String, &known, &mut acc);
+        collect_refs(&FieldType::I32, &known, &mut acc);
+        collect_refs(&FieldType::Bool, &known, &mut acc);
+        collect_refs(&FieldType::F64, &known, &mut acc);
+
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn test_collect_refs_other_known_type() {
+        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(&FieldType::Other("KnownType".to_string()), &known, &mut acc);
+
+        assert!(acc.contains("KnownType"));
+        assert_eq!(acc.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_refs_other_unknown_type() {
+        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::Other("UnknownType".to_string()),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn test_collect_refs_option_with_known_type() {
+        let known: HashSet<String> = ["InnerType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::Option(Box::new(FieldType::Other("InnerType".to_string()))),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("InnerType"));
+    }
+
+    #[test]
+    fn test_collect_refs_vec_with_known_type() {
+        let known: HashSet<String> = ["ElementType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::Vec(Box::new(FieldType::Other("ElementType".to_string()))),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("ElementType"));
+    }
+
+    #[test]
+    fn test_collect_refs_record_link() {
+        let known: HashSet<String> = ["LinkedType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::RecordLink(Box::new(FieldType::Other("LinkedType".to_string()))),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("LinkedType"));
+    }
+
+    #[test]
+    fn test_collect_refs_tuple() {
+        let known: HashSet<String> = ["TypeA".to_string(), "TypeB".to_string()]
+            .into_iter()
+            .collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::Tuple(vec![
+                FieldType::Other("TypeA".to_string()),
+                FieldType::String,
+                FieldType::Other("TypeB".to_string()),
+            ]),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("TypeA"));
+        assert!(acc.contains("TypeB"));
+        assert_eq!(acc.len(), 2);
+    }
+
+    #[test]
+    fn test_collect_refs_struct_type() {
+        let known: HashSet<String> = ["FieldType1".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::Struct(vec![
+                ("field1".to_string(), FieldType::Other("FieldType1".to_string())),
+                ("field2".to_string(), FieldType::I32),
+            ]),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("FieldType1"));
+        assert_eq!(acc.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_refs_hashmap() {
+        let known: HashSet<String> = ["KeyType".to_string(), "ValueType".to_string()]
+            .into_iter()
+            .collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::HashMap(
+                Box::new(FieldType::Other("KeyType".to_string())),
+                Box::new(FieldType::Other("ValueType".to_string())),
+            ),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("KeyType"));
+        assert!(acc.contains("ValueType"));
+    }
+
+    #[test]
+    fn test_collect_refs_btreemap() {
+        let known: HashSet<String> = ["KeyType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        collect_refs(
+            &FieldType::BTreeMap(
+                Box::new(FieldType::Other("KeyType".to_string())),
+                Box::new(FieldType::String),
+            ),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("KeyType"));
+        assert_eq!(acc.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_refs_nested_types() {
+        let known: HashSet<String> = ["DeepType".to_string()].into_iter().collect();
+        let mut acc = HashSet::new();
+
+        // Option<Vec<DeepType>>
+        collect_refs(
+            &FieldType::Option(Box::new(FieldType::Vec(Box::new(FieldType::Other(
+                "DeepType".to_string(),
+            ))))),
+            &known,
+            &mut acc,
+        );
+
+        assert!(acc.contains("DeepType"));
+    }
+
+    // ==================== analyse_recursion Tests ====================
+
+    fn create_struct_config(name: &str, fields: Vec<StructField>) -> StructConfig {
+        StructConfig {
+            struct_name: name.to_string(),
+            fields,
+            validators: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_analyse_recursion_no_types() {
+        let structs: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        let info = analyse_recursion(&structs, &enums);
+
+        assert!(info.comp_of.is_empty());
+        assert!(info.meta.is_empty());
+    }
+
+    #[test]
+    fn test_analyse_recursion_single_struct_no_deps() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "User".to_string(),
+            create_struct_config(
+                "User",
+                vec![
+                    create_struct_field("name", FieldType::String),
+                    create_struct_field("age", FieldType::I32),
+                ],
+            ),
+        );
+
+        let info = analyse_recursion(&structs, &HashMap::new());
+
+        assert!(info.comp_of.contains_key("User"));
+        let scc_id = info.comp_of["User"];
+        // Single node without self-loop is not recursive
+        assert!(!info.meta[&scc_id].0);
+    }
+
+    #[test]
+    fn test_analyse_recursion_self_referential() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "Node".to_string(),
+            create_struct_config(
+                "Node",
+                vec![
+                    create_struct_field("value", FieldType::I32),
+                    create_struct_field(
+                        "next",
+                        FieldType::Option(Box::new(FieldType::Other("Node".to_string()))),
+                    ),
+                ],
+            ),
+        );
+
+        let info = analyse_recursion(&structs, &HashMap::new());
+
+        assert!(info.comp_of.contains_key("Node"));
+        // Self-loop should be detected as recursive
+        let scc_id = info.comp_of["Node"];
+        assert!(info.meta[&scc_id].0);
+    }
+
+    #[test]
+    fn test_analyse_recursion_mutual_recursion() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "TypeA".to_string(),
+            create_struct_config(
+                "TypeA",
+                vec![create_struct_field(
+                    "b_ref",
+                    FieldType::Other("TypeB".to_string()),
+                )],
+            ),
+        );
+        structs.insert(
+            "TypeB".to_string(),
+            create_struct_config(
+                "TypeB",
+                vec![create_struct_field(
+                    "a_ref",
+                    FieldType::Other("TypeA".to_string()),
+                )],
+            ),
+        );
+
+        let info = analyse_recursion(&structs, &HashMap::new());
+
+        // Both should be in the same SCC
+        assert_eq!(info.comp_of.get("TypeA"), info.comp_of.get("TypeB"));
+        let scc_id = info.comp_of["TypeA"];
+        assert!(info.meta[&scc_id].0); // Should be recursive
+        assert_eq!(info.meta[&scc_id].1.len(), 2); // 2 members in SCC
+    }
+
+    #[test]
+    fn test_analyse_recursion_chain_no_cycle() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "A".to_string(),
+            create_struct_config(
+                "A",
+                vec![create_struct_field("b", FieldType::Other("B".to_string()))],
+            ),
+        );
+        structs.insert(
+            "B".to_string(),
+            create_struct_config(
+                "B",
+                vec![create_struct_field("c", FieldType::Other("C".to_string()))],
+            ),
+        );
+        structs.insert(
+            "C".to_string(),
+            create_struct_config("C", vec![create_struct_field("value", FieldType::I32)]),
+        );
+
+        let info = analyse_recursion(&structs, &HashMap::new());
+
+        // All should be in different SCCs (no cycles)
+        assert_ne!(info.comp_of.get("A"), info.comp_of.get("B"));
+        assert_ne!(info.comp_of.get("B"), info.comp_of.get("C"));
+
+        // None should be recursive
+        for (_, (is_recursive, _)) in &info.meta {
+            assert!(!is_recursive);
+        }
+    }
+
+    // ==================== deps_of Tests ====================
+
+    #[test]
+    fn test_deps_of_no_deps() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "Simple".to_string(),
+            create_struct_config(
+                "Simple",
+                vec![create_struct_field("value", FieldType::String)],
+            ),
+        );
+
+        let deps = deps_of("Simple", &structs, &HashMap::new());
+
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_deps_of_with_deps() {
+        let mut structs = HashMap::new();
+        structs.insert(
+            "Parent".to_string(),
+            create_struct_config(
+                "Parent",
+                vec![create_struct_field(
+                    "child",
+                    FieldType::Other("Child".to_string()),
+                )],
+            ),
+        );
+        structs.insert(
+            "Child".to_string(),
+            create_struct_config("Child", vec![create_struct_field("name", FieldType::String)]),
+        );
+
+        let deps = deps_of("Parent", &structs, &HashMap::new());
+
+        assert!(deps.contains("Child"));
+        assert_eq!(deps.len(), 1);
+    }
+
+    #[test]
+    fn test_deps_of_unknown_type() {
+        let structs: HashMap<String, StructConfig> = HashMap::new();
+        let deps = deps_of("Unknown", &structs, &HashMap::new());
+
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_deps_of_enum_with_variants() {
+        let _structs: HashMap<String, StructConfig> = HashMap::new();
+        let mut enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        enums.insert(
+            "Status".to_string(),
+            TaggedUnion {
+                enum_name: "Status".to_string(),
+                variants: vec![
+                    Variant {
+                        name: "Active".to_string(),
+                        data: Some(VariantData::DataStructureRef(FieldType::Other(
+                            "UserData".to_string(),
+                        ))),
+                    },
+                    Variant {
+                        name: "Inactive".to_string(),
+                        data: None,
+                    },
+                ],
+            },
+        );
+
+        // UserData must be in known set for it to be collected
+        let mut structs_with_user = HashMap::new();
+        structs_with_user.insert(
+            "UserData".to_string(),
+            create_struct_config(
+                "UserData",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let deps = deps_of("Status", &structs_with_user, &enums);
+
+        assert!(deps.contains("UserData"));
+    }
+
+    // ==================== analyse_recursion_tables Tests ====================
+
+    fn create_table_config(name: &str, fields: Vec<StructField>) -> TableConfig {
+        TableConfig {
+            table_name: name.to_string(),
+            struct_config: create_struct_config(name, fields),
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_analyse_recursion_tables_empty() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let info = analyse_recursion_tables(&tables);
+
+        assert!(info.comp_of.is_empty());
+    }
+
+    #[test]
+    fn test_analyse_recursion_tables_no_recursion() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let info = analyse_recursion_tables(&tables);
+
+        assert!(info.comp_of.contains_key("User"));
+    }
+
+    // ==================== deps_of_table Tests ====================
+
+    #[test]
+    fn test_deps_of_table_no_deps() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let deps = deps_of_table("user", &tables);
+
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_deps_of_table_with_reference() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "post".to_string(),
+            create_table_config(
+                "post",
+                vec![
+                    create_struct_field("title", FieldType::String),
+                    create_struct_field("author", FieldType::Other("User".to_string())),
+                ],
+            ),
+        );
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let deps = deps_of_table("post", &tables);
+
+        assert!(deps.contains("user"));
+    }
+
+    #[test]
+    fn test_deps_of_table_unknown() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let deps = deps_of_table("unknown", &tables);
+
+        assert!(deps.is_empty());
+    }
+
+    // ==================== sort_tables_by_dependencies Tests ====================
+    // These tests are ignored because sort_tables_by_dependencies uses evenframe_log!
+    // which requires ABSOLUTE_PATH_TO_EVENFRAME environment variable
+
+    #[test]
+    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
+    fn test_sort_tables_empty() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let objects: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        let sorted = sort_tables_by_dependencies(&tables, &objects, &enums);
+
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
+    fn test_sort_tables_no_dependencies() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+        tables.insert(
+            "post".to_string(),
+            create_table_config(
+                "post",
+                vec![create_struct_field("title", FieldType::String)],
+            ),
+        );
+
+        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+
+        assert_eq!(sorted.len(), 2);
+        assert!(sorted.contains(&"user".to_string()));
+        assert!(sorted.contains(&"post".to_string()));
+    }
+
+    #[test]
+    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
+    fn test_sort_tables_with_dependency() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "post".to_string(),
+            create_table_config(
+                "post",
+                vec![
+                    create_struct_field("title", FieldType::String),
+                    create_struct_field("author", FieldType::Other("User".to_string())),
+                ],
+            ),
+        );
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+
+        // user should come before post since post depends on user
+        let user_pos = sorted.iter().position(|s| s == "user").unwrap();
+        let post_pos = sorted.iter().position(|s| s == "post").unwrap();
+        assert!(user_pos < post_pos);
+    }
+
+    #[test]
+    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
+    fn test_sort_tables_chain_dependency() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "C".to_string(),
+            create_table_config(
+                "C",
+                vec![create_struct_field("b_ref", FieldType::Other("B".to_string()))],
+            ),
+        );
+        tables.insert(
+            "B".to_string(),
+            create_table_config(
+                "B",
+                vec![create_struct_field("a_ref", FieldType::Other("A".to_string()))],
+            ),
+        );
+        tables.insert(
+            "A".to_string(),
+            create_table_config("A", vec![create_struct_field("value", FieldType::I32)]),
+        );
+
+        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+
+        // A should come first, then B, then C
+        let a_pos = sorted.iter().position(|s| s == "A").unwrap();
+        let b_pos = sorted.iter().position(|s| s == "B").unwrap();
+        let c_pos = sorted.iter().position(|s| s == "C").unwrap();
+        assert!(a_pos < b_pos);
+        assert!(b_pos < c_pos);
+    }
+
+    #[test]
+    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
+    fn test_sort_tables_circular_dependency() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "A".to_string(),
+            create_table_config(
+                "A",
+                vec![create_struct_field("b_ref", FieldType::Other("B".to_string()))],
+            ),
+        );
+        tables.insert(
+            "B".to_string(),
+            create_table_config(
+                "B",
+                vec![create_struct_field("a_ref", FieldType::Other("A".to_string()))],
+            ),
+        );
+
+        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+
+        // Both should be in the result (circular deps are handled via SCC)
+        assert_eq!(sorted.len(), 2);
+        assert!(sorted.contains(&"A".to_string()));
+        assert!(sorted.contains(&"B".to_string()));
+    }
+
+    // ==================== collect_field_type_dependencies Tests ====================
+
+    #[test]
+    fn test_collect_field_type_dependencies_primitive() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let objects: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::String,
+            &tables,
+            &objects,
+            &enums,
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_table_ref() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "user".to_string(),
+            create_table_config(
+                "user",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Other("user".to_string()),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("user"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_avoids_infinite_recursion() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "node".to_string(),
+            create_table_config(
+                "node",
+                vec![create_struct_field(
+                    "child",
+                    FieldType::Option(Box::new(FieldType::Other("node".to_string()))),
+                )],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Other("node".to_string()),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        // Should not hang due to infinite recursion
+        assert!(visited.contains("node"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_nested_option() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "item".to_string(),
+            create_table_config(
+                "item",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Option(Box::new(FieldType::Other("item".to_string()))),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("item"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_vec() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "item".to_string(),
+            create_table_config(
+                "item",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Vec(Box::new(FieldType::Other("item".to_string()))),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("item"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_tuple() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "a".to_string(),
+            create_table_config(
+                "a",
+                vec![create_struct_field("val", FieldType::String)],
+            ),
+        );
+        tables.insert(
+            "b".to_string(),
+            create_table_config(
+                "b",
+                vec![create_struct_field("val", FieldType::I32)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Tuple(vec![
+                FieldType::Other("a".to_string()),
+                FieldType::Other("b".to_string()),
+            ]),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("a"));
+        assert!(deps.contains("b"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_hashmap_values() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "value_type".to_string(),
+            create_table_config(
+                "value_type",
+                vec![create_struct_field("data", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::HashMap(
+                Box::new(FieldType::String),
+                Box::new(FieldType::Other("value_type".to_string())),
+            ),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("value_type"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_with_objects() {
+        let mut objects = HashMap::new();
+        objects.insert(
+            "Address".to_string(),
+            create_struct_config(
+                "Address",
+                vec![
+                    create_struct_field("street", FieldType::String),
+                    create_struct_field("city", FieldType::Other("City".to_string())),
+                ],
+            ),
+        );
+
+        let mut tables = HashMap::new();
+        tables.insert(
+            "City".to_string(),
+            create_table_config(
+                "City",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Other("Address".to_string()),
+            &tables,
+            &objects,
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        // Should find City through Address's fields
+        assert!(deps.contains("City"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_with_enums() {
+        let mut enums = HashMap::new();
+        enums.insert(
+            "Status".to_string(),
+            TaggedUnion {
+                enum_name: "Status".to_string(),
+                variants: vec![Variant {
+                    name: "WithData".to_string(),
+                    data: Some(VariantData::DataStructureRef(FieldType::Other(
+                        "data_table".to_string(),
+                    ))),
+                }],
+            },
+        );
+
+        let mut tables = HashMap::new();
+        tables.insert(
+            "data_table".to_string(),
+            create_table_config(
+                "data_table",
+                vec![create_struct_field("value", FieldType::I32)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Other("Status".to_string()),
+            &tables,
+            &HashMap::new(),
+            &enums,
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("data_table"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_record_link() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "linked".to_string(),
+            create_table_config(
+                "linked",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::RecordLink(Box::new(FieldType::Other("linked".to_string()))),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("linked"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_struct_fields() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "inner".to_string(),
+            create_table_config(
+                "inner",
+                vec![create_struct_field("data", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::Struct(vec![
+                ("field1".to_string(), FieldType::String),
+                ("field2".to_string(), FieldType::Other("inner".to_string())),
+            ]),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("inner"));
+    }
+
+    #[test]
+    fn test_collect_field_type_dependencies_btreemap() {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "key_type".to_string(),
+            create_table_config(
+                "key_type",
+                vec![create_struct_field("id", FieldType::String)],
+            ),
+        );
+
+        let mut deps = HashSet::new();
+        let mut visited = HashSet::new();
+
+        collect_field_type_dependencies(
+            &FieldType::BTreeMap(
+                Box::new(FieldType::Other("key_type".to_string())),
+                Box::new(FieldType::I32),
+            ),
+            &tables,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut deps,
+            &mut visited,
+        );
+
+        assert!(deps.contains("key_type"));
+    }
+}

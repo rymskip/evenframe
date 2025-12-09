@@ -1,0 +1,12 @@
+error: Evenframe derive macro only supports structs with named fields.
+
+       Example of a valid struct:
+
+       struct UnitStruct {
+           id: String,
+           name: String,
+       }
+ --> tests/ui/fail/struct_unit.rs:5:12
+  |
+5 | pub struct UnitStruct;
+  |            ^^^^^^^^^^

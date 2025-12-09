@@ -1,0 +1,5 @@
+error: EvenframeUnion can only be used on enums
+ --> tests/ui/fail/evenframe_union_on_struct.rs:5:12
+  |
+5 | pub struct BadStruct {
+  |            ^^^^^^^^^

@@ -537,3 +537,372 @@ pub struct StructConfig {
     pub fields: Vec<StructField>,
     pub validators: Vec<Validator>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== TaggedUnion Tests ====================
+
+    #[test]
+    fn test_tagged_union_equality() {
+        let tu1 = TaggedUnion {
+            enum_name: "Status".to_string(),
+            variants: vec![],
+        };
+        let tu2 = TaggedUnion {
+            enum_name: "Status".to_string(),
+            variants: vec![],
+        };
+        assert_eq!(tu1, tu2);
+    }
+
+    #[test]
+    fn test_tagged_union_with_variants() {
+        let tu = TaggedUnion {
+            enum_name: "Status".to_string(),
+            variants: vec![
+                Variant {
+                    name: "Active".to_string(),
+                    data: None,
+                },
+                Variant {
+                    name: "Inactive".to_string(),
+                    data: None,
+                },
+            ],
+        };
+        assert_eq!(tu.variants.len(), 2);
+        assert_eq!(tu.variants[0].name, "Active");
+    }
+
+    #[test]
+    fn test_tagged_union_serialize_deserialize() {
+        let tu = TaggedUnion {
+            enum_name: "Color".to_string(),
+            variants: vec![Variant {
+                name: "Red".to_string(),
+                data: None,
+            }],
+        };
+        let json = serde_json::to_string(&tu).unwrap();
+        let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
+        assert_eq!(tu, deserialized);
+    }
+
+    #[test]
+    fn test_tagged_union_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        let tu1 = TaggedUnion {
+            enum_name: "A".to_string(),
+            variants: vec![],
+        };
+        let tu2 = TaggedUnion {
+            enum_name: "B".to_string(),
+            variants: vec![],
+        };
+        set.insert(tu1);
+        set.insert(tu2);
+        assert_eq!(set.len(), 2);
+    }
+
+    // ==================== Variant Tests ====================
+
+    #[test]
+    fn test_variant_unit() {
+        let v = Variant {
+            name: "None".to_string(),
+            data: None,
+        };
+        assert!(v.data.is_none());
+    }
+
+    #[test]
+    fn test_variant_with_data_structure_ref() {
+        let v = Variant {
+            name: "Some".to_string(),
+            data: Some(VariantData::DataStructureRef(FieldType::String)),
+        };
+        assert!(matches!(v.data, Some(VariantData::DataStructureRef(FieldType::String))));
+    }
+
+    #[test]
+    fn test_variant_with_inline_struct() {
+        let struct_config = StructConfig {
+            struct_name: "InnerData".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+        let v = Variant {
+            name: "Complex".to_string(),
+            data: Some(VariantData::InlineStruct(struct_config)),
+        };
+        assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
+    }
+
+    // ==================== VariantData Tests ====================
+
+    #[test]
+    fn test_variant_data_equality() {
+        let vd1 = VariantData::DataStructureRef(FieldType::I32);
+        let vd2 = VariantData::DataStructureRef(FieldType::I32);
+        assert_eq!(vd1, vd2);
+    }
+
+    #[test]
+    fn test_variant_data_inline_struct_vs_ref() {
+        let vd1 = VariantData::DataStructureRef(FieldType::String);
+        let vd2 = VariantData::InlineStruct(StructConfig {
+            struct_name: "Test".to_string(),
+            fields: vec![],
+            validators: vec![],
+        });
+        assert_ne!(vd1, vd2);
+    }
+
+    // ==================== StructField Tests ====================
+
+    #[test]
+    fn test_struct_field_unit() {
+        let field = StructField::unit("name".to_string());
+        assert_eq!(field.field_name, "name");
+        assert!(matches!(field.field_type, FieldType::Unit));
+    }
+
+    #[test]
+    fn test_struct_field_partial() {
+        let field = StructField::partial("data");
+        assert_eq!(field.field_name, "data");
+        assert!(matches!(field.field_type, FieldType::Struct(_)));
+    }
+
+    #[test]
+    fn test_struct_field_default() {
+        let field = StructField::default();
+        assert!(field.field_name.is_empty());
+        assert!(field.validators.is_empty());
+    }
+
+    #[test]
+    fn test_struct_field_equality() {
+        let f1 = StructField {
+            field_name: "id".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: None,
+            format: None,
+            validators: vec![],
+            always_regenerate: false,
+        };
+        let f2 = f1.clone();
+        assert_eq!(f1, f2);
+    }
+
+    // ==================== StructConfig Tests ====================
+
+    #[test]
+    fn test_struct_config_empty() {
+        let sc = StructConfig {
+            struct_name: "Empty".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+        assert!(sc.fields.is_empty());
+    }
+
+    #[test]
+    fn test_struct_config_with_fields() {
+        let sc = StructConfig {
+            struct_name: "User".to_string(),
+            fields: vec![
+                StructField {
+                    field_name: "id".to_string(),
+                    field_type: FieldType::String,
+                    edge_config: None,
+                    define_config: None,
+                    format: None,
+                    validators: vec![],
+                    always_regenerate: false,
+                },
+                StructField {
+                    field_name: "age".to_string(),
+                    field_type: FieldType::I32,
+                    edge_config: None,
+                    define_config: None,
+                    format: None,
+                    validators: vec![],
+                    always_regenerate: false,
+                },
+            ],
+            validators: vec![],
+        };
+        assert_eq!(sc.fields.len(), 2);
+    }
+
+    #[test]
+    fn test_struct_config_serialize_deserialize() {
+        let sc = StructConfig {
+            struct_name: "Test".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+        let json = serde_json::to_string(&sc).unwrap();
+        let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(sc, deserialized);
+    }
+
+    // ==================== FieldType Basic Tests ====================
+
+    #[test]
+    fn test_field_type_primitives() {
+        assert!(matches!(FieldType::String, FieldType::String));
+        assert!(matches!(FieldType::I32, FieldType::I32));
+        assert!(matches!(FieldType::Bool, FieldType::Bool));
+        assert!(matches!(FieldType::F64, FieldType::F64));
+    }
+
+    #[test]
+    fn test_field_type_option() {
+        let ft = FieldType::Option(Box::new(FieldType::String));
+        assert!(matches!(ft, FieldType::Option(_)));
+    }
+
+    #[test]
+    fn test_field_type_vec() {
+        let ft = FieldType::Vec(Box::new(FieldType::I32));
+        assert!(matches!(ft, FieldType::Vec(_)));
+    }
+
+    #[test]
+    fn test_field_type_tuple() {
+        let ft = FieldType::Tuple(vec![FieldType::String, FieldType::I32]);
+        assert!(matches!(ft, FieldType::Tuple(_)));
+    }
+
+    #[test]
+    fn test_field_type_other() {
+        let ft = FieldType::Other("CustomType".to_string());
+        assert!(matches!(ft, FieldType::Other(ref s) if s == "CustomType"));
+    }
+
+    #[test]
+    fn test_field_type_hashmap() {
+        let ft = FieldType::HashMap(
+            Box::new(FieldType::String),
+            Box::new(FieldType::I32),
+        );
+        assert!(matches!(ft, FieldType::HashMap(_, _)));
+    }
+
+    #[test]
+    fn test_field_type_btreemap() {
+        let ft = FieldType::BTreeMap(
+            Box::new(FieldType::String),
+            Box::new(FieldType::Bool),
+        );
+        assert!(matches!(ft, FieldType::BTreeMap(_, _)));
+    }
+
+    #[test]
+    fn test_field_type_record_link() {
+        let ft = FieldType::RecordLink(Box::new(FieldType::Other("User".to_string())));
+        assert!(matches!(ft, FieldType::RecordLink(_)));
+    }
+
+    #[test]
+    fn test_field_type_struct_inline() {
+        let ft = FieldType::Struct(vec![
+            ("name".to_string(), FieldType::String),
+            ("value".to_string(), FieldType::I32),
+        ]);
+        assert!(matches!(ft, FieldType::Struct(_)));
+    }
+
+    // ==================== FieldType Equality Tests ====================
+
+    #[test]
+    fn test_field_type_equality_primitives() {
+        assert_eq!(FieldType::String, FieldType::String);
+        assert_ne!(FieldType::String, FieldType::I32);
+    }
+
+    #[test]
+    fn test_field_type_equality_nested() {
+        let ft1 = FieldType::Option(Box::new(FieldType::String));
+        let ft2 = FieldType::Option(Box::new(FieldType::String));
+        let ft3 = FieldType::Option(Box::new(FieldType::I32));
+        assert_eq!(ft1, ft2);
+        assert_ne!(ft1, ft3);
+    }
+
+    // ==================== FieldType Hash Tests ====================
+
+    #[test]
+    fn test_field_type_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(FieldType::String);
+        set.insert(FieldType::I32);
+        set.insert(FieldType::String); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    // ==================== FieldType Clone Tests ====================
+
+    #[test]
+    fn test_field_type_clone() {
+        let ft = FieldType::Option(Box::new(FieldType::Vec(Box::new(FieldType::I32))));
+        let cloned = ft.clone();
+        assert_eq!(ft, cloned);
+    }
+
+    // ==================== FieldType Debug Tests ====================
+
+    #[test]
+    fn test_field_type_debug() {
+        let ft = FieldType::String;
+        let debug = format!("{:?}", ft);
+        assert!(debug.contains("String"));
+    }
+
+    // ==================== Edge Cases ====================
+
+    #[test]
+    fn test_empty_struct_config() {
+        let sc = StructConfig {
+            struct_name: "".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+        assert!(sc.struct_name.is_empty());
+    }
+
+    #[test]
+    fn test_deeply_nested_field_type() {
+        let ft = FieldType::Option(Box::new(
+            FieldType::Vec(Box::new(
+                FieldType::HashMap(
+                    Box::new(FieldType::String),
+                    Box::new(FieldType::Option(Box::new(FieldType::I32))),
+                ),
+            )),
+        ));
+        assert!(matches!(ft, FieldType::Option(_)));
+    }
+
+    #[test]
+    fn test_struct_field_with_validators() {
+        use crate::validator::{StringValidator, Validator};
+        let field = StructField {
+            field_name: "email".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: None,
+            format: None,
+            validators: vec![Validator::StringValidator(StringValidator::Email)],
+            always_regenerate: false,
+        };
+        assert_eq!(field.validators.len(), 1);
+    }
+}

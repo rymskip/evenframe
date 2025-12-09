@@ -330,3 +330,530 @@ pub fn merge_tables_and_objects(
     );
     struct_configs
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evenframe_core::types::FieldType;
+
+    // ==================== parse_struct_config Tests ====================
+
+    #[test]
+    fn test_parse_struct_config_basic_struct() {
+        let code = r#"
+            pub struct User {
+                pub id: String,
+                pub name: String,
+                pub age: i32,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            let config = parse_struct_config(item_struct).unwrap();
+
+            assert_eq!(config.struct_name, "User");
+            assert_eq!(config.fields.len(), 3);
+
+            let field_names: Vec<_> = config.fields.iter().map(|f| f.field_name.as_str()).collect();
+            assert!(field_names.contains(&"id"));
+            assert!(field_names.contains(&"name"));
+            assert!(field_names.contains(&"age"));
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_config_with_optional_fields() {
+        let code = r#"
+            pub struct Profile {
+                pub id: String,
+                pub bio: Option<String>,
+                pub avatar_url: Option<String>,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            let config = parse_struct_config(item_struct).unwrap();
+
+            assert_eq!(config.struct_name, "Profile");
+            assert_eq!(config.fields.len(), 3);
+
+            // Find the bio field and check it's an Option
+            let bio_field = config.fields.iter().find(|f| f.field_name == "bio").unwrap();
+            assert!(matches!(bio_field.field_type, FieldType::Option(_)));
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_config_with_vec_field() {
+        let code = r#"
+            pub struct Team {
+                pub id: String,
+                pub name: String,
+                pub members: Vec<String>,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            let config = parse_struct_config(item_struct).unwrap();
+
+            let members_field = config.fields.iter().find(|f| f.field_name == "members").unwrap();
+            assert!(matches!(members_field.field_type, FieldType::Vec(_)));
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_config_empty_struct() {
+        let code = r#"
+            pub struct Empty {}
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            let config = parse_struct_config(item_struct).unwrap();
+
+            assert_eq!(config.struct_name, "Empty");
+            assert!(config.fields.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_config_raw_identifier() {
+        let code = r#"
+            pub struct Data {
+                pub id: String,
+                pub r#type: String,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            let config = parse_struct_config(item_struct).unwrap();
+
+            // Raw identifier r#type should become just "type"
+            let type_field = config.fields.iter().find(|f| f.field_name == "type");
+            assert!(type_field.is_some(), "Should find field named 'type' after stripping r#");
+        }
+    }
+
+    // ==================== parse_enum_config Tests ====================
+
+    #[test]
+    fn test_parse_enum_config_unit_variants() {
+        let code = r#"
+            pub enum Status {
+                Active,
+                Inactive,
+                Pending,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            assert_eq!(config.enum_name, "Status");
+            assert_eq!(config.variants.len(), 3);
+
+            // All variants should have no data
+            for variant in &config.variants {
+                assert!(variant.data.is_none());
+            }
+
+            let variant_names: Vec<_> = config.variants.iter().map(|v| v.name.as_str()).collect();
+            assert!(variant_names.contains(&"Active"));
+            assert!(variant_names.contains(&"Inactive"));
+            assert!(variant_names.contains(&"Pending"));
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_config_tuple_variants() {
+        let code = r#"
+            pub enum Message {
+                Text(String),
+                Number(i32),
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            assert_eq!(config.enum_name, "Message");
+            assert_eq!(config.variants.len(), 2);
+
+            let text_variant = config.variants.iter().find(|v| v.name == "Text").unwrap();
+            assert!(matches!(text_variant.data, Some(VariantData::DataStructureRef(_))));
+
+            let number_variant = config.variants.iter().find(|v| v.name == "Number").unwrap();
+            assert!(matches!(number_variant.data, Some(VariantData::DataStructureRef(_))));
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_config_struct_variants() {
+        let code = r#"
+            pub enum Event {
+                Click { x: i32, y: i32 },
+                KeyPress { key: String },
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            assert_eq!(config.enum_name, "Event");
+            assert_eq!(config.variants.len(), 2);
+
+            let click_variant = config.variants.iter().find(|v| v.name == "Click").unwrap();
+            if let Some(VariantData::InlineStruct(struct_config)) = &click_variant.data {
+                assert_eq!(struct_config.fields.len(), 2);
+                let field_names: Vec<_> = struct_config.fields.iter().map(|f| f.field_name.as_str()).collect();
+                assert!(field_names.contains(&"x"));
+                assert!(field_names.contains(&"y"));
+            } else {
+                panic!("Expected InlineStruct variant data");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_config_mixed_variants() {
+        let code = r#"
+            pub enum Action {
+                None,
+                Single(String),
+                Multiple { first: String, second: i32 },
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            assert_eq!(config.enum_name, "Action");
+            assert_eq!(config.variants.len(), 3);
+
+            let none_variant = config.variants.iter().find(|v| v.name == "None").unwrap();
+            assert!(none_variant.data.is_none());
+
+            let single_variant = config.variants.iter().find(|v| v.name == "Single").unwrap();
+            assert!(matches!(single_variant.data, Some(VariantData::DataStructureRef(_))));
+
+            let multiple_variant = config.variants.iter().find(|v| v.name == "Multiple").unwrap();
+            assert!(matches!(multiple_variant.data, Some(VariantData::InlineStruct(_))));
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_config_empty_enum() {
+        let code = r#"
+            pub enum Empty {}
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            assert_eq!(config.enum_name, "Empty");
+            assert!(config.variants.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_config_tuple_multiple_fields() {
+        let code = r#"
+            pub enum Coord {
+                Point2D(i32, i32),
+                Point3D(i32, i32, i32),
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Enum(item_enum) = &file.items[0] {
+            let config = parse_enum_config(item_enum).unwrap();
+
+            let point2d = config.variants.iter().find(|v| v.name == "Point2D").unwrap();
+            if let Some(VariantData::DataStructureRef(FieldType::Tuple(types))) = &point2d.data {
+                assert_eq!(types.len(), 2);
+            } else {
+                panic!("Expected tuple type with 2 elements");
+            }
+
+            let point3d = config.variants.iter().find(|v| v.name == "Point3D").unwrap();
+            if let Some(VariantData::DataStructureRef(FieldType::Tuple(types))) = &point3d.data {
+                assert_eq!(types.len(), 3);
+            } else {
+                panic!("Expected tuple type with 3 elements");
+            }
+        }
+    }
+
+    // ==================== process_struct_fields Tests ====================
+
+    #[test]
+    fn test_process_struct_fields_basic() {
+        let code = r#"
+            pub struct Test {
+                pub id: String,
+                pub count: i32,
+                pub active: bool,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            if let Fields::Named(ref fields_named) = item_struct.fields {
+                let fields = process_struct_fields(fields_named);
+
+                assert_eq!(fields.len(), 3);
+
+                let id_field = fields.iter().find(|f| f.field_name == "id").unwrap();
+                assert!(matches!(id_field.field_type, FieldType::String));
+
+                let count_field = fields.iter().find(|f| f.field_name == "count").unwrap();
+                assert!(matches!(count_field.field_type, FieldType::I32));
+
+                let active_field = fields.iter().find(|f| f.field_name == "active").unwrap();
+                assert!(matches!(active_field.field_type, FieldType::Bool));
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_struct_fields_with_hashmap() {
+        let code = r#"
+            use std::collections::HashMap;
+            pub struct Config {
+                pub settings: HashMap<String, String>,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        for item in &file.items {
+            if let Item::Struct(item_struct) = item {
+                if let Fields::Named(ref fields_named) = item_struct.fields {
+                    let fields = process_struct_fields(fields_named);
+
+                    assert_eq!(fields.len(), 1);
+                    let settings_field = &fields[0];
+                    assert_eq!(settings_field.field_name, "settings");
+                    // HashMap should parse to HashMap type
+                    assert!(matches!(settings_field.field_type, FieldType::HashMap(_, _)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_struct_fields_preserves_field_order() {
+        let code = r#"
+            pub struct Ordered {
+                pub first: String,
+                pub second: i32,
+                pub third: bool,
+                pub fourth: f64,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let Item::Struct(item_struct) = &file.items[0] {
+            if let Fields::Named(ref fields_named) = item_struct.fields {
+                let fields = process_struct_fields(fields_named);
+
+                assert_eq!(fields.len(), 4);
+                assert_eq!(fields[0].field_name, "first");
+                assert_eq!(fields[1].field_name, "second");
+                assert_eq!(fields[2].field_name, "third");
+                assert_eq!(fields[3].field_name, "fourth");
+            }
+        }
+    }
+
+    // ==================== merge_tables_and_objects Tests ====================
+
+    #[test]
+    fn test_merge_tables_and_objects_empty() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let objects: HashMap<String, StructConfig> = HashMap::new();
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_tables_and_objects_only_objects() {
+        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let mut objects: HashMap<String, StructConfig> = HashMap::new();
+
+        objects.insert(
+            "Address".to_string(),
+            StructConfig {
+                struct_name: "Address".to_string(),
+                fields: vec![],
+                validators: vec![],
+            },
+        );
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains_key("Address"));
+    }
+
+    #[test]
+    fn test_merge_tables_and_objects_only_tables() {
+        let mut tables: HashMap<String, TableConfig> = HashMap::new();
+        let objects: HashMap<String, StructConfig> = HashMap::new();
+
+        let struct_config = StructConfig {
+            struct_name: "User".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+
+        tables.insert(
+            "user".to_string(),
+            TableConfig {
+                table_name: "user".to_string(),
+                struct_config: struct_config.clone(),
+                relation: None,
+                permissions: None,
+                mock_generation_config: None,
+                events: vec![],
+            },
+        );
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains_key("user"));
+    }
+
+    #[test]
+    fn test_merge_tables_and_objects_combined() {
+        let mut tables: HashMap<String, TableConfig> = HashMap::new();
+        let mut objects: HashMap<String, StructConfig> = HashMap::new();
+
+        // Add an object
+        objects.insert(
+            "Address".to_string(),
+            StructConfig {
+                struct_name: "Address".to_string(),
+                fields: vec![],
+                validators: vec![],
+            },
+        );
+
+        // Add a table
+        let user_struct = StructConfig {
+            struct_name: "User".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+
+        tables.insert(
+            "user".to_string(),
+            TableConfig {
+                table_name: "user".to_string(),
+                struct_config: user_struct,
+                relation: None,
+                permissions: None,
+                mock_generation_config: None,
+                events: vec![],
+            },
+        );
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.contains_key("Address"));
+        assert!(merged.contains_key("user"));
+    }
+
+    #[test]
+    fn test_merge_tables_and_objects_table_overwrites_object() {
+        let mut tables: HashMap<String, TableConfig> = HashMap::new();
+        let mut objects: HashMap<String, StructConfig> = HashMap::new();
+
+        // Add an object with same key as table will have
+        objects.insert(
+            "user".to_string(),
+            StructConfig {
+                struct_name: "OldUser".to_string(),
+                fields: vec![],
+                validators: vec![],
+            },
+        );
+
+        // Add a table with same key
+        let user_struct = StructConfig {
+            struct_name: "NewUser".to_string(),
+            fields: vec![],
+            validators: vec![],
+        };
+
+        tables.insert(
+            "user".to_string(),
+            TableConfig {
+                table_name: "user".to_string(),
+                struct_config: user_struct,
+                relation: None,
+                permissions: None,
+                mock_generation_config: None,
+                events: vec![],
+            },
+        );
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.get("user").unwrap().struct_name, "NewUser");
+    }
+
+    #[test]
+    fn test_merge_tables_and_objects_preserves_struct_config() {
+        let mut tables: HashMap<String, TableConfig> = HashMap::new();
+        let objects: HashMap<String, StructConfig> = HashMap::new();
+
+        let field = StructField {
+            field_name: "id".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: None,
+            format: None,
+            validators: vec![],
+            always_regenerate: false,
+        };
+
+        let user_struct = StructConfig {
+            struct_name: "User".to_string(),
+            fields: vec![field],
+            validators: vec![],
+        };
+
+        tables.insert(
+            "user".to_string(),
+            TableConfig {
+                table_name: "user".to_string(),
+                struct_config: user_struct,
+                relation: None,
+                permissions: None,
+                mock_generation_config: None,
+                events: vec![],
+            },
+        );
+
+        let merged = merge_tables_and_objects(&tables, &objects);
+
+        let user_config = merged.get("user").unwrap();
+        assert_eq!(user_config.struct_name, "User");
+        assert_eq!(user_config.fields.len(), 1);
+        assert_eq!(user_config.fields[0].field_name, "id");
+    }
+}

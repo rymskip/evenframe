@@ -1,0 +1,39 @@
+[package]
+name = "evenframe_playground"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jakob Lochinski"]
+description = "A playground demonstrating Evenframe integration with Axum"
+
+# Empty workspace to exclude from parent workspace
+[workspace]
+
+[dependencies]
+# Evenframe dependencies
+evenframe = { path = "../evenframe" }
+evenframe_derive = { path = "../evenframe_derive" }
+evenframe_core = { path = "../evenframe_core" }
+
+# Web framework
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+ordered-float = "5"
+linkme = "0.3"
+convert_case = "0.6"
+url = "2"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

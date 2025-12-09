@@ -102,7 +102,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
             ident.span(),
         );
         let registry_submission = quote! {
-            #[linkme::distributed_slice(::evenframe::registry::ENUM_REGISTRY_ENTRIES)]
+            #[::evenframe::linkme::distributed_slice(::evenframe::registry::ENUM_REGISTRY_ENTRIES)]
             static #registry_var_name: ::evenframe::registry::EnumRegistryEntry = ::evenframe::registry::EnumRegistryEntry {
                 type_name: #enum_name,
                 tagged_union_fn: || #ident::variants(),

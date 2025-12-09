@@ -1,0 +1,5 @@
+error: Evenframe can only be used on structs and enums
+ --> tests/ui/fail/on_rust_union.rs:5:11
+  |
+5 | pub union BadUnion {
+  |           ^^^^^^^^

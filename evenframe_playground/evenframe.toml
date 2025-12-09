@@ -1,0 +1,35 @@
+[general]
+apply_aliases = []
+
+[schemasync]
+should_generate_mocks = true
+
+[schemasync.database]
+provider = "surrealdb"
+url = "${SURREALDB_URL}"
+namespace = "${SURREALDB_NS}"
+database = "${SURREALDB_DB}"
+timeout = 60
+
+[[schemasync.database.accesses]]
+name = "user"
+access_type = "Record"
+table_name = "user"
+
+[schemasync.mock_gen_config]
+default_record_count = 100
+default_preservation_mode = "Smart"
+default_batch_size = 100
+full_refresh_mode = false
+
+[schemasync.performance]
+embedded_db_memory_limit = "1GB"
+cache_duration_seconds = 300
+use_progressive_loading = true
+
+[typesync]
+should_generate_arktype_types = true
+should_generate_effect_types = true
+should_generate_macroforge_types = false
+should_generate_surrealdb_schemas = true
+output_path = "./src/bindings/"

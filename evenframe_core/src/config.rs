@@ -132,3 +132,422 @@ impl EvenframeConfig {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // ==================== GeneralConfig Tests ====================
+
+    #[test]
+    fn test_general_config_default() {
+        let config = GeneralConfig::default();
+        assert!(config.apply_aliases.is_empty());
+    }
+
+    #[test]
+    fn test_general_config_deserialize_empty() {
+        let toml_str = "";
+        let config: GeneralConfig = toml::from_str(toml_str).unwrap_or_default();
+        assert!(config.apply_aliases.is_empty());
+    }
+
+    #[test]
+    fn test_general_config_deserialize_with_aliases() {
+        let toml_str = r#"
+            apply_aliases = ["MyAlias", "AnotherAlias"]
+        "#;
+        let config: GeneralConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.apply_aliases.len(), 2);
+        assert_eq!(config.apply_aliases[0], "MyAlias");
+        assert_eq!(config.apply_aliases[1], "AnotherAlias");
+    }
+
+    #[test]
+    fn test_general_config_serialize() {
+        let config = GeneralConfig {
+            apply_aliases: vec!["Test".to_string()],
+        };
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(toml_str.contains("apply_aliases"));
+        assert!(toml_str.contains("Test"));
+    }
+
+    // ==================== substitute_env_vars Tests ====================
+
+    #[test]
+    fn test_substitute_env_vars_basic() {
+        temp_env::with_var("TEST_VAR_BASIC", Some("hello"), || {
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_BASIC}");
+            assert_eq!(result, "hello");
+        });
+    }
+
+    #[test]
+    fn test_substitute_env_vars_with_surrounding_text() {
+        temp_env::with_var("TEST_VAR_SURROUND", Some("world"), || {
+            let result = EvenframeConfig::substitute_env_vars("hello ${TEST_VAR_SURROUND}!");
+            assert_eq!(result, "hello world!");
+        });
+    }
+
+    #[test]
+    fn test_substitute_env_vars_multiple() {
+        temp_env::with_vars(
+            [
+                ("TEST_VAR_MULTI1", Some("foo")),
+                ("TEST_VAR_MULTI2", Some("bar")),
+            ],
+            || {
+                let result =
+                    EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}");
+                assert_eq!(result, "foo:bar");
+            },
+        );
+    }
+
+    #[test]
+    fn test_substitute_env_vars_no_match() {
+        let result = EvenframeConfig::substitute_env_vars("no variables here");
+        assert_eq!(result, "no variables here");
+    }
+
+    #[test]
+    fn test_substitute_env_vars_empty_string() {
+        let result = EvenframeConfig::substitute_env_vars("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_substitute_env_vars_url_pattern() {
+        temp_env::with_var("TEST_DB_URL", Some("http://localhost:8000"), || {
+            let result = EvenframeConfig::substitute_env_vars("${TEST_DB_URL}");
+            assert_eq!(result, "http://localhost:8000");
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "was not set")]
+    fn test_substitute_env_vars_missing_panics() {
+        // Clear the env var to make sure it doesn't exist
+        // SAFETY: This is a test environment where we control access to env vars
+        unsafe {
+            std::env::remove_var("DEFINITELY_NOT_SET_VAR_12345");
+        }
+        let _ = EvenframeConfig::substitute_env_vars("${DEFINITELY_NOT_SET_VAR_12345}");
+    }
+
+    #[test]
+    fn test_substitute_env_vars_with_underscores() {
+        temp_env::with_var("TEST_VAR_WITH_UNDERSCORES", Some("value"), || {
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_WITH_UNDERSCORES}");
+            assert_eq!(result, "value");
+        });
+    }
+
+    #[test]
+    fn test_substitute_env_vars_with_numbers() {
+        temp_env::with_var("TEST_VAR_123", Some("num_value"), || {
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_123}");
+            assert_eq!(result, "num_value");
+        });
+    }
+
+    #[test]
+    fn test_substitute_env_vars_adjacent() {
+        temp_env::with_vars(
+            [
+                ("TEST_ADJ1", Some("a")),
+                ("TEST_ADJ2", Some("b")),
+            ],
+            || {
+                let result = EvenframeConfig::substitute_env_vars("${TEST_ADJ1}${TEST_ADJ2}");
+                assert_eq!(result, "ab");
+            },
+        );
+    }
+
+    #[test]
+    fn test_substitute_env_vars_preserves_non_matching_braces() {
+        let result = EvenframeConfig::substitute_env_vars("{not_a_var}");
+        assert_eq!(result, "{not_a_var}");
+    }
+
+    // ==================== find_config_file Tests ====================
+    // NOTE: These tests that use env::set_current_dir should be run with --test-threads=1
+    // to avoid race conditions. They are marked with #[ignore] for parallel runs.
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_file_not_found() {
+        // Create a temp directory without evenframe.toml
+        let temp_dir = TempDir::new().unwrap();
+        let original_dir = env::current_dir().unwrap();
+
+        // Change to temp directory
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("evenframe.toml not found"));
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_file_in_current_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("evenframe.toml");
+        fs::write(&config_path, "# test config").unwrap();
+        // Canonicalize before changing directory
+        let expected_canonical = config_path.canonicalize().unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        // Use canonicalize to handle symlinks (e.g., /var -> /private/var on macOS)
+        let result_canonical = result.unwrap().canonicalize().unwrap();
+        assert_eq!(result_canonical, expected_canonical);
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_file_in_parent_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let child_dir = temp_dir.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+
+        let config_path = temp_dir.path().join("evenframe.toml");
+        fs::write(&config_path, "# test config").unwrap();
+        // Canonicalize before changing directory
+        let expected_canonical = config_path.canonicalize().unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&child_dir).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        // Use canonicalize to handle symlinks
+        let result_canonical = result.unwrap().canonicalize().unwrap();
+        assert_eq!(result_canonical, expected_canonical);
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_file_in_grandparent_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let child_dir = temp_dir.path().join("child");
+        let grandchild_dir = child_dir.join("grandchild");
+        fs::create_dir_all(&grandchild_dir).unwrap();
+
+        let config_path = temp_dir.path().join("evenframe.toml");
+        fs::write(&config_path, "# test config").unwrap();
+        // Canonicalize before changing directory
+        let expected_canonical = config_path.canonicalize().unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&grandchild_dir).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        // Use canonicalize to handle symlinks
+        let result_canonical = result.unwrap().canonicalize().unwrap();
+        assert_eq!(result_canonical, expected_canonical);
+    }
+
+    // ==================== EvenframeConfig Serialization Tests ====================
+
+    #[test]
+    fn test_evenframe_config_deserialize_minimal() {
+        let toml_str = r#"
+            [schemasync]
+            should_generate_mocks = false
+
+            [schemasync.database]
+            provider = "surrealdb"
+            url = "http://localhost:8000"
+            namespace = "test"
+            database = "test"
+
+            [schemasync.mock_gen_config]
+            default_record_count = 10
+            default_preservation_mode = "Smart"
+            default_batch_size = 10
+            full_refresh_mode = false
+            coordination_groups = []
+
+            [schemasync.performance]
+            embedded_db_memory_limit = "256MB"
+            cache_duration_seconds = 60
+            use_progressive_loading = false
+
+            [typesync]
+            output_path = "./generated/"
+            should_generate_arktype_types = false
+            should_generate_effect_types = false
+            should_generate_macroforge_types = false
+            should_generate_surrealdb_schemas = false
+        "#;
+
+        let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.general.apply_aliases.is_empty()); // Default
+        assert_eq!(config.schemasync.database.url, "http://localhost:8000");
+        assert_eq!(config.typesync.output_path, "./generated/");
+    }
+
+    #[test]
+    fn test_evenframe_config_deserialize_with_general() {
+        let toml_str = r#"
+            [general]
+            apply_aliases = ["MyAlias"]
+
+            [schemasync]
+            should_generate_mocks = true
+
+            [schemasync.database]
+            provider = "surrealdb"
+            url = "http://localhost:8000"
+            namespace = "test"
+            database = "test"
+
+            [schemasync.mock_gen_config]
+            default_record_count = 100
+            default_preservation_mode = "Smart"
+            default_batch_size = 50
+            full_refresh_mode = false
+            coordination_groups = []
+
+            [schemasync.performance]
+            embedded_db_memory_limit = "1GB"
+            cache_duration_seconds = 300
+            use_progressive_loading = true
+
+            [typesync]
+            output_path = "./types/"
+            should_generate_arktype_types = true
+            should_generate_effect_types = true
+            should_generate_macroforge_types = false
+            should_generate_surrealdb_schemas = true
+        "#;
+
+        let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.general.apply_aliases.len(), 1);
+        assert_eq!(config.general.apply_aliases[0], "MyAlias");
+        assert!(config.schemasync.should_generate_mocks);
+        assert!(config.typesync.should_generate_arktype_types);
+    }
+
+    // ==================== EvenframeConfig::new() Integration Tests ====================
+    // NOTE: These tests use env::set_current_dir and should be run with --test-threads=1
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_evenframe_config_new_with_valid_config() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a valid evenframe.toml
+        let config_content = r#"
+            [schemasync]
+            should_generate_mocks = false
+
+            [schemasync.database]
+            provider = "surrealdb"
+            url = "http://localhost:8000"
+            namespace = "test_ns"
+            database = "test_db"
+
+            [schemasync.mock_gen_config]
+            default_record_count = 10
+            default_preservation_mode = "Smart"
+            default_batch_size = 10
+            full_refresh_mode = false
+            coordination_groups = []
+
+            [schemasync.performance]
+            embedded_db_memory_limit = "256MB"
+            cache_duration_seconds = 60
+            use_progressive_loading = false
+
+            [typesync]
+            output_path = "./output/"
+            should_generate_arktype_types = false
+            should_generate_effect_types = false
+            should_generate_macroforge_types = false
+            should_generate_surrealdb_schemas = false
+        "#;
+        fs::write(temp_dir.path().join("evenframe.toml"), config_content).unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::new();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.schemasync.database.namespace, "test_ns");
+        assert_eq!(config.schemasync.database.database, "test_db");
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_evenframe_config_new_invalid_toml() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create invalid TOML
+        fs::write(
+            temp_dir.path().join("evenframe.toml"),
+            "invalid toml content {{{",
+        )
+        .unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::new();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_evenframe_config_new_missing_required_fields() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create TOML missing required fields
+        let config_content = r#"
+            [general]
+            apply_aliases = []
+        "#;
+        fs::write(temp_dir.path().join("evenframe.toml"), config_content).unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::new();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        // Should fail due to missing schemasync and typesync sections
+        assert!(result.is_err());
+    }
+}

@@ -401,12 +401,12 @@ impl Validator {
                     // No validation needed - any string is valid
                 },
                 StringValidator::Alpha => quote! {
-                    if !&#value.chars().all(|c| c.is_alphabetic()) {
+                    if !#value.chars().all(|c| c.is_alphabetic()) {
                         return Err(serde::de::Error::custom("value must contain only alphabetic characters"));
                     }
                 },
                 StringValidator::Alphanumeric => quote! {
-                    if !&#value.chars().all(|c| c.is_alphanumeric()) {
+                    if !#value.chars().all(|c| c.is_alphanumeric()) {
                         return Err(serde::de::Error::custom("value must contain only alphanumeric characters"));
                     }
                 },
@@ -433,10 +433,10 @@ impl Validator {
                     };
                 },
                 StringValidator::CapitalizePreformatted => quote! {
-                    if &#value.is_empty() {
+                    if #value.is_empty() {
                         return Err(serde::de::Error::custom("value cannot be empty"));
                     }
-                    match &#value.chars().next() {
+                    match #value.chars().next() {
                         Some(first_char) if !first_char.is_uppercase() => {
                             return Err(serde::de::Error::custom("value must be capitalized"));
                         }
@@ -507,13 +507,13 @@ impl Validator {
                         .map_err(|_| serde::de::Error::custom("invalid date format"))?;
                 },
                 StringValidator::Digits => quote! {
-                    if !&#value.chars().all(|c| c.is_digit(10)) {
+                    if !#value.chars().all(|c| c.is_digit(10)) {
                         return Err(serde::de::Error::custom("value must contain only digits"));
                     }
                 },
                 StringValidator::Email => quote! {
                     // Basic email validation
-                    let parts: Vec<&str> = &#value.split('@').collect();
+                    let parts: Vec<&str> = #value.split('@').collect();
                     if parts.len() != 2 {
                         return Err(serde::de::Error::custom("invalid email format"));
                     }
@@ -525,7 +525,7 @@ impl Validator {
                     }
                 },
                 StringValidator::Hex => quote! {
-                    if !&#value.chars().all(|c| c.is_ascii_hexdigit()) {
+                    if !#value.chars().all(|c| c.is_ascii_hexdigit()) {
                         return Err(serde::de::Error::custom("value must contain only hexadecimal characters"));
                     }
                 },
@@ -566,7 +566,7 @@ impl Validator {
                     let #value = &#value.to_lowercase();
                 },
                 StringValidator::LowerPreformatted => quote! {
-                    if &#value.chars().any(|c| c.is_alphabetic() && !c.is_lowercase()) {
+                    if #value.chars().any(|c| c.is_alphabetic() && !c.is_lowercase()) {
                         return Err(serde::de::Error::custom("value must be lowercase"));
                     }
                 },
@@ -644,7 +644,7 @@ impl Validator {
                     let #value = &#value.to_uppercase();
                 },
                 StringValidator::UpperPreformatted => quote! {
-                    if &#value.chars().any(|c| c.is_alphabetic() && !c.is_uppercase()) {
+                    if #value.chars().any(|c| c.is_alphabetic() && !c.is_uppercase()) {
                         return Err(serde::de::Error::custom("value must be uppercase"));
                     }
                 },
@@ -720,7 +720,7 @@ impl Validator {
                 },
                 StringValidator::Literal(literal) => {
                     quote! {
-                        if &#value != #literal {
+                        if #value != #literal {
                             return Err(serde::de::Error::custom(format!("value must be exactly '{}'", #literal)));
                         }
                     }
@@ -745,68 +745,68 @@ impl Validator {
                     quote! {
                         let expected_len: usize = #len_str.parse()
                             .map_err(|_| serde::de::Error::custom("invalid length specification"))?;
-                        if &#value.len() != expected_len {
+                        if #value.len() != expected_len {
                             return Err(serde::de::Error::custom(format!("value must be exactly {} characters", expected_len)));
                         }
                     }
                 }
                 StringValidator::MinLength(min_len) => {
                     quote! {
-                        if &#value.len() < #min_len {
+                        if #value.len() < #min_len {
                             return Err(serde::de::Error::custom(format!("value must be at least {} characters", #min_len)));
                         }
                     }
                 }
                 StringValidator::MaxLength(max_len) => {
                     quote! {
-                        if &#value.len() > #max_len {
+                        if #value.len() > #max_len {
                             return Err(serde::de::Error::custom(format!("value must be at most {} characters", #max_len)));
                         }
                     }
                 }
                 StringValidator::NonEmpty => quote! {
-                    if &#value.is_empty() {
+                    if #value.is_empty() {
                         return Err(serde::de::Error::custom("value cannot be empty"));
                     }
                 },
                 StringValidator::StartsWith(prefix) => {
                     quote! {
-                        if !&#value.starts_with(#prefix) {
+                        if !#value.starts_with(#prefix) {
                             return Err(serde::de::Error::custom(format!("value must start with '{}'", #prefix)));
                         }
                     }
                 }
                 StringValidator::EndsWith(suffix) => {
                     quote! {
-                        if !&#value.ends_with(#suffix) {
+                        if !#value.ends_with(#suffix) {
                             return Err(serde::de::Error::custom(format!("value must end with '{}'", #suffix)));
                         }
                     }
                 }
                 StringValidator::Includes(substring) => {
                     quote! {
-                        if !&#value.contains(#substring) {
+                        if !#value.contains(#substring) {
                             return Err(serde::de::Error::custom(format!("value must contain '{}'", #substring)));
                         }
                     }
                 }
                 StringValidator::Trimmed => quote! {
-                    if &#value != &#value.trim() {
+                    if #value != #value.trim() {
                         return Err(serde::de::Error::custom("value must not have leading or trailing whitespace"));
                     }
                 },
                 StringValidator::Lowercased => quote! {
-                    if &#value.chars().any(|c| c.is_alphabetic() && !c.is_lowercase()) {
+                    if #value.chars().any(|c| c.is_alphabetic() && !c.is_lowercase()) {
                         return Err(serde::de::Error::custom("value must be entirely lowercase"));
                     }
                 },
                 StringValidator::Uppercased => quote! {
-                    if &#value.chars().any(|c| c.is_alphabetic() && !c.is_uppercase()) {
+                    if #value.chars().any(|c| c.is_alphabetic() && !c.is_uppercase()) {
                         return Err(serde::de::Error::custom("value must be entirely uppercase"));
                     }
                 },
                 StringValidator::Capitalized => quote! {
-                    let mut chars = &#value.chars();
+                    let mut chars = #value.chars();
                     match chars.next() {
                         Some(first) if !first.is_uppercase() => {
                             return Err(serde::de::Error::custom("value must be capitalized"));
@@ -819,7 +819,7 @@ impl Validator {
                     }
                 },
                 StringValidator::Uncapitalized => quote! {
-                    let mut chars = &#value.chars();
+                    let mut chars = #value.chars();
                     match chars.next() {
                         Some(first) if !first.is_lowercase() => {
                             return Err(serde::de::Error::custom("value must be uncapitalized"));
@@ -1679,5 +1679,482 @@ impl ToTokens for DurationValidator {
             }
         };
         tokens.extend(variant_tokens);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ordered_float::OrderedFloat;
+
+    // ==================== Validator Enum Tests ====================
+
+    #[test]
+    fn test_validator_from_string_validator() {
+        let sv = StringValidator::Email;
+        let v: Validator = sv.into();
+        assert!(matches!(v, Validator::StringValidator(StringValidator::Email)));
+    }
+
+    #[test]
+    fn test_validator_from_number_validator() {
+        let nv = NumberValidator::Positive;
+        let v: Validator = nv.into();
+        assert!(matches!(v, Validator::NumberValidator(NumberValidator::Positive)));
+    }
+
+    #[test]
+    fn test_validator_from_array_validator() {
+        let av = ArrayValidator::MinItems(5);
+        let v: Validator = av.into();
+        assert!(matches!(v, Validator::ArrayValidator(ArrayValidator::MinItems(5))));
+    }
+
+    #[test]
+    fn test_validator_from_date_validator() {
+        let dv = DateValidator::ValidDate;
+        let v: Validator = dv.into();
+        assert!(matches!(v, Validator::DateValidator(DateValidator::ValidDate)));
+    }
+
+    #[test]
+    fn test_validator_from_bigint_validator() {
+        let bv = BigIntValidator::PositiveBigInt;
+        let v: Validator = bv.into();
+        assert!(matches!(v, Validator::BigIntValidator(BigIntValidator::PositiveBigInt)));
+    }
+
+    #[test]
+    fn test_validator_from_bigdecimal_validator() {
+        let bv = BigDecimalValidator::PositiveBigDecimal;
+        let v: Validator = bv.into();
+        assert!(matches!(v, Validator::BigDecimalValidator(BigDecimalValidator::PositiveBigDecimal)));
+    }
+
+    #[test]
+    fn test_validator_from_duration_validator() {
+        let dv = DurationValidator::GreaterThanDuration("1h".to_string());
+        let v: Validator = dv.into();
+        assert!(matches!(v, Validator::DurationValidator(DurationValidator::GreaterThanDuration(_))));
+    }
+
+    // ==================== StringValidator Tests ====================
+
+    #[test]
+    fn test_string_validator_equality() {
+        assert_eq!(StringValidator::Email, StringValidator::Email);
+        assert_ne!(StringValidator::Email, StringValidator::Url);
+    }
+
+    #[test]
+    fn test_string_validator_with_parameters() {
+        let v1 = StringValidator::MinLength(5);
+        let v2 = StringValidator::MinLength(5);
+        let v3 = StringValidator::MinLength(10);
+
+        assert_eq!(v1, v2);
+        assert_ne!(v1, v3);
+    }
+
+    #[test]
+    fn test_string_validator_literal() {
+        let v = StringValidator::Literal("hello".to_string());
+        assert!(matches!(v, StringValidator::Literal(s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_string_validator_starts_with() {
+        let v = StringValidator::StartsWith("prefix".to_string());
+        assert!(matches!(v, StringValidator::StartsWith(s) if s == "prefix"));
+    }
+
+    #[test]
+    fn test_string_validator_ends_with() {
+        let v = StringValidator::EndsWith("suffix".to_string());
+        assert!(matches!(v, StringValidator::EndsWith(s) if s == "suffix"));
+    }
+
+    #[test]
+    fn test_string_validator_includes() {
+        let v = StringValidator::Includes("substring".to_string());
+        assert!(matches!(v, StringValidator::Includes(s) if s == "substring"));
+    }
+
+    #[test]
+    fn test_string_validator_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(StringValidator::Email);
+        set.insert(StringValidator::Url);
+        set.insert(StringValidator::Email); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_string_validator_clone() {
+        let v = StringValidator::MinLength(10);
+        let cloned = v.clone();
+        assert_eq!(v, cloned);
+    }
+
+    // ==================== NumberValidator Tests ====================
+
+    #[test]
+    fn test_number_validator_greater_than() {
+        let v = NumberValidator::GreaterThan(OrderedFloat(5.0));
+        assert!(matches!(v, NumberValidator::GreaterThan(OrderedFloat(x)) if x == 5.0));
+    }
+
+    #[test]
+    fn test_number_validator_less_than() {
+        let v = NumberValidator::LessThan(OrderedFloat(10.0));
+        assert!(matches!(v, NumberValidator::LessThan(OrderedFloat(x)) if x == 10.0));
+    }
+
+    #[test]
+    fn test_number_validator_between() {
+        let v = NumberValidator::Between(OrderedFloat(1.0), OrderedFloat(10.0));
+        assert!(matches!(v, NumberValidator::Between(OrderedFloat(a), OrderedFloat(b)) if a == 1.0 && b == 10.0));
+    }
+
+    #[test]
+    fn test_number_validator_multiple_of() {
+        let v = NumberValidator::MultipleOf(OrderedFloat(3.0));
+        assert!(matches!(v, NumberValidator::MultipleOf(OrderedFloat(x)) if x == 3.0));
+    }
+
+    #[test]
+    fn test_number_validator_equality() {
+        assert_eq!(NumberValidator::Positive, NumberValidator::Positive);
+        assert_ne!(NumberValidator::Positive, NumberValidator::Negative);
+    }
+
+    #[test]
+    fn test_number_validator_int() {
+        let v = NumberValidator::Int;
+        assert!(matches!(v, NumberValidator::Int));
+    }
+
+    #[test]
+    fn test_number_validator_finite() {
+        let v = NumberValidator::Finite;
+        assert!(matches!(v, NumberValidator::Finite));
+    }
+
+    #[test]
+    fn test_number_validator_uint8() {
+        let v = NumberValidator::Uint8;
+        assert!(matches!(v, NumberValidator::Uint8));
+    }
+
+    // ==================== ArrayValidator Tests ====================
+
+    #[test]
+    fn test_array_validator_min_items() {
+        let v = ArrayValidator::MinItems(3);
+        assert!(matches!(v, ArrayValidator::MinItems(3)));
+    }
+
+    #[test]
+    fn test_array_validator_max_items() {
+        let v = ArrayValidator::MaxItems(10);
+        assert!(matches!(v, ArrayValidator::MaxItems(10)));
+    }
+
+    #[test]
+    fn test_array_validator_items_count() {
+        let v = ArrayValidator::ItemsCount(5);
+        assert!(matches!(v, ArrayValidator::ItemsCount(5)));
+    }
+
+    #[test]
+    fn test_array_validator_equality() {
+        assert_eq!(ArrayValidator::MinItems(5), ArrayValidator::MinItems(5));
+        assert_ne!(ArrayValidator::MinItems(5), ArrayValidator::MinItems(10));
+        assert_ne!(ArrayValidator::MinItems(5), ArrayValidator::MaxItems(5));
+    }
+
+    // ==================== DateValidator Tests ====================
+
+    #[test]
+    fn test_date_validator_valid_date() {
+        let v = DateValidator::ValidDate;
+        assert!(matches!(v, DateValidator::ValidDate));
+    }
+
+    #[test]
+    fn test_date_validator_greater_than() {
+        let v = DateValidator::GreaterThanDate("2024-01-01".to_string());
+        assert!(matches!(v, DateValidator::GreaterThanDate(s) if s == "2024-01-01"));
+    }
+
+    #[test]
+    fn test_date_validator_between() {
+        let v = DateValidator::BetweenDate("2024-01-01".to_string(), "2024-12-31".to_string());
+        assert!(matches!(v, DateValidator::BetweenDate(start, end) if start == "2024-01-01" && end == "2024-12-31"));
+    }
+
+    // ==================== BigIntValidator Tests ====================
+
+    #[test]
+    fn test_bigint_validator_greater_than() {
+        let v = BigIntValidator::GreaterThanBigInt("1000000000000".to_string());
+        assert!(matches!(v, BigIntValidator::GreaterThanBigInt(s) if s == "1000000000000"));
+    }
+
+    #[test]
+    fn test_bigint_validator_positive() {
+        let v = BigIntValidator::PositiveBigInt;
+        assert!(matches!(v, BigIntValidator::PositiveBigInt));
+    }
+
+    #[test]
+    fn test_bigint_validator_between() {
+        let v = BigIntValidator::BetweenBigInt("0".to_string(), "100".to_string());
+        assert!(matches!(v, BigIntValidator::BetweenBigInt(start, end) if start == "0" && end == "100"));
+    }
+
+    // ==================== BigDecimalValidator Tests ====================
+
+    #[test]
+    fn test_bigdecimal_validator_greater_than() {
+        let v = BigDecimalValidator::GreaterThanBigDecimal("0.001".to_string());
+        assert!(matches!(v, BigDecimalValidator::GreaterThanBigDecimal(s) if s == "0.001"));
+    }
+
+    #[test]
+    fn test_bigdecimal_validator_positive() {
+        let v = BigDecimalValidator::PositiveBigDecimal;
+        assert!(matches!(v, BigDecimalValidator::PositiveBigDecimal));
+    }
+
+    // ==================== DurationValidator Tests ====================
+
+    #[test]
+    fn test_duration_validator_greater_than() {
+        let v = DurationValidator::GreaterThanDuration("1h".to_string());
+        assert!(matches!(v, DurationValidator::GreaterThanDuration(s) if s == "1h"));
+    }
+
+    #[test]
+    fn test_duration_validator_between() {
+        let v = DurationValidator::BetweenDuration("1m".to_string(), "1h".to_string());
+        assert!(matches!(v, DurationValidator::BetweenDuration(start, end) if start == "1m" && end == "1h"));
+    }
+
+    // ==================== Serialization Tests ====================
+
+    #[test]
+    fn test_validator_serialize_deserialize() {
+        let v = Validator::StringValidator(StringValidator::Email);
+        let json = serde_json::to_string(&v).unwrap();
+        let deserialized: Validator = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, deserialized);
+    }
+
+    #[test]
+    fn test_string_validator_serialize_deserialize() {
+        let v = StringValidator::MinLength(10);
+        let json = serde_json::to_string(&v).unwrap();
+        let deserialized: StringValidator = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, deserialized);
+    }
+
+    #[test]
+    fn test_number_validator_serialize_deserialize() {
+        let v = NumberValidator::GreaterThan(OrderedFloat(5.5));
+        let json = serde_json::to_string(&v).unwrap();
+        let deserialized: NumberValidator = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, deserialized);
+    }
+
+    #[test]
+    fn test_array_validator_serialize_deserialize() {
+        let v = ArrayValidator::MinItems(5);
+        let json = serde_json::to_string(&v).unwrap();
+        let deserialized: ArrayValidator = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, deserialized);
+    }
+
+    // ==================== ToTokens Tests ====================
+
+    #[test]
+    fn test_validator_to_tokens_not_empty() {
+        let v = Validator::StringValidator(StringValidator::Email);
+        let tokens = v.to_token_stream();
+        assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_string_validator_to_tokens() {
+        let v = StringValidator::Alpha;
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("Alpha"));
+    }
+
+    #[test]
+    fn test_number_validator_to_tokens() {
+        let v = NumberValidator::Positive;
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("Positive"));
+    }
+
+    #[test]
+    fn test_array_validator_to_tokens() {
+        let v = ArrayValidator::MaxItems(10);
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("MaxItems"));
+    }
+
+    #[test]
+    fn test_date_validator_to_tokens() {
+        let v = DateValidator::ValidDate;
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("ValidDate"));
+    }
+
+    #[test]
+    fn test_bigint_validator_to_tokens() {
+        let v = BigIntValidator::PositiveBigInt;
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("PositiveBigInt"));
+    }
+
+    #[test]
+    fn test_bigdecimal_validator_to_tokens() {
+        let v = BigDecimalValidator::NegativeBigDecimal;
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("NegativeBigDecimal"));
+    }
+
+    #[test]
+    fn test_duration_validator_to_tokens() {
+        let v = DurationValidator::LessThanDuration("2h".to_string());
+        let tokens = v.to_token_stream();
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("LessThanDuration"));
+    }
+
+    // ==================== get_validation_logic_tokens Tests ====================
+
+    #[test]
+    fn test_get_validation_logic_tokens_alpha() {
+        let v = Validator::StringValidator(StringValidator::Alpha);
+        let tokens = v.get_validation_logic_tokens("value");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("alphabetic"));
+    }
+
+    #[test]
+    fn test_get_validation_logic_tokens_email() {
+        let v = Validator::StringValidator(StringValidator::Email);
+        let tokens = v.get_validation_logic_tokens("email");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("email"));
+    }
+
+    #[test]
+    fn test_get_validation_logic_tokens_min_length() {
+        let v = Validator::StringValidator(StringValidator::MinLength(5));
+        let tokens = v.get_validation_logic_tokens("text");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("len"));
+    }
+
+    #[test]
+    fn test_get_validation_logic_tokens_positive_number() {
+        let v = Validator::NumberValidator(NumberValidator::Positive);
+        let tokens = v.get_validation_logic_tokens("num");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("positive"));
+    }
+
+    #[test]
+    fn test_get_validation_logic_tokens_array_min_items() {
+        let v = Validator::ArrayValidator(ArrayValidator::MinItems(3));
+        let tokens = v.get_validation_logic_tokens("arr");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("len"));
+    }
+
+    #[test]
+    fn test_get_validation_logic_tokens_uuid() {
+        let v = Validator::StringValidator(StringValidator::Uuid);
+        let tokens = v.get_validation_logic_tokens("id");
+        let token_string = tokens.to_string();
+        assert!(token_string.contains("uuid"));
+    }
+
+    // ==================== Debug Tests ====================
+
+    #[test]
+    fn test_validator_debug() {
+        let v = Validator::StringValidator(StringValidator::Email);
+        let debug_str = format!("{:?}", v);
+        assert!(debug_str.contains("Email"));
+    }
+
+    #[test]
+    fn test_string_validator_debug() {
+        let v = StringValidator::Url;
+        let debug_str = format!("{:?}", v);
+        assert!(debug_str.contains("Url"));
+    }
+
+    #[test]
+    fn test_number_validator_debug() {
+        let v = NumberValidator::Between(OrderedFloat(1.0), OrderedFloat(10.0));
+        let debug_str = format!("{:?}", v);
+        assert!(debug_str.contains("Between"));
+    }
+
+    // ==================== Hash Tests ====================
+
+    #[test]
+    fn test_validator_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(Validator::StringValidator(StringValidator::Email));
+        set.insert(Validator::StringValidator(StringValidator::Url));
+        set.insert(Validator::NumberValidator(NumberValidator::Positive));
+        assert_eq!(set.len(), 3);
+    }
+
+    // ==================== Edge Cases ====================
+
+    #[test]
+    fn test_string_validator_empty_literal() {
+        let v = StringValidator::Literal("".to_string());
+        assert!(matches!(v, StringValidator::Literal(s) if s.is_empty()));
+    }
+
+    #[test]
+    fn test_string_validator_zero_length() {
+        let v = StringValidator::MinLength(0);
+        assert!(matches!(v, StringValidator::MinLength(0)));
+    }
+
+    #[test]
+    fn test_number_validator_zero() {
+        let v = NumberValidator::GreaterThan(OrderedFloat(0.0));
+        assert!(matches!(v, NumberValidator::GreaterThan(OrderedFloat(x)) if x == 0.0));
+    }
+
+    #[test]
+    fn test_number_validator_negative() {
+        let v = NumberValidator::LessThan(OrderedFloat(-5.0));
+        assert!(matches!(v, NumberValidator::LessThan(OrderedFloat(x)) if x == -5.0));
+    }
+
+    #[test]
+    fn test_array_validator_zero_items() {
+        let v = ArrayValidator::MinItems(0);
+        assert!(matches!(v, ArrayValidator::MinItems(0)));
     }
 }
