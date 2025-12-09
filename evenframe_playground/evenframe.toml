@@ -21,6 +21,7 @@ default_record_count = 100
 default_preservation_mode = "Smart"
 default_batch_size = 100
 full_refresh_mode = false
+coordination_groups = []
 
 [schemasync.performance]
 embedded_db_memory_limit = "1GB"
@@ -31,5 +32,10 @@ use_progressive_loading = true
 should_generate_arktype_types = true
 should_generate_effect_types = true
 should_generate_macroforge_types = false
+should_generate_flatbuffers_types = true
+flatbuffers_namespace = "evenframe.playground"
+should_generate_protobuf_types = true
+protobuf_package = "evenframe.playground"
+protobuf_import_validate = true
 should_generate_surrealdb_schemas = true
 output_path = "./src/bindings/"

@@ -1,0 +1,498 @@
+namespace evenframe.playground;
+
+enum Role : byte {
+    Admin = 0,
+    Moderator = 1,
+    User = 2,
+    Guest = 3
+}
+
+enum PaymentMethod : byte {
+    CreditCard = 0,
+    DebitCard = 1,
+    BankTransfer = 2,
+    PayPal = 3,
+    Crypto = 4,
+    Cash = 5
+}
+
+enum ProductCategory : byte {
+    Electronics = 0,
+    Clothing = 1,
+    Books = 2,
+    Home = 3,
+    Sports = 4,
+    Other = 5
+}
+
+enum OrderStatus : byte {
+    Pending = 0,
+    Processing = 1,
+    Shipped = 2,
+    Delivered = 3,
+    Cancelled = 4
+}
+
+enum PaymentStatus : byte {
+    Pending = 0,
+    Processing = 1,
+    Completed = 2,
+    Failed = 3,
+    Refunded = 4,
+    Cancelled = 5
+}
+
+table MaxValidatorStacking {
+    id: string;
+    mega_validated_string: string (validate: "nonEmpty, trimmed, minLength(8), maxLength(128), alphanumeric");
+    optional_mega_validated: string (validate: "nonEmpty, trimmed, minLength(8), maxLength(128), alphanumeric");
+    mega_validated_number: double (validate: "positive, greaterThan(0), greaterThanOrEqualTo(1), lessThan(1000), lessThanOrEqualTo(999), between(1, 999)");
+    mega_validated_u_32: uint32 (validate: "positive, greaterThanOrEqualTo(1), lessThanOrEqualTo(100), between(1, 100)");
+    optional_mega_u_32: uint32 (validate: "positive, between(1, 100)");
+    mega_validated_i_64: int64 (validate: "greaterThan(-1000000), lessThan(1000000), between(-999999, 999999)");
+    optional_mega_i_64: int64 (validate: "between(-1000, 1000)");
+}
+
+table Customer {
+    id: string;
+    user: User;
+    shipping_address: Address;
+    billing_address: Address;
+    phone: string;
+    created_at: string;
+}
+
+table Order {
+    id: string;
+    customer: Customer;
+    items: [CartItem];
+    subtotal: double (validate: "nonNegative");
+    tax: double (validate: "nonNegative");
+    shipping_cost: double (validate: "nonNegative");
+    total: double (validate: "positive");
+    status: OrderStatus;
+    shipping_address: Address;
+    notes: string (validate: "maxLength(1000)");
+    created_at: string;
+    shipped_at: string;
+    delivered_at: string;
+}
+
+table ArrayValidationExtremes {
+    id: string;
+    tags: [string];
+    validated_emails: [string];
+    optional_tags: [string];
+    scores: [uint32];
+    optional_scores: [uint32];
+    measurements: [double];
+    addresses: [ValidatedAddress];
+    backup_addresses: [ValidatedAddress];
+}
+
+table DateTimeExtremes {
+    id: string;
+    created_at: string (validate: "nonEmpty");
+    optional_updated_at: string;
+    birth_date: string (validate: "nonEmpty, maxLength(10)");
+    optional_expiry_date: string (validate: "maxLength(10)");
+    start_time: string (validate: "nonEmpty");
+    optional_end_time: string;
+    appointment: string (validate: "nonEmpty");
+    optional_followup: string;
+    duration: string (validate: "nonEmpty");
+    optional_duration: string;
+    timezone: string (validate: "nonEmpty");
+    optional_timezone: string;
+    deadline: string (validate: "nonEmpty");
+    optional_target_date: string;
+}
+
+table NetworkTypes {
+    id: string;
+    ip_address: string (validate: "ip");
+    optional_ip: string (validate: "ip");
+    mac_address: string (validate: "maxLength(17)");
+    optional_mac: string (validate: "maxLength(17)");
+    internal_api_url: string (validate: "url, startsWith(\"https://\")");
+    optional_storage_url: string (validate: "url");
+    user_agent: string (validate: "nonEmpty, maxLength(500)");
+    optional_user_agent: string (validate: "maxLength(500)");
+}
+
+table Session {
+    id: string;
+    user: User;
+    token: string (validate: "nonEmpty, minLength(32)");
+    expires_at: string;
+    created_at: string;
+}
+
+table ComplexStringValidation {
+    id: string;
+    optional_uuid: string (validate: "uuid");
+    optional_ip: string (validate: "ip");
+    optional_ipv_4: string (validate: "ipv4");
+    optional_digits: string (validate: "digits");
+    optional_hex: string (validate: "hex");
+    optional_alpha: string (validate: "alpha");
+    optional_alphanumeric: string (validate: "alphanumeric");
+    optional_domain: string (validate: "endsWith(\".com\")");
+    optional_with_at: string (validate: "includes(\"@\")");
+}
+
+table FloatValidation {
+    id: string;
+    positive_float: double (validate: "positive");
+    non_negative_float: double (validate: "nonNegative");
+    normalized: double (validate: "between(0, 1)");
+    optional_positive_float: double (validate: "positive");
+}
+
+table NonEmptyOptionString {
+    id: string;
+    optional_non_empty: string (validate: "nonEmpty");
+    optional_min_three: string (validate: "nonEmpty, minLength(3)");
+}
+
+table ComplexIdentifiers {
+    id: string;
+    uuid_field: string (validate: "uuid");
+    optional_uuid: string (validate: "uuid");
+    hex_id_32: string (validate: "hex, minLength(32), maxLength(32)");
+    optional_hex_id: string (validate: "hex, minLength(16)");
+    base_64_token: string (validate: "maxLength(100)");
+    optional_base_64_token: string (validate: "maxLength(50)");
+    version: string (validate: "nonEmpty, maxLength(20)");
+    optional_version: string (validate: "maxLength(20)");
+    sha_256_hash: string (validate: "hex, minLength(64), maxLength(64)");
+    optional_hash: string (validate: "hex");
+}
+
+table Post {
+    id: string;
+    title: string (validate: "nonEmpty, minLength(1), maxLength(200)");
+    slug: string (validate: "nonEmpty, maxLength(250), lowercase");
+    content: string (validate: "nonEmpty");
+    excerpt: string (validate: "maxLength(500)");
+    author: Author;
+    tags: [Tag];
+    featured_image: string (validate: "url");
+    published: bool;
+    published_at: string;
+    view_count: uint32 (validate: "nonNegative");
+    created_at: string;
+    updated_at: string;
+}
+
+table KitchenSinkString {
+    id: string;
+    strict_username: string (validate: "alphanumeric, lowercase, minLength(3), maxLength(20), nonEmpty, trimmed");
+    optional_strict_username: string (validate: "alphanumeric, lowercase, minLength(3), maxLength(20), nonEmpty, trimmed");
+    validated_email: string (validate: "email, maxLength(255), includes(\"@\"), nonEmpty");
+    optional_validated_email: string (validate: "email, maxLength(255), nonEmpty");
+    api_endpoint: string (validate: "url, maxLength(2000), startsWith(\"https://\"), nonEmpty");
+    optional_cdn_url: string (validate: "url, maxLength(500)");
+}
+
+table MultipleNumberValidators {
+    id: string;
+    bounded_positive: uint32 (validate: "positive, lessThan(100)");
+    optional_byte: uint32 (validate: "nonNegative, lessThanOrEqualTo(255)");
+    percentage: double (validate: "positive, between(0.01, 100)");
+}
+
+table BusinessExtremes {
+    id: string;
+    company_name: string (validate: "nonEmpty, maxLength(200)");
+    job_title: string (validate: "nonEmpty, maxLength(100)");
+    optional_parent_company: string (validate: "maxLength(200)");
+    product_name: string (validate: "nonEmpty, maxLength(200)");
+    sku: string (validate: "alphanumeric, minLength(6), maxLength(20)");
+    optional_variant_name: string (validate: "maxLength(200)");
+    optional_variant_sku: string (validate: "maxLength(20)");
+    price: double (validate: "positive, lessThan(100000)");
+    optional_discount: double (validate: "nonNegative");
+    quantity: uint32 (validate: "nonNegative, lessThan(10000)");
+    optional_min_quantity: uint32 (validate: "positive");
+    test_card_number: string (validate: "digits, minLength(13), maxLength(19)");
+    optional_backup_card: string (validate: "digits");
+}
+
+table DeepNestedValidation {
+    id: string;
+    name: string (validate: "nonEmpty, maxLength(200)");
+    primary_address: ValidatedAddress;
+    billing_address: ValidatedAddress;
+    shipping_addresses: [ValidatedAddress];
+    primary_contact: ValidatedContact;
+    secondary_contact: ValidatedContact;
+    additional_contacts: [ValidatedContact];
+    total_orders: uint32 (validate: "nonNegative");
+    total_spent: double (validate: "nonNegative");
+    credit_limit: double (validate: "positive");
+}
+
+table EdgeCasePost {
+    id: string;
+    author: EdgeCaseUser;
+    title: string (validate: "nonEmpty, minLength(5), maxLength(200)");
+    content: string (validate: "nonEmpty, minLength(10)");
+    slug: string (validate: "lowercase, maxLength(100)");
+    created_at: string;
+    updated_at: string;
+    view_count: uint64 (validate: "nonNegative");
+    like_count: uint32 (validate: "nonNegative");
+    is_published: bool;
+    featured_image: string (validate: "url");
+    meta_description: string (validate: "maxLength(300)");
+}
+
+table OptionalIntegerValidation {
+    id: string;
+    optional_positive_u_32: uint32 (validate: "positive");
+    optional_non_negative_i_32: int32 (validate: "nonNegative");
+    optional_positive_u_64: uint64 (validate: "positive");
+    optional_negative_i_64: int64 (validate: "negative");
+}
+
+table Product {
+    id: string;
+    name: string (validate: "nonEmpty, maxLength(200)");
+    description: string (validate: "maxLength(5000)");
+    price: double (validate: "positive");
+    stock_quantity: uint32 (validate: "nonNegative");
+    category: ProductCategory;
+    image_url: string (validate: "url");
+    is_available: bool;
+    created_at: string;
+}
+
+table ExtremeIntegerValidation {
+    id: string;
+    constrained_u_8: uint8 (validate: "positive, lessThanOrEqualTo(255), between(1, 100)");
+    optional_constrained_u_8: uint8 (validate: "positive, between(1, 100)");
+    bounded_u_16: uint16 (validate: "nonNegative, lessThan(65000), greaterThan(0)");
+    optional_bounded_u_16: uint16 (validate: "nonNegative, lessThan(1000)");
+    percentage_u_32: uint32 (validate: "nonNegative, lessThanOrEqualTo(100), between(0, 100)");
+    optional_percentage_u_32: uint32 (validate: "between(0, 100)");
+    large_u_64: uint64 (validate: "positive, greaterThanOrEqualTo(1), lessThan(1000000000)");
+    optional_large_u_64: uint64 (validate: "positive");
+    negative_i_8: int8 (validate: "negative, greaterThan(-100)");
+    optional_negative_i_8: int8 (validate: "negative");
+    non_positive_i_16: int16 (validate: "nonPositive, greaterThanOrEqualTo(-1000)");
+    optional_non_positive_i_16: int16 (validate: "nonPositive");
+    bounded_i_32: int32 (validate: "between(-1000, 1000)");
+    optional_bounded_i_32: int32 (validate: "between(-500, 500)");
+    constrained_i_64: int64 (validate: "greaterThan(-9999999), lessThan(9999999)");
+    optional_non_negative_i_64: int64 (validate: "greaterThanOrEqualTo(0)");
+    bounded_usize: uint64 (validate: "nonNegative, lessThan(10000)");
+    optional_bounded_usize: uint64 (validate: "nonNegative");
+    bounded_isize: int64 (validate: "between(-100, 100)");
+    optional_positive_isize: int64 (validate: "positive");
+}
+
+table User {
+    id: string;
+    email: string (validate: "email, minLength(5), maxLength(255)");
+    username: string (validate: "alphanumeric, minLength(3), maxLength(50)");
+    password_hash: string (validate: "nonEmpty");
+    roles: [Role];
+    is_active: bool;
+    created_at: string;
+    updated_at: string;
+}
+
+table Tag {
+    id: string;
+    name: string (validate: "nonEmpty, maxLength(100)");
+    slug: string (validate: "nonEmpty, maxLength(100), lowercase");
+    description: string (validate: "maxLength(500)");
+    post_count: uint32 (validate: "nonNegative");
+}
+
+table EdgeCaseUser {
+    id: string;
+    email: string (validate: "email, maxLength(255)");
+    username: string (validate: "alphanumeric, minLength(3), maxLength(30)");
+    created_at: string;
+    login_count: uint32 (validate: "nonNegative");
+    rating: double (validate: "between(0, 5)");
+}
+
+table ValidatedAddress {
+    street: string (validate: "nonEmpty, maxLength(200)");
+    city: string (validate: "nonEmpty, maxLength(100)");
+    state_code: string (validate: "uppercase, minLength(2), maxLength(3)");
+    postal_code: string (validate: "nonEmpty, maxLength(20)");
+    country_code: string (validate: "uppercase, minLength(2), maxLength(2)");
+    latitude: double (validate: "between(-90, 90)");
+    longitude: double (validate: "between(-180, 180)");
+}
+
+table PersonalInfoExtremes {
+    id: string;
+    first_name: string (validate: "alpha, nonEmpty, maxLength(50)");
+    last_name: string (validate: "nonEmpty, maxLength(50)");
+    full_name: string (validate: "nonEmpty, maxLength(100)");
+    optional_nickname: string (validate: "maxLength(50)");
+    phone: string (validate: "nonEmpty, maxLength(20)");
+    optional_mobile: string (validate: "maxLength(20)");
+    email: string (validate: "email, maxLength(255)");
+    optional_work_email: string (validate: "email");
+    street: string (validate: "nonEmpty, maxLength(200)");
+    city: string (validate: "nonEmpty, maxLength(100)");
+    state: string (validate: "nonEmpty, maxLength(50)");
+    postal_code: string (validate: "nonEmpty, maxLength(20)");
+    country: string (validate: "nonEmpty, maxLength(100)");
+    optional_street: string (validate: "maxLength(200)");
+    optional_city: string (validate: "maxLength(100)");
+}
+
+table Comment {
+    id: string;
+    post: Post;
+    author: Author;
+    content: string (validate: "nonEmpty, minLength(1), maxLength(5000)");
+    parent_comment_id: string;
+    is_approved: bool;
+    created_at: string;
+    edited_at: string;
+}
+
+table ComplexPayment {
+    id: string;
+    user: EdgeCaseUser;
+    status: PaymentStatus;
+    method: PaymentMethod;
+    amount: double (validate: "positive, lessThan(1000000)");
+    currency: string (validate: "uppercase, minLength(3), maxLength(3)");
+    fee: double (validate: "nonNegative");
+    tax: double (validate: "nonNegative");
+    total: double (validate: "positive");
+    transaction_id: string (validate: "hex, minLength(32)");
+    reference_code: string (validate: "hex");
+    created_at: string;
+    processed_at: string;
+    completed_at: string;
+    billing_address: ValidatedAddress;
+    notes: string (validate: "maxLength(1000)");
+    retry_count: uint8 (validate: "nonNegative");
+    failure_reason: string (validate: "maxLength(500)");
+}
+
+table CaseValidation {
+    id: string;
+    optional_lowercase: string (validate: "lowercase");
+    optional_uppercase: string (validate: "uppercase");
+    optional_capitalized: string (validate: "capitalized");
+    optional_uncapitalized: string (validate: "uncapitalized");
+    optional_trimmed: string (validate: "trimmed");
+}
+
+table IntegerBounds {
+    id: string;
+    percentage: uint32 (validate: "between(1, 100)");
+    above_zero: int32 (validate: "greaterThan(0)");
+    under_thousand: uint16 (validate: "lessThan(1000)");
+    optional_byte_value: uint32 (validate: "between(0, 255)");
+    optional_bounded: int32 (validate: "greaterThanOrEqualTo(-100)");
+}
+
+table MultiValidatorOptionalString {
+    id: string;
+    username: string (validate: "minLength(5), maxLength(100), startsWith(\"usr_\")");
+    email: string (validate: "email, maxLength(255)");
+    website: string (validate: "url, maxLength(2000)");
+}
+
+table InnerValidated {
+    name: string (validate: "nonEmpty, maxLength(100)");
+    count: uint32 (validate: "positive");
+    optional_email: string (validate: "email");
+}
+
+table Address {
+    street: string (validate: "nonEmpty, maxLength(200)");
+    city: string (validate: "nonEmpty, maxLength(100)");
+    state: string (validate: "maxLength(100)");
+    postal_code: string (validate: "nonEmpty, maxLength(20)");
+    country: string (validate: "nonEmpty, minLength(2), maxLength(2), uppercase");
+}
+
+table EdgeCaseComment {
+    id: string;
+    post: EdgeCasePost;
+    author: EdgeCaseUser;
+    content: string (validate: "nonEmpty, minLength(1), maxLength(10000)");
+    created_at: string;
+    edited_at: string;
+    like_count: uint32 (validate: "nonNegative");
+    parent_comment_id: string;
+    is_approved: bool;
+    author_ip: string (validate: "ip");
+}
+
+table ExtremeFloatValidation {
+    id: string;
+    multi_constrained_f_32: float (validate: "positive, between(0.001, 999.999), lessThan(1000), greaterThan(0)");
+    optional_f_32: float (validate: "positive, lessThan(100)");
+    normalized_f_64: double (validate: "nonNegative, lessThanOrEqualTo(1), greaterThanOrEqualTo(0)");
+    optional_normalized_f_64: double (validate: "between(0, 1)");
+    negative_f_64: double (validate: "negative, greaterThan(-1000), lessThan(0)");
+    optional_negative_f_64: double (validate: "negative");
+    currency_amount: double (validate: "nonNegative, lessThan(1000000)");
+    optional_currency: double (validate: "positive");
+    percentage: double (validate: "between(0, 100)");
+    optional_percentage: double (validate: "between(0, 100)");
+    latitude: double (validate: "between(-90, 90)");
+    longitude: double (validate: "between(-180, 180)");
+    optional_latitude: double (validate: "between(-90, 90)");
+    optional_longitude: double (validate: "between(-180, 180)");
+}
+
+table Author {
+    id: string;
+    user: User;
+    bio: string (validate: "maxLength(2000)");
+    avatar_url: string (validate: "url");
+    twitter_handle: string (validate: "startsWith(\"@\"), maxLength(16)");
+    github_handle: string (validate: "maxLength(39)");
+    created_at: string;
+}
+
+table ValidatedContact {
+    name: string (validate: "nonEmpty, maxLength(100)");
+    email: string (validate: "email");
+    phone: string (validate: "maxLength(20)");
+    title: string (validate: "maxLength(100)");
+}
+
+table AllIntegerTypes {
+    id: string;
+    positive_u_8: uint8 (validate: "positive");
+    positive_u_16: uint16 (validate: "positive");
+    positive_u_32: uint32 (validate: "positive");
+    positive_u_64: uint64 (validate: "positive");
+    non_negative_usize: uint64 (validate: "nonNegative");
+    positive_i_8: int8 (validate: "positive");
+    positive_i_16: int16 (validate: "positive");
+    positive_i_32: int32 (validate: "positive");
+    positive_i_64: int64 (validate: "positive");
+    non_negative_isize: int64 (validate: "nonNegative");
+}
+
+table OuterWithNestedValidator {
+    id: string;
+    inner: InnerValidated;
+    optional_inner: InnerValidated;
+    inner_list: [InnerValidated];
+}
+
+table CartItem {
+    product_id: string (validate: "nonEmpty");
+    product_name: string (validate: "nonEmpty, maxLength(200)");
+    quantity: uint32 (validate: "positive");
+    unit_price: double (validate: "positive");
+}
+

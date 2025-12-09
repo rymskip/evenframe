@@ -246,3 +246,32 @@ pub fn parse_validator_enum_with_logic(
 
     Ok((validator_tokens, logic_tokens))
 }
+
+/// Parse field validators and return them as Validator enums.
+/// This is useful for runtime introspection and schema generation.
+pub fn parse_field_validators_as_enums(attrs: &[Attribute]) -> Vec<Validator> {
+    use syn::punctuated::Punctuated;
+
+    let mut validators = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("validators") {
+            if let Ok(nested) = attr.parse_args_with(
+                Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+            ) {
+                for expr in nested {
+                    if let Ok(validator) = Validator::try_from(&expr) {
+                        tracing::trace!("Parsed validator enum: {:?}", validator);
+                        validators.push(validator);
+                    } else {
+                        tracing::warn!(
+                            "Failed to parse validator expression in runtime context"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    validators
+}

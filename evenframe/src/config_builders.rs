@@ -2,9 +2,12 @@ use crate::workspace_scanner::WorkspaceScanner;
 use convert_case::{Case, Casing};
 use evenframe_core::config::EvenframeConfig;
 use evenframe_core::{
-    derive::attributes::{
-        parse_event_attributes, parse_format_attribute_bin, parse_mock_data_attribute,
-        parse_relation_attribute, parse_table_validators,
+    derive::{
+        attributes::{
+            parse_event_attributes, parse_format_attribute_bin, parse_mock_data_attribute,
+            parse_relation_attribute, parse_table_validators,
+        },
+        validator_parser::parse_field_validators_as_enums,
     },
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, PermissionsConfig},
@@ -13,7 +16,7 @@ use evenframe_core::{
 };
 use std::collections::HashMap;
 use std::fs;
-use syn::{Fields, FieldsNamed, Item, ItemEnum, ItemStruct, parse_file};
+use syn::{Attribute, Fields, FieldsNamed, Item, ItemEnum, ItemStruct, parse_file};
 use tracing::{debug, info, trace, warn};
 
 pub fn build_all_configs() -> (
@@ -291,8 +294,8 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
         // Parse format
         let format = parse_format_attribute_bin(&field.attrs).ok().flatten();
 
-        // Parse validators - simplified for now
-        let validators = vec![];
+        // Parse validators from #[validators(...)] attribute
+        let validators = parse_field_validators_as_enums(&field.attrs);
 
         struct_fields.push(StructField {
             field_name,

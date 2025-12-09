@@ -674,3 +674,25 @@ fn test_validators_attribute_syntax() {
         }
     }
 }
+
+// ==================== FlatBuffers Configuration Tests ====================
+
+/// Test that FlatBuffers generation is enabled in config
+#[test]
+fn test_flatbuffers_configuration() {
+    let playground_dir = get_playground_dir();
+    let config_content = fs::read_to_string(playground_dir.join("evenframe.toml"))
+        .expect("Failed to read evenframe.toml");
+
+    // Check FlatBuffers is enabled
+    assert!(
+        config_content.contains("should_generate_flatbuffers_types = true"),
+        "FlatBuffers generation should be enabled"
+    );
+
+    // Check namespace is configured
+    assert!(
+        config_content.contains("flatbuffers_namespace"),
+        "FlatBuffers namespace should be configured"
+    );
+}

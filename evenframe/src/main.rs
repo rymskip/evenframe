@@ -8,7 +8,9 @@ use evenframe_core::{
     error::Result,
     typesync::{
         arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
+        flatbuffers::generate_flatbuffers_schema_string,
         macroforge::generate_macroforge_type_string,
+        protobuf::generate_protobuf_schema_string,
     },
 };
 use tracing::{debug, error, info};
@@ -42,10 +44,12 @@ async fn main() -> Result<()> {
     let generate_arktype_types = config.typesync.should_generate_arktype_types;
     let generate_effect_schemas = config.typesync.should_generate_effect_types;
     let generate_macroforge_types = config.typesync.should_generate_macroforge_types;
+    let generate_flatbuffers_types = config.typesync.should_generate_flatbuffers_types;
+    let generate_protobuf_types = config.typesync.should_generate_protobuf_types;
 
     debug!(
-        "Configuration flags - arktype: {}, effect: {}, macroforge: {}",
-        generate_arktype_types, generate_effect_schemas, generate_macroforge_types
+        "Configuration flags - arktype: {}, effect: {}, macroforge: {}, flatbuffers: {}, protobuf: {}",
+        generate_arktype_types, generate_effect_schemas, generate_macroforge_types, generate_flatbuffers_types, generate_protobuf_types
     );
 
     // Get the config builder closure
@@ -136,6 +140,71 @@ async fn main() -> Result<()> {
         }
     } else {
         debug!("Skipping Macroforge type generation (disabled in config)");
+    }
+
+    if generate_flatbuffers_types {
+        info!("Generating FlatBuffers schema...");
+        let structs = config_builders::merge_tables_and_objects(&tables, &objects);
+        debug!(
+            "Merged {} structs for FlatBuffers generation",
+            structs.len()
+        );
+
+        let flatbuffers_content = generate_flatbuffers_schema_string(
+            &structs,
+            &enums,
+            config.typesync.flatbuffers_namespace.as_deref(),
+        );
+        debug!(
+            "Generated FlatBuffers content: {} characters",
+            flatbuffers_content.len()
+        );
+
+        match std::fs::write(
+            format!("{}schema.fbs", config.typesync.output_path),
+            flatbuffers_content,
+        ) {
+            Ok(_) => info!("FlatBuffers schema written successfully to schema.fbs"),
+            Err(e) => {
+                error!("Failed to write FlatBuffers schema: {}", e);
+                return Err(e.into());
+            }
+        }
+    } else {
+        debug!("Skipping FlatBuffers schema generation (disabled in config)");
+    }
+
+    if generate_protobuf_types {
+        info!("Generating Protocol Buffers schema...");
+        let structs = config_builders::merge_tables_and_objects(&tables, &objects);
+        debug!(
+            "Merged {} structs for Protocol Buffers generation",
+            structs.len()
+        );
+
+        let protobuf_content = generate_protobuf_schema_string(
+            &structs,
+            &enums,
+            config.typesync.protobuf_package.as_deref(),
+            config.typesync.protobuf_import_validate,
+        );
+        debug!(
+            "Generated Protocol Buffers content: {} characters",
+            protobuf_content.len()
+        );
+
+        match std::fs::write(
+            format!("{}schema.proto", config.typesync.output_path),
+            protobuf_content,
+        ) {
+            Ok(_) => info!("Protocol Buffers schema written successfully to schema.proto"),
+            Err(e) => {
+                error!("Failed to write Protocol Buffers schema: {}", e);
+                return Err(e.into());
+            }
+        }
+    } else {
+        debug!("Skipping Protocol Buffers schema generation (disabled in config)");
     }
 
     info!("Starting Schemasync");

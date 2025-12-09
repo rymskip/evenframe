@@ -151,9 +151,11 @@ impl WorkspaceScanner {
                 }
             }
         }
-        // Check if this is a standalone crate and scan it.
-        else if manifest.get("package").is_some() {
-            debug!("Processing single crate at: {:?}", manifest_dir);
+
+        // Also check if this manifest has a [package] section (handles both standalone crates
+        // and the case where a crate has an empty [workspace] to exclude from parent workspace).
+        if manifest.get("package").is_some() {
+            debug!("Processing package at: {:?}", manifest_dir);
             processed_manifests.insert(manifest_path.to_path_buf());
             let crate_name = manifest
                 .get("package")
