@@ -9,12 +9,15 @@ pub mod value;
 
 use crate::{
     registry,
-    schemasync::{edge::EdgeConfig, table::TableConfig},
+    schemasync::{
+        edge::{Direction, EdgeConfig},
+        table::TableConfig,
+    },
     types::{FieldType, StructField},
 };
 use convert_case::{Case, Casing};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryType {
@@ -67,6 +70,111 @@ fn get_inner_record_link_type(field_type: &FieldType) -> Option<&FieldType> {
         FieldType::Vec(inner) => get_inner_record_link_type(inner),
         ft @ FieldType::RecordLink(_) => Some(ft),
         _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EdgeEndpoints {
+    in_record: String,
+    out_record: String,
+}
+
+fn extract_edge_endpoint_id(value: &Value) -> Option<String> {
+    if let Some(str_val) = value.as_str() {
+        Some(str_val.to_string())
+    } else if let Some(obj_val) = value.as_object() {
+        obj_val
+            .get("id")
+            .and_then(|nested_id| nested_id.as_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_edge_endpoint_id_from_map(object: &Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(|value| extract_edge_endpoint_id(value))
+}
+
+fn determine_edge_endpoints(
+    direction: Direction,
+    field_value_obj: &Map<String, Value>,
+    record_id: &str,
+) -> Option<EdgeEndpoints> {
+    match direction {
+        Direction::From => {
+            extract_edge_endpoint_id_from_map(field_value_obj, "out").map(|target| EdgeEndpoints {
+                in_record: record_id.to_string(),
+                out_record: target,
+            })
+        }
+        Direction::To => {
+            extract_edge_endpoint_id_from_map(field_value_obj, "in").map(|target| EdgeEndpoints {
+                in_record: target,
+                out_record: record_id.to_string(),
+            })
+        }
+        Direction::Both => {
+            let mut in_id = extract_edge_endpoint_id_from_map(field_value_obj, "in");
+            let mut out_id = extract_edge_endpoint_id_from_map(field_value_obj, "out");
+
+            if in_id.is_none() && out_id.is_none() {
+                return None;
+            }
+
+            let base_in_in = matches!(in_id, Some(ref id) if id == record_id);
+            let base_in_out = matches!(out_id, Some(ref id) if id == record_id);
+
+            if !base_in_in && !base_in_out {
+                if out_id.is_some() {
+                    in_id = Some(record_id.to_string());
+                } else if in_id.is_some() {
+                    out_id = Some(record_id.to_string());
+                }
+            }
+
+            if in_id.is_none() {
+                in_id = Some(record_id.to_string());
+            }
+
+            if out_id.is_none() {
+                out_id = Some(record_id.to_string());
+            }
+
+            let in_id = in_id?;
+            let out_id = out_id?;
+
+            if in_id == record_id && out_id == record_id {
+                return None;
+            }
+
+            Some(EdgeEndpoints {
+                in_record: in_id,
+                out_record: out_id,
+            })
+        }
+    }
+}
+
+fn validate_edge_endpoint_id(
+    edge_table_config: Option<&TableConfig>,
+    field_name: &str,
+    record_id: &str,
+) {
+    if let Some(config) = edge_table_config
+        && let Some(edge_field) = config
+            .struct_config
+            .fields
+            .iter()
+            .find(|f| f.field_name == field_name)
+        && let Err(e) = validate_record_id_table(record_id, &edge_field.field_type)
+    {
+        panic!(
+            "Edge record ID validation failed for field '{}': {}",
+            field_name, e
+        );
     }
 }
 
@@ -246,83 +354,41 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
     for value in field_values {
         if let Some(field_value_obj) = value.as_object() {
             let mut edge_obj_parts = Vec::new();
-            let mut target_record_id = None;
 
-            // Determine the direction and extract the target record ID
             let effective_direction = edge_config.resolve_direction_for_table(current_table_name);
-            let target_field = match effective_direction {
-                crate::schemasync::edge::Direction::From => "out",
-                crate::schemasync::edge::Direction::To => "in",
-                crate::schemasync::edge::Direction::Both => "out",
+            let Some(endpoints) =
+                determine_edge_endpoints(effective_direction, field_value_obj, record_id)
+            else {
+                continue;
             };
 
-            if let Some(id_val) = field_value_obj.get(target_field) {
-                let id_str = if let Some(str_val) = id_val.as_str() {
-                    // Direct string ID
-                    str_val.to_string()
-                } else if let Some(obj_val) = id_val.as_object() {
-                    // Object with id field
-                    if let Some(nested_id) = obj_val.get("id") {
-                        if let Some(nested_id_str) = nested_id.as_str() {
-                            nested_id_str.to_string()
-                        } else {
-                            continue; // Skip if id is not a string
-                        }
-                    } else {
-                        continue; // Skip if no id field
-                    }
-                } else {
-                    continue; // Skip if neither string nor object
-                };
-
-                // ID Validation for edge objects
-                if let Some(config) = &edge_table_config
-                    && let Some(edge_target_field) = config
-                        .struct_config
-                        .fields
-                        .iter()
-                        .find(|f| f.field_name == target_field)
-                    && let Err(e) = validate_record_id_table(&id_str, &edge_target_field.field_type)
-                {
-                    panic!(
-                        "Edge record ID validation failed for field '{}': {}",
-                        target_field, e
-                    );
-                }
-                target_record_id = Some(id_str);
+            if let Some(config) = edge_table_config.as_ref() {
+                validate_edge_endpoint_id(Some(config), "in", &endpoints.in_record);
+                validate_edge_endpoint_id(Some(config), "out", &endpoints.out_record);
             }
 
-            if let Some(target_id) = target_record_id {
-                let (in_record, out_record) = match effective_direction {
-                    crate::schemasync::edge::Direction::From => (record_id.to_string(), target_id),
-                    crate::schemasync::edge::Direction::To => (target_id, record_id.to_string()),
-                    crate::schemasync::edge::Direction::Both => (record_id.to_string(), target_id),
-                };
+            let formatted_in = value::to_surreal_string(
+                &FieldType::EvenframeRecordId,
+                &Value::String(endpoints.in_record.clone()),
+            );
+            let formatted_out = value::to_surreal_string(
+                &FieldType::EvenframeRecordId,
+                &Value::String(endpoints.out_record.clone()),
+            );
 
-                let formatted_in = value::to_surreal_string(
-                    &FieldType::EvenframeRecordId,
-                    &Value::String(in_record),
-                );
-                let formatted_out = value::to_surreal_string(
-                    &FieldType::EvenframeRecordId,
-                    &Value::String(out_record),
-                );
+            edge_obj_parts.push(format!("in: {}", formatted_in));
+            edge_obj_parts.push(format!("out: {}", formatted_out));
 
-                edge_obj_parts.push(format!("in: {}", formatted_in));
-                edge_obj_parts.push(format!("out: {}", formatted_out));
+            if let Some(config) = edge_table_config.as_ref() {
+                for edge_field in &config.struct_config.fields {
+                    let key = &edge_field.field_name;
+                    if key == "in" || key == "out" || key == "id" {
+                        continue;
+                    }
 
-                // Loop through table_config.struct_config.fields like the main loop
-                if let Some(config) = &edge_table_config {
-                    for edge_field in &config.struct_config.fields {
-                        let key = &edge_field.field_name;
-                        if key == "in" || key == "out" || key == "id" {
-                            continue;
-                        }
-
-                        if let Some(edge_prop_value) = field_value_obj.get(key) {
-                            let surreal_string = if let FieldType::RecordLink(inner_type) =
-                                &edge_field.field_type
-                            {
+                    if let Some(edge_prop_value) = field_value_obj.get(key) {
+                        let surreal_string =
+                            if let FieldType::RecordLink(inner_type) = &edge_field.field_type {
                                 handle_record_link(
                                     edge_field,
                                     edge_prop_value,
@@ -334,13 +400,12 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
                             } else {
                                 value::to_surreal_string(&edge_field.field_type, edge_prop_value)
                             };
-                            edge_obj_parts.push(format!("{}: {}", key, surreal_string));
-                        }
+                        edge_obj_parts.push(format!("{}: {}", key, surreal_string));
                     }
                 }
-
-                edge_objects.push(format!("{{ {} }}", edge_obj_parts.join(", ")));
             }
+
+            edge_objects.push(format!("{{ {} }}", edge_obj_parts.join(", ")));
         } else if let Some(id_str) = value.as_str() {
             // ID Validation for string IDs
             if let Some(record_link_type) = get_inner_record_link_type(&field.field_type)
@@ -352,15 +417,9 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
             // Handle case where the value is just an ID string
             let effective_direction = edge_config.resolve_direction_for_table(current_table_name);
             let (in_record, out_record) = match effective_direction {
-                crate::schemasync::edge::Direction::From => {
-                    (record_id.to_string(), id_str.to_string())
-                }
-                crate::schemasync::edge::Direction::To => {
-                    (id_str.to_string(), record_id.to_string())
-                }
-                crate::schemasync::edge::Direction::Both => {
-                    (record_id.to_string(), id_str.to_string())
-                }
+                Direction::From => (record_id.to_string(), id_str.to_string()),
+                Direction::To => (id_str.to_string(), record_id.to_string()),
+                Direction::Both => (record_id.to_string(), id_str.to_string()),
             };
 
             let formatted_in =
@@ -386,26 +445,31 @@ fn generate_single_edge_table_update(
     edge_config: &EdgeConfig,
     current_table_name: &str,
 ) -> String {
-    // Determine which side of the edge to query based on direction
-    let edge_field = match edge_config.resolve_direction_for_table(current_table_name) {
-        crate::schemasync::edge::Direction::From => "in",
-        crate::schemasync::edge::Direction::To => "out",
-        crate::schemasync::edge::Direction::Both => "in", // Default to 'in' for Both
+    let direction = edge_config.resolve_direction_for_table(current_table_name);
+    let (existing_condition, delete_condition) = match direction {
+        Direction::From => (format!("in = {}", record_id), format!("in = {}", record_id)),
+        Direction::To => (
+            format!("out = {}", record_id),
+            format!("out = {}", record_id),
+        ),
+        Direction::Both => (
+            format!("(in = {record} OR out = {record})", record = record_id),
+            format!("(in = {record} OR out = {record})", record = record_id),
+        ),
     };
 
     // If incoming edges is empty array, just delete all existing edges for this record
     if incoming_edges.trim() == "[]" {
         return format!(
-            r#"DELETE {table} WHERE {edge_field} = {record_id};"#,
+            r#"DELETE {table} WHERE {condition};"#,
             table = edge_table,
-            edge_field = edge_field,
-            record_id = record_id
+            condition = delete_condition,
         );
     }
 
     format!(
         r#"
-        LET $existing_{table} = (SELECT id, in, out FROM {table} WHERE {edge_field} = {record_id});
+        LET $existing_{table} = (SELECT id, in, out FROM {table} WHERE {existing_condition});
         LET $incoming_{table} = {incoming_edges};
 
         -- Delete edges that don't exist in incoming
@@ -423,8 +487,7 @@ fn generate_single_edge_table_update(
         }};
         "#,
         table = edge_table,
-        edge_field = edge_field,
-        record_id = record_id,
+        existing_condition = existing_condition,
         incoming_edges = incoming_edges
     )
 }
@@ -586,23 +649,8 @@ pub(crate) fn generate_recursive(
                 for value in field_values {
                     if let Some(field_value_obj) = value.as_object() {
                         let mut relation_data_parts = Vec::new();
-                        let mut to_record_id = None;
 
-                        // Determine the direction and extract the target record ID
-                        let target_field = match effective_direction {
-                            crate::schemasync::edge::Direction::From => "out",
-                            crate::schemasync::edge::Direction::To => "in",
-                            crate::schemasync::edge::Direction::Both => "out", // Defaulting to 'out' for Both
-                        };
-
-                        if let Some(id_val) = field_value_obj.get(target_field)
-                            && let Some(id_str) = id_val.as_str()
-                        {
-                            to_record_id = Some(id_str.to_string());
-                        }
-
-                        // Construct data parts and update assignments from the rest of the fields
-                        if let Some(config) = &relation_table_config {
+                        if let Some(config) = relation_table_config.as_ref() {
                             for edge_field in &config.struct_config.fields {
                                 let key = &edge_field.field_name;
                                 if key == "in" || key == "out" || key == "id" {
@@ -633,28 +681,19 @@ pub(crate) fn generate_recursive(
                             }
                         }
 
-                        if let Some(to_id) = to_record_id {
-                            // Format record IDs properly
-                            let formatted_to_id = value::to_surreal_string(
+                        if let Some(endpoints) = determine_edge_endpoints(
+                            effective_direction,
+                            field_value_obj,
+                            from_record_id,
+                        ) {
+                            let formatted_in_id = value::to_surreal_string(
                                 &FieldType::EvenframeRecordId,
-                                &serde_json::Value::String(to_id.clone()),
+                                &serde_json::Value::String(endpoints.in_record.clone()),
                             );
-                            let formatted_from_id = value::to_surreal_string(
+                            let formatted_out_id = value::to_surreal_string(
                                 &FieldType::EvenframeRecordId,
-                                &serde_json::Value::String(from_record_id.clone()),
+                                &serde_json::Value::String(endpoints.out_record.clone()),
                             );
-
-                            let (in_id, out_id) = match effective_direction {
-                                crate::schemasync::edge::Direction::From => {
-                                    (formatted_from_id, formatted_to_id)
-                                }
-                                crate::schemasync::edge::Direction::To => {
-                                    (formatted_to_id, formatted_from_id)
-                                }
-                                crate::schemasync::edge::Direction::Both => {
-                                    (formatted_from_id, formatted_to_id)
-                                }
-                            };
 
                             let relation_id = format!(
                                 "{}:{}",
@@ -678,7 +717,10 @@ pub(crate) fn generate_recursive(
 
                             let insert_relation_stmt = format!(
                                 "RELATE {}->{}->{} CONTENT {{ {} }};",
-                                in_id, relation_table, out_id, relation_data_str
+                                formatted_in_id,
+                                relation_table,
+                                formatted_out_id,
+                                relation_data_str
                             );
                             relation_statements.push(insert_relation_stmt);
                         }
@@ -695,15 +737,9 @@ pub(crate) fn generate_recursive(
                         );
 
                         let (in_id, out_id) = match effective_direction {
-                            crate::schemasync::edge::Direction::From => {
-                                (formatted_from_id, formatted_to_id)
-                            }
-                            crate::schemasync::edge::Direction::To => {
-                                (formatted_to_id, formatted_from_id)
-                            }
-                            crate::schemasync::edge::Direction::Both => {
-                                (formatted_from_id, formatted_to_id)
-                            }
+                            Direction::From => (formatted_from_id, formatted_to_id),
+                            Direction::To => (formatted_to_id, formatted_from_id),
+                            Direction::Both => (formatted_from_id, formatted_to_id),
                         };
 
                         let insert_relation_stmt =
