@@ -33,7 +33,7 @@ enum WorkItem<'a> {
 
 #[derive(Debug, Builder)]
 pub struct FieldValueGenerator<'a> {
-    mockmaker: &'a Mockmaker,
+    mockmaker: &'a Mockmaker<'a>,
     table_config: &'a TableConfig,
     field: &'a StructField,
     id_index: &'a usize,
@@ -231,8 +231,8 @@ impl<'a> FieldValueGenerator<'a> {
 
                                         if let Some(table_key) = resolve_table(
                                             type_name,
-                                            &self.mockmaker.tables,
-                                            &self.mockmaker.enums,
+                                            self.mockmaker.tables,
+                                            self.mockmaker.enums,
                                         ) {
                                             // Generate a record ID for the resolved table
                                             if let Some(possible_ids) =

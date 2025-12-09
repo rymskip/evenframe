@@ -10,7 +10,7 @@ use crate::{
 use std::collections::{HashMap, HashSet};
 use tracing;
 
-impl Mockmaker {
+impl Mockmaker<'_> {
     /// Filter tables and objects to only include those with changes that need to be regenerated.
     ///
     /// This function takes a SchemaChanges instance and the full tables and objects hashmaps,

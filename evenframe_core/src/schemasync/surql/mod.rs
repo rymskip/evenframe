@@ -93,9 +93,7 @@ fn extract_edge_endpoint_id(value: &Value) -> Option<String> {
 }
 
 fn extract_edge_endpoint_id_from_map(object: &Map<String, Value>, key: &str) -> Option<String> {
-    object
-        .get(key)
-        .and_then(|value| extract_edge_endpoint_id(value))
+    object.get(key).and_then(extract_edge_endpoint_id)
 }
 
 fn determine_edge_endpoints(

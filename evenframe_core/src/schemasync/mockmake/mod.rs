@@ -19,7 +19,6 @@ use crate::{
     types::StructField,
     wrappers::EvenframeRecordId,
 };
-use bon::Builder;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use surrealdb::Surreal;
@@ -28,14 +27,14 @@ use surrealdb::engine::remote::http::Client;
 use tracing;
 use uuid::Uuid;
 
-#[derive(Debug, Builder)]
-pub struct Mockmaker {
-    db: Surreal<Client>,
-    pub(super) tables: HashMap<String, TableConfig>,
-    objects: HashMap<String, StructConfig>,
-    enums: HashMap<String, TaggedUnion>,
-    pub(super) schemasync_config: crate::schemasync::config::SchemasyncConfig,
-    pub comparator: Option<Comparator>,
+#[derive(Debug)]
+pub struct Mockmaker<'a> {
+    db: &'a Surreal<Client>,
+    pub(super) tables: &'a HashMap<String, TableConfig>,
+    objects: &'a HashMap<String, StructConfig>,
+    enums: &'a HashMap<String, TaggedUnion>,
+    pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
+    pub comparator: Option<Comparator<'a>>,
 
     // Runtime state
     pub(super) id_map: HashMap<String, Vec<String>>,
@@ -45,20 +44,20 @@ pub struct Mockmaker {
     pub coordinated_values: HashMap<CoordinationId, String>,
 }
 
-impl Mockmaker {
+impl<'a> Mockmaker<'a> {
     pub fn new(
-        db: Surreal<Client>,
-        tables: HashMap<String, TableConfig>,
-        objects: HashMap<String, StructConfig>,
-        enums: HashMap<String, TaggedUnion>,
-        schemasync_config: crate::schemasync::config::SchemasyncConfig,
+        db: &'a Surreal<Client>,
+        tables: &'a HashMap<String, TableConfig>,
+        objects: &'a HashMap<String, StructConfig>,
+        enums: &'a HashMap<String, TaggedUnion>,
+        schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     ) -> Self {
         Self {
-            db: db.clone(),
+            db,
             tables,
             objects,
             enums,
-            schemasync_config: schemasync_config.clone(),
+            schemasync_config,
             comparator: Some(Comparator::new(db, schemasync_config)),
             id_map: HashMap::new(),
             record_diffs: HashMap::new(),
@@ -106,7 +105,7 @@ impl Mockmaker {
 
         // Process tables sequentially to avoid reference issues
         // Since these are just SELECT queries, they should be fast enough
-        for (table_name, table_config) in &self.tables {
+        for (table_name, table_config) in self.tables {
             tracing::trace!(table = %table_name, "Generating IDs for table");
 
             // Determine desired count from config or default
@@ -228,7 +227,7 @@ impl Mockmaker {
 
         tracing::debug!(query_length = access_query.len(), "Executing access query");
 
-        execute_access_query(&self.db, access_query).await
+        execute_access_query(self.db, access_query).await
     }
 
     /// Filter changed tables and objects
@@ -245,9 +244,9 @@ impl Mockmaker {
                 tracing::debug!("Incremental mode - filtering changed items only");
                 self.filter_changed_tables_and_objects(
                     schema_changes,
-                    &self.tables,
-                    &self.objects,
-                    &self.enums,
+                    self.tables,
+                    self.objects,
+                    self.enums,
                     &self.record_diffs,
                 )
             };
@@ -274,7 +273,7 @@ impl Mockmaker {
 
         // Sort tables by dependencies to ensure proper insertion order
         let sorted_table_names =
-            sort_tables_by_dependencies(&self.filtered_tables, &self.filtered_objects, &self.enums);
+            sort_tables_by_dependencies(&self.filtered_tables, &self.filtered_objects, self.enums);
 
         tracing::debug!(
             table_count = sorted_table_names.len(),
@@ -315,7 +314,7 @@ impl Mockmaker {
                     // Execute and validate upsert statements
                     use crate::schemasync::surql::execute::execute_and_validate;
 
-                    match execute_and_validate(&self.db, &stmts, "UPSERT", table_name).await {
+                    match execute_and_validate(self.db, &stmts, "UPSERT", table_name).await {
                         Ok(_results) => {
                             tracing::debug!(table = %table_name, "Mock data inserted successfully");
                         }
@@ -357,7 +356,7 @@ impl Mockmaker {
         let mut coordination_map: HashMap<String, Vec<(String, Coordination)>> = HashMap::new();
 
         // Extract coordination rules from each table's mock_generation_config
-        for (table_name, table_config) in &self.tables {
+        for (table_name, table_config) in self.tables {
             if let Some(ref mock_config) = table_config.mock_generation_config {
                 // Each table may have coordination_rules
                 for coordination in &mock_config.coordination_rules {
@@ -383,7 +382,7 @@ impl Mockmaker {
                                 state,
                                 zip,
                                 country,
-                            } => vec![city, state, zip, country]
+                            } => [city, state, zip, country]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -392,7 +391,7 @@ impl Mockmaker {
                                 first_name,
                                 last_name,
                                 full_name,
-                            } => vec![first_name, last_name, full_name]
+                            } => [first_name, last_name, full_name]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -402,7 +401,7 @@ impl Mockmaker {
                                 longitude,
                                 city,
                                 country,
-                            } => vec![latitude, longitude, city, country]
+                            } => [latitude, longitude, city, country]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -410,9 +409,7 @@ impl Mockmaker {
                             CoherentDataset::DateRange {
                                 start_date,
                                 end_date,
-                            } => {
-                                vec![start_date.clone(), end_date.clone()]
-                            }
+                            } => vec![start_date.clone(), end_date.clone()],
                         },
                     };
 
@@ -492,7 +489,7 @@ impl Mockmaker {
                                 state,
                                 zip,
                                 country,
-                            } => vec![city, state, zip, country]
+                            } => [city, state, zip, country]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -501,7 +498,7 @@ impl Mockmaker {
                                 first_name,
                                 last_name,
                                 full_name,
-                            } => vec![first_name, last_name, full_name]
+                            } => [first_name, last_name, full_name]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -511,7 +508,7 @@ impl Mockmaker {
                                 longitude,
                                 city,
                                 country,
-                            } => vec![latitude, longitude, city, country]
+                            } => [latitude, longitude, city, country]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .cloned()
@@ -519,9 +516,7 @@ impl Mockmaker {
                             CoherentDataset::DateRange {
                                 start_date,
                                 end_date,
-                            } => {
-                                vec![start_date.clone(), end_date.clone()]
-                            }
+                            } => vec![start_date.clone(), end_date.clone()],
                         },
                     };
 

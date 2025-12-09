@@ -6,7 +6,7 @@ use crate::types::FieldType;
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
-impl Mockmaker {
+impl Mockmaker<'_> {
     pub fn generate_insert_statements(
         &self,
         table_name: &str,

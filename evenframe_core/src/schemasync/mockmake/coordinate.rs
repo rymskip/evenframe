@@ -18,7 +18,7 @@ pub struct CoordinationId {
 
 impl CoordinationId {
     /// Parse a field path like "recurrence_rule.recurrence_begins" into (table_name, struct_name) for Mockmaker extraction
-    fn parse_field_path(&self, mockmaker: &Mockmaker) -> (String, String) {
+    fn parse_field_path(&self, mockmaker: &Mockmaker<'_>) -> (String, String) {
         tracing::trace!("Parsing field path {}", &self.field_name);
         let table_config = mockmaker.tables.get(&self.table_name).unwrap_or_else(|| {
             tracing::trace!("{:#?}", mockmaker.tables);
@@ -50,7 +50,7 @@ impl CoordinationId {
         (self.table_name.clone(), obj.struct_name.to_owned())
     }
 
-    pub fn get_field(&self, mockmaker: &Mockmaker) -> StructField {
+    pub fn get_field(&self, mockmaker: &Mockmaker<'_>) -> StructField {
         let (_, object_name) = self.parse_field_path(mockmaker);
 
         let struct_config = mockmaker.objects.get(&object_name).unwrap_or_else(|| {
@@ -89,7 +89,7 @@ pub struct CoordinationGroup {
     #[builder(default)]
     pub coordination_pairs: Vec<CoordinationPair>,
 }
-impl Mockmaker {
+impl Mockmaker<'_> {
     pub fn generate_coordinated_values(&mut self) {
         tracing::debug!("Generating coordinated values for all tables");
 
@@ -711,7 +711,7 @@ impl Coordination {
     /// Validate that this coordination can be applied to the given fields
     pub fn validate(
         &self,
-        mockmaker: &Mockmaker,
+        mockmaker: &Mockmaker<'_>,
         coordination_ids: &[CoordinationId],
     ) -> Result<(), EvenframeError> {
         // First validate that all field paths exist and are valid

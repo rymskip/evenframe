@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Builder)]
 pub struct FieldValueGenerator<'a> {
-    mockmaker: &'a Mockmaker,
+    mockmaker: &'a Mockmaker<'a>,
     table_config: &'a TableConfig,
     field: &'a StructField,
     id_index: &'a usize,

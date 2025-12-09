@@ -222,11 +222,11 @@ impl<'a> Schemasync<'a> {
         // Create Mockmaker instance (which contains Comparator)
         info!("Creating Mockmaker instance for data generation and comparison");
         let mut mockmaker = Mockmaker::new(
-            db.clone(),
-            tables.clone(),
-            objects.clone(),
-            enums.clone(),
-            config.clone(),
+            &db,
+            tables,
+            objects,
+            enums,
+            &config,
         );
         debug!("Mockmaker instance created successfully");
 
@@ -237,8 +237,9 @@ impl<'a> Schemasync<'a> {
 
         // Run the comparator pipeline
         info!("Running schema comparison pipeline");
-        let comparator = mockmaker.comparator.take().unwrap();
-        mockmaker.comparator = Some(comparator.run(&define_statements_string).await?);
+        if let Some(ref mut comparator) = mockmaker.comparator {
+            comparator.run(&define_statements_string).await?;
+        }
         debug!("Schema comparison completed");
 
         // Continue with the rest of the mockmaker pipeline
@@ -255,10 +256,11 @@ impl<'a> Schemasync<'a> {
             e
         })?;
 
-        let comparator = mockmaker.comparator.take().unwrap();
-        let comparator_clone = comparator.clone();
-        let schema_changes = comparator.get_schema_changes().unwrap();
-        mockmaker.comparator = Some(comparator_clone);
+        let schema_changes = mockmaker
+            .comparator
+            .as_ref()
+            .and_then(|c| c.get_schema_changes())
+            .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
         info!("Defining database tables and schema");
         self.define_tables(&db, define_statements, schema_changes)

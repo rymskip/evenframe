@@ -2,7 +2,7 @@ use crate::{compare::SchemaChanges, mockmake::Mockmaker};
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
-impl Mockmaker {
+impl Mockmaker<'_> {
     /// Generate REMOVE statements based on schema changes and record differences
     ///
     /// This function takes a SchemaChanges instance and record differences, and generates

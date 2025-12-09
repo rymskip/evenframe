@@ -5,7 +5,7 @@ use crate::{
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
-impl Mockmaker {
+impl Mockmaker<'_> {
     pub fn generate_upsert_statements(
         &self,
         table_name: &str,

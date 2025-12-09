@@ -25,10 +25,10 @@ use surrealdb::engine::local::{Db, Mem};
 use surrealdb::{Surreal, engine::remote::http::Client};
 use tracing;
 
-#[derive(Debug, Clone)]
-pub struct Comparator {
-    db: Surreal<Client>,
-    schemasync_config: crate::schemasync::config::SchemasyncConfig,
+#[derive(Debug)]
+pub struct Comparator<'a> {
+    db: &'a Surreal<Client>,
+    schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
 
     // Runtime state
     remote_schema: Option<Surreal<Db>>,
@@ -39,10 +39,10 @@ pub struct Comparator {
     schema_changes: Option<SchemaChanges>,
 }
 
-impl Comparator {
+impl<'a> Comparator<'a> {
     pub fn new(
-        db: Surreal<Client>,
-        schemasync_config: crate::schemasync::config::SchemasyncConfig,
+        db: &'a Surreal<Client>,
+        schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     ) -> Self {
         Self {
             db,
@@ -56,7 +56,7 @@ impl Comparator {
         }
     }
 
-    pub async fn run(mut self, define_statements: &str) -> Result<Self> {
+    pub async fn run(&mut self, define_statements: &str) -> Result<()> {
         tracing::info!("Starting Comparator pipeline");
 
         tracing::debug!("Setting up schemas");
@@ -72,13 +72,13 @@ impl Comparator {
         self.compare_schemas().await?;
 
         tracing::info!("Comparator pipeline completed successfully");
-        Ok(self)
+        Ok(())
     }
 
     /// Setup backup and create in-memory schemas
     async fn setup_schemas(&mut self, define_statements: &str) -> Result<()> {
         tracing::trace!("Creating backup and in-memory schemas");
-        let (remote_schema, new_schema) = setup_backup_and_schemas(&self.db).await?;
+        let (remote_schema, new_schema) = setup_backup_and_schemas(self.db).await?;
         self.remote_schema = Some(remote_schema);
         // Execute and check define statements
         let _ = new_schema.query(define_statements).await.map_err(|e| {
@@ -97,7 +97,7 @@ impl Comparator {
     async fn setup_access(&mut self) -> Result<()> {
         tracing::trace!("Setting up access definitions");
         let new_schema = self.new_schema.as_ref().unwrap();
-        self.access_query = setup_access_definitions(new_schema, &self.schemasync_config).await?;
+        self.access_query = setup_access_definitions(new_schema, self.schemasync_config).await?;
         tracing::trace!(
             access_query_length = self.access_query.len(),
             "Access query generated"
@@ -129,7 +129,7 @@ impl Comparator {
     async fn compare_schemas(&mut self) -> Result<()> {
         tracing::trace!("Starting schema comparison");
         let changes = compare_schemas(
-            &self.db,
+            self.db,
             &self.remote_schema_string,
             &self.new_schema_string,
         )
@@ -776,7 +776,7 @@ impl SchemaChanges {
     }
 }
 
-impl Comparator {
+impl Comparator<'_> {
     /// Compare two schemas and return the differences
     pub fn compare(old: &SchemaDefinition, new: &SchemaDefinition) -> Result<SchemaChanges> {
         tracing::debug!("Starting detailed schema comparison");
