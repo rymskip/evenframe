@@ -63,10 +63,11 @@ impl EvenframeConfig {
 
         info!("Configuration loaded successfully");
         debug!(
-            "Schemasync enabled: {}, Typesync arktype: {}, effect: {}",
+            "Schemasync enabled: {}, Typesync arktype: {}, effect: {}, macroforge: {}",
             config.schemasync.should_generate_mocks,
             config.typesync.should_generate_arktype_types,
-            config.typesync.should_generate_effect_types
+            config.typesync.should_generate_effect_types,
+            config.typesync.should_generate_macroforge_types
         );
 
         Ok(config)

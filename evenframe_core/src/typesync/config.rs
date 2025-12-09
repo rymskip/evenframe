@@ -7,6 +7,9 @@ pub struct TypesyncConfig {
     pub should_generate_arktype_types: bool,
     /// Whether to generate Effect Schema types
     pub should_generate_effect_types: bool,
+    /// Whether to generate Macroforge TypeScript interfaces with JSDoc annotations
+    #[serde(default)]
+    pub should_generate_macroforge_types: bool,
     /// Whether to generate SurrealDB schema types
     pub should_generate_surrealdb_schemas: bool,
     /// Output path for generated type files

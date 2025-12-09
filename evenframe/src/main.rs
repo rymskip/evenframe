@@ -6,7 +6,10 @@ use evenframe_core::schemasync::Schemasync; // Import your new struct
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
-    typesync::{arktype::generate_arktype_type_string, effect::generate_effect_schema_string},
+    typesync::{
+        arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
+        macroforge::generate_macroforge_type_string,
+    },
 };
 use tracing::{debug, error, info};
 
@@ -38,10 +41,11 @@ async fn main() -> Result<()> {
 
     let generate_arktype_types = config.typesync.should_generate_arktype_types;
     let generate_effect_schemas = config.typesync.should_generate_effect_types;
+    let generate_macroforge_types = config.typesync.should_generate_macroforge_types;
 
     debug!(
-        "Configuration flags - arktype: {}, effect: {}",
-        generate_arktype_types, generate_effect_schemas
+        "Configuration flags - arktype: {}, effect: {}, macroforge: {}",
+        generate_arktype_types, generate_effect_schemas, generate_macroforge_types
     );
 
     // Get the config builder closure
@@ -107,6 +111,31 @@ async fn main() -> Result<()> {
         }
     } else {
         debug!("Skipping Effect schema generation (disabled in config)");
+    }
+
+    if generate_macroforge_types {
+        info!("Generating Macroforge types...");
+        let structs = config_builders::merge_tables_and_objects(&tables, &objects);
+        debug!("Merged {} structs for Macroforge generation", structs.len());
+
+        let macroforge_content = generate_macroforge_type_string(&structs, &enums, false);
+        debug!(
+            "Generated Macroforge content: {} characters",
+            macroforge_content.len()
+        );
+
+        match std::fs::write(
+            format!("{}macroforge.ts", config.typesync.output_path),
+            macroforge_content,
+        ) {
+            Ok(_) => info!("Macroforge types written successfully to macroforge.ts"),
+            Err(e) => {
+                error!("Failed to write Macroforge types: {}", e);
+                return Err(e.into());
+            }
+        }
+    } else {
+        debug!("Skipping Macroforge type generation (disabled in config)");
     }
 
     info!("Starting Schemasync");
