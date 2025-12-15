@@ -733,11 +733,14 @@ impl Validator {
                     let format_regex_string: String =
                         format_variant.to_owned().into_regex().to_string();
                     quote! {
-                        let re = regex::Regex::new(#format_regex_string)
-                        .map_err(|_| serde::de::Error::custom("invalid regex pattern"))?;
+                        {
+                            static RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+                                regex::Regex::new(#format_regex_string).expect("Invalid regex pattern")
+                            });
 
-                        if !re.is_match(&#value) {
-                            return Err(serde::de::Error::custom("value does not match pattern"));
+                            if !RE.is_match(&#value) {
+                                return Err(serde::de::Error::custom("value does not match pattern"));
+                            }
                         }
                     }
                 }

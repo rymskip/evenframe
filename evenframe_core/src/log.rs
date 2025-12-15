@@ -102,19 +102,19 @@ macro_rules! __internal_log_impl {
 ///
 /// Log to a timestamp-based file (e.g., "2024_01_12_14_30_52.log"):
 /// ```no_run
-/// # use helpers::evenframe_log;
+/// # use evenframe_core::evenframe_log;
 /// evenframe_log!("Sync started");
 /// ```
 ///
 /// Log to a specific file (overwrites existing content):
 /// ```no_run
-/// # use helpers::evenframe_log;
+/// # use evenframe_core::evenframe_log;
 /// evenframe_log!("Types generated", "output.log");
 /// ```
 ///
 /// Log to a specific file with append mode:
 /// ```no_run
-/// # use helpers::evenframe_log;
+/// # use evenframe_core::evenframe_log;
 /// evenframe_log!("New type added", "output.log", true);
 /// ```
 #[macro_export]
