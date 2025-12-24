@@ -5946,7 +5946,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "try_from_expr"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ordered-float 5.0.0",
  "syn 2.0.106",
@@ -5955,7 +5955,7 @@ dependencies = [
 
 [[package]]
 name = "try_from_expr_derive"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
