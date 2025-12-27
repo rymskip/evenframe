@@ -48,7 +48,7 @@ fn cleanup_generated_files() {
         if let Ok(entries) = fs::read_dir(&bindings_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "ts") {
+                if path.extension().is_some_and(|ext| ext == "ts") {
                     let _ = fs::remove_file(path);
                 }
             }
@@ -76,10 +76,7 @@ fn run_evenframe() -> Result<std::process::Output, std::io::Error> {
             "Failed to build evenframe: {}",
             String::from_utf8_lossy(&build_output.stderr)
         );
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to build evenframe",
-        ));
+        return Err(std::io::Error::other("Failed to build evenframe"));
     }
 
     // Run evenframe in the playground directory
@@ -166,7 +163,7 @@ fn test_valid_format_attributes() {
 
     for file_path in files {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         // Find all format attributes
         for line in content.lines() {
@@ -195,7 +192,7 @@ fn test_edge_attribute_structure() {
 
     for file_path in files {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         // Find all edge attributes
         for line in content.lines() {
@@ -648,7 +645,7 @@ fn test_validators_attribute_syntax() {
 
     for file_path in files {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         // Find all validators attributes and verify they have proper syntax
         for line in content.lines() {

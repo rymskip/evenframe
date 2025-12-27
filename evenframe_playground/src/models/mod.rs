@@ -6,6 +6,5 @@ pub mod extreme_edge_cases;
 
 pub use auth::*;
 pub use ecommerce::*;
-pub use edge_cases::*;
-pub use extreme_edge_cases::*;
 // Note: blog types are accessed via models::blog::* to avoid name conflicts
+// Note: edge_cases and extreme_edge_cases are test modules, accessed via models::edge_cases::* etc.

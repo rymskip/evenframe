@@ -260,27 +260,23 @@ mod tests {
 
     #[test]
     fn test_get_all_table_names_returns_vec() {
-        let tables = get_all_table_names();
         // Just verify it returns a Vec (may be empty in test context)
-        assert!(tables.len() >= 0);
+        let _ = get_all_table_names();
     }
 
     #[test]
     fn test_get_all_object_names_returns_vec() {
-        let objects = get_all_object_names();
-        assert!(objects.len() >= 0);
+        let _ = get_all_object_names();
     }
 
     #[test]
     fn test_get_all_enum_names_returns_vec() {
-        let enums = get_all_enum_names();
-        assert!(enums.len() >= 0);
+        let _ = get_all_enum_names();
     }
 
     #[test]
     fn test_get_all_union_of_tables_names_returns_vec() {
-        let unions = get_all_union_of_tables_names();
-        assert!(unions.len() >= 0);
+        let _ = get_all_union_of_tables_names();
     }
 
     // ==================== Registry Entry Struct Tests ====================

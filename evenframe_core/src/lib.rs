@@ -8,6 +8,7 @@ pub mod derive;
 pub mod error;
 pub mod log;
 pub mod registry;
+pub mod tooling;
 pub mod traits;
 pub mod types;
 pub mod validator;

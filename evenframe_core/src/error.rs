@@ -27,6 +27,9 @@ pub enum EvenframeError {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    #[error("Configuration file not found. Searched from {search_start:?} upward to root")]
+    ConfigNotFound { search_start: PathBuf },
+
     #[error("Invalid path: {path}")]
     InvalidPath { path: PathBuf },
 
@@ -195,6 +198,10 @@ impl EvenframeError {
     }
 
     pub fn config(message: impl Into<String>) -> Self {
+        EvenframeError::Config(message.into())
+    }
+
+    pub fn config_error(message: impl Into<String>) -> Self {
         EvenframeError::Config(message.into())
     }
 
@@ -534,7 +541,9 @@ mod tests {
 
     #[test]
     fn test_from_regex_error() {
-        let regex_result = regex::Regex::new("[invalid");
+        // Use a runtime string to prevent compile-time regex validation
+        let invalid_pattern = String::from("[invalid");
+        let regex_result = regex::Regex::new(&invalid_pattern);
         let regex_err = regex_result.unwrap_err();
         let err: EvenframeError = regex_err.into();
         assert!(matches!(err, EvenframeError::Regex(_)));
@@ -551,10 +560,7 @@ mod tests {
 
     #[test]
     fn test_from_boxed_dyn_error() {
-        let boxed_err: Box<dyn std::error::Error> = Box::new(io::Error::new(
-            io::ErrorKind::Other,
-            "boxed error",
-        ));
+        let boxed_err: Box<dyn std::error::Error> = Box::new(io::Error::other("boxed error"));
         let err: EvenframeError = boxed_err.into();
         assert!(matches!(err, EvenframeError::Unknown(_)));
         assert!(err.to_string().contains("boxed error"));
@@ -774,7 +780,7 @@ mod tests {
     fn test_result_type_ok() {
         let result: Result<i32> = Ok(42);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 42);
+        assert_eq!(result.ok(), Some(42));
     }
 
     #[test]

@@ -6,10 +6,10 @@ use tracing;
 
 /// Check if a syn::Type represents an Option<T> type
 fn is_option_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "Option";
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Option";
     }
     false
 }
@@ -63,7 +63,7 @@ pub fn parse_field_validators_with_logic(
     field_type: Option<&syn::Type>,
 ) -> Result<(Vec<TokenStream>, Vec<TokenStream>)> {
     tracing::debug!(attr_count = attrs.len(), value_ident = %value_ident, "Parsing field validators with logic");
-    let is_optional = field_type.map(|ty| is_option_type(ty)).unwrap_or(false);
+    let is_optional = field_type.map(is_option_type).unwrap_or(false);
 
     // Check for common attribute mistakes
     for attr in attrs {
@@ -255,19 +255,19 @@ pub fn parse_field_validators_as_enums(attrs: &[Attribute]) -> Vec<Validator> {
     let mut validators = Vec::new();
 
     for attr in attrs {
-        if attr.path().is_ident("validators") {
-            if let Ok(nested) = attr.parse_args_with(
+        if attr.path().is_ident("validators")
+            && let Ok(nested) = attr.parse_args_with(
                 Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
-            ) {
-                for expr in nested {
-                    if let Ok(validator) = Validator::try_from(&expr) {
-                        tracing::trace!("Parsed validator enum: {:?}", validator);
-                        validators.push(validator);
-                    } else {
-                        tracing::warn!(
-                            "Failed to parse validator expression in runtime context"
-                        );
-                    }
+            )
+        {
+            for expr in nested {
+                if let Ok(validator) = Validator::try_from(&expr) {
+                    tracing::trace!("Parsed validator enum: {:?}", validator);
+                    validators.push(validator);
+                } else {
+                    tracing::warn!(
+                        "Failed to parse validator expression in runtime context"
+                    );
                 }
             }
         }

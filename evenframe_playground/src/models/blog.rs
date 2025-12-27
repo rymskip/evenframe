@@ -1,7 +1,7 @@
 use super::auth::User;
 use evenframe::types::RecordLink;
 use evenframe::Evenframe;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 20)]

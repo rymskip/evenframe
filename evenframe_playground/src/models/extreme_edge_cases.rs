@@ -1,5 +1,5 @@
-/// EXTREME EDGE CASES - The most complex, convoluted validator combinations
-/// Testing every feature Evenframe has to offer in the most challenging ways possible.
+//! EXTREME EDGE CASES - The most complex, convoluted validator combinations
+//! Testing every feature Evenframe has to offer in the most challenging ways possible.
 
 use evenframe::types::RecordLink;
 use evenframe::Evenframe;
@@ -1231,7 +1231,7 @@ mod tests {
             optional_tags: Some(vec!["optional".to_string()]),
             scores: vec![100, 95, 88],
             optional_scores: Some(vec![50, 60]),
-            measurements: vec![1.5, 2.7, 3.14],
+            measurements: vec![1.5, 2.7, 3.5],
             addresses: vec![ValidatedAddress {
                 street: "789 Array St".to_string(),
                 city: "Boston".to_string(),

@@ -4,6 +4,35 @@ package evenframe.playground;
 
 import "validate/validate.proto";
 
+enum PaymentStatus {
+    PAYMENT_STATUS_UNSPECIFIED = 0;
+    PAYMENT_STATUS_PENDING = 1;
+    PAYMENT_STATUS_PROCESSING = 2;
+    PAYMENT_STATUS_COMPLETED = 3;
+    PAYMENT_STATUS_FAILED = 4;
+    PAYMENT_STATUS_REFUNDED = 5;
+    PAYMENT_STATUS_CANCELLED = 6;
+}
+
+enum OrderStatus {
+    ORDER_STATUS_UNSPECIFIED = 0;
+    ORDER_STATUS_PENDING = 1;
+    ORDER_STATUS_PROCESSING = 2;
+    ORDER_STATUS_SHIPPED = 3;
+    ORDER_STATUS_DELIVERED = 4;
+    ORDER_STATUS_CANCELLED = 5;
+}
+
+enum ProductCategory {
+    PRODUCT_CATEGORY_UNSPECIFIED = 0;
+    PRODUCT_CATEGORY_ELECTRONICS = 1;
+    PRODUCT_CATEGORY_CLOTHING = 2;
+    PRODUCT_CATEGORY_BOOKS = 3;
+    PRODUCT_CATEGORY_HOME = 4;
+    PRODUCT_CATEGORY_SPORTS = 5;
+    PRODUCT_CATEGORY_OTHER = 6;
+}
+
 enum Role {
     ROLE_UNSPECIFIED = 0;
     ROLE_ADMIN = 1;
@@ -22,81 +51,80 @@ enum PaymentMethod {
     PAYMENT_METHOD_CASH = 6;
 }
 
-enum ProductCategory {
-    PRODUCT_CATEGORY_UNSPECIFIED = 0;
-    PRODUCT_CATEGORY_ELECTRONICS = 1;
-    PRODUCT_CATEGORY_CLOTHING = 2;
-    PRODUCT_CATEGORY_BOOKS = 3;
-    PRODUCT_CATEGORY_HOME = 4;
-    PRODUCT_CATEGORY_SPORTS = 5;
-    PRODUCT_CATEGORY_OTHER = 6;
-}
-
-enum OrderStatus {
-    ORDER_STATUS_UNSPECIFIED = 0;
-    ORDER_STATUS_PENDING = 1;
-    ORDER_STATUS_PROCESSING = 2;
-    ORDER_STATUS_SHIPPED = 3;
-    ORDER_STATUS_DELIVERED = 4;
-    ORDER_STATUS_CANCELLED = 5;
-}
-
-enum PaymentStatus {
-    PAYMENT_STATUS_UNSPECIFIED = 0;
-    PAYMENT_STATUS_PENDING = 1;
-    PAYMENT_STATUS_PROCESSING = 2;
-    PAYMENT_STATUS_COMPLETED = 3;
-    PAYMENT_STATUS_FAILED = 4;
-    PAYMENT_STATUS_REFUNDED = 5;
-    PAYMENT_STATUS_CANCELLED = 6;
-}
-
-message MaxValidatorStacking {
+message ExtremeFloatValidation {
     string id = 1;
-    string mega_validated_string = 2 [(validate.rules).string = {min_len: 1, min_len: 8, max_len: 128, pattern: "^[a-zA-Z0-9]*$"}];
-    optional string optional_mega_validated = 3 [(validate.rules).string = {min_len: 1, min_len: 8, max_len: 128, pattern: "^[a-zA-Z0-9]*$"}];
-    double mega_validated_number = 4 [(validate.rules).double = {gt: 0, gt: 0, gte: 1, lt: 1000, lte: 999, gte: 1, lte: 999}];
-    uint32 mega_validated_u_32 = 5 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100, gte: 1, lte: 100}];
-    optional uint32 optional_mega_u_32 = 6 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100}];
-    int64 mega_validated_i_64 = 7 [(validate.rules).int64 = {gt: -1000000, lt: 1000000, gte: -999999, lte: 999999}];
-    optional int64 optional_mega_i_64 = 8 [(validate.rules).int64 = {gte: -1000, lte: 1000}];
+    float multi_constrained_f_32 = 2 [(validate.rules).float = {gt: 0, gte: 0.001, lte: 999.999, lt: 1000, gt: 0}];
+    optional float optional_f_32 = 3 [(validate.rules).float = {gt: 0, lt: 100}];
+    double normalized_f_64 = 4 [(validate.rules).double = {gte: 0, lte: 1, gte: 0}];
+    optional double optional_normalized_f_64 = 5 [(validate.rules).double = {gte: 0, lte: 1}];
+    double negative_f_64 = 6 [(validate.rules).double = {lt: 0, gt: -1000, lt: 0}];
+    optional double optional_negative_f_64 = 7 [(validate.rules).double = {lt: 0}];
+    double currency_amount = 8 [(validate.rules).double = {gte: 0, lt: 1000000}];
+    optional double optional_currency = 9 [(validate.rules).double = {gt: 0}];
+    double percentage = 10 [(validate.rules).double = {gte: 0, lte: 100}];
+    optional double optional_percentage = 11 [(validate.rules).double = {gte: 0, lte: 100}];
+    double latitude = 12 [(validate.rules).double = {gte: -90, lte: 90}];
+    double longitude = 13 [(validate.rules).double = {gte: -180, lte: 180}];
+    optional double optional_latitude = 14 [(validate.rules).double = {gte: -90, lte: 90}];
+    optional double optional_longitude = 15 [(validate.rules).double = {gte: -180, lte: 180}];
 }
 
-message Customer {
+message MultiValidatorOptionalString {
     string id = 1;
-    User user = 2;
-    optional Address shipping_address = 3;
-    optional Address billing_address = 4;
-    optional string phone = 5;
-    string created_at = 6;
+    optional string username = 2 [(validate.rules).string = {min_len: 5, max_len: 100, prefix: "usr_"}];
+    optional string email = 3 [(validate.rules).string = {email: true, max_len: 255}];
+    optional string website = 4 [(validate.rules).string = {uri: true, max_len: 2000}];
 }
 
-message Order {
+message BusinessExtremes {
     string id = 1;
-    Customer customer = 2;
-    repeated CartItem items = 3;
-    double subtotal = 4 [(validate.rules).double = {gte: 0}];
-    double tax = 5 [(validate.rules).double = {gte: 0}];
-    double shipping_cost = 6 [(validate.rules).double = {gte: 0}];
-    double total = 7 [(validate.rules).double = {gt: 0}];
-    OrderStatus status = 8;
-    Address shipping_address = 9;
-    optional string notes = 10 [(validate.rules).string = {max_len: 1000}];
-    string created_at = 11;
-    optional string shipped_at = 12;
-    optional string delivered_at = 13;
+    string company_name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    string job_title = 3 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    optional string optional_parent_company = 4 [(validate.rules).string = {max_len: 200}];
+    string product_name = 5 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    string sku = 6 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 6, max_len: 20}];
+    optional string optional_variant_name = 7 [(validate.rules).string = {max_len: 200}];
+    optional string optional_variant_sku = 8 [(validate.rules).string = {max_len: 20}];
+    double price = 9 [(validate.rules).double = {gt: 0, lt: 100000}];
+    optional double optional_discount = 10 [(validate.rules).double = {gte: 0}];
+    uint32 quantity = 11 [(validate.rules).uint32 = {gte: 0, lt: 10000}];
+    optional uint32 optional_min_quantity = 12 [(validate.rules).uint32 = {gt: 0}];
+    string test_card_number = 13 [(validate.rules).string = {pattern: "^[0-9]*$", min_len: 13, max_len: 19}];
+    optional string optional_backup_card = 14 [(validate.rules).string = {pattern: "^[0-9]*$"}];
 }
 
-message ArrayValidationExtremes {
+message ComplexIdentifiers {
     string id = 1;
-    repeated string tags = 2;
-    repeated string validated_emails = 3;
-    optional string optional_tags = 4;
-    repeated uint32 scores = 5;
-    optional uint32 optional_scores = 6;
-    repeated double measurements = 7;
-    repeated ValidatedAddress addresses = 8;
-    optional ValidatedAddress backup_addresses = 9;
+    string uuid_field = 2 [(validate.rules).string = {uuid: true}];
+    optional string optional_uuid = 3 [(validate.rules).string = {uuid: true}];
+    string hex_id_32 = 4 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 32, max_len: 32}];
+    optional string optional_hex_id = 5 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 16}];
+    string base_64_token = 6 [(validate.rules).string = {max_len: 100}];
+    optional string optional_base_64_token = 7 [(validate.rules).string = {max_len: 50}];
+    string version = 8 [(validate.rules).string = {min_len: 1, max_len: 20}];
+    optional string optional_version = 9 [(validate.rules).string = {max_len: 20}];
+    string sha_256_hash = 10 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 64, max_len: 64}];
+    optional string optional_hash = 11 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$"}];
+}
+
+message CaseValidation {
+    string id = 1;
+    optional string optional_lowercase = 2 [(validate.rules).string = {pattern: "^[^A-Z]*$"}];
+    optional string optional_uppercase = 3 [(validate.rules).string = {pattern: "^[^a-z]*$"}];
+    optional string optional_capitalized = 4;
+    optional string optional_uncapitalized = 5;
+    optional string optional_trimmed = 6;
+}
+
+message User {
+    string id = 1;
+    string email = 2 [(validate.rules).string = {email: true, min_len: 5, max_len: 255}];
+    string username = 3 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 3, max_len: 50}];
+    string password_hash = 4 [(validate.rules).string = {min_len: 1}];
+    repeated Role roles = 5;
+    bool is_active = 6;
+    string created_at = 7;
+    string updated_at = 8;
 }
 
 message DateTimeExtremes {
@@ -117,16 +145,12 @@ message DateTimeExtremes {
     optional string optional_target_date = 15;
 }
 
-message NetworkTypes {
+message OptionalIntegerValidation {
     string id = 1;
-    string ip_address = 2 [(validate.rules).string = {ip: true}];
-    optional string optional_ip = 3 [(validate.rules).string = {ip: true}];
-    string mac_address = 4 [(validate.rules).string = {max_len: 17}];
-    optional string optional_mac = 5 [(validate.rules).string = {max_len: 17}];
-    string internal_api_url = 6 [(validate.rules).string = {uri: true, prefix: "https://"}];
-    optional string optional_storage_url = 7 [(validate.rules).string = {uri: true}];
-    string user_agent = 8 [(validate.rules).string = {min_len: 1, max_len: 500}];
-    optional string optional_user_agent = 9 [(validate.rules).string = {max_len: 500}];
+    optional uint32 optional_positive_u_32 = 2 [(validate.rules).uint32 = {gt: 0}];
+    optional int32 optional_non_negative_i_32 = 3 [(validate.rules).int32 = {gte: 0}];
+    optional uint64 optional_positive_u_64 = 4 [(validate.rules).uint64 = {gt: 0}];
+    optional int64 optional_negative_i_64 = 5 [(validate.rules).int64 = {lt: 0}];
 }
 
 message Session {
@@ -135,6 +159,153 @@ message Session {
     string token = 3 [(validate.rules).string = {min_len: 1, min_len: 32}];
     string expires_at = 4;
     string created_at = 5;
+}
+
+message CartItem {
+    string product_id = 1 [(validate.rules).string = {min_len: 1}];
+    string product_name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    uint32 quantity = 3 [(validate.rules).uint32 = {gt: 0}];
+    double unit_price = 4 [(validate.rules).double = {gt: 0}];
+}
+
+message MaxValidatorStacking {
+    string id = 1;
+    string mega_validated_string = 2 [(validate.rules).string = {min_len: 1, min_len: 8, max_len: 128, pattern: "^[a-zA-Z0-9]*$"}];
+    optional string optional_mega_validated = 3 [(validate.rules).string = {min_len: 1, min_len: 8, max_len: 128, pattern: "^[a-zA-Z0-9]*$"}];
+    double mega_validated_number = 4 [(validate.rules).double = {gt: 0, gt: 0, gte: 1, lt: 1000, lte: 999, gte: 1, lte: 999}];
+    uint32 mega_validated_u_32 = 5 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100, gte: 1, lte: 100}];
+    optional uint32 optional_mega_u_32 = 6 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100}];
+    int64 mega_validated_i_64 = 7 [(validate.rules).int64 = {gt: -1000000, lt: 1000000, gte: -999999, lte: 999999}];
+    optional int64 optional_mega_i_64 = 8 [(validate.rules).int64 = {gte: -1000, lte: 1000}];
+}
+
+message Comment {
+    string id = 1;
+    Post post = 2;
+    Author author = 3;
+    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 1, max_len: 5000}];
+    optional string parent_comment_id = 5;
+    bool is_approved = 6;
+    string created_at = 7;
+    optional string edited_at = 8;
+}
+
+message ArrayValidationExtremes {
+    string id = 1;
+    repeated string tags = 2;
+    repeated string validated_emails = 3;
+    optional string optional_tags = 4;
+    repeated uint32 scores = 5;
+    optional uint32 optional_scores = 6;
+    repeated double measurements = 7;
+    repeated ValidatedAddress addresses = 8;
+    optional ValidatedAddress backup_addresses = 9;
+}
+
+message Order {
+    string id = 1;
+    Customer customer = 2;
+    repeated CartItem items = 3;
+    double subtotal = 4 [(validate.rules).double = {gte: 0}];
+    double tax = 5 [(validate.rules).double = {gte: 0}];
+    double shipping_cost = 6 [(validate.rules).double = {gte: 0}];
+    double total = 7 [(validate.rules).double = {gt: 0}];
+    OrderStatus status = 8;
+    Address shipping_address = 9;
+    optional string notes = 10 [(validate.rules).string = {max_len: 1000}];
+    string created_at = 11;
+    optional string shipped_at = 12;
+    optional string delivered_at = 13;
+}
+
+message Product {
+    string id = 1;
+    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    string description = 3 [(validate.rules).string = {max_len: 5000}];
+    double price = 4 [(validate.rules).double = {gt: 0}];
+    uint32 stock_quantity = 5 [(validate.rules).uint32 = {gte: 0}];
+    ProductCategory category = 6;
+    optional string image_url = 7 [(validate.rules).string = {uri: true}];
+    bool is_available = 8;
+    string created_at = 9;
+}
+
+message EdgeCaseUser {
+    string id = 1;
+    string email = 2 [(validate.rules).string = {email: true, max_len: 255}];
+    string username = 3 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 3, max_len: 30}];
+    string created_at = 4;
+    uint32 login_count = 5 [(validate.rules).uint32 = {gte: 0}];
+    optional double rating = 6 [(validate.rules).double = {gte: 0, lte: 5}];
+}
+
+message Customer {
+    string id = 1;
+    User user = 2;
+    optional Address shipping_address = 3;
+    optional Address billing_address = 4;
+    optional string phone = 5;
+    string created_at = 6;
+}
+
+message ValidatedContact {
+    string name = 1 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    string email = 2 [(validate.rules).string = {email: true}];
+    optional string phone = 3 [(validate.rules).string = {max_len: 20}];
+    optional string title = 4 [(validate.rules).string = {max_len: 100}];
+}
+
+message DeepNestedValidation {
+    string id = 1;
+    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    ValidatedAddress primary_address = 3;
+    optional ValidatedAddress billing_address = 4;
+    repeated ValidatedAddress shipping_addresses = 5;
+    ValidatedContact primary_contact = 6;
+    optional ValidatedContact secondary_contact = 7;
+    repeated ValidatedContact additional_contacts = 8;
+    uint32 total_orders = 9 [(validate.rules).uint32 = {gte: 0}];
+    double total_spent = 10 [(validate.rules).double = {gte: 0}];
+    optional double credit_limit = 11 [(validate.rules).double = {gt: 0}];
+}
+
+message ExtremeIntegerValidation {
+    string id = 1;
+    uint32 constrained_u_8 = 2 [(validate.rules).uint32 = {gt: 0, lte: 255, gte: 1, lte: 100}];
+    optional uint32 optional_constrained_u_8 = 3 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100}];
+    uint32 bounded_u_16 = 4 [(validate.rules).uint32 = {gte: 0, lt: 65000, gt: 0}];
+    optional uint32 optional_bounded_u_16 = 5 [(validate.rules).uint32 = {gte: 0, lt: 1000}];
+    uint32 percentage_u_32 = 6 [(validate.rules).uint32 = {gte: 0, lte: 100, gte: 0, lte: 100}];
+    optional uint32 optional_percentage_u_32 = 7 [(validate.rules).uint32 = {gte: 0, lte: 100}];
+    uint64 large_u_64 = 8 [(validate.rules).uint64 = {gt: 0, gte: 1, lt: 1000000000}];
+    optional uint64 optional_large_u_64 = 9 [(validate.rules).uint64 = {gt: 0}];
+    int32 negative_i_8 = 10 [(validate.rules).int32 = {lt: 0, gt: -100}];
+    optional int32 optional_negative_i_8 = 11 [(validate.rules).int32 = {lt: 0}];
+    int32 non_positive_i_16 = 12 [(validate.rules).int32 = {lte: 0, gte: -1000}];
+    optional int32 optional_non_positive_i_16 = 13 [(validate.rules).int32 = {lte: 0}];
+    int32 bounded_i_32 = 14 [(validate.rules).int32 = {gte: -1000, lte: 1000}];
+    optional int32 optional_bounded_i_32 = 15 [(validate.rules).int32 = {gte: -500, lte: 500}];
+    int64 constrained_i_64 = 16 [(validate.rules).int64 = {gt: -9999999, lt: 9999999}];
+    optional int64 optional_non_negative_i_64 = 17 [(validate.rules).int64 = {gte: 0}];
+    uint64 bounded_usize = 18 [(validate.rules).uint64 = {gte: 0, lt: 10000}];
+    optional uint64 optional_bounded_usize = 19 [(validate.rules).uint64 = {gte: 0}];
+    int64 bounded_isize = 20 [(validate.rules).int64 = {gte: -100, lte: 100}];
+    optional int64 optional_positive_isize = 21 [(validate.rules).int64 = {gt: 0}];
+}
+
+message EdgeCasePost {
+    string id = 1;
+    EdgeCaseUser author = 2;
+    string title = 3 [(validate.rules).string = {min_len: 1, min_len: 5, max_len: 200}];
+    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 10}];
+    string slug = 5 [(validate.rules).string = {pattern: "^[^A-Z]*$", max_len: 100}];
+    string created_at = 6;
+    optional string updated_at = 7;
+    uint64 view_count = 8 [(validate.rules).uint64 = {gte: 0}];
+    uint32 like_count = 9 [(validate.rules).uint32 = {gte: 0}];
+    bool is_published = 10;
+    optional string featured_image = 11 [(validate.rules).string = {uri: true}];
+    optional string meta_description = 12 [(validate.rules).string = {max_len: 300}];
 }
 
 message ComplexStringValidation {
@@ -150,12 +321,24 @@ message ComplexStringValidation {
     optional string optional_with_at = 10 [(validate.rules).string = {contains: "@"}];
 }
 
-message FloatValidation {
+message OuterWithNestedValidator {
     string id = 1;
-    double positive_float = 2 [(validate.rules).double = {gt: 0}];
-    double non_negative_float = 3 [(validate.rules).double = {gte: 0}];
-    double normalized = 4 [(validate.rules).double = {gte: 0, lte: 1}];
-    optional double optional_positive_float = 5 [(validate.rules).double = {gt: 0}];
+    InnerValidated inner = 2;
+    optional InnerValidated optional_inner = 3;
+    repeated InnerValidated inner_list = 4;
+}
+
+message EdgeCaseComment {
+    string id = 1;
+    EdgeCasePost post = 2;
+    EdgeCaseUser author = 3;
+    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 1, max_len: 10000}];
+    string created_at = 5;
+    optional string edited_at = 6;
+    uint32 like_count = 7 [(validate.rules).uint32 = {gte: 0}];
+    optional string parent_comment_id = 8;
+    bool is_approved = 9;
+    optional string author_ip = 10 [(validate.rules).string = {ip: true}];
 }
 
 message NonEmptyOptionString {
@@ -164,18 +347,12 @@ message NonEmptyOptionString {
     optional string optional_min_three = 3 [(validate.rules).string = {min_len: 1, min_len: 3}];
 }
 
-message ComplexIdentifiers {
+message FloatValidation {
     string id = 1;
-    string uuid_field = 2 [(validate.rules).string = {uuid: true}];
-    optional string optional_uuid = 3 [(validate.rules).string = {uuid: true}];
-    string hex_id_32 = 4 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 32, max_len: 32}];
-    optional string optional_hex_id = 5 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 16}];
-    string base_64_token = 6 [(validate.rules).string = {max_len: 100}];
-    optional string optional_base_64_token = 7 [(validate.rules).string = {max_len: 50}];
-    string version = 8 [(validate.rules).string = {min_len: 1, max_len: 20}];
-    optional string optional_version = 9 [(validate.rules).string = {max_len: 20}];
-    string sha_256_hash = 10 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$", min_len: 64, max_len: 64}];
-    optional string optional_hash = 11 [(validate.rules).string = {pattern: "^[a-fA-F0-9]*$"}];
+    double positive_float = 2 [(validate.rules).double = {gt: 0}];
+    double non_negative_float = 3 [(validate.rules).double = {gte: 0}];
+    double normalized = 4 [(validate.rules).double = {gte: 0, lte: 1}];
+    optional double optional_positive_float = 5 [(validate.rules).double = {gt: 0}];
 }
 
 message Post {
@@ -211,122 +388,26 @@ message MultipleNumberValidators {
     double percentage = 4 [(validate.rules).double = {gt: 0, gte: 0.01, lte: 100}];
 }
 
-message BusinessExtremes {
+message Author {
     string id = 1;
-    string company_name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    string job_title = 3 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    optional string optional_parent_company = 4 [(validate.rules).string = {max_len: 200}];
-    string product_name = 5 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    string sku = 6 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 6, max_len: 20}];
-    optional string optional_variant_name = 7 [(validate.rules).string = {max_len: 200}];
-    optional string optional_variant_sku = 8 [(validate.rules).string = {max_len: 20}];
-    double price = 9 [(validate.rules).double = {gt: 0, lt: 100000}];
-    optional double optional_discount = 10 [(validate.rules).double = {gte: 0}];
-    uint32 quantity = 11 [(validate.rules).uint32 = {gte: 0, lt: 10000}];
-    optional uint32 optional_min_quantity = 12 [(validate.rules).uint32 = {gt: 0}];
-    string test_card_number = 13 [(validate.rules).string = {pattern: "^[0-9]*$", min_len: 13, max_len: 19}];
-    optional string optional_backup_card = 14 [(validate.rules).string = {pattern: "^[0-9]*$"}];
-}
-
-message DeepNestedValidation {
-    string id = 1;
-    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    ValidatedAddress primary_address = 3;
-    optional ValidatedAddress billing_address = 4;
-    repeated ValidatedAddress shipping_addresses = 5;
-    ValidatedContact primary_contact = 6;
-    optional ValidatedContact secondary_contact = 7;
-    repeated ValidatedContact additional_contacts = 8;
-    uint32 total_orders = 9 [(validate.rules).uint32 = {gte: 0}];
-    double total_spent = 10 [(validate.rules).double = {gte: 0}];
-    optional double credit_limit = 11 [(validate.rules).double = {gt: 0}];
-}
-
-message EdgeCasePost {
-    string id = 1;
-    EdgeCaseUser author = 2;
-    string title = 3 [(validate.rules).string = {min_len: 1, min_len: 5, max_len: 200}];
-    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 10}];
-    string slug = 5 [(validate.rules).string = {pattern: "^[^A-Z]*$", max_len: 100}];
-    string created_at = 6;
-    optional string updated_at = 7;
-    uint64 view_count = 8 [(validate.rules).uint64 = {gte: 0}];
-    uint32 like_count = 9 [(validate.rules).uint32 = {gte: 0}];
-    bool is_published = 10;
-    optional string featured_image = 11 [(validate.rules).string = {uri: true}];
-    optional string meta_description = 12 [(validate.rules).string = {max_len: 300}];
-}
-
-message OptionalIntegerValidation {
-    string id = 1;
-    optional uint32 optional_positive_u_32 = 2 [(validate.rules).uint32 = {gt: 0}];
-    optional int32 optional_non_negative_i_32 = 3 [(validate.rules).int32 = {gte: 0}];
-    optional uint64 optional_positive_u_64 = 4 [(validate.rules).uint64 = {gt: 0}];
-    optional int64 optional_negative_i_64 = 5 [(validate.rules).int64 = {lt: 0}];
-}
-
-message Product {
-    string id = 1;
-    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    string description = 3 [(validate.rules).string = {max_len: 5000}];
-    double price = 4 [(validate.rules).double = {gt: 0}];
-    uint32 stock_quantity = 5 [(validate.rules).uint32 = {gte: 0}];
-    ProductCategory category = 6;
-    optional string image_url = 7 [(validate.rules).string = {uri: true}];
-    bool is_available = 8;
-    string created_at = 9;
-}
-
-message ExtremeIntegerValidation {
-    string id = 1;
-    uint32 constrained_u_8 = 2 [(validate.rules).uint32 = {gt: 0, lte: 255, gte: 1, lte: 100}];
-    optional uint32 optional_constrained_u_8 = 3 [(validate.rules).uint32 = {gt: 0, gte: 1, lte: 100}];
-    uint32 bounded_u_16 = 4 [(validate.rules).uint32 = {gte: 0, lt: 65000, gt: 0}];
-    optional uint32 optional_bounded_u_16 = 5 [(validate.rules).uint32 = {gte: 0, lt: 1000}];
-    uint32 percentage_u_32 = 6 [(validate.rules).uint32 = {gte: 0, lte: 100, gte: 0, lte: 100}];
-    optional uint32 optional_percentage_u_32 = 7 [(validate.rules).uint32 = {gte: 0, lte: 100}];
-    uint64 large_u_64 = 8 [(validate.rules).uint64 = {gt: 0, gte: 1, lt: 1000000000}];
-    optional uint64 optional_large_u_64 = 9 [(validate.rules).uint64 = {gt: 0}];
-    int32 negative_i_8 = 10 [(validate.rules).int32 = {lt: 0, gt: -100}];
-    optional int32 optional_negative_i_8 = 11 [(validate.rules).int32 = {lt: 0}];
-    int32 non_positive_i_16 = 12 [(validate.rules).int32 = {lte: 0, gte: -1000}];
-    optional int32 optional_non_positive_i_16 = 13 [(validate.rules).int32 = {lte: 0}];
-    int32 bounded_i_32 = 14 [(validate.rules).int32 = {gte: -1000, lte: 1000}];
-    optional int32 optional_bounded_i_32 = 15 [(validate.rules).int32 = {gte: -500, lte: 500}];
-    int64 constrained_i_64 = 16 [(validate.rules).int64 = {gt: -9999999, lt: 9999999}];
-    optional int64 optional_non_negative_i_64 = 17 [(validate.rules).int64 = {gte: 0}];
-    uint64 bounded_usize = 18 [(validate.rules).uint64 = {gte: 0, lt: 10000}];
-    optional uint64 optional_bounded_usize = 19 [(validate.rules).uint64 = {gte: 0}];
-    int64 bounded_isize = 20 [(validate.rules).int64 = {gte: -100, lte: 100}];
-    optional int64 optional_positive_isize = 21 [(validate.rules).int64 = {gt: 0}];
-}
-
-message User {
-    string id = 1;
-    string email = 2 [(validate.rules).string = {email: true, min_len: 5, max_len: 255}];
-    string username = 3 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 3, max_len: 50}];
-    string password_hash = 4 [(validate.rules).string = {min_len: 1}];
-    repeated Role roles = 5;
-    bool is_active = 6;
+    User user = 2;
+    optional string bio = 3 [(validate.rules).string = {max_len: 2000}];
+    optional string avatar_url = 4 [(validate.rules).string = {uri: true}];
+    optional string twitter_handle = 5 [(validate.rules).string = {prefix: "@", max_len: 16}];
+    optional string github_handle = 6 [(validate.rules).string = {max_len: 39}];
     string created_at = 7;
-    string updated_at = 8;
 }
 
-message Tag {
+message NetworkTypes {
     string id = 1;
-    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    string slug = 3 [(validate.rules).string = {min_len: 1, max_len: 100, pattern: "^[^A-Z]*$"}];
-    optional string description = 4 [(validate.rules).string = {max_len: 500}];
-    uint32 post_count = 5 [(validate.rules).uint32 = {gte: 0}];
-}
-
-message EdgeCaseUser {
-    string id = 1;
-    string email = 2 [(validate.rules).string = {email: true, max_len: 255}];
-    string username = 3 [(validate.rules).string = {pattern: "^[a-zA-Z0-9]*$", min_len: 3, max_len: 30}];
-    string created_at = 4;
-    uint32 login_count = 5 [(validate.rules).uint32 = {gte: 0}];
-    optional double rating = 6 [(validate.rules).double = {gte: 0, lte: 5}];
+    string ip_address = 2 [(validate.rules).string = {ip: true}];
+    optional string optional_ip = 3 [(validate.rules).string = {ip: true}];
+    string mac_address = 4 [(validate.rules).string = {max_len: 17}];
+    optional string optional_mac = 5 [(validate.rules).string = {max_len: 17}];
+    string internal_api_url = 6 [(validate.rules).string = {uri: true, prefix: "https://"}];
+    optional string optional_storage_url = 7 [(validate.rules).string = {uri: true}];
+    string user_agent = 8 [(validate.rules).string = {min_len: 1, max_len: 500}];
+    optional string optional_user_agent = 9 [(validate.rules).string = {max_len: 500}];
 }
 
 message ValidatedAddress {
@@ -337,36 +418,6 @@ message ValidatedAddress {
     string country_code = 5 [(validate.rules).string = {pattern: "^[^a-z]*$", min_len: 2, max_len: 2}];
     optional double latitude = 6 [(validate.rules).double = {gte: -90, lte: 90}];
     optional double longitude = 7 [(validate.rules).double = {gte: -180, lte: 180}];
-}
-
-message PersonalInfoExtremes {
-    string id = 1;
-    string first_name = 2 [(validate.rules).string = {pattern: "^[a-zA-Z]*$", min_len: 1, max_len: 50}];
-    string last_name = 3 [(validate.rules).string = {min_len: 1, max_len: 50}];
-    string full_name = 4 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    optional string optional_nickname = 5 [(validate.rules).string = {max_len: 50}];
-    string phone = 6 [(validate.rules).string = {min_len: 1, max_len: 20}];
-    optional string optional_mobile = 7 [(validate.rules).string = {max_len: 20}];
-    string email = 8 [(validate.rules).string = {email: true, max_len: 255}];
-    optional string optional_work_email = 9 [(validate.rules).string = {email: true}];
-    string street = 10 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    string city = 11 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    string state = 12 [(validate.rules).string = {min_len: 1, max_len: 50}];
-    string postal_code = 13 [(validate.rules).string = {min_len: 1, max_len: 20}];
-    string country = 14 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    optional string optional_street = 15 [(validate.rules).string = {max_len: 200}];
-    optional string optional_city = 16 [(validate.rules).string = {max_len: 100}];
-}
-
-message Comment {
-    string id = 1;
-    Post post = 2;
-    Author author = 3;
-    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 1, max_len: 5000}];
-    optional string parent_comment_id = 5;
-    bool is_approved = 6;
-    string created_at = 7;
-    optional string edited_at = 8;
 }
 
 message ComplexPayment {
@@ -390,29 +441,23 @@ message ComplexPayment {
     optional string failure_reason = 18 [(validate.rules).string = {max_len: 500}];
 }
 
-message CaseValidation {
+message PersonalInfoExtremes {
     string id = 1;
-    optional string optional_lowercase = 2 [(validate.rules).string = {pattern: "^[^A-Z]*$"}];
-    optional string optional_uppercase = 3 [(validate.rules).string = {pattern: "^[^a-z]*$"}];
-    optional string optional_capitalized = 4;
-    optional string optional_uncapitalized = 5;
-    optional string optional_trimmed = 6;
-}
-
-message IntegerBounds {
-    string id = 1;
-    uint32 percentage = 2 [(validate.rules).uint32 = {gte: 1, lte: 100}];
-    int32 above_zero = 3 [(validate.rules).int32 = {gt: 0}];
-    uint32 under_thousand = 4 [(validate.rules).uint32 = {lt: 1000}];
-    optional uint32 optional_byte_value = 5 [(validate.rules).uint32 = {gte: 0, lte: 255}];
-    optional int32 optional_bounded = 6 [(validate.rules).int32 = {gte: -100}];
-}
-
-message MultiValidatorOptionalString {
-    string id = 1;
-    optional string username = 2 [(validate.rules).string = {min_len: 5, max_len: 100, prefix: "usr_"}];
-    optional string email = 3 [(validate.rules).string = {email: true, max_len: 255}];
-    optional string website = 4 [(validate.rules).string = {uri: true, max_len: 2000}];
+    string first_name = 2 [(validate.rules).string = {pattern: "^[a-zA-Z]*$", min_len: 1, max_len: 50}];
+    string last_name = 3 [(validate.rules).string = {min_len: 1, max_len: 50}];
+    string full_name = 4 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    optional string optional_nickname = 5 [(validate.rules).string = {max_len: 50}];
+    string phone = 6 [(validate.rules).string = {min_len: 1, max_len: 20}];
+    optional string optional_mobile = 7 [(validate.rules).string = {max_len: 20}];
+    string email = 8 [(validate.rules).string = {email: true, max_len: 255}];
+    optional string optional_work_email = 9 [(validate.rules).string = {email: true}];
+    string street = 10 [(validate.rules).string = {min_len: 1, max_len: 200}];
+    string city = 11 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    string state = 12 [(validate.rules).string = {min_len: 1, max_len: 50}];
+    string postal_code = 13 [(validate.rules).string = {min_len: 1, max_len: 20}];
+    string country = 14 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    optional string optional_street = 15 [(validate.rules).string = {max_len: 200}];
+    optional string optional_city = 16 [(validate.rules).string = {max_len: 100}];
 }
 
 message InnerValidated {
@@ -421,60 +466,20 @@ message InnerValidated {
     optional string optional_email = 3 [(validate.rules).string = {email: true}];
 }
 
+message Tag {
+    string id = 1;
+    string name = 2 [(validate.rules).string = {min_len: 1, max_len: 100}];
+    string slug = 3 [(validate.rules).string = {min_len: 1, max_len: 100, pattern: "^[^A-Z]*$"}];
+    optional string description = 4 [(validate.rules).string = {max_len: 500}];
+    uint32 post_count = 5 [(validate.rules).uint32 = {gte: 0}];
+}
+
 message Address {
     string street = 1 [(validate.rules).string = {min_len: 1, max_len: 200}];
     string city = 2 [(validate.rules).string = {min_len: 1, max_len: 100}];
     string state = 3 [(validate.rules).string = {max_len: 100}];
     string postal_code = 4 [(validate.rules).string = {min_len: 1, max_len: 20}];
     string country = 5 [(validate.rules).string = {min_len: 1, min_len: 2, max_len: 2, pattern: "^[^a-z]*$"}];
-}
-
-message EdgeCaseComment {
-    string id = 1;
-    EdgeCasePost post = 2;
-    EdgeCaseUser author = 3;
-    string content = 4 [(validate.rules).string = {min_len: 1, min_len: 1, max_len: 10000}];
-    string created_at = 5;
-    optional string edited_at = 6;
-    uint32 like_count = 7 [(validate.rules).uint32 = {gte: 0}];
-    optional string parent_comment_id = 8;
-    bool is_approved = 9;
-    optional string author_ip = 10 [(validate.rules).string = {ip: true}];
-}
-
-message ExtremeFloatValidation {
-    string id = 1;
-    float multi_constrained_f_32 = 2 [(validate.rules).float = {gt: 0, gte: 0.001, lte: 999.999, lt: 1000, gt: 0}];
-    optional float optional_f_32 = 3 [(validate.rules).float = {gt: 0, lt: 100}];
-    double normalized_f_64 = 4 [(validate.rules).double = {gte: 0, lte: 1, gte: 0}];
-    optional double optional_normalized_f_64 = 5 [(validate.rules).double = {gte: 0, lte: 1}];
-    double negative_f_64 = 6 [(validate.rules).double = {lt: 0, gt: -1000, lt: 0}];
-    optional double optional_negative_f_64 = 7 [(validate.rules).double = {lt: 0}];
-    double currency_amount = 8 [(validate.rules).double = {gte: 0, lt: 1000000}];
-    optional double optional_currency = 9 [(validate.rules).double = {gt: 0}];
-    double percentage = 10 [(validate.rules).double = {gte: 0, lte: 100}];
-    optional double optional_percentage = 11 [(validate.rules).double = {gte: 0, lte: 100}];
-    double latitude = 12 [(validate.rules).double = {gte: -90, lte: 90}];
-    double longitude = 13 [(validate.rules).double = {gte: -180, lte: 180}];
-    optional double optional_latitude = 14 [(validate.rules).double = {gte: -90, lte: 90}];
-    optional double optional_longitude = 15 [(validate.rules).double = {gte: -180, lte: 180}];
-}
-
-message Author {
-    string id = 1;
-    User user = 2;
-    optional string bio = 3 [(validate.rules).string = {max_len: 2000}];
-    optional string avatar_url = 4 [(validate.rules).string = {uri: true}];
-    optional string twitter_handle = 5 [(validate.rules).string = {prefix: "@", max_len: 16}];
-    optional string github_handle = 6 [(validate.rules).string = {max_len: 39}];
-    string created_at = 7;
-}
-
-message ValidatedContact {
-    string name = 1 [(validate.rules).string = {min_len: 1, max_len: 100}];
-    string email = 2 [(validate.rules).string = {email: true}];
-    optional string phone = 3 [(validate.rules).string = {max_len: 20}];
-    optional string title = 4 [(validate.rules).string = {max_len: 100}];
 }
 
 message AllIntegerTypes {
@@ -491,17 +496,12 @@ message AllIntegerTypes {
     int64 non_negative_isize = 11 [(validate.rules).int64 = {gte: 0}];
 }
 
-message OuterWithNestedValidator {
+message IntegerBounds {
     string id = 1;
-    InnerValidated inner = 2;
-    optional InnerValidated optional_inner = 3;
-    repeated InnerValidated inner_list = 4;
-}
-
-message CartItem {
-    string product_id = 1 [(validate.rules).string = {min_len: 1}];
-    string product_name = 2 [(validate.rules).string = {min_len: 1, max_len: 200}];
-    uint32 quantity = 3 [(validate.rules).uint32 = {gt: 0}];
-    double unit_price = 4 [(validate.rules).double = {gt: 0}];
+    uint32 percentage = 2 [(validate.rules).uint32 = {gte: 1, lte: 100}];
+    int32 above_zero = 3 [(validate.rules).int32 = {gt: 0}];
+    uint32 under_thousand = 4 [(validate.rules).uint32 = {lt: 1000}];
+    optional uint32 optional_byte_value = 5 [(validate.rules).uint32 = {gte: 0, lte: 255}];
+    optional int32 optional_bounded = 6 [(validate.rules).int32 = {gte: -100}];
 }
 

@@ -5,7 +5,6 @@
 //! 2. TypeScript type definitions are generated correctly
 //! 3. Database schema statements are generated correctly
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -370,25 +369,25 @@ fn test_persistable_structs_have_id() {
 
     for (file_path, structs) in persistable_structs {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         for struct_name in structs {
             // Find the struct definition
             let pattern = format!("pub struct {}", struct_name);
             let struct_start = content
                 .find(&pattern)
-                .expect(&format!("{} struct should exist in {}", struct_name, file_path));
+                .unwrap_or_else(|| panic!("{} struct should exist in {}", struct_name, file_path));
 
             // Find the struct body
             let brace_start = content[struct_start..]
                 .find("{")
                 .map(|i| struct_start + i)
-                .expect(&format!("{} should have opening brace", struct_name));
+                .unwrap_or_else(|| panic!("{} should have opening brace", struct_name));
 
             let brace_end = content[brace_start..]
                 .find("}")
                 .map(|i| brace_start + i)
-                .expect(&format!("{} should have closing brace", struct_name));
+                .unwrap_or_else(|| panic!("{} should have closing brace", struct_name));
 
             let struct_body = &content[brace_start..=brace_end];
 
@@ -414,7 +413,7 @@ fn test_mock_data_values() {
 
     for file_path in files {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         // Find all mock_data attributes
         for line in content.lines() {
@@ -426,7 +425,7 @@ fn test_mock_data_values() {
 
                 let n: u32 = n_str
                     .parse()
-                    .expect(&format!("mock_data n value should be valid integer: {}", n_str));
+                    .unwrap_or_else(|_| panic!("mock_data n value should be valid integer: {}", n_str));
 
                 assert!(n > 0, "mock_data n value should be positive");
                 assert!(n <= 1000, "mock_data n value should be reasonable (<= 1000)");

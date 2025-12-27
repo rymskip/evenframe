@@ -1038,7 +1038,7 @@ mod tests {
         assert_ne!(info.comp_of.get("B"), info.comp_of.get("C"));
 
         // None should be recursive
-        for (_, (is_recursive, _)) in &info.meta {
+        for (is_recursive, _) in info.meta.values() {
             assert!(!is_recursive);
         }
     }

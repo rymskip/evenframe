@@ -456,11 +456,11 @@ impl<'a> Mockmaker<'a> {
             }
 
             // Create CoordinationPair for each unique coordination
-            for (_type_key, typed_coordinations) in coordination_by_type {
+            for typed_coordinations in coordination_by_type.values() {
                 // Group coordinations with identical rules
                 let mut processed = HashSet::new();
 
-                for (_table_name, coordination) in &typed_coordinations {
+                for (_, coordination) in typed_coordinations {
                     let coord_str = format!("{:?}", coordination);
                     if processed.contains(&coord_str) {
                         continue;
@@ -524,7 +524,7 @@ impl<'a> Mockmaker<'a> {
                     let mut coordinated_fields = Vec::new();
                     for field_name in &field_names {
                         // Check all tables with this coordination type to find which ones have these fields
-                        for (t_name, t_coord) in &typed_coordinations {
+                        for (t_name, t_coord) in typed_coordinations {
                             // Only add if this table's coordination includes this field
                             let t_fields = match t_coord {
                                 Coordination::InitializeEqual(f) => f.clone(),
@@ -547,7 +547,7 @@ impl<'a> Mockmaker<'a> {
                                         state,
                                         zip,
                                         country,
-                                    } => vec![city, state, zip, country]
+                                    } => [city, state, zip, country]
                                         .into_iter()
                                         .filter(|s| !s.is_empty())
                                         .cloned()
@@ -556,7 +556,7 @@ impl<'a> Mockmaker<'a> {
                                         first_name,
                                         last_name,
                                         full_name,
-                                    } => vec![first_name, last_name, full_name]
+                                    } => [first_name, last_name, full_name]
                                         .into_iter()
                                         .filter(|s| !s.is_empty())
                                         .cloned()
@@ -566,7 +566,7 @@ impl<'a> Mockmaker<'a> {
                                         longitude,
                                         city,
                                         country,
-                                    } => vec![latitude, longitude, city, country]
+                                    } => [latitude, longitude, city, country]
                                         .into_iter()
                                         .filter(|s| !s.is_empty())
                                         .cloned()

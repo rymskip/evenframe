@@ -4,6 +4,39 @@ use std::{env, fs, path::PathBuf};
 use toml;
 use tracing::{debug, error, info, trace, warn};
 
+/// Source of truth for type definitions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceOfTruth {
+    /// Rust structs with #[derive(Evenframe)] or #[apply(...)]
+    #[default]
+    Rust,
+    /// FlatBuffers schema files (.fbs)
+    Flatbuffers,
+    /// Protocol Buffers schema files (.proto)
+    Protobuf,
+}
+
+/// Configuration for schema source files (FlatBuffers/Protobuf)
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SourceConfig {
+    /// Primary source of truth for type definitions
+    #[serde(default)]
+    pub primary: SourceOfTruth,
+
+    /// Glob pattern for FlatBuffers schema files (e.g., "./schemas/*.fbs")
+    #[serde(default)]
+    pub flatbuffers_input: Option<String>,
+
+    /// Glob pattern for Protocol Buffers schema files (e.g., "./schemas/*.proto")
+    #[serde(default)]
+    pub protobuf_input: Option<String>,
+
+    /// Additional include paths for schema imports
+    #[serde(default)]
+    pub include_paths: Vec<String>,
+}
+
 /// General configuration for Evenframe operations
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GeneralConfig {
@@ -11,6 +44,10 @@ pub struct GeneralConfig {
     /// These are used with #[apply(...)] and automatically include Evenframe
     #[serde(default)]
     pub apply_aliases: Vec<String>,
+
+    /// Source of truth configuration
+    #[serde(default)]
+    pub source: SourceConfig,
 }
 
 /// Unified configuration for Evenframe operations
@@ -168,6 +205,7 @@ mod tests {
     fn test_general_config_serialize() {
         let config = GeneralConfig {
             apply_aliases: vec!["Test".to_string()],
+            source: SourceConfig::default(),
         };
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("apply_aliases"));

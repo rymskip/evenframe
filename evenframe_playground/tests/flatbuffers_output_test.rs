@@ -67,10 +67,7 @@ fn run_evenframe() -> Result<std::process::Output, std::io::Error> {
             "Failed to build evenframe: {}",
             String::from_utf8_lossy(&build_output.stderr)
         );
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to build evenframe",
-        ));
+        return Err(std::io::Error::other("Failed to build evenframe"));
     }
 
     // Run evenframe in the playground directory

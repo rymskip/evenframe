@@ -3,5 +3,7 @@ pub mod config;
 pub mod effect;
 pub mod effect_template;
 pub mod flatbuffers;
+pub mod flatbuffers_parser;
 pub mod macroforge;
 pub mod protobuf;
+pub mod protobuf_parser;

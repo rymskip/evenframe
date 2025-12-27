@@ -31,6 +31,7 @@ evenframe_derive = { version = "0.1.0", path = "../evenframe_derive" }
 tracing-subscriber = "0.3"
 walkdir = "2.5.0"
 linkme = "0.3.33"
+clap = { version = "4.5", features = ["derive", "env"] }
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -1,6 +1,6 @@
-/// Edge case tests for validator macro bugs
-/// Tests various combinations of validators with Option types, integer types,
-/// nested structures, and multiple validators on the same field.
+//! Edge case tests for validator macro bugs
+//! Tests various combinations of validators with Option types, integer types,
+//! nested structures, and multiple validators on the same field.
 
 use evenframe::Evenframe;
 use serde::Serialize;
@@ -453,7 +453,7 @@ mod tests {
             positive_float: 1.5,
             non_negative_float: 0.0,
             normalized: 0.5,
-            optional_positive_float: Some(3.14),
+            optional_positive_float: Some(3.5),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("1.5"));

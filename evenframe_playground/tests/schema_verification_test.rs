@@ -95,8 +95,7 @@ fn test_user_table_schema() {
         ("updated_at", "String", "datetime"),
     ];
 
-    for (field_name, rust_type, _surreal_type) in &expected_fields {
-        let pattern = format!("pub {}: {}", field_name, rust_type);
+    for (field_name, _rust_type, _surreal_type) in &expected_fields {
         // Check that the field exists (we're testing the source, not generated schema)
         assert!(
             auth_content.contains(&format!("pub {}:", field_name)),
@@ -390,7 +389,7 @@ fn test_mock_data_counts() {
 
     for (file_path, struct_name, expected_n) in &expected_counts {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         // Find the struct and its mock_data attribute
         let struct_pattern = format!("pub struct {}", struct_name);
@@ -435,7 +434,7 @@ fn test_edge_directions() {
 
     for file_path in files {
         let content = fs::read_to_string(playground_dir.join(file_path))
-            .expect(&format!("Failed to read {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
         for line in content.lines() {
             if line.contains("#[edge(") {

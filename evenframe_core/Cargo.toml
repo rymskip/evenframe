@@ -65,6 +65,12 @@ ordered-float = { version = "5.0.0", features = ["serde"] }
 derive-syn-parse = "0.2.0"
 linkme = "0.3.33"
 once_cell = "1.21.3"
+walkdir = "2.5"
+
+# For FlatBuffers/Protobuf parsing
+logos = "0.15"
+protox = "0.8"
+prost-types = "0.13"
 
 # For ts_template! macro experiment
 macroforge_ts = "0.1.17"
