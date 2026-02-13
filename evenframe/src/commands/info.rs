@@ -242,7 +242,8 @@ fn show_types(format: &InfoFormat) -> Result<()> {
 }
 
 fn show_schema(_format: &InfoFormat) -> Result<()> {
-    let (enums, tables, objects) = config_builders::build_all_configs();
+    let build_config = config_builders::BuildConfig::from_toml()?;
+    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
 
     println!("\n=== Schema Summary ===\n");
     println!("Tables: {}", tables.len());

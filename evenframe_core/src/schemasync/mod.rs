@@ -176,6 +176,12 @@ impl<'a> Schemasync<'a> {
             .take()
             .ok_or_else(|| EvenframeError::config("Config failed to initialize"))?;
 
+        if tables.is_empty() {
+            return Err(EvenframeError::config(
+                "No Evenframe tables found. Ensure your structs have #[derive(Evenframe)] and contain an `id` field.",
+            ));
+        }
+
         info!(
             "Pipeline validation completed - {} tables, {} objects, {} enums",
             tables.len(),
@@ -283,11 +289,7 @@ impl<'a> Schemasync<'a> {
         })?;
         debug!("Schema changes filtering completed");
 
-        if self
-            .schemasync_config
-            .unwrap_or(EvenframeConfig::new()?.schemasync)
-            .should_generate_mocks
-        {
+        if config.should_generate_mocks {
             info!("Generating mock data");
             mockmaker.generate_mock_data().await.map_err(|e| {
                 error!("Failed to generate mock data: {}", e);

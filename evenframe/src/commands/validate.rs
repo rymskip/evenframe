@@ -88,7 +88,8 @@ fn validate_types() -> Result<(usize, usize, usize)> {
         warn!("No Evenframe types found in workspace");
     }
 
-    let (enums, tables, objects) = config_builders::build_all_configs();
+    let build_config = config_builders::BuildConfig::from_toml()?;
+    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
     Ok((enums.len(), tables.len(), objects.len()))
 }
 

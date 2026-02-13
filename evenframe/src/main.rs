@@ -53,8 +53,9 @@ fn init_logging(verbose: u8, quiet: bool) {
         Level::ERROR
     } else {
         match verbose {
-            0 => Level::INFO,
-            1 => Level::DEBUG,
+            0 => Level::WARN,
+            1 => Level::INFO,
+            2 => Level::DEBUG,
             _ => Level::TRACE,
         }
     };

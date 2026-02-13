@@ -44,7 +44,8 @@ pub async fn run(_cli: &Cli, args: GenerateArgs) -> Result<()> {
 
     // Build all configs
     info!("Building all configs...");
-    let (enums, tables, objects) = config_builders::build_all_configs();
+    let build_config = config_builders::BuildConfig::from_toml()?;
+    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
     info!(
         "Config building complete. Found {} enums, {} tables, {} objects",
         enums.len(),

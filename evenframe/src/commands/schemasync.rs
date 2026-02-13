@@ -10,7 +10,8 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
     info!("Starting schema synchronization");
 
     // Build all configs
-    let (enums, tables, objects) = config_builders::build_all_configs();
+    let build_config = config_builders::BuildConfig::from_toml()?;
+    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
 
     info!(
         "Found {} enums, {} tables, {} objects",

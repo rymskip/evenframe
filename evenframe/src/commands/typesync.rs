@@ -32,7 +32,8 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     };
 
     // Build all configs
-    let (enums, tables, objects) = config_builders::build_all_configs();
+    let build_config = config_builders::BuildConfig::from_toml()?;
+    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
     let structs = config_builders::merge_tables_and_objects(&tables, &objects);
 
     info!(

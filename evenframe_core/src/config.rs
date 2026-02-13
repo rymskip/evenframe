@@ -91,12 +91,12 @@ impl EvenframeConfig {
         // Process environment variable substitutions for all database-related fields
         // TODO: This should find all environment variable references in the config, not just these hardcoded ones
         debug!("Substituting environment variables in configuration");
-        config.schemasync.database.url = Self::substitute_env_vars(&config.schemasync.database.url);
+        config.schemasync.database.url = Self::substitute_env_vars(&config.schemasync.database.url)?;
         config.schemasync.database.namespace =
-            Self::substitute_env_vars(&config.schemasync.database.namespace);
+            Self::substitute_env_vars(&config.schemasync.database.namespace)?;
         config.schemasync.database.database =
-            Self::substitute_env_vars(&config.schemasync.database.database);
-        config.typesync.output_path = Self::substitute_env_vars(&config.typesync.output_path);
+            Self::substitute_env_vars(&config.schemasync.database.database)?;
+        config.typesync.output_path = Self::substitute_env_vars(&config.typesync.output_path)?;
 
         info!("Configuration loaded successfully");
         debug!(
@@ -131,42 +131,48 @@ impl EvenframeConfig {
     }
     /// Substitute environment variables in config strings
     /// Supports ${VAR_NAME:-default} syntax
-    fn substitute_env_vars(value: &str) -> String {
+    fn substitute_env_vars(value: &str) -> Result<String> {
         trace!("Substituting environment variables in: {}", value);
         let mut result = value.to_string();
 
         // Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
         let re = regex::Regex::new(r"\$\{([^}:]+)(?::-([^}]*))?\}")
-            .expect("There were no matches for the given environment variables");
+            .expect("Invalid regex for environment variable substitution");
 
         for cap in re.captures_iter(value) {
             let var_name = &cap[1];
-            let default_value = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            let default_value = cap.get(2).map(|m| m.as_str());
 
             trace!("Looking for environment variable: {}", var_name);
 
-            let replacement = env::var(var_name)
-                .inspect(|_| {
-                    if default_value.is_empty() {
+            let replacement = match env::var(var_name) {
+                Ok(val) => {
+                    debug!("Resolved environment variable: {}", var_name);
+                    val
+                }
+                Err(_) => match default_value {
+                    Some(default) => {
+                        warn!(
+                            "Environment variable {} not set, using default: {}",
+                            var_name, default
+                        );
+                        default.to_string()
+                    }
+                    None => {
                         error!(
                             "Environment variable {} not set and no default provided",
                             var_name
                         );
-                    } else {
-                        warn!(
-                            "Environment variable {} not set, using default: {}",
-                            var_name, default_value
-                        );
+                        return Err(EvenframeError::EnvVarNotSet(var_name.to_string()));
                     }
-                })
-                .unwrap_or_else(|_| panic!("{var_name} was not set"));
+                },
+            };
 
             let full_match = &cap[0];
-            debug!("Replacing {} with value from {}", full_match, var_name);
             result = result.replace(full_match, &replacement);
         }
 
-        result
+        Ok(result)
     }
 }
 
@@ -217,7 +223,7 @@ mod tests {
     #[test]
     fn test_substitute_env_vars_basic() {
         temp_env::with_var("TEST_VAR_BASIC", Some("hello"), || {
-            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_BASIC}");
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_BASIC}").unwrap();
             assert_eq!(result, "hello");
         });
     }
@@ -225,7 +231,7 @@ mod tests {
     #[test]
     fn test_substitute_env_vars_with_surrounding_text() {
         temp_env::with_var("TEST_VAR_SURROUND", Some("world"), || {
-            let result = EvenframeConfig::substitute_env_vars("hello ${TEST_VAR_SURROUND}!");
+            let result = EvenframeConfig::substitute_env_vars("hello ${TEST_VAR_SURROUND}!").unwrap();
             assert_eq!(result, "hello world!");
         });
     }
@@ -239,7 +245,7 @@ mod tests {
             ],
             || {
                 let result =
-                    EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}");
+                    EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}").unwrap();
                 assert_eq!(result, "foo:bar");
             },
         );
@@ -247,39 +253,39 @@ mod tests {
 
     #[test]
     fn test_substitute_env_vars_no_match() {
-        let result = EvenframeConfig::substitute_env_vars("no variables here");
+        let result = EvenframeConfig::substitute_env_vars("no variables here").unwrap();
         assert_eq!(result, "no variables here");
     }
 
     #[test]
     fn test_substitute_env_vars_empty_string() {
-        let result = EvenframeConfig::substitute_env_vars("");
+        let result = EvenframeConfig::substitute_env_vars("").unwrap();
         assert_eq!(result, "");
     }
 
     #[test]
     fn test_substitute_env_vars_url_pattern() {
         temp_env::with_var("TEST_DB_URL", Some("http://localhost:8000"), || {
-            let result = EvenframeConfig::substitute_env_vars("${TEST_DB_URL}");
+            let result = EvenframeConfig::substitute_env_vars("${TEST_DB_URL}").unwrap();
             assert_eq!(result, "http://localhost:8000");
         });
     }
 
     #[test]
-    #[should_panic(expected = "was not set")]
-    fn test_substitute_env_vars_missing_panics() {
+    fn test_substitute_env_vars_missing_returns_error() {
         // Clear the env var to make sure it doesn't exist
         // SAFETY: This is a test environment where we control access to env vars
         unsafe {
             std::env::remove_var("DEFINITELY_NOT_SET_VAR_12345");
         }
-        let _ = EvenframeConfig::substitute_env_vars("${DEFINITELY_NOT_SET_VAR_12345}");
+        let result = EvenframeConfig::substitute_env_vars("${DEFINITELY_NOT_SET_VAR_12345}");
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_substitute_env_vars_with_underscores() {
         temp_env::with_var("TEST_VAR_WITH_UNDERSCORES", Some("value"), || {
-            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_WITH_UNDERSCORES}");
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_WITH_UNDERSCORES}").unwrap();
             assert_eq!(result, "value");
         });
     }
@@ -287,7 +293,7 @@ mod tests {
     #[test]
     fn test_substitute_env_vars_with_numbers() {
         temp_env::with_var("TEST_VAR_123", Some("num_value"), || {
-            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_123}");
+            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_123}").unwrap();
             assert_eq!(result, "num_value");
         });
     }
@@ -300,7 +306,7 @@ mod tests {
                 ("TEST_ADJ2", Some("b")),
             ],
             || {
-                let result = EvenframeConfig::substitute_env_vars("${TEST_ADJ1}${TEST_ADJ2}");
+                let result = EvenframeConfig::substitute_env_vars("${TEST_ADJ1}${TEST_ADJ2}").unwrap();
                 assert_eq!(result, "ab");
             },
         );
@@ -308,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_substitute_env_vars_preserves_non_matching_braces() {
-        let result = EvenframeConfig::substitute_env_vars("{not_a_var}");
+        let result = EvenframeConfig::substitute_env_vars("{not_a_var}").unwrap();
         assert_eq!(result, "{not_a_var}");
     }
 

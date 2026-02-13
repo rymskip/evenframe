@@ -3,5 +3,5 @@
 //! This module re-exports functionality from `evenframe_core::tooling`.
 
 pub use evenframe_core::tooling::{
-    build_all_configs_default as build_all_configs, merge_tables_and_objects,
+    build_all_configs, merge_tables_and_objects, BuildConfig,
 };
