@@ -4,7 +4,7 @@ use serde::{
     de::{self, MapAccess, Visitor},
 };
 use std::{marker::PhantomData, ops::Deref};
-use surrealdb::RecordId;
+use surrealdb::types::{RecordId, ToSql};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvenframeRecordId(pub RecordId);
@@ -12,9 +12,9 @@ pub struct EvenframeRecordId(pub RecordId);
 impl From<String> for EvenframeRecordId {
     fn from(value: String) -> Self {
         let mut parts = value.splitn(2, ':');
-        let key = parts.next().unwrap_or("");
-        let val = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
-        EvenframeRecordId((key, val).into())
+        let table = parts.next().unwrap_or("");
+        let key = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
+        EvenframeRecordId(RecordId::new(table, key))
     }
 }
 
@@ -41,7 +41,7 @@ impl fmt::Display for EvenframeRecordId {
         write!(
             f,
             "{}",
-            self.0.to_string().replace("⟩", "").replace("⟨", "")
+            self.0.to_sql().replace("⟩", "").replace("⟨", "")
         )
     }
 }
@@ -50,8 +50,7 @@ impl serde::Serialize for EvenframeRecordId {
     where
         S: serde::Serializer,
     {
-        // Use the to_string method on the inner RecordId
-        serializer.serialize_str(&self.0.to_string().replace(['⟨', '⟩'], ""))
+        serializer.serialize_str(&self.0.to_sql().replace(['⟨', '⟩'], ""))
     }
 }
 impl<'de> Deserialize<'de> for EvenframeRecordId {
@@ -74,9 +73,9 @@ impl<'de> Deserialize<'de> for EvenframeRecordId {
                 E: de::Error,
             {
                 let mut parts = value.splitn(2, ':');
-                let key = parts.next().unwrap_or("");
-                let val = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
-                Ok(EvenframeRecordId((key, val).into()))
+                let table = parts.next().unwrap_or("");
+                let key = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
+                Ok(EvenframeRecordId(RecordId::new(table, key)))
             }
 
             fn visit_string<E>(self, value: String) -> Result<Self::Value, E>

@@ -122,8 +122,8 @@ impl<'a> Schemasync<'a> {
         debug!("Retrieved database credentials from environment");
 
         db.signin(Root {
-            username: &username,
-            password: &password,
+            username,
+            password,
         })
         .await
         .map_err(|e| {

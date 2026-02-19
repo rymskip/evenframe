@@ -234,7 +234,7 @@ pub fn field_type_to_surql_default(
         FieldType::EvenframeDuration => {
             // Default duration of 0 nanoseconds
             trace!("Generating SURQL default for EvenframeDuration");
-            "duration::from::nanos(0)".to_string()
+            "duration::from_nanos(0)".to_string()
         }
         FieldType::Timezone => {
             // Default timezone UTC

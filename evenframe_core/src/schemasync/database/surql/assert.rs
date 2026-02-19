@@ -23,37 +23,37 @@ pub fn generate_assert_from_validators(validators: &[Validator], value_var: &str
                 trace!("Processing string validator: {:?}", sv);
                 match sv {
                     StringValidator::Email => {
-                        assertions.push(format!("string::is::email({})", value_var))
+                        assertions.push(format!("string::is_email({})", value_var))
                     }
                     StringValidator::Alpha => {
-                        assertions.push(format!("string::is::alpha({})", value_var))
+                        assertions.push(format!("string::is_alpha({})", value_var))
                     }
                     StringValidator::Alphanumeric => {
-                        assertions.push(format!("string::is::alphanum({})", value_var))
+                        assertions.push(format!("string::is_alphanum({})", value_var))
                     }
                     StringValidator::Hex => {
-                        assertions.push(format!("string::is::hexadecimal({})", value_var))
+                        assertions.push(format!("string::is_hexadecimal({})", value_var))
                     }
                     StringValidator::Ip => {
-                        assertions.push(format!("string::is::ip({})", value_var))
+                        assertions.push(format!("string::is_ip({})", value_var))
                     }
                     StringValidator::IpV4 => {
-                        assertions.push(format!("string::is::ipv4({})", value_var))
+                        assertions.push(format!("string::is_ipv4({})", value_var))
                     }
                     StringValidator::IpV6 => {
-                        assertions.push(format!("string::is::ipv6({})", value_var))
+                        assertions.push(format!("string::is_ipv6({})", value_var))
                     }
                     StringValidator::Url => {
-                        assertions.push(format!("string::is::url({})", value_var))
+                        assertions.push(format!("string::is_url({})", value_var))
                     }
                     StringValidator::Uuid => {
-                        assertions.push(format!("string::is::uuid({})", value_var))
+                        assertions.push(format!("string::is_uuid({})", value_var))
                     }
                     StringValidator::Semver => {
-                        assertions.push(format!("string::is::semver({})", value_var))
+                        assertions.push(format!("string::is_semver({})", value_var))
                     }
                     StringValidator::Digits => {
-                        assertions.push(format!("string::is::numeric({})", value_var))
+                        assertions.push(format!("string::is_numeric({})", value_var))
                     }
                     StringValidator::MinLength(len) => {
                         assertions.push(format!("string::len({}) >= {}", value_var, len))
@@ -122,7 +122,7 @@ pub fn generate_assert_from_validators(validators: &[Validator], value_var: &str
                         value_var, start.0, value_var, end.0
                     )),
                     NumberValidator::Int => {
-                        assertions.push(format!("type::is::int({})", value_var))
+                        assertions.push(format!("type::is_int({})", value_var))
                     }
                     NumberValidator::Positive => assertions.push(format!("{} > 0", value_var)),
                     NumberValidator::NonNegative => assertions.push(format!("{} >= 0", value_var)),

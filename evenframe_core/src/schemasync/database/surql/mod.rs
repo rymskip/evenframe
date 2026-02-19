@@ -122,8 +122,8 @@ impl DatabaseProvider for SurrealdbProvider {
             debug!("Signing in to SurrealDB as {}", username);
             client
                 .signin(Root {
-                    username,
-                    password,
+                    username: username.to_string(),
+                    password: password.to_string(),
                 })
                 .await
                 .map_err(|e| EvenframeError::database(format!(
@@ -209,7 +209,7 @@ impl DatabaseProvider for SurrealdbProvider {
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let query = format!("INFO FOR TABLE {}", table_name);
-        let response: surrealdb::Response = client
+        let response: surrealdb::IndexedResults = client
             .query(&query)
             .await
             .map_err(|e| EvenframeError::database(format!(

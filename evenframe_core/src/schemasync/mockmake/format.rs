@@ -260,8 +260,8 @@ impl From<Format> for Regex {
                 // 15 minutes = 900,000,000,000 ns
                 // 1 hour = 3,600,000,000,000 ns
                 // 5 hours = 18,000,000,000,000 ns
-                // Exhaustive list of all valid values wrapped in duration::from::nanos():
-                r"^(duration::from::nanos\(3600000000000\)|duration::from::nanos\(4500000000000\)|duration::from::nanos\(5400000000000\)|duration::from::nanos\(6300000000000\)|duration::from::nanos\(7200000000000\)|duration::from::nanos\(8100000000000\)|duration::from::nanos\(9000000000000\)|duration::from::nanos\(9900000000000\)|duration::from::nanos\(10800000000000\)|duration::from::nanos\(11700000000000\)|duration::from::nanos\(12600000000000\)|duration::from::nanos\(13500000000000\)|duration::from::nanos\(14400000000000\)|duration::from::nanos\(15300000000000\)|duration::from::nanos\(16200000000000\)|duration::from::nanos\(17100000000000\)|duration::from::nanos\(18000000000000\))$"
+                // Exhaustive list of all valid values wrapped in duration::from_nanos():
+                r"^(duration::from_nanos\(3600000000000\)|duration::from_nanos\(4500000000000\)|duration::from_nanos\(5400000000000\)|duration::from_nanos\(6300000000000\)|duration::from_nanos\(7200000000000\)|duration::from_nanos\(8100000000000\)|duration::from_nanos\(9000000000000\)|duration::from_nanos\(9900000000000\)|duration::from_nanos\(10800000000000\)|duration::from_nanos\(11700000000000\)|duration::from_nanos\(12600000000000\)|duration::from_nanos\(13500000000000\)|duration::from_nanos\(14400000000000\)|duration::from_nanos\(15300000000000\)|duration::from_nanos\(16200000000000\)|duration::from_nanos\(17100000000000\)|duration::from_nanos\(18000000000000\))$"
             }
         };
 

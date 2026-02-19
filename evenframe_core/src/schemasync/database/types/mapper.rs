@@ -101,7 +101,7 @@ pub trait TypeMapper: Send + Sync {
     ///
     /// PostgreSQL: INTERVAL '1 day 2 hours'
     /// MySQL/SQLite: nanoseconds as integer
-    /// SurrealDB: duration::from::nanos(...)
+    /// SurrealDB: duration::from_nanos(...)
     fn format_duration(&self, nanos: i64) -> String;
 
     /// Format an array value for this database.

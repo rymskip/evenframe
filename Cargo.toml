@@ -9,6 +9,6 @@ serde_json = "1.0.142"
 regex = "1.11.1"
 syn = { version = "2.0.104", features = ["full"] }
 tracing = "0.1.41"
-convert_case = "0.10.0"
+convert_case = "0.11.0"
 tokio = { version = "1.47.1", features = ["full"] }
-toml = "0.9.5"
+toml = "1.0.3"

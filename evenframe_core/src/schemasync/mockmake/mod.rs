@@ -124,14 +124,24 @@ impl<'a> Mockmaker<'a> {
             );
             evenframe_log!(&format!("{:?}", response), "record_diffs.log", true);
 
-            #[derive(serde::Deserialize, Debug)]
+            let existing_values: Vec<serde_json::Value> = response.take(0).unwrap_or_else(|_| {
+                panic!("Something went wrong getting the record ids: {response:?}")
+            });
+
             struct IdResponse {
                 id: EvenframeRecordId,
             }
 
-            let existing_ids: Vec<IdResponse> = response.take(0).unwrap_or_else(|_| {
-                panic!("Something went wrong getting the record ids: {response:?}")
-            });
+            let existing_ids: Vec<IdResponse> = existing_values
+                .into_iter()
+                .filter_map(|v| {
+                    v.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id_str| IdResponse {
+                            id: EvenframeRecordId::from(id_str.to_string()),
+                        })
+                })
+                .collect();
 
             let mut ids = Vec::new();
             let existing_count = existing_ids.len();

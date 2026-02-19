@@ -63,11 +63,11 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
         }
         FieldType::EvenframeDuration => {
             if let Some(nanos) = value.as_i64() {
-                format!("duration::from::nanos({})", nanos)
+                format!("duration::from_nanos({})", nanos)
             } else if let Some(nanos) = value.as_u64() {
-                format!("duration::from::nanos({})", nanos)
+                format!("duration::from_nanos({})", nanos)
             } else {
-                "duration::from::nanos(0)".to_string()
+                "duration::from_nanos(0)".to_string()
             }
         }
         FieldType::Timezone => {

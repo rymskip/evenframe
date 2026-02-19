@@ -1,6 +1,6 @@
 use crate::evenframe_log;
 use serde_json::Value;
-use surrealdb::Response;
+use surrealdb::IndexedResults;
 use tracing::{debug, error, info, trace};
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ pub enum QueryErrorType {
 /// - Partial failures (some statements succeed, some fail)
 /// - Empty results when records should have been created
 pub async fn validate_surql_response(
-    mut response: Response,
+    mut response: IndexedResults,
     statements: &str,
     expected_operation: &str,
 ) -> Result<Vec<Value>, Vec<QueryValidationError>> {
@@ -48,12 +48,10 @@ pub async fn validate_surql_response(
 
     // Process each result from the response
     for (index, statement) in statement_lines.iter().enumerate() {
-        match response.take::<surrealdb::Value>(index) {
+        match response.take::<surrealdb::types::Value>(index) {
             Ok(surreal_value) => {
-                // Convert SurrealDB Value to serde_json Value
-                // Serialize surrealdb::Value to serde_json::Value
                 let value: Value =
-                    serde_json::to_value(&surreal_value).unwrap_or_else(|_| Value::Null);
+                    serde_json::to_value(&surreal_value).unwrap_or(Value::Null);
                 // Check if the result is an error disguised as success
                 if let Some(obj) = value.as_object() {
                     // Check for error indicators in the response
@@ -94,7 +92,8 @@ pub async fn validate_surql_response(
                 results.push(value);
             }
             Err(e) => {
-                let error_type = match e.to_string().to_lowercase() {
+                let error_string = e.to_string().to_lowercase();
+                let error_type = match error_string {
                     s if s.contains("parse") => QueryErrorType::ParseError,
                     s if s.contains("validation") || s.contains("schema") => {
                         QueryErrorType::ValidationError

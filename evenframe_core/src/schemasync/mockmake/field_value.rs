@@ -104,7 +104,7 @@ impl<'a> FieldValueGenerator<'a> {
                                 value_stack.push(format!("d'{}'", chrono::Utc::now().to_rfc3339()))
                             }
                             FieldType::EvenframeDuration => value_stack.push(format!(
-                                "duration::from::nanos({})",
+                                "duration::from_nanos({})",
                                 rng.random_range(0..86_400_000_000_000i64)
                             )),
                             FieldType::Timezone => {

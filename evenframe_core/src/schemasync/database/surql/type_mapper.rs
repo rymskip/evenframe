@@ -96,7 +96,7 @@ impl TypeMapper for SurrealdbTypeMapper {
     }
 
     fn format_duration(&self, nanos: i64) -> String {
-        format!("duration::from::nanos({})", nanos)
+        format!("duration::from_nanos({})", nanos)
     }
 
     fn format_array(&self, field_type: &FieldType, values: &[serde_json::Value]) -> String {
