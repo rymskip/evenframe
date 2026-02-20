@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "convert_case 0.11.0",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1583,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "convert_case 0.11.0",
  "evenframe",
