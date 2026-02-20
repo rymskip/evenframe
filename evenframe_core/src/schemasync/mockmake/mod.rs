@@ -124,9 +124,8 @@ impl<'a> Mockmaker<'a> {
             );
             evenframe_log!(&format!("{:?}", response), "record_diffs.log", true);
 
-            let existing_values: Vec<serde_json::Value> = response.take(0).unwrap_or_else(|_| {
-                panic!("Something went wrong getting the record ids: {response:?}")
-            });
+            let existing_values: Vec<serde_json::Value> =
+                response.take(0).unwrap_or_default();
 
             struct IdResponse {
                 id: EvenframeRecordId,
