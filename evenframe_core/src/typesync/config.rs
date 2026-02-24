@@ -1,5 +1,45 @@
 use serde::{Deserialize, Serialize};
 
+/// Whether to emit all types into a single file or split into per-type files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
+    /// All types in one file (default).
+    #[default]
+    Single,
+    /// Each primary type gets its own file; exclusive dependents are co-located.
+    PerFile,
+}
+
+/// Naming convention for generated per-file filenames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileNamingConvention {
+    /// PascalCase (e.g. `UserProfile.ts`)
+    Pascal,
+    /// kebab-case (e.g. `user-profile.ts`) — default
+    #[default]
+    Kebab,
+    /// snake_case (e.g. `user_profile.ts`)
+    Snake,
+    /// camelCase (e.g. `userProfile.ts`)
+    Camel,
+}
+
+/// Per-file output configuration (used under `[typesync.output]`).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct OutputConfig {
+    /// Single-file or per-file output mode.
+    #[serde(default)]
+    pub mode: OutputMode,
+    /// Whether to generate a barrel `index.ts` that re-exports everything.
+    #[serde(default)]
+    pub barrel_file: bool,
+    /// Naming convention for generated filenames.
+    #[serde(default)]
+    pub file_naming: FileNamingConvention,
+}
+
 /// Configuration for Typesync operations (TypeScript/Effect type generation)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TypesyncConfig {
@@ -29,4 +69,7 @@ pub struct TypesyncConfig {
     pub should_generate_surrealdb_schemas: bool,
     /// Output path for generated type files
     pub output_path: String,
+    /// Per-file output settings.
+    #[serde(default)]
+    pub output: OutputConfig,
 }

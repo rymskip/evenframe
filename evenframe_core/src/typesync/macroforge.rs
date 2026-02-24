@@ -102,6 +102,85 @@ pub fn generate_macroforge_type_string(
     result
 }
 
+/// Generates Macroforge TypeScript interfaces for a specific subset of types (used in per-file mode).
+pub fn generate_macroforge_for_types(
+    type_names: &[String],
+    structs: &HashMap<String, StructConfig>,
+    enums: &HashMap<String, TaggedUnion>,
+) -> String {
+    let type_set: HashSet<String> = type_names.iter().cloned().collect();
+
+    // Filter to only the requested types, deduplicating by PascalCase name.
+    let mut seen_structs = HashSet::new();
+    let filtered_structs: Vec<&StructConfig> = structs
+        .values()
+        .filter(|s| {
+            let name = s.struct_name.to_case(Case::Pascal);
+            if !type_set.contains(&name) || seen_structs.contains(&name) {
+                false
+            } else {
+                seen_structs.insert(name);
+                true
+            }
+        })
+        .collect();
+
+    let mut seen_enums = HashSet::new();
+    let filtered_enums: Vec<&TaggedUnion> = enums
+        .values()
+        .filter(|e| {
+            let name = e.enum_name.to_case(Case::Pascal);
+            if !type_set.contains(&name) || seen_enums.contains(&name) {
+                false
+            } else {
+                seen_enums.insert(name);
+                true
+            }
+        })
+        .collect();
+
+    ts_template! {
+        {#for struct_config in &filtered_structs}
+            {$let name = struct_config.struct_name.to_case(Case::Pascal)}
+            {$let field_count = struct_config.fields.len()}
+            @{"/** @derive(Deserialize) */"}
+            export interface @{&name} {
+                {#for (index, field) in struct_config.fields.iter().enumerate()}
+                    {$let validators_str = collect_validators_for_field(&field.validators, &field.field_type)}
+                    {#if !validators_str.is_empty()}
+                        @{format!("/** @serde({{ validate: [{}] }}) */", &validators_str)}
+                    {/if}
+                    @{field.field_name.to_case(Case::Camel)}: @{field_type_to_typescript(&field.field_type)}{#if index + 1 != field_count};{/if}
+                {/for}
+            }
+
+        {/for}
+        {#for enum_def in &filtered_enums}
+            {$let name = enum_def.enum_name.to_case(Case::Pascal)}
+            {$let variant_count = enum_def.variants.len()}
+            @{"/** @derive(Deserialize) */"}
+            export type @{&name} =
+                {#for (index, variant) in enum_def.variants.iter().enumerate()}
+                    {#if let Some(data) = &variant.data}
+                        {#match data}
+                            {:case VariantData::InlineStruct(s)}
+                                @{s.struct_name.to_case(Case::Pascal)}
+                            {:case VariantData::DataStructureRef(ft)}
+                                @{field_type_to_typescript(ft)}
+                        {/match}
+                    {:else}
+                        "@{variant.name}"
+                    {/if}
+                    {#if index + 1 != variant_count} | {/if}
+                {/for}
+            ;
+
+        {/for}
+    }
+    .source()
+    .to_string()
+}
+
 /// Convert a FieldType to its TypeScript representation.
 fn field_type_to_typescript(field_type: &FieldType) -> String {
     ts_template! {

@@ -514,6 +514,147 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
     value_stack.pop().unwrap()
 }
 
+/// Generates Effect Schema code for a specific subset of types (used in per-file mode).
+///
+/// Types NOT in `type_names` are treated as already-processed (imported from other files),
+/// so `Schema.suspend()` will NOT be emitted for cross-file references.
+pub fn generate_effect_schema_for_types(
+    type_names: &[String],
+    structs: &HashMap<String, StructConfig>,
+    enums: &HashMap<String, TaggedUnion>,
+) -> String {
+    let type_set: HashSet<String> = type_names.iter().cloned().collect();
+
+    // Analyse recursion across ALL types (needed for correct SCC detection).
+    let rec = analyse_recursion(structs, enums);
+
+    // Build condensation graph for topological ordering.
+    let mut condensation = DiGraphMap::<usize, ()>::new();
+    for (t1, _) in rec
+        .meta
+        .values()
+        .flat_map(|(_, mem)| mem.iter())
+        .filter_map(|n| rec.comp_of.get(n).map(|&c| (n, c)))
+    {
+        let from_comp = rec.comp_of[t1];
+        for t2 in &deps_of(t1, structs, enums) {
+            let to_comp = rec.comp_of[t2];
+            if from_comp != to_comp {
+                condensation.add_edge(from_comp, to_comp, ());
+            }
+        }
+    }
+    let mut ordered_comps = toposort(&condensation, None).unwrap_or_default();
+    ordered_comps.reverse();
+
+    // Pre-populate processed with all types NOT in this group.
+    // This means cross-file references won't get Schema.suspend().
+    let all_types: HashSet<String> = structs
+        .values()
+        .map(|s| s.struct_name.to_case(Case::Pascal))
+        .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
+        .collect();
+    let mut processed: HashSet<String> = all_types
+        .difference(&type_set)
+        .cloned()
+        .collect();
+
+    let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
+        field_type_to_effect_schema(ft, structs, cur, &rec, proc)
+    };
+
+    let mut out_classes = String::new();
+    let mut out_encoded = String::new();
+
+    for comp_id in ordered_comps {
+        let mut members = rec.meta[&comp_id].1.clone();
+        members.sort();
+
+        for name in members {
+            if processed.contains(&name) || !type_set.contains(&name) {
+                continue;
+            }
+
+            if let Some(e) = enums
+                .values()
+                .find(|e| e.enum_name.to_case(Case::Pascal) == name)
+            {
+                out_classes.push_str(&format!("export const {} = Schema.Union(", name));
+                let variants = e
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        v.data
+                            .as_ref()
+                            .map(|variant_data| match variant_data {
+                                VariantData::InlineStruct(_) => v.name.to_case(Case::Pascal),
+                                VariantData::DataStructureRef(field_type) => {
+                                    to_schema(field_type, &name, &processed)
+                                }
+                            })
+                            .unwrap_or_else(|| format!("Schema.Literal(\"{}\")", v.name))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                out_classes.push_str(&variants);
+                out_classes.push_str(&format!(").annotations({{ identifier: `{}` }});\n", name));
+                out_classes.push_str(&format!(
+                    "export type {}Type = typeof {}.Type;\n",
+                    name, name
+                ));
+                out_encoded.push_str(&encoded_alias_for_enum(e));
+            } else if let Some(struct_config) = structs
+                .values()
+                .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
+            {
+                out_classes.push_str(&format!(
+                    "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
+                    name, name, name
+                ));
+                for (idx, f) in struct_config.fields.iter().enumerate() {
+                    let schema = to_schema(&f.field_type, &name, &processed);
+                    let schema_with_validators =
+                        apply_validators_to_schema(schema, &f.validators, &f.field_name);
+                    let field_name_camel = f.field_name.to_case(Case::Camel);
+                    let field_name_title = f.field_name.to_case(Case::Title);
+
+                    let is_optional = matches!(f.field_type, FieldType::Option(_));
+
+                    let final_schema = if !is_optional {
+                        format!(
+                            "Schema.propertySignature({}).annotations({{ missingMessage: () => `'{}' is required` }})",
+                            schema_with_validators, field_name_title
+                        )
+                    } else {
+                        schema_with_validators
+                    };
+
+                    out_classes.push_str(&format!(
+                        "  {}: {}{}",
+                        field_name_camel,
+                        final_schema,
+                        if idx + 1 == struct_config.fields.len() {
+                            ""
+                        } else {
+                            ","
+                        }
+                    ));
+                    out_classes.push('\n');
+                }
+                out_classes.push_str("}) {[key: string]: unknown}\n\n");
+                out_classes.push_str(&format!(
+                    "export type {}Type = typeof {}.Type;\n",
+                    name, name
+                ));
+                out_encoded.push_str(&encoded_interface_for_struct(struct_config));
+            }
+            processed.insert(name);
+        }
+    }
+
+    format!("{out_classes}\n{out_encoded}")
+}
+
 // ----- Validator Application Logic -----------------------------------------
 
 /// Applies a series of validators to a schema string by chaining `.pipe()` calls.

@@ -1,6 +1,7 @@
 //! Build-time configuration for type generation.
 
 use crate::error::EvenframeError;
+use crate::typesync::config::{FileNamingConvention, OutputConfig, OutputMode};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,9 @@ pub struct BuildConfig {
 
     /// Whether to import validate.proto for Protocol Buffers.
     pub protobuf_import_validate: bool,
+
+    /// Per-file output configuration.
+    pub output: OutputConfig,
 }
 
 impl Default for BuildConfig {
@@ -56,6 +60,7 @@ impl Default for BuildConfig {
             flatbuffers_namespace: None,
             protobuf_package: None,
             protobuf_import_validate: false,
+            output: OutputConfig::default(),
         }
     }
 }
@@ -164,6 +169,27 @@ impl BuildConfig {
 
             if let Some(v) = typesync.get("protobuf_import_validate") {
                 config.protobuf_import_validate = v.as_bool().unwrap_or(false);
+            }
+
+            if let Some(output_table) = typesync.get("output").and_then(|v| v.as_table()) {
+                if let Some(mode_str) = output_table.get("mode").and_then(|v| v.as_str()) {
+                    config.output.mode = match mode_str {
+                        "per_file" => OutputMode::PerFile,
+                        _ => OutputMode::Single,
+                    };
+                }
+                if let Some(v) = output_table.get("barrel_file").and_then(|v| v.as_bool()) {
+                    config.output.barrel_file = v;
+                }
+                if let Some(naming_str) = output_table.get("file_naming").and_then(|v| v.as_str())
+                {
+                    config.output.file_naming = match naming_str {
+                        "pascal" => FileNamingConvention::Pascal,
+                        "snake" => FileNamingConvention::Snake,
+                        "camel" => FileNamingConvention::Camel,
+                        _ => FileNamingConvention::Kebab,
+                    };
+                }
             }
         }
 
@@ -279,6 +305,24 @@ impl BuildConfigBuilder {
     /// Disables Protocol Buffers schema generation.
     pub fn disable_protobuf(mut self) -> Self {
         self.config.protobuf = false;
+        self
+    }
+
+    /// Sets the output mode (single file or per-file).
+    pub fn output_mode(mut self, mode: OutputMode) -> Self {
+        self.config.output.mode = mode;
+        self
+    }
+
+    /// Enables or disables barrel file generation.
+    pub fn barrel_file(mut self, enabled: bool) -> Self {
+        self.config.output.barrel_file = enabled;
+        self
+    }
+
+    /// Sets the file naming convention for per-file output.
+    pub fn file_naming(mut self, naming: FileNamingConvention) -> Self {
+        self.config.output.file_naming = naming;
         self
     }
 

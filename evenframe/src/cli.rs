@@ -85,6 +85,10 @@ pub struct TypesyncArgs {
     /// Disable specific formats (overrides config)
     #[arg(long, value_delimiter = ',')]
     pub skip: Option<Vec<TypeFormat>>,
+
+    /// Enable per-file output mode (overrides config)
+    #[arg(long)]
+    pub per_file: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]

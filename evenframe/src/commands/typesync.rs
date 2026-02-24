@@ -6,14 +6,21 @@ use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
     typesync::{
-        arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
+        arktype::generate_arktype_type_string,
+        config::{FileNamingConvention, OutputMode},
+        effect::{generate_effect_schema_for_types, generate_effect_schema_string},
+        file_grouping::compute_file_grouping,
         flatbuffers::generate_flatbuffers_schema_string,
-        macroforge::generate_macroforge_type_string,
+        import_resolver::{
+            format_imports, generate_barrel_file, resolve_imports, type_name_to_filename,
+        },
+        macroforge::{generate_macroforge_for_types, generate_macroforge_type_string},
         protobuf::generate_protobuf_schema_string,
     },
 };
 use std::collections::HashSet;
-use tracing::{debug, error, info};
+use std::path::Path;
+use tracing::{debug, error, info, warn};
 
 /// Runs the typesync command.
 pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
@@ -43,6 +50,15 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
         objects.len()
     );
 
+    // Determine output mode: CLI flag overrides config.
+    let output_mode = if args.per_file {
+        OutputMode::PerFile
+    } else {
+        config.typesync.output.mode
+    };
+    let barrel_file = config.typesync.output.barrel_file;
+    let file_naming = config.typesync.output.file_naming;
+
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
         match cmd {
@@ -51,6 +67,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .output
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}arktype.ts", config.typesync.output_path));
+                if output_mode == OutputMode::PerFile {
+                    warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
+                }
                 generate_arktype(&structs, &enums, &output_path)?;
             }
             TypesyncCommands::Effect(effect_args) => {
@@ -58,14 +77,34 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .output
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}bindings.ts", config.typesync.output_path));
-                generate_effect(&structs, &enums, &output_path)?;
+                match output_mode {
+                    OutputMode::Single => generate_effect(&structs, &enums, &output_path)?,
+                    OutputMode::PerFile => generate_effect_per_file(
+                        &structs,
+                        &enums,
+                        &config.typesync.output_path,
+                        "effect",
+                        barrel_file,
+                        file_naming,
+                    )?,
+                }
             }
             TypesyncCommands::Macroforge(macroforge_args) => {
                 let output_path = macroforge_args
                     .output
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
-                generate_macroforge(&structs, &enums, &output_path)?;
+                match output_mode {
+                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path)?,
+                    OutputMode::PerFile => generate_macroforge_per_file(
+                        &structs,
+                        &enums,
+                        &config.typesync.output_path,
+                        "macroforge",
+                        barrel_file,
+                        file_naming,
+                    )?,
+                }
             }
             TypesyncCommands::Flatbuffers(fbs_args) => {
                 let output_path = fbs_args
@@ -92,7 +131,13 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                 } else {
                     config.typesync.protobuf_import_validate
                 };
-                generate_protobuf(&structs, &enums, &output_path, package.as_deref(), import_validate)?;
+                generate_protobuf(
+                    &structs,
+                    &enums,
+                    &output_path,
+                    package.as_deref(),
+                    import_validate,
+                )?;
             }
         }
         return Ok(());
@@ -134,17 +179,44 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     for format in &formats_to_generate {
         match format {
             TypeFormat::Arktype => {
+                if output_mode == OutputMode::PerFile {
+                    warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
+                }
                 let path = format!("{}arktype.ts", config.typesync.output_path);
                 generate_arktype(&structs, &enums, &path)?;
             }
-            TypeFormat::Effect => {
-                let path = format!("{}bindings.ts", config.typesync.output_path);
-                generate_effect(&structs, &enums, &path)?;
-            }
-            TypeFormat::Macroforge => {
-                let path = format!("{}macroforge.ts", config.typesync.output_path);
-                generate_macroforge(&structs, &enums, &path)?;
-            }
+            TypeFormat::Effect => match output_mode {
+                OutputMode::Single => {
+                    let path = format!("{}bindings.ts", config.typesync.output_path);
+                    generate_effect(&structs, &enums, &path)?;
+                }
+                OutputMode::PerFile => {
+                    generate_effect_per_file(
+                        &structs,
+                        &enums,
+                        &config.typesync.output_path,
+                        "effect",
+                        barrel_file,
+                        file_naming,
+                    )?;
+                }
+            },
+            TypeFormat::Macroforge => match output_mode {
+                OutputMode::Single => {
+                    let path = format!("{}macroforge.ts", config.typesync.output_path);
+                    generate_macroforge(&structs, &enums, &path)?;
+                }
+                OutputMode::PerFile => {
+                    generate_macroforge_per_file(
+                        &structs,
+                        &enums,
+                        &config.typesync.output_path,
+                        "macroforge",
+                        barrel_file,
+                        file_naming,
+                    )?;
+                }
+            },
             TypeFormat::Flatbuffers => {
                 let path = format!("{}schema.fbs", config.typesync.output_path);
                 generate_flatbuffers(
@@ -203,6 +275,56 @@ fn generate_effect(
     Ok(())
 }
 
+fn generate_effect_per_file(
+    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    base_output_path: &str,
+    subdir: &str,
+    barrel_file: bool,
+    naming: FileNamingConvention,
+) -> Result<()> {
+    let plan = compute_file_grouping(structs, enums);
+    let dir = Path::new(base_output_path).join(subdir);
+    std::fs::create_dir_all(&dir)?;
+
+    info!(
+        "Generating Effect schemas (per-file) to {} ({} files)",
+        dir.display(),
+        plan.groups.len()
+    );
+
+    for group in &plan.groups {
+        let imports = resolve_imports(group, &plan, structs, enums, naming);
+        let type_names = group.all_types();
+        let body = generate_effect_schema_for_types(&type_names, structs, enums);
+
+        let mut file_content = String::new();
+        file_content.push_str("import { Schema } from \"effect\";\n");
+        let import_lines = format_imports(&imports);
+        if !import_lines.is_empty() {
+            file_content.push_str(&import_lines);
+            file_content.push('\n');
+        }
+        file_content.push('\n');
+        file_content.push_str(&body);
+
+        let filename = type_name_to_filename(&group.primary_type, naming);
+        let file_path = dir.join(format!("{}.ts", filename));
+        std::fs::write(&file_path, file_content)?;
+        debug!("Written {}", file_path.display());
+    }
+
+    if barrel_file {
+        let barrel_content = generate_barrel_file(&plan, naming);
+        let barrel_path = dir.join("index.ts");
+        std::fs::write(&barrel_path, barrel_content)?;
+        debug!("Written barrel file {}", barrel_path.display());
+    }
+
+    info!("Effect per-file generation complete");
+    Ok(())
+}
+
 fn generate_macroforge(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
@@ -212,6 +334,57 @@ fn generate_macroforge(
     let content = generate_macroforge_type_string(structs, enums, false);
     std::fs::write(output_path, content)?;
     debug!("Macroforge types written successfully");
+    Ok(())
+}
+
+fn generate_macroforge_per_file(
+    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    base_output_path: &str,
+    subdir: &str,
+    barrel_file: bool,
+    naming: FileNamingConvention,
+) -> Result<()> {
+    let plan = compute_file_grouping(structs, enums);
+    let dir = Path::new(base_output_path).join(subdir);
+    std::fs::create_dir_all(&dir)?;
+
+    info!(
+        "Generating Macroforge types (per-file) to {} ({} files)",
+        dir.display(),
+        plan.groups.len()
+    );
+
+    for group in &plan.groups {
+        let imports = resolve_imports(group, &plan, structs, enums, naming);
+        let type_names = group.all_types();
+        let body = generate_macroforge_for_types(&type_names, structs, enums);
+
+        let mut file_content = String::new();
+        let import_lines = format_imports(&imports);
+        if !import_lines.is_empty() {
+            file_content.push_str(&import_lines);
+            file_content.push('\n');
+        }
+        if !file_content.is_empty() {
+            file_content.push('\n');
+        }
+        file_content.push_str(&body);
+
+        let filename = type_name_to_filename(&group.primary_type, naming);
+        let file_path = dir.join(format!("{}.ts", filename));
+        std::fs::write(&file_path, file_content)?;
+        debug!("Written {}", file_path.display());
+    }
+
+    if barrel_file {
+        let barrel_content = generate_barrel_file(&plan, naming);
+        let barrel_path = dir.join("index.ts");
+        std::fs::write(&barrel_path, barrel_content)?;
+        debug!("Written barrel file {}", barrel_path.display());
+    }
+
+    info!("Macroforge per-file generation complete");
     Ok(())
 }
 
