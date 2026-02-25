@@ -6,6 +6,7 @@
 //! - Filtering and sorting
 
 use crate::{
+    error::{EvenframeError, Result},
     registry,
     schemasync::{
         edge::{Direction, EdgeConfig},
@@ -160,7 +161,7 @@ fn validate_edge_endpoint_id(
     edge_table_config: Option<&TableConfig>,
     field_name: &str,
     record_id: &str,
-) {
+) -> Result<()> {
     if let Some(config) = edge_table_config
         && let Some(edge_field) = config
             .struct_config
@@ -169,11 +170,12 @@ fn validate_edge_endpoint_id(
             .find(|f| f.field_name == field_name)
         && let Err(e) = validate_record_id_table(record_id, &edge_field.field_type)
     {
-        panic!(
+        return Err(EvenframeError::validation(format!(
             "Edge record ID validation failed for field '{}': {}",
             field_name, e
-        );
+        )));
     }
+    Ok(())
 }
 
 /// Generate edge update queries using SurrealDB's built-in array and record functions
@@ -182,8 +184,10 @@ pub fn generate_edge_update_query<T: Serialize>(
     table_config: &TableConfig,
     object: &T,
     record_id: &str,
-) -> String {
-    let value = serde_json::to_value(object).expect("Failed to serialize object to JSON Value");
+) -> Result<String> {
+    let value = serde_json::to_value(object).map_err(|e| {
+        EvenframeError::serialization(format!("Failed to serialize object to JSON Value: {}", e))
+    })?;
 
     // Collect all edge configurations from the table
     let edge_configs: Vec<&EdgeConfig> = table_config
@@ -194,7 +198,7 @@ pub fn generate_edge_update_query<T: Serialize>(
         .collect();
 
     if edge_configs.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
 
     let formatted_record_id = value::to_surreal_string(
@@ -222,7 +226,7 @@ pub fn generate_edge_update_query<T: Serialize>(
                 relation_statements: &mut relation_statements,
                 depth: 0,
                 current_table_name: &table_config.table_name,
-            });
+            })?;
 
             if !incoming_edges.is_empty() {
                 let edge_update_query = generate_single_edge_table_update(
@@ -237,7 +241,7 @@ pub fn generate_edge_update_query<T: Serialize>(
         }
     }
 
-    query_parts.join(" ")
+    Ok(query_parts.join(" "))
 }
 
 fn handle_record_link(
@@ -247,13 +251,16 @@ fn handle_record_link(
     let_statements: &mut Vec<String>,
     relation_statements: &mut Vec<String>,
     depth: u32,
-) -> String {
+) -> Result<String> {
     if field_value.is_string() {
         let record_id_str = field_value.as_str().unwrap();
         if let Err(e) = validate_record_id_table(record_id_str, &field.field_type) {
-            panic!("Record ID validation failed: {}", e);
+            return Err(EvenframeError::validation(format!(
+                "Record ID validation failed: {}",
+                e
+            )));
         }
-        record_id_str.to_string()
+        Ok(record_id_str.to_string())
     } else if field_value.is_object() {
         let mut create_new_object = true;
         let mut object_id = String::new();
@@ -270,7 +277,12 @@ fn handle_record_link(
         if create_new_object {
             let struct_name = match inner_type {
                 FieldType::Other(name) => name,
-                _ => panic!("RecordLink inner type must be a named struct (FieldType::Other)"),
+                _ => {
+                    return Err(EvenframeError::InvalidFieldType {
+                        message: "RecordLink inner type must be a named struct (FieldType::Other)"
+                            .to_string(),
+                    })
+                }
             };
 
             if let Some(nested_table_config) = registry::get_table_config(struct_name) {
@@ -282,7 +294,7 @@ fn handle_record_link(
                     let_statements,
                     relation_statements,
                     depth + 1,
-                );
+                )?;
 
                 let var_name = format!(
                     "nested_{}_{}",
@@ -296,15 +308,15 @@ fn handle_record_link(
                 );
                 let_statements.push(let_stmt);
 
-                format!("array::first(${}.id)", var_name)
+                Ok(format!("array::first(${}.id)", var_name))
             } else {
-                value::to_surreal_string(&field.field_type, field_value)
+                Ok(value::to_surreal_string(&field.field_type, field_value))
             }
         } else {
-            object_id
+            Ok(object_id)
         }
     } else {
-        value::to_surreal_string(&field.field_type, field_value)
+        Ok(value::to_surreal_string(&field.field_type, field_value))
     }
 }
 
@@ -321,7 +333,7 @@ struct ExtractEdgesParams<'a> {
 }
 
 /// Extract incoming edges as SurrealQL array literal
-fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
+fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> Result<String> {
     let ExtractEdgesParams {
         field_value,
         edge_config,
@@ -334,7 +346,7 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
     } = params;
     // Handle null/missing values - return empty array
     if field_value.is_null() {
-        return "[]".to_string();
+        return Ok("[]".to_string());
     }
 
     let field_values = if let Some(arr) = field_value.as_array() {
@@ -361,8 +373,8 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
             };
 
             if let Some(config) = edge_table_config.as_ref() {
-                validate_edge_endpoint_id(Some(config), "in", &endpoints.in_record);
-                validate_edge_endpoint_id(Some(config), "out", &endpoints.out_record);
+                validate_edge_endpoint_id(Some(config), "in", &endpoints.in_record)?;
+                validate_edge_endpoint_id(Some(config), "out", &endpoints.out_record)?;
             }
 
             let formatted_in = value::to_surreal_string(
@@ -394,7 +406,7 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
                                     let_statements,
                                     relation_statements,
                                     depth,
-                                )
+                                )?
                             } else {
                                 value::to_surreal_string(&edge_field.field_type, edge_prop_value)
                             };
@@ -409,7 +421,10 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
             if let Some(record_link_type) = get_inner_record_link_type(&field.field_type)
                 && let Err(e) = validate_record_id_table(id_str, record_link_type)
             {
-                panic!("Edge record ID validation failed: {}", e);
+                return Err(EvenframeError::validation(format!(
+                    "Edge record ID validation failed: {}",
+                    e
+                )));
             }
 
             // Handle case where the value is just an ID string
@@ -432,7 +447,7 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> String {
         }
     }
 
-    format!("[{}]", edge_objects.join(", "))
+    Ok(format!("[{}]", edge_objects.join(", ")))
 }
 
 /// Generate update query for a single edge table using SurrealDB array functions
@@ -496,30 +511,30 @@ pub fn generate_update_query_with_edges<T: Serialize>(
     object: &T,
     explicit_id: Option<String>,
     select_config: Option<SelectConfig>,
-) -> (String, String) {
+) -> Result<(String, String)> {
     let (main_query, record_id) = generate_query(
         QueryType::Update,
         table_config,
         object,
         explicit_id,
         select_config.clone(),
-    );
+    )?;
 
     if let Some(ref config) = select_config
         && !config.filters.is_empty()
     {
-        return (main_query, record_id);
+        return Ok((main_query, record_id));
     }
 
-    let edge_query = generate_edge_update_query(table_config, object, &record_id);
+    let edge_query = generate_edge_update_query(table_config, object, &record_id)?;
 
     if edge_query.is_empty() {
-        (main_query, record_id)
+        Ok((main_query, record_id))
     } else {
-        (
+        Ok((
             format!("{} {}", main_query.trim_end_matches(';'), edge_query),
             record_id,
-        )
+        ))
     }
 }
 
@@ -531,7 +546,7 @@ pub(crate) fn generate_recursive(
     let_statements: &mut Vec<String>,
     relation_statements: &mut Vec<String>,
     depth: u32,
-) -> (String, String) {
+) -> Result<(String, String)> {
     let generated_id = match query_type {
         QueryType::Create => {
             if let Some(id) = explicit_id.clone() {
@@ -609,7 +624,7 @@ pub(crate) fn generate_recursive(
                     relation_statements,
                     depth,
                     current_table_name: &table_config.table_name,
-                });
+                })?;
 
                 let formatted_record_id = value::to_surreal_string(
                     &FieldType::EvenframeRecordId,
@@ -666,7 +681,7 @@ pub(crate) fn generate_recursive(
                                             let_statements,
                                             relation_statements,
                                             depth,
-                                        )
+                                        )?
                                     } else {
                                         value::to_surreal_string(
                                             &edge_field.field_type,
@@ -756,7 +771,7 @@ pub(crate) fn generate_recursive(
                     let_statements,
                     relation_statements,
                     depth,
-                )
+                )?
             } else {
                 value::to_surreal_string(&field.field_type, field_value)
             };
@@ -771,7 +786,7 @@ pub(crate) fn generate_recursive(
         QueryType::Select => unreachable!("Select should not be handled in generate_recursive"),
     };
 
-    (main_query, generated_id)
+    Ok((main_query, generated_id))
 }
 
 use serde::Deserialize;
@@ -942,7 +957,7 @@ pub fn generate_query<T: Serialize>(
     object: &T,
     explicit_id: Option<String>,
     select_config: Option<SelectConfig>,
-) -> (String, String) {
+) -> Result<(String, String)> {
     if query_type == QueryType::Select {
         let target = if let Some(id) = explicit_id {
             id
@@ -964,10 +979,12 @@ pub fn generate_query<T: Serialize>(
             }
         }
         query.push(';');
-        return (query, String::new());
+        return Ok((query, String::new()));
     }
 
-    let value = serde_json::to_value(object).expect("Failed to serialize object to JSON Value");
+    let value = serde_json::to_value(object).map_err(|e| {
+        EvenframeError::serialization(format!("Failed to serialize object to JSON Value: {}", e))
+    })?;
     let mut all_let_statements = Vec::new();
     let mut all_relation_statements = Vec::new();
 
@@ -979,7 +996,7 @@ pub fn generate_query<T: Serialize>(
         &mut all_let_statements,
         &mut all_relation_statements,
         0,
-    );
+    )?;
 
     let where_clause = if let Some(ref config) = select_config {
         let clause = generate_where_clause(&config.filters);
@@ -1031,11 +1048,11 @@ pub fn generate_query<T: Serialize>(
         relation_suffix
     );
 
-    (full_query, generated_id)
+    Ok((full_query, generated_id))
 }
 
 /// Validates if the table name part of a record ID matches the expected table for the given FieldType.
-pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> Result<(), String> {
+pub fn validate_record_id_table(record_id: &str, field_type: &FieldType) -> std::result::Result<(), String> {
     match field_type {
         FieldType::RecordLink(inner_type) => {
             let expected_struct_name = match &**inner_type {
@@ -1177,7 +1194,8 @@ mod tests {
             &(),
             None,
             Some(select_config),
-        );
+        )
+        .unwrap();
 
         assert_eq!(temp_id, "");
         assert_eq!(
