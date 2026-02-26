@@ -13,7 +13,7 @@ impl From<String> for EvenframeRecordId {
     fn from(value: String) -> Self {
         let mut parts = value.splitn(2, ':');
         let table = parts.next().unwrap_or("");
-        let key = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
+        let key = parts.next().unwrap_or("").replace(['⟨', '⟩', '`'], "");
         EvenframeRecordId(RecordId::new(table, key))
     }
 }
@@ -41,7 +41,7 @@ impl fmt::Display for EvenframeRecordId {
         write!(
             f,
             "{}",
-            self.0.to_sql().replace("⟩", "").replace("⟨", "")
+            self.0.to_sql().replace(['⟨', '⟩', '`'], "")
         )
     }
 }
@@ -50,7 +50,7 @@ impl serde::Serialize for EvenframeRecordId {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.0.to_sql().replace(['⟨', '⟩'], ""))
+        serializer.serialize_str(&self.0.to_sql().replace(['⟨', '⟩', '`'], ""))
     }
 }
 impl<'de> Deserialize<'de> for EvenframeRecordId {
@@ -74,7 +74,7 @@ impl<'de> Deserialize<'de> for EvenframeRecordId {
             {
                 let mut parts = value.splitn(2, ':');
                 let table = parts.next().unwrap_or("");
-                let key = parts.next().unwrap_or("").replace(['⟨', '⟩'], "");
+                let key = parts.next().unwrap_or("").replace(['⟨', '⟩', '`'], "");
                 Ok(EvenframeRecordId(RecordId::new(table, key)))
             }
 

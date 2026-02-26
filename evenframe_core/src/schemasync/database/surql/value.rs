@@ -52,7 +52,7 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
         FieldType::Unit => "null".to_string(),
         FieldType::EvenframeRecordId => {
             let id_string = value.as_str().unwrap_or_default();
-            id_string.to_string()
+            id_string.replace('`', "")
         }
         FieldType::DateTime => {
             if let Some(s) = value.as_str() {
@@ -162,7 +162,7 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
                 let link_string = value
                     .as_str()
                     .expect("Record link value should not be None");
-                link_string.to_string()
+                link_string.replace('`', "")
             } else if let Some(obj) = value.as_object() {
                 if let Some(id_value) = obj.get("Id") {
                     if let Some(id_str) = id_value.as_str() {
