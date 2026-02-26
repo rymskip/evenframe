@@ -85,6 +85,19 @@ impl<'a> SurrealdbComparator<'a> {
             ))
         });
 
+        // Execute function surql on embedded DB if available (for validation)
+        if let Some(ref functions_surql) = self.schemasync_config.database.resolved.functions_surql {
+            if !functions_surql.is_empty() {
+                tracing::debug!("Executing function surql on embedded DB for validation");
+                let _ = new_schema.query(functions_surql.as_str()).await.map_err(|e| {
+                    tracing::warn!(error = %e, "Failed to execute function surql on embedded DB");
+                    EvenframeError::database(format!(
+                        "There was a problem executing function surql on the new_schema embedded db: {e}"
+                    ))
+                });
+            }
+        }
+
         self.new_schema = Some(new_schema);
 
         tracing::trace!("Schemas setup complete");

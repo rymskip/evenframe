@@ -58,9 +58,15 @@ pub struct DatabaseConfig {
     /// Connection timeout in seconds
     #[serde(default = "default_timeout")]
     pub timeout: u64,
-    /// Access configurations (SurrealDB-specific)
+    /// Access configurations (SurrealDB-specific) - inline or path-based
     #[serde(default)]
-    pub accesses: Vec<AccessConfig>,
+    pub accesses: AccessesSource,
+    /// Function definitions from .surql files
+    #[serde(default)]
+    pub functions: Option<FunctionsSource>,
+    /// Resolved surql content loaded from paths (set at runtime, not from TOML)
+    #[serde(skip)]
+    pub resolved: ResolvedDatabaseItems,
     /// Maximum number of connections in the pool (SQL databases)
     #[serde(default)]
     pub max_connections: Option<u32>,
@@ -91,6 +97,35 @@ pub enum AccessType {
     Jwt,
 }
 
+/// Source for access definitions: either inline config or a path to .surql file(s).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum AccessesSource {
+    /// Existing format: array of AccessConfig structs
+    Inline(Vec<AccessConfig>),
+    /// New format: `{ path = "..." }` pointing to .surql file or directory
+    Path { path: String },
+}
+
+impl Default for AccessesSource {
+    fn default() -> Self {
+        AccessesSource::Inline(vec![])
+    }
+}
+
+/// Source for function definitions: a path to .surql file(s).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FunctionsSource {
+    pub path: String,
+}
+
+/// Resolved surql content loaded from paths at config init time.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedDatabaseItems {
+    pub access_surql: Option<String>,
+    pub functions_surql: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
 pub struct SchemasyncMockGenConfig {
     /// overriden by table level  configs
@@ -117,7 +152,9 @@ impl Default for DatabaseConfig {
             namespace: String::new(),
             database: String::new(),
             timeout: default_timeout(),
-            accesses: vec![],
+            accesses: AccessesSource::default(),
+            functions: None,
+            resolved: ResolvedDatabaseItems::default(),
             max_connections: None,
             min_connections: None,
             schema: None,
@@ -134,11 +171,13 @@ impl DatabaseConfig {
             url: "http://localhost:8000".to_string(),
             namespace: "test".to_string(),
             database: "test".to_string(),
-            accesses: vec![AccessConfig {
+            accesses: AccessesSource::Inline(vec![AccessConfig {
                 name: "user".to_owned(),
                 access_type: AccessType::Record,
                 table_name: "user".to_owned(),
-            }],
+            }]),
+            functions: None,
+            resolved: ResolvedDatabaseItems::default(),
             timeout: 60,
             max_connections: None,
             min_connections: None,
@@ -148,7 +187,9 @@ impl DatabaseConfig {
             "Test database config - URL: {}, namespace: {}, database: {}, timeout: {}s",
             config.url, config.namespace, config.database, config.timeout
         );
-        trace!("Test access configs: {} entries", config.accesses.len());
+        if let AccessesSource::Inline(ref accesses) = config.accesses {
+            trace!("Test access configs: {} entries", accesses.len());
+        }
         config
     }
 
@@ -161,7 +202,9 @@ impl DatabaseConfig {
             namespace: String::new(),
             database: String::new(),
             timeout: 60,
-            accesses: vec![],
+            accesses: AccessesSource::default(),
+            functions: None,
+            resolved: ResolvedDatabaseItems::default(),
             max_connections: Some(5),
             min_connections: Some(1),
             schema: Some("public".to_string()),
@@ -177,7 +220,9 @@ impl DatabaseConfig {
             namespace: String::new(),
             database: String::new(),
             timeout: 60,
-            accesses: vec![],
+            accesses: AccessesSource::default(),
+            functions: None,
+            resolved: ResolvedDatabaseItems::default(),
             max_connections: Some(1),
             min_connections: Some(1),
             schema: None,

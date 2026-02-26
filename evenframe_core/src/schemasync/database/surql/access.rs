@@ -1,5 +1,5 @@
 use crate::evenframe_log;
-use crate::schemasync::config::{AccessConfig, AccessType};
+use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource};
 use std::env;
 use surrealdb::{
     Surreal,
@@ -93,31 +93,53 @@ pub async fn setup_access_definitions(
     schemasync_config: &crate::schemasync::config::SchemasyncConfig,
 ) -> Result<String, Box<dyn std::error::Error>> {
     tracing::info!("Setting up access definitions");
-    let mut access_query = String::new();
-
-    tracing::debug!(
-        access_count = schemasync_config.database.accesses.len(),
-        "Processing access configurations"
-    );
 
     evenframe_log!(
         &format!("{:#?}", &schemasync_config.database.accesses),
         "access_config.surql"
     );
 
-    for access in &schemasync_config.database.accesses {
-        tracing::trace!(access_name = %access.name, "Processing access definition");
-        access_query = generate_access_definition(access);
-        if let Err(e) = new_schema.query(&access_query).await {
-            tracing::error!(
-                access_name = %access.name,
-                error = %e,
-                "Failed to create access"
+    let access_query = match &schemasync_config.database.accesses {
+        AccessesSource::Inline(accesses) => {
+            tracing::debug!(
+                access_count = accesses.len(),
+                "Processing inline access configurations"
             );
-        } else {
-            tracing::debug!(access_name = %access.name, "Access created successfully");
+            let mut query = String::new();
+            for access in accesses {
+                tracing::trace!(access_name = %access.name, "Processing access definition");
+                query = generate_access_definition(access);
+                if let Err(e) = new_schema.query(&query).await {
+                    tracing::error!(
+                        access_name = %access.name,
+                        error = %e,
+                        "Failed to create access"
+                    );
+                } else {
+                    tracing::debug!(access_name = %access.name, "Access created successfully");
+                }
+            }
+            query
         }
-    }
+        AccessesSource::Path { .. } => {
+            // Path-based access: use resolved surql content
+            if let Some(ref surql) = schemasync_config.database.resolved.access_surql {
+                tracing::debug!(
+                    surql_length = surql.len(),
+                    "Executing path-based access surql on embedded DB"
+                );
+                if let Err(e) = new_schema.query(surql.as_str()).await {
+                    tracing::error!(error = %e, "Failed to execute path-based access surql");
+                } else {
+                    tracing::debug!("Path-based access surql executed successfully");
+                }
+                surql.clone()
+            } else {
+                tracing::warn!("AccessesSource::Path set but no resolved surql found");
+                String::new()
+            }
+        }
+    };
 
     tracing::debug!(
         total_query_length = access_query.len(),

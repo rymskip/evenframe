@@ -282,6 +282,13 @@ impl<'a> Schemasync<'a> {
 
         debug!("Access control setup completed");
 
+        info!("Executing function definitions");
+        self.execute_functions(&db, &config).await.map_err(|e| {
+            error!("Failed to execute functions: {}", e);
+            e
+        })?;
+        debug!("Function definitions completed");
+
         info!("Filtering schema changes");
         mockmaker.filter_changes().await.map_err(|e| {
             error!("Failed to filter changes: {}", e);
@@ -459,6 +466,37 @@ impl<'a> Schemasync<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Execute function definitions from resolved surql on the live database
+    async fn execute_functions(
+        &self,
+        db: &Surreal<Client>,
+        config: &crate::schemasync::config::SchemasyncConfig,
+    ) -> Result<()> {
+        if let Some(ref functions_surql) = config.database.resolved.functions_surql {
+            if !functions_surql.is_empty() {
+                info!("Executing function definitions from surql");
+                evenframe_log!(functions_surql, "function_definitions.surql");
+
+                let result = execute_and_validate(db, functions_surql, "define", "functions").await;
+                match result {
+                    Ok(_) => {
+                        evenframe_log!(
+                            "Successfully executed function definitions",
+                            "results.log",
+                            true
+                        );
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to execute function definitions: {}", e);
+                        evenframe_log!(&error_msg, "results.log", true);
+                        return Err(EvenframeError::database(error_msg));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

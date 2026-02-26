@@ -1,6 +1,6 @@
 use crate::error::{EvenframeError, Result};
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::{Path, PathBuf}};
 use toml;
 use tracing::{debug, error, info, trace, warn};
 
@@ -61,6 +61,9 @@ pub struct EvenframeConfig {
     pub schemasync: crate::schemasync::config::SchemasyncConfig,
     /// Type synchronization configuration (TypeScript/Effect type generation)
     pub typesync: crate::typesync::config::TypesyncConfig,
+    /// Path to the config file that was loaded (set at runtime, not from TOML)
+    #[serde(skip)]
+    pub config_file_path: PathBuf,
 }
 
 impl EvenframeConfig {
@@ -98,6 +101,20 @@ impl EvenframeConfig {
             Self::substitute_env_vars(&config.schemasync.database.database)?;
         config.typesync.output_path = Self::substitute_env_vars(&config.typesync.output_path)?;
 
+        // Store config file path and resolve surql paths
+        config.config_file_path = config_path;
+        let project_root = config.project_root().to_path_buf();
+
+        if let crate::schemasync::config::AccessesSource::Path { ref path } = config.schemasync.database.accesses {
+            config.schemasync.database.resolved.access_surql =
+                Some(Self::load_surql_from_path(&project_root, path)?);
+        }
+
+        if let Some(ref func) = config.schemasync.database.functions {
+            config.schemasync.database.resolved.functions_surql =
+                Some(Self::load_surql_from_path(&project_root, &func.path)?);
+        }
+
         info!("Configuration loaded successfully");
         debug!(
             "Schemasync enabled: {}, Typesync arktype: {}, effect: {}, macroforge: {}",
@@ -110,28 +127,95 @@ impl EvenframeConfig {
         Ok(config)
     }
 
-    /// Searches for `evenframe.toml` starting from the current directory
-    /// and traversing up to the root.
+    /// Searches for `.evenframe/config.toml` (preferred) or `evenframe.toml` (fallback)
+    /// starting from the current directory and traversing up to the root.
     fn find_config_file() -> Result<PathBuf> {
         let current_dir = env::current_dir()?;
         debug!("Starting config file search from: {:?}", current_dir);
 
         for path in current_dir.ancestors() {
-            let config_path = path.join("evenframe.toml");
-            trace!("Checking for config at: {:?}", config_path);
-            if config_path.exists() {
-                return Ok(config_path);
+            // Check .evenframe/config.toml first (preferred location)
+            let dotdir_config = path.join(".evenframe").join("config.toml");
+            trace!("Checking for config at: {:?}", dotdir_config);
+            if dotdir_config.exists() {
+                return Ok(dotdir_config);
+            }
+
+            // Fall back to evenframe.toml (backwards compatible)
+            let legacy_config = path.join("evenframe.toml");
+            trace!("Checking for config at: {:?}", legacy_config);
+            if legacy_config.exists() {
+                return Ok(legacy_config);
             }
         }
 
-        error!("Configuration file 'evenframe.toml' not found in any parent directory.");
+        error!("Configuration file not found in any parent directory.");
         Err(EvenframeError::config(
-            "evenframe.toml not found in current or any parent directory.",
+            "Configuration file not found. Expected '.evenframe/config.toml' or 'evenframe.toml' in current or any parent directory.",
         ))
+    }
+
+    /// Returns the project root directory based on config file location.
+    /// - For `evenframe.toml` → parent dir
+    /// - For `.evenframe/config.toml` → grandparent dir
+    pub fn project_root(&self) -> &Path {
+        let parent = self.config_file_path.parent().unwrap_or(Path::new("."));
+        if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
+            parent.parent().unwrap_or(Path::new("."))
+        } else {
+            parent
+        }
+    }
+
+    /// Load surql content from a file or directory path, with env var substitution.
+    /// If the path points to a file, reads its contents.
+    /// If it points to a directory, reads all `*.surql` files sorted by name and concatenates them.
+    pub fn load_surql_from_path(project_root: &Path, relative_path: &str) -> Result<String> {
+        let full_path = project_root.join(relative_path);
+        debug!("Loading surql from path: {:?}", full_path);
+
+        let content = if full_path.is_dir() {
+            let mut entries: Vec<_> = fs::read_dir(&full_path)
+                .map_err(|e| EvenframeError::config(format!("Failed to read directory {:?}: {}", full_path, e)))?
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("surql")
+                })
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+
+            if entries.is_empty() {
+                return Err(EvenframeError::config(format!(
+                    "No .surql files found in directory {:?}", full_path
+                )));
+            }
+
+            let mut combined = String::new();
+            for entry in entries {
+                let file_content = fs::read_to_string(entry.path()).map_err(|e| {
+                    EvenframeError::config(format!("Failed to read {:?}: {}", entry.path(), e))
+                })?;
+                if !combined.is_empty() {
+                    combined.push('\n');
+                }
+                combined.push_str(&file_content);
+            }
+            combined
+        } else if full_path.is_file() {
+            fs::read_to_string(&full_path).map_err(|e| {
+                EvenframeError::config(format!("Failed to read {:?}: {}", full_path, e))
+            })?
+        } else {
+            return Err(EvenframeError::config(format!(
+                "Surql path does not exist: {:?}", full_path
+            )));
+        };
+
+        Self::substitute_env_vars(&content)
     }
     /// Substitute environment variables in config strings
     /// Supports ${VAR_NAME:-default} syntax
-    fn substitute_env_vars(value: &str) -> Result<String> {
+    pub fn substitute_env_vars(value: &str) -> Result<String> {
         trace!("Substituting environment variables in: {}", value);
         let mut result = value.to_string();
 
@@ -339,7 +423,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("evenframe.toml not found"));
+        assert!(err.to_string().contains("Configuration file not found"));
     }
 
     #[test]
@@ -413,6 +497,182 @@ mod tests {
         // Use canonicalize to handle symlinks
         let result_canonical = result.unwrap().canonicalize().unwrap();
         assert_eq!(result_canonical, expected_canonical);
+    }
+
+    // ==================== .evenframe/config.toml Discovery Tests ====================
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_dotdir_preferred_over_legacy() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create both config files
+        fs::write(temp_dir.path().join("evenframe.toml"), "# legacy").unwrap();
+        let dotdir = temp_dir.path().join(".evenframe");
+        fs::create_dir(&dotdir).unwrap();
+        let dotdir_config = dotdir.join("config.toml");
+        fs::write(&dotdir_config, "# preferred").unwrap();
+        let expected_canonical = dotdir_config.canonicalize().unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let result_canonical = result.unwrap().canonicalize().unwrap();
+        assert_eq!(result_canonical, expected_canonical);
+    }
+
+    #[test]
+    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
+    fn test_find_config_only_dotdir() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let dotdir = temp_dir.path().join(".evenframe");
+        fs::create_dir(&dotdir).unwrap();
+        let dotdir_config = dotdir.join("config.toml");
+        fs::write(&dotdir_config, "# only dotdir").unwrap();
+        let expected_canonical = dotdir_config.canonicalize().unwrap();
+
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = EvenframeConfig::find_config_file();
+
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let result_canonical = result.unwrap().canonicalize().unwrap();
+        assert_eq!(result_canonical, expected_canonical);
+    }
+
+    #[test]
+    fn test_project_root_for_legacy_config() {
+        let config = EvenframeConfig {
+            general: GeneralConfig::default(),
+            schemasync: toml::from_str(
+                r#"
+                should_generate_mocks = false
+                [database]
+                provider = "surrealdb"
+                url = ""
+                namespace = ""
+                database = ""
+                [mock_gen_config]
+                default_record_count = 10
+                default_preservation_mode = "Smart"
+                default_batch_size = 10
+                full_refresh_mode = false
+                coordination_groups = []
+                [performance]
+                embedded_db_memory_limit = "256MB"
+                cache_duration_seconds = 60
+                use_progressive_loading = false
+                "#,
+            )
+            .unwrap(),
+            typesync: toml::from_str(
+                r#"
+                output_path = "./"
+                should_generate_arktype_types = false
+                should_generate_effect_types = false
+                should_generate_macroforge_types = false
+                should_generate_surrealdb_schemas = false
+                "#,
+            )
+            .unwrap(),
+            config_file_path: PathBuf::from("/project/evenframe.toml"),
+        };
+        assert_eq!(config.project_root(), Path::new("/project"));
+    }
+
+    #[test]
+    fn test_project_root_for_dotdir_config() {
+        let config = EvenframeConfig {
+            general: GeneralConfig::default(),
+            schemasync: toml::from_str(
+                r#"
+                should_generate_mocks = false
+                [database]
+                provider = "surrealdb"
+                url = ""
+                namespace = ""
+                database = ""
+                [mock_gen_config]
+                default_record_count = 10
+                default_preservation_mode = "Smart"
+                default_batch_size = 10
+                full_refresh_mode = false
+                coordination_groups = []
+                [performance]
+                embedded_db_memory_limit = "256MB"
+                cache_duration_seconds = 60
+                use_progressive_loading = false
+                "#,
+            )
+            .unwrap(),
+            typesync: toml::from_str(
+                r#"
+                output_path = "./"
+                should_generate_arktype_types = false
+                should_generate_effect_types = false
+                should_generate_macroforge_types = false
+                should_generate_surrealdb_schemas = false
+                "#,
+            )
+            .unwrap(),
+            config_file_path: PathBuf::from("/project/.evenframe/config.toml"),
+        };
+        assert_eq!(config.project_root(), Path::new("/project"));
+    }
+
+    // ==================== load_surql_from_path Tests ====================
+
+    #[test]
+    fn test_load_surql_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let surql_path = temp_dir.path().join("test.surql");
+        fs::write(&surql_path, "DEFINE FUNCTION fn::test() { RETURN 1; };").unwrap();
+
+        let result = EvenframeConfig::load_surql_from_path(temp_dir.path(), "test.surql");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "DEFINE FUNCTION fn::test() { RETURN 1; };");
+    }
+
+    #[test]
+    fn test_load_surql_from_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let surql_dir = temp_dir.path().join("surql");
+        fs::create_dir(&surql_dir).unwrap();
+        fs::write(surql_dir.join("01_first.surql"), "-- first").unwrap();
+        fs::write(surql_dir.join("02_second.surql"), "-- second").unwrap();
+        // Non-surql file should be ignored
+        fs::write(surql_dir.join("readme.txt"), "ignore me").unwrap();
+
+        let result = EvenframeConfig::load_surql_from_path(temp_dir.path(), "surql");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "-- first\n-- second");
+    }
+
+    #[test]
+    fn test_load_surql_nonexistent_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let result = EvenframeConfig::load_surql_from_path(temp_dir.path(), "nonexistent.surql");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_surql_with_env_var_substitution() {
+        let temp_dir = TempDir::new().unwrap();
+        let surql_path = temp_dir.path().join("test.surql");
+        fs::write(&surql_path, "DEFINE ACCESS test ON DATABASE TYPE JWT ALGORITHM HS256 KEY '${TEST_SURQL_KEY:-default_key}';").unwrap();
+
+        let result = EvenframeConfig::load_surql_from_path(temp_dir.path(), "test.surql");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("default_key"));
     }
 
     // ==================== EvenframeConfig Serialization Tests ====================
