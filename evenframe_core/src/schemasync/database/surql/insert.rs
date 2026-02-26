@@ -121,6 +121,18 @@ impl Mockmaker<'_> {
                         continue;
                     }
 
+                    // Skip computed fields (they are auto-calculated by the database)
+                    if let Some(ref define_config) = table_field.define_config
+                        && define_config.computed.is_some()
+                    {
+                        evenframe_log!(
+                            format!("Skipping computed field '{}'", table_field.field_name),
+                            log_name,
+                            true
+                        );
+                        continue;
+                    }
+
                     let field_val = FieldValueGenerator::builder()
                         .field(table_field)
                         .id_index(&i)

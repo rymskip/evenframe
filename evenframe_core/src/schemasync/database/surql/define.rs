@@ -21,6 +21,8 @@ pub struct DefineConfig {
     pub assert: Option<String>,
     pub readonly: Option<bool>,
     pub flexible: Option<bool>,
+    pub computed: Option<String>,
+    pub comment: Option<String>,
 }
 
 impl ToTokens for DefineConfig {
@@ -44,6 +46,8 @@ impl ToTokens for DefineConfig {
         let default_always = opt_lit(&self.default_always);
         let value = opt_lit(&self.value);
         let assert_field = opt_lit(&self.assert);
+        let computed = opt_lit(&self.computed);
+        let comment = opt_lit(&self.comment);
         let readonly = if let Some(b) = self.readonly {
             quote! { Some(#b) }
         } else {
@@ -69,7 +73,9 @@ impl ToTokens for DefineConfig {
                 value: #value,
                 assert: #assert_field,
                 readonly: #readonly,
-                flexible: #flexible
+                flexible: #flexible,
+                computed: #computed,
+                comment: #comment
             }
         });
     }
@@ -88,6 +94,8 @@ impl DefineConfig {
         let mut assert: Option<String> = None;
         let mut readonly: Option<bool> = None;
         let mut flexible: Option<bool> = None;
+        let mut computed: Option<String> = None;
+        let mut comment: Option<String> = None;
 
         for attr in &field.attrs {
             if attr.path().is_ident("define_field_statement") {
@@ -213,6 +221,24 @@ impl DefineConfig {
                         readonly = Some(content.parse::<syn::LitBool>()?.value);
                         return Ok(());
                     }
+                    if meta.path.is_ident("computed") {
+                        let mut content;
+                        parenthesized!(content in meta.input);
+                        if computed.is_some() {
+                            return Err(meta.error("duplicate computed attribute"));
+                        }
+                        computed = parse_opt_string(&mut content)?;
+                        return Ok(());
+                    }
+                    if meta.path.is_ident("comment") {
+                        let mut content;
+                        parenthesized!(content in meta.input);
+                        if comment.is_some() {
+                            return Err(meta.error("duplicate comment attribute"));
+                        }
+                        comment = parse_opt_string(&mut content)?;
+                        return Ok(());
+                    }
 
                     Err(meta.error("unrecognized define detail"))
                 })?;
@@ -230,6 +256,8 @@ impl DefineConfig {
                     assert,
                     readonly,
                     flexible,
+                    computed,
+                    comment,
                 }));
             }
         }
@@ -246,6 +274,8 @@ impl DefineConfig {
             assert: None,
             readonly: None,
             flexible: Some(false),
+            computed: None,
+            comment: None,
         }))
     }
 }
@@ -376,7 +406,7 @@ pub fn generate_define_statements(
 mod tests {
     use super::*;
     use crate::schemasync::EventConfig;
-    use crate::types::{StructConfig, TaggedUnion};
+    use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
 
     #[test]
     fn generate_define_statements_appends_events() {
@@ -412,5 +442,134 @@ mod tests {
 
         assert!(statements.contains("DEFINE EVENT user_change ON TABLE user"));
         assert!(statements.trim().ends_with(';'));
+    }
+
+    #[test]
+    fn generate_computed_field_statement() {
+        dotenv::dotenv().ok();
+        let field = StructField {
+            field_name: "upper_name".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: Some(DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: None,
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: Some("string::uppercase($value.name)".to_string()),
+                comment: None,
+            }),
+            format: None,
+            validators: Vec::new(),
+            always_regenerate: false,
+            doccom: None,
+        };
+
+        let result = field
+            .generate_define_statement(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &"user".to_string(),
+            )
+            .unwrap();
+
+        assert!(result.contains("COMPUTED string::uppercase($value.name)"));
+        assert!(result.contains("TYPE string"));
+        assert!(!result.contains("DEFAULT"));
+        assert!(!result.contains("VALUE"));
+        assert!(!result.contains("ASSERT"));
+        assert!(!result.contains("READONLY"));
+    }
+
+    #[test]
+    fn generate_computed_field_with_comment() {
+        dotenv::dotenv().ok();
+        let field = StructField {
+            field_name: "upper_name".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: Some(DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: None,
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: Some("string::uppercase($value.name)".to_string()),
+                comment: Some("Auto-uppercased name".to_string()),
+            }),
+            format: None,
+            validators: Vec::new(),
+            always_regenerate: false,
+            doccom: None,
+        };
+
+        let result = field
+            .generate_define_statement(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &"user".to_string(),
+            )
+            .unwrap();
+
+        assert!(result.contains("COMPUTED string::uppercase($value.name)"));
+        assert!(result.contains("COMMENT 'Auto-uppercased name'"));
+    }
+
+    #[test]
+    fn generate_regular_field_with_comment() {
+        dotenv::dotenv().ok();
+        let field = StructField {
+            field_name: "email".to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: Some(DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: Some("''".to_string()),
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: None,
+                comment: Some("User email address".to_string()),
+            }),
+            format: None,
+            validators: Vec::new(),
+            always_regenerate: false,
+            doccom: None,
+        };
+
+        let result = field
+            .generate_define_statement(
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &"user".to_string(),
+            )
+            .unwrap();
+
+        assert!(result.contains("TYPE string"));
+        assert!(result.contains("DEFAULT ''"));
+        assert!(result.contains("COMMENT 'User email address'"));
+        assert!(!result.contains("COMPUTED"));
     }
 }

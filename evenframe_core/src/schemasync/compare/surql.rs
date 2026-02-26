@@ -837,7 +837,15 @@ impl<'a> SchemaImporter<'a> {
         }
 
         // Extract field name - it's after "DEFINE FIELD" and before "ON"
+        // Strip OVERWRITE / IF NOT EXISTS if present
         let after_field = statement.strip_prefix("DEFINE FIELD")?.trim();
+        let after_field = if after_field.starts_with("OVERWRITE ") {
+            after_field.strip_prefix("OVERWRITE ")?.trim()
+        } else if after_field.starts_with("IF NOT EXISTS ") {
+            after_field.strip_prefix("IF NOT EXISTS ")?.trim()
+        } else {
+            after_field
+        };
 
         // Check if this is an array wildcard field (e.g., phones[*])
         let (field_name, parent_array) = if let Some(bracket_pos) = after_field.find("[*]") {
@@ -857,65 +865,112 @@ impl<'a> SchemaImporter<'a> {
             (name.to_string(), None)
         };
 
-        // Extract type - it's after "TYPE" and before the next keyword or semicolon
-        let type_pos = statement.find(" TYPE ")?;
-        let after_type = &statement[type_pos + 6..].trim();
+        // Check for COMPUTED expression (SurrealDB 3.0)
+        let computed_expression = if let Some(computed_pos) = statement.find(" COMPUTED ") {
+            let after_computed = &statement[computed_pos + 10..].trim();
 
-        // Find the end of the type definition
-        let mut type_end = 0;
-        let mut bracket_count = 0;
-        let mut brace_count = 0;
-        let mut in_quotes = false;
-        let mut quote_char = ' ';
+            // Find the end of the computed expression (before TYPE, FLEXIBLE, PERMISSIONS, COMMENT, or ;)
+            let mut expr_end = 0;
+            let mut paren_count = 0;
+            let mut brace_count = 0;
+            let mut in_quotes = false;
+            let mut quote_char = ' ';
 
-        for (i, ch) in after_type.char_indices() {
-            // Handle quotes
-            if !in_quotes && (ch == '\'' || ch == '"') {
-                in_quotes = true;
-                quote_char = ch;
-            } else if in_quotes && ch == quote_char {
-                in_quotes = false;
-            }
-
-            if !in_quotes {
-                match ch {
-                    '<' => bracket_count += 1,
-                    '>' => bracket_count -= 1,
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    ' ' if bracket_count == 0
-                        && brace_count == 0
-                        && after_type[i..].starts_with(" DEFAULT") =>
-                    {
-                        type_end = i;
-                        break;
-                    }
-                    ' ' if bracket_count == 0
-                        && brace_count == 0
-                        && after_type[i..].starts_with(" ASSERT") =>
-                    {
-                        type_end = i;
-                        break;
-                    }
-                    ' ' if bracket_count == 0
-                        && brace_count == 0
-                        && after_type[i..].starts_with(" PERMISSIONS") =>
-                    {
-                        type_end = i;
-                        break;
-                    }
-                    ';' if bracket_count == 0 && brace_count == 0 => {
-                        type_end = i;
-                        break;
-                    }
-                    _ => {}
+            for (i, ch) in after_computed.char_indices() {
+                if !in_quotes && (ch == '\'' || ch == '"') {
+                    in_quotes = true;
+                    quote_char = ch;
+                } else if in_quotes && ch == quote_char {
+                    in_quotes = false;
                 }
-            }
-            type_end = i + 1;
-        }
 
-        let field_type_str = after_type[..type_end].trim().trim_end_matches(';');
-        let field_type = Self::parse_type_string(field_type_str);
+                if !in_quotes {
+                    match ch {
+                        '(' => paren_count += 1,
+                        ')' => paren_count -= 1,
+                        '{' => brace_count += 1,
+                        '}' => brace_count -= 1,
+                        ' ' if paren_count == 0
+                            && brace_count == 0
+                            && (after_computed[i..].starts_with(" TYPE ")
+                                || after_computed[i..].starts_with(" FLEXIBLE")
+                                || after_computed[i..].starts_with(" PERMISSIONS")
+                                || after_computed[i..].starts_with(" COMMENT")) =>
+                        {
+                            expr_end = i;
+                            break;
+                        }
+                        ';' if paren_count == 0 && brace_count == 0 => {
+                            expr_end = i;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                expr_end = i + 1;
+            }
+
+            Some(after_computed[..expr_end].trim().trim_end_matches(';').to_string())
+        } else {
+            None
+        };
+
+        // For computed fields, TYPE is optional; for regular fields, TYPE is required
+        let field_type = if let Some(type_pos) = statement.find(" TYPE ") {
+            let after_type = &statement[type_pos + 6..].trim();
+
+            // Find the end of the type definition
+            let mut type_end = 0;
+            let mut bracket_count = 0;
+            let mut brace_count = 0;
+            let mut in_quotes = false;
+            let mut quote_char = ' ';
+
+            for (i, ch) in after_type.char_indices() {
+                if !in_quotes && (ch == '\'' || ch == '"') {
+                    in_quotes = true;
+                    quote_char = ch;
+                } else if in_quotes && ch == quote_char {
+                    in_quotes = false;
+                }
+
+                if !in_quotes {
+                    match ch {
+                        '<' => bracket_count += 1,
+                        '>' => bracket_count -= 1,
+                        '{' => brace_count += 1,
+                        '}' => brace_count -= 1,
+                        ' ' if bracket_count == 0
+                            && brace_count == 0
+                            && (after_type[i..].starts_with(" DEFAULT")
+                                || after_type[i..].starts_with(" ASSERT")
+                                || after_type[i..].starts_with(" READONLY")
+                                || after_type[i..].starts_with(" VALUE")
+                                || after_type[i..].starts_with(" PERMISSIONS")
+                                || after_type[i..].starts_with(" COMMENT")) =>
+                        {
+                            type_end = i;
+                            break;
+                        }
+                        ';' if bracket_count == 0 && brace_count == 0 => {
+                            type_end = i;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                type_end = i + 1;
+            }
+
+            let field_type_str = after_type[..type_end].trim().trim_end_matches(';');
+            Self::parse_type_string(field_type_str)
+        } else if computed_expression.is_some() {
+            // Computed fields without explicit TYPE default to "any"
+            ObjectType::Simple("any".to_string())
+        } else {
+            // Regular fields without TYPE - shouldn't normally happen but handle gracefully
+            return None;
+        };
 
         // Check for DEFAULT value
         let has_default = statement.contains(" DEFAULT ");
@@ -942,13 +997,11 @@ impl<'a> SchemaImporter<'a> {
                             '{' => brace_count += 1,
                             '}' => brace_count -= 1,
                             ' ' if brace_count == 0
-                                && after_default[i..].starts_with(" ASSERT") =>
-                            {
-                                default_end = i;
-                                break;
-                            }
-                            ' ' if brace_count == 0
-                                && after_default[i..].starts_with(" PERMISSIONS") =>
+                                && (after_default[i..].starts_with(" ASSERT")
+                                    || after_default[i..].starts_with(" READONLY")
+                                    || after_default[i..].starts_with(" VALUE")
+                                    || after_default[i..].starts_with(" PERMISSIONS")
+                                    || after_default[i..].starts_with(" COMMENT")) =>
                             {
                                 default_end = i;
                                 break;
@@ -976,6 +1029,7 @@ impl<'a> SchemaImporter<'a> {
             let after_assert = &statement[assert_pos + 8..].trim();
             let assert_end = after_assert
                 .find(" PERMISSIONS")
+                .or_else(|| after_assert.find(" COMMENT"))
                 .unwrap_or(after_assert.len());
             let assert_content = after_assert[..assert_end].trim_end_matches(';');
             vec![assert_content.to_string()]
@@ -983,13 +1037,31 @@ impl<'a> SchemaImporter<'a> {
             Vec::new()
         };
 
+        // Extract COMMENT
+        let comment = if let Some(comment_pos) = statement.find(" COMMENT ") {
+            let after_comment = &statement[comment_pos + 9..].trim();
+            // Comment is a quoted string - extract it
+            let comment_str = after_comment.trim_end_matches(';').trim();
+            if (comment_str.starts_with('\'') && comment_str.ends_with('\''))
+                || (comment_str.starts_with('"') && comment_str.ends_with('"'))
+            {
+                Some(comment_str[1..comment_str.len() - 1].to_string())
+            } else {
+                Some(comment_str.to_string())
+            }
+        } else {
+            None
+        };
+
         Some(FieldDefinition {
             name: field_name.to_string(),
             field_type,
-            required: !has_default,
+            required: !has_default && computed_expression.is_none(),
             default_value,
             assertions,
             parent_array_field: parent_array,
+            computed_expression,
+            comment,
         })
     }
 
@@ -1184,5 +1256,89 @@ impl<'a> SchemaImporter<'a> {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_computed_field_definition() {
+        let stmt = "DEFINE FIELD upper_name ON TABLE user COMPUTED string::uppercase($value.name) TYPE string PERMISSIONS FOR select FULL FOR create FULL FOR update FULL";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "upper_name");
+        assert_eq!(
+            field.computed_expression,
+            Some("string::uppercase($value.name)".to_string())
+        );
+        assert_eq!(field.field_type, ObjectType::Simple("string".to_string()));
+        assert!(!field.required); // computed fields are not required
+    }
+
+    #[test]
+    fn parse_computed_field_without_type() {
+        let stmt = "DEFINE FIELD upper_name ON TABLE user COMPUTED string::uppercase($value.name) PERMISSIONS FOR select FULL";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "upper_name");
+        assert_eq!(
+            field.computed_expression,
+            Some("string::uppercase($value.name)".to_string())
+        );
+        assert_eq!(field.field_type, ObjectType::Simple("any".to_string()));
+    }
+
+    #[test]
+    fn parse_field_with_overwrite() {
+        let stmt = "DEFINE FIELD OVERWRITE name ON TABLE user TYPE string DEFAULT '' PERMISSIONS FOR select FULL";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "name");
+        assert_eq!(field.field_type, ObjectType::Simple("string".to_string()));
+        assert!(field.computed_expression.is_none());
+    }
+
+    #[test]
+    fn parse_field_with_if_not_exists() {
+        let stmt = "DEFINE FIELD IF NOT EXISTS name ON TABLE user TYPE string DEFAULT ''";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "name");
+        assert_eq!(field.field_type, ObjectType::Simple("string".to_string()));
+    }
+
+    #[test]
+    fn parse_field_with_comment() {
+        let stmt = "DEFINE FIELD email ON TABLE user TYPE string DEFAULT '' PERMISSIONS FOR select FULL COMMENT 'User email address'";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "email");
+        assert_eq!(field.comment, Some("User email address".to_string()));
+    }
+
+    #[test]
+    fn parse_computed_field_with_comment() {
+        let stmt = "DEFINE FIELD upper_name ON TABLE user COMPUTED string::uppercase($value.name) TYPE string COMMENT 'Auto-uppercased'";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "upper_name");
+        assert_eq!(
+            field.computed_expression,
+            Some("string::uppercase($value.name)".to_string())
+        );
+        assert_eq!(field.comment, Some("Auto-uppercased".to_string()));
+    }
+
+    #[test]
+    fn parse_regular_field_no_computed() {
+        let stmt = "DEFINE FIELD name ON TABLE user TYPE string DEFAULT '' PERMISSIONS FOR select FULL FOR create FULL FOR update FULL";
+        let field = SchemaImporter::parse_field_definition(stmt).unwrap();
+
+        assert_eq!(field.name, "name");
+        assert!(field.computed_expression.is_none());
+        assert!(field.comment.is_none());
+        assert_eq!(field.field_type, ObjectType::Simple("string".to_string()));
     }
 }

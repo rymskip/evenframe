@@ -3,7 +3,7 @@ members = ["evenframe_core", "evenframe", "evenframe_derive"]
 resolver = "2"
 
 [workspace.dependencies]
-try_from_expr = { version = "0.1.1", path = "../try_from_expr/try_from_expr" }
+try_from_expr = { version = "0.1.1", path = "../../try_from_expr/try_from_expr" }
 evenframe_core = { path = "evenframe_core" }
 serde_json = "1.0.142"
 regex = "1.11.1"

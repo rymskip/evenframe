@@ -57,6 +57,10 @@ pub struct FieldDefinition {
     pub assertions: Vec<String>,
     /// For array wildcard fields (e.g., phones[*]), this stores the parent field name
     pub parent_array_field: Option<String>,
+    /// SurrealDB 3.0 COMPUTED expression
+    pub computed_expression: Option<String>,
+    /// COMMENT string for the field
+    pub comment: Option<String>,
 }
 
 /// Represents a table definition in a schema
@@ -199,6 +203,14 @@ impl SchemaDefinition {
                     .map(|a| vec![a])
                     .unwrap_or_default(),
                 parent_array_field: None,
+                computed_expression: field
+                    .define_config
+                    .as_ref()
+                    .and_then(|dc| dc.computed.clone()),
+                comment: field
+                    .define_config
+                    .as_ref()
+                    .and_then(|dc| dc.comment.clone()),
             };
             fields.insert(field.field_name.clone(), field_def);
         }

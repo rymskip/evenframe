@@ -448,6 +448,51 @@ impl StructField {
             self.field_name, table_name
         );
 
+        // Handle computed fields (SurrealDB 3.0 COMPUTED syntax)
+        if let Some(ref def) = self.define_config
+            && let Some(ref computed_expr) = def.computed
+        {
+            stmt.push_str(&format!(" COMPUTED {}", computed_expr));
+
+            // TYPE is optional for computed fields but include if explicitly set or auto-detected
+            let type_str = if let Some(ref data_type) = def.data_type {
+                data_type.clone()
+            } else {
+                let (ts, _, _) = convert_type_iteratively(&self.field_type)?;
+                ts
+            };
+
+            if def.flexible.unwrap_or(false) {
+                stmt.push_str(" FLEXIBLE");
+            }
+
+            if !type_str.is_empty() {
+                stmt.push_str(&format!(" TYPE {}", type_str));
+            }
+
+            // Permissions for computed fields (select/create/update only, no delete)
+            let mut permissions = Vec::new();
+            if let Some(ref perm) = def.select_permissions {
+                permissions.push(format!("FOR select {}", perm));
+            }
+            if let Some(ref perm) = def.create_permissions {
+                permissions.push(format!("FOR create {}", perm));
+            }
+            if let Some(ref perm) = def.update_permissions {
+                permissions.push(format!("FOR update {}", perm));
+            }
+            if !permissions.is_empty() {
+                stmt.push_str(&format!(" PERMISSIONS {}", permissions.join(" ")));
+            }
+
+            if let Some(ref comment_str) = def.comment {
+                stmt.push_str(&format!(" COMMENT '{}'", comment_str.replace('\'', "\\'")));
+            }
+
+            stmt.push_str(";\n");
+            return Ok(stmt);
+        }
+
         let (type_str, needs_wildcard, wildcard_type) = if let Some(ref def) = self.define_config {
             if def.should_skip {
                 ("".to_string(), false, None)
@@ -521,6 +566,10 @@ impl StructField {
 
             if !permissions.is_empty() {
                 stmt.push_str(&format!(" PERMISSIONS {}", permissions.join(" ")));
+            }
+
+            if let Some(ref comment_str) = def.comment {
+                stmt.push_str(&format!(" COMMENT '{}'", comment_str.replace('\'', "\\'")));
             }
         }
 

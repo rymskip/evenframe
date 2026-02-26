@@ -1227,12 +1227,10 @@ mod tests {
     }
 
     // ==================== sort_tables_by_dependencies Tests ====================
-    // These tests are ignored because sort_tables_by_dependencies uses evenframe_log!
-    // which requires ABSOLUTE_PATH_TO_EVENFRAME environment variable
 
     #[test]
-    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
     fn test_sort_tables_empty() {
+        dotenv::dotenv().ok();
         let tables: HashMap<String, TableConfig> = HashMap::new();
         let objects: HashMap<String, StructConfig> = HashMap::new();
         let enums: HashMap<String, TaggedUnion> = HashMap::new();
@@ -1243,8 +1241,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
     fn test_sort_tables_no_dependencies() {
+        dotenv::dotenv().ok();
         let mut tables = HashMap::new();
         tables.insert(
             "user".to_string(),
@@ -1269,8 +1267,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
     fn test_sort_tables_with_dependency() {
+        dotenv::dotenv().ok();
         let mut tables = HashMap::new();
         tables.insert(
             "post".to_string(),
@@ -1299,8 +1297,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
     fn test_sort_tables_chain_dependency() {
+        dotenv::dotenv().ok();
         let mut tables = HashMap::new();
         tables.insert(
             "C".to_string(),
@@ -1332,8 +1330,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ABSOLUTE_PATH_TO_EVENFRAME environment variable"]
     fn test_sort_tables_circular_dependency() {
+        dotenv::dotenv().ok();
         let mut tables = HashMap::new();
         tables.insert(
             "A".to_string(),
