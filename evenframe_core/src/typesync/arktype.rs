@@ -1,6 +1,7 @@
 use crate::default::field_type_to_default_value;
 use crate::types::StructConfig;
 use crate::types::{FieldType, TaggedUnion, VariantData};
+use crate::typesync::doc_comment::format_jsdoc;
 use convert_case::{Case, Casing};
 use std::collections::HashMap;
 use tracing;
@@ -153,6 +154,11 @@ pub fn generate_arktype_type_string(
 
     // First, process all enums
     for schema_enum in enums.values() {
+        // Write doc comment if present
+        if let Some(ref doc) = schema_enum.doccom {
+            scope_output.push_str(&format_jsdoc(doc, ""));
+        }
+
         // Write the Arktype binding name
         scope_output.push_str(&format!(
             "{}: ",
@@ -202,6 +208,12 @@ pub fn generate_arktype_type_string(
     for struct_config in structs.values() {
         tracing::trace!(struct_name = %struct_config.struct_name, "Processing struct");
         let type_name = struct_config.struct_name.to_case(Case::Pascal);
+
+        // Write doc comment if present
+        if let Some(ref doc) = struct_config.doccom {
+            scope_output.push_str(&format_jsdoc(doc, ""));
+        }
+
         scope_output.push_str(&format!("{}: {{\n", type_name));
         defaults_output.push_str(&format!(
             "export const default{}: {} = {{\n",
@@ -210,6 +222,11 @@ pub fn generate_arktype_type_string(
 
         for field in &struct_config.fields {
             let field_name = field.field_name.to_case(Case::Camel);
+
+            // Write field doc comment if present
+            if let Some(ref doc) = field.doccom {
+                scope_output.push_str(&format_jsdoc(doc, "  "));
+            }
 
             scope_output.push_str(&format!(
                 "  {}: {}",

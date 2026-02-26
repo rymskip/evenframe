@@ -730,6 +730,7 @@ mod tests {
             format: None,
             validators: Vec::new(),
             always_regenerate: false,
+            doccom: None,
         }
     }
 
@@ -915,6 +916,7 @@ mod tests {
             struct_name: name.to_string(),
             fields,
             validators: Vec::new(),
+            doccom: None,
         }
     }
 
@@ -1108,12 +1110,15 @@ mod tests {
                         data: Some(VariantData::DataStructureRef(FieldType::Other(
                             "UserData".to_string(),
                         ))),
+                        doccom: None,
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
+                        doccom: None,
                     },
                 ],
+                doccom: None,
             },
         );
 
@@ -1600,7 +1605,9 @@ mod tests {
                     data: Some(VariantData::DataStructureRef(FieldType::Other(
                         "data_table".to_string(),
                     ))),
+                    doccom: None,
                 }],
+                doccom: None,
             },
         );
 

@@ -1140,6 +1140,7 @@ mod tests {
                 struct_name: "Person".to_string(),
                 fields: Vec::new(),
                 validators: Vec::new(),
+                doccom: None,
             },
             relation: None,
             permissions: None,

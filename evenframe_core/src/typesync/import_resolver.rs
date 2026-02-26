@@ -119,6 +119,7 @@ mod tests {
                 })
                 .collect(),
             validators: vec![],
+            doccom: None,
         }
     }
 

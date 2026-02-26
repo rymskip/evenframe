@@ -18,6 +18,8 @@ use std::collections::{HashMap, HashSet};
 pub struct TaggedUnion {
     pub enum_name: String,
     pub variants: Vec<Variant>,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,6 +77,8 @@ where
 pub struct Variant {
     pub name: String,
     pub data: Option<VariantData>,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -92,6 +96,8 @@ pub struct StructField {
     pub format: Option<Format>,
     pub validators: Vec<Validator>,
     pub always_regenerate: bool,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 impl StructField {
@@ -104,6 +110,7 @@ impl StructField {
             format: None,
             validators: Vec::new(),
             always_regenerate: false,
+            doccom: None,
         }
     }
 
@@ -116,6 +123,7 @@ impl StructField {
             format: None,
             validators: Vec::new(),
             always_regenerate: false,
+            doccom: None,
         }
     }
     pub fn generate_define_statement(
@@ -536,6 +544,8 @@ pub struct StructConfig {
     pub struct_name: String,
     pub fields: Vec<StructField>,
     pub validators: Vec<Validator>,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 #[cfg(test)]
@@ -549,10 +559,12 @@ mod tests {
         let tu1 = TaggedUnion {
             enum_name: "Status".to_string(),
             variants: vec![],
+            doccom: None,
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
             variants: vec![],
+            doccom: None,
         };
         assert_eq!(tu1, tu2);
     }
@@ -565,12 +577,15 @@ mod tests {
                 Variant {
                     name: "Active".to_string(),
                     data: None,
+                    doccom: None,
                 },
                 Variant {
                     name: "Inactive".to_string(),
                     data: None,
+                    doccom: None,
                 },
             ],
+            doccom: None,
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -583,7 +598,9 @@ mod tests {
             variants: vec![Variant {
                 name: "Red".to_string(),
                 data: None,
+                doccom: None,
             }],
+            doccom: None,
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -597,10 +614,12 @@ mod tests {
         let tu1 = TaggedUnion {
             enum_name: "A".to_string(),
             variants: vec![],
+            doccom: None,
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
             variants: vec![],
+            doccom: None,
         };
         set.insert(tu1);
         set.insert(tu2);
@@ -614,6 +633,7 @@ mod tests {
         let v = Variant {
             name: "None".to_string(),
             data: None,
+            doccom: None,
         };
         assert!(v.data.is_none());
     }
@@ -623,6 +643,7 @@ mod tests {
         let v = Variant {
             name: "Some".to_string(),
             data: Some(VariantData::DataStructureRef(FieldType::String)),
+            doccom: None,
         };
         assert!(matches!(v.data, Some(VariantData::DataStructureRef(FieldType::String))));
     }
@@ -633,10 +654,12 @@ mod tests {
             struct_name: "InnerData".to_string(),
             fields: vec![],
             validators: vec![],
+            doccom: None,
         };
         let v = Variant {
             name: "Complex".to_string(),
             data: Some(VariantData::InlineStruct(struct_config)),
+            doccom: None,
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }
@@ -657,6 +680,7 @@ mod tests {
             struct_name: "Test".to_string(),
             fields: vec![],
             validators: vec![],
+            doccom: None,
         });
         assert_ne!(vd1, vd2);
     }
@@ -694,6 +718,7 @@ mod tests {
             format: None,
             validators: vec![],
             always_regenerate: false,
+            doccom: None,
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -707,6 +732,7 @@ mod tests {
             struct_name: "Empty".to_string(),
             fields: vec![],
             validators: vec![],
+            doccom: None,
         };
         assert!(sc.fields.is_empty());
     }
@@ -724,6 +750,7 @@ mod tests {
                     format: None,
                     validators: vec![],
                     always_regenerate: false,
+                    doccom: None,
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -733,9 +760,11 @@ mod tests {
                     format: None,
                     validators: vec![],
                     always_regenerate: false,
+                    doccom: None,
                 },
             ],
             validators: vec![],
+            doccom: None,
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -746,6 +775,7 @@ mod tests {
             struct_name: "Test".to_string(),
             fields: vec![],
             validators: vec![],
+            doccom: None,
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -874,6 +904,7 @@ mod tests {
             struct_name: "".to_string(),
             fields: vec![],
             validators: vec![],
+            doccom: None,
         };
         assert!(sc.struct_name.is_empty());
     }
@@ -902,6 +933,7 @@ mod tests {
             format: None,
             validators: vec![Validator::StringValidator(StringValidator::Email)],
             always_regenerate: false,
+            doccom: None,
         };
         assert_eq!(field.validators.len(), 1);
     }

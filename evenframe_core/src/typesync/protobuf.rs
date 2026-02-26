@@ -7,6 +7,7 @@
 //! with common protobuf validation tooling.
 
 use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::doc_comment::format_double_slash;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -101,13 +102,19 @@ pub fn generate_protobuf_schema_string(
 /// Proto3 enums require the first value to be 0 (UNSPECIFIED).
 fn generate_enum(enum_def: &TaggedUnion) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
+    let mut output = String::new();
+
+    // Write doc comment if present
+    if let Some(ref doc) = enum_def.doccom {
+        output.push_str(&format_double_slash(doc, ""));
+    }
 
     // Check if this is a simple enum (no data variants) or needs to be a oneof
     let has_data_variants = enum_def.variants.iter().any(|v| v.data.is_some());
 
     if has_data_variants {
         // Generate as a message with oneof for variants with data
-        let mut output = format!("message {} {{\n", name);
+        output.push_str(&format!("message {} {{\n", name));
         output.push_str("    oneof variant {\n");
         for (i, variant) in enum_def.variants.iter().enumerate() {
             let variant_name = variant.name.to_case(Case::Snake);
@@ -129,11 +136,10 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
         }
         output.push_str("    }\n");
         output.push_str("}\n");
-        output
     } else {
         // Generate as a simple proto3 enum
         let enum_prefix = name.to_case(Case::UpperSnake);
-        let mut output = format!("enum {} {{\n", name);
+        output.push_str(&format!("enum {} {{\n", name));
 
         // Proto3 requires first value to be 0 (UNSPECIFIED)
         output.push_str(&format!("    {}_UNSPECIFIED = 0;\n", enum_prefix));
@@ -147,16 +153,28 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
             output.push_str(&format!("    {} = {};\n", variant_name, i + 1));
         }
         output.push_str("}\n");
-        output
     }
+    output
 }
 
 /// Generate a Protocol Buffers message from a StructConfig.
 fn generate_message(struct_config: &StructConfig, include_validators: bool) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
-    let mut output = format!("message {} {{\n", name);
+    let mut output = String::new();
+
+    // Write doc comment if present
+    if let Some(ref doc) = struct_config.doccom {
+        output.push_str(&format_double_slash(doc, ""));
+    }
+
+    output.push_str(&format!("message {} {{\n", name));
 
     for (index, field) in struct_config.fields.iter().enumerate() {
+        // Write field doc comment if present
+        if let Some(ref doc) = field.doccom {
+            output.push_str(&format_double_slash(doc, "    "));
+        }
+
         let field_number = index + 1;
         let field_name = field.field_name.to_case(Case::Snake);
         let (field_prefix, field_type) = field_type_to_protobuf_with_prefix(&field.field_type);
@@ -714,6 +732,7 @@ mod tests {
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 
@@ -758,16 +777,20 @@ mod tests {
                     Variant {
                         name: "Active".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "Pending".to_string(),
                         data: None,
+                        doccom: None,
                     },
                 ],
+                doccom: None,
             },
         );
 
@@ -825,6 +848,7 @@ mod tests {
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 
@@ -837,12 +861,15 @@ mod tests {
                     Variant {
                         name: "Admin".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "User".to_string(),
                         data: None,
+                        doccom: None,
                     },
                 ],
+                doccom: None,
             },
         );
 

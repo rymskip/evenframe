@@ -3,6 +3,7 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
+use crate::typesync::doc_comment::format_jsdoc;
 use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
@@ -58,11 +59,18 @@ pub fn generate_macroforge_type_string(
         {#for struct_config in &unique_structs}
             {$let name = struct_config.struct_name.to_case(Case::Pascal)}
             {$let field_count = struct_config.fields.len()}
+            {#if let Some(ref desc) = struct_config.doccom}
+                @{format_jsdoc(desc, "")}
+            {/if}
             @{"/** @derive(Deserialize) */"}
             export interface @{&name} {
                 {#for (index, field) in struct_config.fields.iter().enumerate()}
                     {$let validators_str = collect_validators_for_field(&field.validators, &field.field_type)}
-                    {#if !validators_str.is_empty()}
+                    {#if field.doccom.is_some() && !validators_str.is_empty()}
+                        @{format!("/**\n * {}\n * @serde({{ validate: [{}] }})\n */", field.doccom.as_ref().unwrap().replace("*/", "* /"), &validators_str)}
+                    {:else if field.doccom.is_some()}
+                        @{format!("/** {} */", field.doccom.as_ref().unwrap().replace("*/", "* /"))}
+                    {:else if !validators_str.is_empty()}
                         @{format!("/** @serde({{ validate: [{}] }}) */", &validators_str)}
                     {/if}
                     @{field.field_name.to_case(Case::Camel)}: @{field_type_to_typescript(&field.field_type)}{#if index + 1 != field_count};{/if}
@@ -73,6 +81,9 @@ pub fn generate_macroforge_type_string(
         {#for enum_def in &unique_enums}
             {$let name = enum_def.enum_name.to_case(Case::Pascal)}
             {$let variant_count = enum_def.variants.len()}
+            {#if let Some(ref desc) = enum_def.doccom}
+                @{format_jsdoc(desc, "")}
+            {/if}
             @{"/** @derive(Deserialize) */"}
             export type @{&name} =
                 {#for (index, variant) in enum_def.variants.iter().enumerate()}
@@ -143,11 +154,18 @@ pub fn generate_macroforge_for_types(
         {#for struct_config in &filtered_structs}
             {$let name = struct_config.struct_name.to_case(Case::Pascal)}
             {$let field_count = struct_config.fields.len()}
+            {#if let Some(ref desc) = struct_config.doccom}
+                @{format_jsdoc(desc, "")}
+            {/if}
             @{"/** @derive(Deserialize) */"}
             export interface @{&name} {
                 {#for (index, field) in struct_config.fields.iter().enumerate()}
                     {$let validators_str = collect_validators_for_field(&field.validators, &field.field_type)}
-                    {#if !validators_str.is_empty()}
+                    {#if field.doccom.is_some() && !validators_str.is_empty()}
+                        @{format!("/**\n * {}\n * @serde({{ validate: [{}] }})\n */", field.doccom.as_ref().unwrap().replace("*/", "* /"), &validators_str)}
+                    {:else if field.doccom.is_some()}
+                        @{format!("/** {} */", field.doccom.as_ref().unwrap().replace("*/", "* /"))}
+                    {:else if !validators_str.is_empty()}
                         @{format!("/** @serde({{ validate: [{}] }}) */", &validators_str)}
                     {/if}
                     @{field.field_name.to_case(Case::Camel)}: @{field_type_to_typescript(&field.field_type)}{#if index + 1 != field_count};{/if}
@@ -158,6 +176,9 @@ pub fn generate_macroforge_for_types(
         {#for enum_def in &filtered_enums}
             {$let name = enum_def.enum_name.to_case(Case::Pascal)}
             {$let variant_count = enum_def.variants.len()}
+            {#if let Some(ref desc) = enum_def.doccom}
+                @{format_jsdoc(desc, "")}
+            {/if}
             @{"/** @derive(Deserialize) */"}
             export type @{&name} =
                 {#for (index, variant) in enum_def.variants.iter().enumerate()}
@@ -493,6 +514,7 @@ fn escape_for_jsdoc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,6 +713,7 @@ mod tests {
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 

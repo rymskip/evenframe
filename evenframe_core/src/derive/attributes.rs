@@ -497,6 +497,34 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
     Ok(None)
 }
 
+pub fn parse_doccom_attribute(attrs: &[Attribute]) -> Result<Option<String>, syn::Error> {
+    for attr in attrs {
+        if attr.path().is_ident("doccom") {
+            let lit: LitStr = attr.parse_args().map_err(|e| {
+                syn::Error::new(
+                    attr.span(),
+                    format!(
+                        "Failed to parse doccom attribute: {}\n\nExpected usage: #[doccom(\"Description text\")]",
+                        e
+                    ),
+                )
+            })?;
+
+            let value = lit.value();
+
+            if value.trim().is_empty() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "Doc comment cannot be empty or whitespace-only.\n\nExample: #[doccom(\"A user account in the system\")]",
+                ));
+            }
+
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
 pub fn parse_format_attribute(
     attrs: &[Attribute],
 ) -> Result<Option<proc_macro2::TokenStream>, syn::Error> {

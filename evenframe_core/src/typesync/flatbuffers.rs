@@ -4,6 +4,7 @@
 //! `(validate: "...")` attributes at the field level for validators.
 
 use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::doc_comment::format_triple_slash;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -82,13 +83,19 @@ pub fn generate_flatbuffers_schema_string(
 /// Generate a FlatBuffers enum or union from a TaggedUnion.
 fn generate_enum(enum_def: &TaggedUnion) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
+    let mut output = String::new();
+
+    // Write doc comment if present
+    if let Some(ref doc) = enum_def.doccom {
+        output.push_str(&format_triple_slash(doc, ""));
+    }
 
     // Check if this is a simple enum (no data variants) or a union
     let has_data_variants = enum_def.variants.iter().any(|v| v.data.is_some());
 
     if has_data_variants {
         // Generate as FlatBuffers union
-        let mut output = format!("union {} {{\n", name);
+        output.push_str(&format!("union {} {{\n", name));
         for variant in &enum_def.variants {
             if let Some(data) = &variant.data {
                 let type_name = match data {
@@ -100,10 +107,9 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
             // Simple variants in unions are skipped (FlatBuffers unions only contain tables)
         }
         output.push_str("}\n");
-        output
     } else {
         // Generate as FlatBuffers enum
-        let mut output = format!("enum {} : byte {{\n", name);
+        output.push_str(&format!("enum {} : byte {{\n", name));
         for (i, variant) in enum_def.variants.iter().enumerate() {
             output.push_str(&format!("    {} = {}", variant.name, i));
             if i < enum_def.variants.len() - 1 {
@@ -112,16 +118,28 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
             output.push('\n');
         }
         output.push_str("}\n");
-        output
     }
+    output
 }
 
 /// Generate a FlatBuffers table from a StructConfig.
 fn generate_table(struct_config: &StructConfig) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
-    let mut output = format!("table {} {{\n", name);
+    let mut output = String::new();
+
+    // Write doc comment if present
+    if let Some(ref doc) = struct_config.doccom {
+        output.push_str(&format_triple_slash(doc, ""));
+    }
+
+    output.push_str(&format!("table {} {{\n", name));
 
     for field in &struct_config.fields {
+        // Write field doc comment if present
+        if let Some(ref doc) = field.doccom {
+            output.push_str(&format_triple_slash(doc, "    "));
+        }
+
         let field_name = field.field_name.to_case(Case::Snake);
         let field_type = field_type_to_flatbuffers(&field.field_type);
         let validators_str = collect_validators_for_field(&field.validators);
@@ -676,6 +694,7 @@ mod tests {
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 
@@ -709,16 +728,20 @@ mod tests {
                     Variant {
                         name: "Active".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "Pending".to_string(),
                         data: None,
+                        doccom: None,
                     },
                 ],
+                doccom: None,
             },
         );
 
@@ -778,6 +801,7 @@ mod tests {
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 
@@ -790,12 +814,15 @@ mod tests {
                     Variant {
                         name: "Admin".to_string(),
                         data: None,
+                        doccom: None,
                     },
                     Variant {
                         name: "User".to_string(),
                         data: None,
+                        doccom: None,
                     },
                 ],
+                doccom: None,
             },
         );
 

@@ -75,6 +75,7 @@ fn convert_table(table: &TableDef) -> StructConfig {
         struct_name: table.name.clone(),
         fields,
         validators: Vec::new(), // Validators will be extracted separately
+        doccom: None,
     }
 }
 
@@ -85,6 +86,7 @@ fn convert_struct(struct_def: &StructDef) -> StructConfig {
         struct_name: struct_def.name.clone(),
         fields,
         validators: Vec::new(),
+        doccom: None,
     }
 }
 
@@ -97,6 +99,7 @@ fn convert_field(field: &FieldDef) -> StructField {
         format: None,
         validators: Vec::new(), // Validators extracted separately
         always_regenerate: false,
+        doccom: None,
     }
 }
 
@@ -136,12 +139,14 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         .map(|v| Variant {
             name: v.name.clone(),
             data: None, // FlatBuffers enums don't have associated data
+            doccom: None,
         })
         .collect();
 
     TaggedUnion {
         enum_name: enum_def.name.clone(),
         variants,
+        doccom: None,
     }
 }
 
@@ -157,6 +162,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                 data: Some(VariantData::DataStructureRef(FieldType::Other(
                     type_name.clone(),
                 ))),
+                doccom: None,
             }
         })
         .collect();
@@ -164,6 +170,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
     TaggedUnion {
         enum_name: union_def.name.clone(),
         variants,
+        doccom: None,
     }
 }
 

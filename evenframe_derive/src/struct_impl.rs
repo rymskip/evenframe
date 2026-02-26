@@ -206,7 +206,8 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                     define_config: #define_config_tokens,
                     format: #format_tokens,
                     validators: #validators_tokens,
-                    always_regenerate: false
+                    always_regenerate: false,
+                    doccom: None,
                 }
             });
 
@@ -276,6 +277,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                                 struct_name: #struct_name.to_owned(),
                                 fields: vec![ #(#table_field_tokens),* ],
                                 validators: #table_validators_tokens,
+                                doccom: None,
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,

@@ -87,6 +87,7 @@ fn convert_message(
         struct_name: name.clone(),
         fields,
         validators: Vec::new(),
+        doccom: None,
     };
 
     result.structs.insert(name.clone(), struct_config);
@@ -145,6 +146,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
         format: None,
         validators: Vec::new(),
         always_regenerate: false,
+        doccom: None,
     }
 }
 
@@ -205,12 +207,14 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         .map(|v| Variant {
             name: v.name().to_string(),
             data: None, // Protobuf enums don't have associated data
+            doccom: None,
         })
         .collect();
 
     TaggedUnion {
         enum_name: enum_type.name().to_string(),
         variants,
+        doccom: None,
     }
 }
 

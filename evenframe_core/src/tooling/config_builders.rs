@@ -5,8 +5,8 @@ use crate::error::Result;
 use crate::{
     derive::{
         attributes::{
-            parse_event_attributes, parse_format_attribute_bin, parse_mock_data_attribute,
-            parse_relation_attribute, parse_table_validators,
+            parse_doccom_attribute, parse_event_attributes, parse_format_attribute_bin,
+            parse_mock_data_attribute, parse_relation_attribute, parse_table_validators,
         },
         validator_parser::parse_field_validators_as_enums,
     },
@@ -264,6 +264,8 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         .ok()
         .unwrap_or_default();
 
+    let doccom = parse_doccom_attribute(&item_struct.attrs).ok().flatten();
+
     Some(StructConfig {
         struct_name,
         fields,
@@ -271,6 +273,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
             .into_iter()
             .map(|v| Validator::StringValidator(StringValidator::StringEmbedded(v)))
             .collect(),
+        doccom,
     })
 }
 
@@ -279,9 +282,13 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
     trace!("Parsing enum config for: {}", enum_name);
     let mut variants = Vec::new();
 
+    let enum_doccom = parse_doccom_attribute(&item_enum.attrs).ok().flatten();
+
     for variant in &item_enum.variants {
         let variant_name = variant.ident.to_string();
         trace!("Processing variant: {} in enum {}", variant_name, enum_name);
+
+        let variant_doccom = parse_doccom_attribute(&variant.attrs).ok().flatten();
 
         let data = match &variant.fields {
             Fields::Unit => None,
@@ -313,6 +320,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                     struct_name: variant_name.clone(),
                     fields: struct_fields,
                     validators: vec![],
+                    doccom: None,
                 }))
             }
         };
@@ -320,12 +328,14 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         variants.push(Variant {
             name: variant_name,
             data,
+            doccom: variant_doccom,
         });
     }
 
     Some(TaggedUnion {
         enum_name,
         variants,
+        doccom: enum_doccom,
     })
 }
 
@@ -345,6 +355,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
         let define_config = DefineConfig::parse(field).ok().flatten();
         let format = parse_format_attribute_bin(&field.attrs).ok().flatten();
         let validators = parse_field_validators_as_enums(&field.attrs);
+        let doccom = parse_doccom_attribute(&field.attrs).ok().flatten();
 
         struct_fields.push(StructField {
             field_name,
@@ -354,6 +365,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             format,
             validators,
             always_regenerate: false,
+            doccom,
         });
     }
     struct_fields

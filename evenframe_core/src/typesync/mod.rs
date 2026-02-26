@@ -1,5 +1,6 @@
 pub mod arktype;
 pub mod config;
+pub mod doc_comment;
 pub mod effect;
 pub mod effect_template;
 pub mod file_grouping;

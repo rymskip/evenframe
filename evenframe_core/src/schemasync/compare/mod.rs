@@ -1289,6 +1289,7 @@ impl<'a> Merger<'a> {
                         define_config: None,
                         validators: Vec::new(),
                         always_regenerate: false,
+                        doccom: None,
                     };
                     Self::generate_field_value(&inner_field, _table_config)
                 } else {

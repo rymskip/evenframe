@@ -42,6 +42,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                         format: None,
                                         validators: vec![],
                                         always_regenerate: false,
+                                        doccom: None,
                                     }
                                 }
                             })
@@ -52,6 +53,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                 struct_name: format!("{}_{}", #enum_name, #variant_name),
                                 fields: vec![#(#struct_fields),*],
                                 validators: vec![],
+                                doccom: None,
                             }))
                         }
                     }
@@ -73,6 +75,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                     format: None,
                                     validators: vec![],
                                     always_regenerate: false,
+                                    doccom: None,
                                 }
                             }
                         })
@@ -83,6 +86,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                             struct_name: format!("{}_{}", #enum_name, #variant_name),
                             fields: vec![#(#struct_fields),*],
                             validators: vec![],
+                            doccom: None,
                         }))
                     }
                 }
@@ -92,6 +96,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                 Variant {
                     name: #variant_name.to_string(),
                     data: #variant_data,
+                    doccom: None,
                 }
             });
         }
@@ -119,6 +124,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                         TaggedUnion {
                             enum_name: #enum_name.to_string(),
                             variants: vec![#(#variant_tokens),*],
+                            doccom: None,
                         }
                     }
                 }

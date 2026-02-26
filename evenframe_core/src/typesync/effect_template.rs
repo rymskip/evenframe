@@ -488,6 +488,7 @@ mod tests {
                         define_config: None,
                         format: None,
                         always_regenerate: false,
+                        doccom: None,
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -497,6 +498,7 @@ mod tests {
                         define_config: None,
                         format: None,
                         always_regenerate: false,
+                        doccom: None,
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -506,9 +508,11 @@ mod tests {
                         define_config: None,
                         format: None,
                         always_regenerate: false,
+                        doccom: None,
                     },
                 ],
                 validators: vec![],
+                doccom: None,
             },
         );
 

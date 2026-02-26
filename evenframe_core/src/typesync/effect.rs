@@ -1,5 +1,6 @@
 use crate::dependency::{RecursionInfo, analyse_recursion, deps_of};
 use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::doc_comment::format_jsdoc;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -77,6 +78,11 @@ pub fn generate_effect_schema_string(
                 .find(|e| e.enum_name.to_case(Case::Pascal) == name)
             {
                 // ---- ENUM ---------------------------------------------------
+                // Write doc comment if present
+                if let Some(ref doc) = e.doccom {
+                    out_classes.push_str(&format_jsdoc(doc, ""));
+                }
+
                 // Generate the schema class for the enum.
                 out_classes.push_str(&format!("export const {} = Schema.Union(", name));
                 let variants = e
@@ -111,6 +117,11 @@ pub fn generate_effect_schema_string(
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
             {
                 // ---- STRUCT -------------------------------------------------
+                // Write doc comment if present
+                if let Some(ref doc) = struct_config.doccom {
+                    out_classes.push_str(&format_jsdoc(doc, ""));
+                }
+
                 // Generate the schema class for the struct.
                 out_classes.push_str(&format!(
                     "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
@@ -124,6 +135,11 @@ pub fn generate_effect_schema_string(
                     let field_name_title = f.field_name.to_case(Case::Title);
 
                     let is_optional = matches!(f.field_type, FieldType::Option(_));
+
+                    // Write field doc comment if present
+                    if let Some(ref doc) = f.doccom {
+                        out_classes.push_str(&format_jsdoc(doc, "  "));
+                    }
 
                     let final_schema = if !is_optional {
                         format!(
@@ -579,6 +595,9 @@ pub fn generate_effect_schema_for_types(
                 .values()
                 .find(|e| e.enum_name.to_case(Case::Pascal) == name)
             {
+                if let Some(ref doc) = e.doccom {
+                    out_classes.push_str(&format_jsdoc(doc, ""));
+                }
                 out_classes.push_str(&format!("export const {} = Schema.Union(", name));
                 let variants = e
                     .variants
@@ -607,6 +626,9 @@ pub fn generate_effect_schema_for_types(
                 .values()
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
             {
+                if let Some(ref doc) = struct_config.doccom {
+                    out_classes.push_str(&format_jsdoc(doc, ""));
+                }
                 out_classes.push_str(&format!(
                     "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
                     name, name, name
@@ -619,6 +641,10 @@ pub fn generate_effect_schema_for_types(
                     let field_name_title = f.field_name.to_case(Case::Title);
 
                     let is_optional = matches!(f.field_type, FieldType::Option(_));
+
+                    if let Some(ref doc) = f.doccom {
+                        out_classes.push_str(&format_jsdoc(doc, "  "));
+                    }
 
                     let final_schema = if !is_optional {
                         format!(
