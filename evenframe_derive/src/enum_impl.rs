@@ -1,4 +1,7 @@
-use evenframe_core::types::FieldType;
+use evenframe_core::{
+    derive::attributes::{parse_annotation_attributes, parse_macroforge_derive_attribute},
+    types::FieldType,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
@@ -8,10 +11,29 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
 
     if let Data::Enum(ref data_enum) = input.data {
         let enum_name = ident.to_string();
+
+        // Parse enum-level macroforge_derive attribute
+        let macroforge_derives = match parse_macroforge_derive_attribute(&input.attrs) {
+            Ok(derives) => derives,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        // Parse enum-level annotation attributes
+        let enum_annotations = match parse_annotation_attributes(&input.attrs) {
+            Ok(annotations) => annotations,
+            Err(err) => return err.to_compile_error(),
+        };
+
         let mut variant_tokens = Vec::new();
 
         for variant in &data_enum.variants {
             let variant_name = variant.ident.to_string();
+
+            // Parse variant-level annotation attributes
+            let variant_annotations = match parse_annotation_attributes(&variant.attrs) {
+                Ok(annotations) => annotations,
+                Err(err) => return err.to_compile_error(),
+            };
 
             let variant_data = match &variant.fields {
                 Fields::Unit => {
@@ -43,6 +65,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                         validators: vec![],
                                         always_regenerate: false,
                                         doccom: None,
+                                        annotations: vec![],
                                     }
                                 }
                             })
@@ -54,6 +77,8 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                 fields: vec![#(#struct_fields),*],
                                 validators: vec![],
                                 doccom: None,
+                                macroforge_derives: vec![],
+                                annotations: vec![],
                             }))
                         }
                     }
@@ -76,6 +101,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                     validators: vec![],
                                     always_regenerate: false,
                                     doccom: None,
+                                    annotations: vec![],
                                 }
                             }
                         })
@@ -87,9 +113,17 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                             fields: vec![#(#struct_fields),*],
                             validators: vec![],
                             doccom: None,
+                            macroforge_derives: vec![],
+                            annotations: vec![],
                         }))
                     }
                 }
+            };
+
+            let variant_annotations_tokens = if variant_annotations.is_empty() {
+                quote! { vec![] }
+            } else {
+                quote! { vec![#(#variant_annotations.to_string()),*] }
             };
 
             variant_tokens.push(quote! {
@@ -97,6 +131,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                     name: #variant_name.to_string(),
                     data: #variant_data,
                     doccom: None,
+                    annotations: #variant_annotations_tokens,
                 }
             });
         }
@@ -121,10 +156,14 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
 
                 impl EvenframeTaggedUnion for #ident {
                     fn variants() -> TaggedUnion {
+                        let macroforge_derives_val: Vec<String> = vec![#(#macroforge_derives.to_string()),*];
+                        let enum_annotations_val: Vec<String> = vec![#(#enum_annotations.to_string()),*];
                         TaggedUnion {
                             enum_name: #enum_name.to_string(),
                             variants: vec![#(#variant_tokens),*],
                             doccom: None,
+                            macroforge_derives: macroforge_derives_val,
+                            annotations: enum_annotations_val,
                         }
                     }
                 }

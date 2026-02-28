@@ -19,7 +19,9 @@ mod union_impl;
         validators,
         relation,
         event,
-        doccom
+        doccom,
+        macroforge_derive,
+        annotation
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {
@@ -39,7 +41,7 @@ pub fn evenframe_derive(input: TokenStream) -> TokenStream {
 
 /// Derive macro for unions of persistable structs
 /// Each variant must contain exactly one persistable struct type
-#[proc_macro_derive(EvenframeUnion)]
+#[proc_macro_derive(EvenframeUnion, attributes(macroforge_derive, annotation))]
 pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 

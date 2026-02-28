@@ -2,7 +2,8 @@ use crate::{deserialization_impl::generate_custom_deserialize, imports::generate
 use evenframe_core::{
     derive::{
         attributes::{
-            parse_event_attributes, parse_format_attribute, parse_mock_data_attribute,
+            parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
+            parse_macroforge_derive_attribute, parse_mock_data_attribute,
             parse_relation_attribute,
         },
         validator_parser::parse_field_validators,
@@ -82,6 +83,18 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 )
                 .to_compile_error();
             }
+        };
+
+        // Parse macroforge_derive attribute
+        let macroforge_derives = match parse_macroforge_derive_attribute(&input.attrs) {
+            Ok(derives) => derives,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        // Parse annotation attributes
+        let struct_annotations = match parse_annotation_attributes(&input.attrs) {
+            Ok(annotations) => annotations,
+            Err(err) => return err.to_compile_error(),
         };
 
         // Check if an "id" field exists.
@@ -191,11 +204,23 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 quote! { None }
             };
 
+            // Parse field-level annotations
+            let field_annotations = match parse_annotation_attributes(&field.attrs) {
+                Ok(annotations) => annotations,
+                Err(err) => return err.to_compile_error(),
+            };
+
             // Build validators token for this field
             let validators_tokens = if field_validators.is_empty() {
                 quote! { vec![] }
             } else {
                 quote! { vec![#(#field_validators),*] }
+            };
+
+            let field_annotations_tokens = if field_annotations.is_empty() {
+                quote! { vec![] }
+            } else {
+                quote! { vec![#(#field_annotations.to_string()),*] }
             };
 
             table_field_tokens.push(quote! {
@@ -208,6 +233,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                     validators: #validators_tokens,
                     always_regenerate: false,
                     doccom: None,
+                    annotations: #field_annotations_tokens,
                 }
             });
 
@@ -267,6 +293,18 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
             quote! { vec![#(#event_configs),*] }
         };
 
+        let macroforge_derives_tokens = if macroforge_derives.is_empty() {
+            quote! { vec![] }
+        } else {
+            quote! { vec![#(#macroforge_derives.to_string()),*] }
+        };
+
+        let struct_annotations_tokens = if struct_annotations.is_empty() {
+            quote! { vec![] }
+        } else {
+            quote! { vec![#(#struct_annotations.to_string()),*] }
+        };
+
         let evenframe_persistable_struct_impl = {
             quote! {
                 impl EvenframePersistableStruct for #ident {
@@ -278,6 +316,8 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                                 fields: vec![ #(#table_field_tokens),* ],
                                 validators: #table_validators_tokens,
                                 doccom: None,
+                                macroforge_derives: #macroforge_derives_tokens,
+                                annotations: #struct_annotations_tokens,
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,
