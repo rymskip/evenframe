@@ -5,12 +5,14 @@ mod workspace_scanner;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use evenframe_core::{error::Result, evenframe_log};
+use evenframe_core::{config::EvenframeConfig, error::Result, evenframe_log};
 use tracing::{error, info, Level};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv::dotenv().ok();
+    // Early env load for logging macros that need env vars before full config init.
+    // EvenframeConfig::new() will do the authoritative load from the configured path.
+    EvenframeConfig::load_env_early();
 
     let cli = Cli::parse();
 

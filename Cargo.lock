@@ -1516,7 +1516,6 @@ version = "0.1.3"
 dependencies = [
  "clap",
  "convert_case 0.11.0",
- "dotenv",
  "evenframe_core",
  "evenframe_derive",
  "linkme",

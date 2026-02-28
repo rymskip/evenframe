@@ -12,9 +12,13 @@ use evenframe_core::{
         file_grouping::compute_file_grouping,
         flatbuffers::generate_flatbuffers_schema_string,
         import_resolver::{
-            format_imports, generate_barrel_file, resolve_imports, type_name_to_filename,
+            barrel_filename, format_imports, generate_barrel_file, resolve_imports,
+            type_name_to_filename,
         },
-        macroforge::{generate_macroforge_for_types, generate_macroforge_type_string},
+        macroforge::{
+            compute_extra_imports, compute_macro_import_line, generate_macroforge_for_types,
+            generate_macroforge_type_string,
+        },
         protobuf::generate_protobuf_schema_string,
     },
 };
@@ -58,6 +62,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     };
     let barrel_file = config.typesync.output.barrel_file;
     let file_naming = config.typesync.output.file_naming;
+    let file_extension = &config.typesync.output.file_extension;
 
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
@@ -86,6 +91,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         "effect",
                         barrel_file,
                         file_naming,
+                        file_extension,
                     )?,
                 }
             }
@@ -100,9 +106,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         &structs,
                         &enums,
                         &config.typesync.output_path,
-                        "macroforge",
                         barrel_file,
                         file_naming,
+                        file_extension,
                     )?,
                 }
             }
@@ -198,6 +204,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         "effect",
                         barrel_file,
                         file_naming,
+                        file_extension,
                     )?;
                 }
             },
@@ -211,9 +218,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         &structs,
                         &enums,
                         &config.typesync.output_path,
-                        "macroforge",
                         barrel_file,
                         file_naming,
+                        file_extension,
                     )?;
                 }
             },
@@ -282,6 +289,7 @@ fn generate_effect_per_file(
     subdir: &str,
     barrel_file: bool,
     naming: FileNamingConvention,
+    file_ext: &str,
 ) -> Result<()> {
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path).join(subdir);
@@ -294,7 +302,7 @@ fn generate_effect_per_file(
     );
 
     for group in &plan.groups {
-        let imports = resolve_imports(group, &plan, structs, enums, naming);
+        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
         let body = generate_effect_schema_for_types(&type_names, structs, enums);
 
@@ -309,14 +317,14 @@ fn generate_effect_per_file(
         file_content.push_str(&body);
 
         let filename = type_name_to_filename(&group.primary_type, naming);
-        let file_path = dir.join(format!("{}.ts", filename));
+        let file_path = dir.join(format!("{}{}", filename, file_ext));
         std::fs::write(&file_path, file_content)?;
         debug!("Written {}", file_path.display());
     }
 
     if barrel_file {
-        let barrel_content = generate_barrel_file(&plan, naming);
-        let barrel_path = dir.join("index.ts");
+        let barrel_content = generate_barrel_file(&plan, naming, file_ext);
+        let barrel_path = dir.join(barrel_filename(file_ext));
         std::fs::write(&barrel_path, barrel_content)?;
         debug!("Written barrel file {}", barrel_path.display());
     }
@@ -341,13 +349,13 @@ fn generate_macroforge_per_file(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     base_output_path: &str,
-    subdir: &str,
     barrel_file: bool,
     naming: FileNamingConvention,
+    file_ext: &str,
 ) -> Result<()> {
     let plan = compute_file_grouping(structs, enums);
-    let dir = Path::new(base_output_path).join(subdir);
-    std::fs::create_dir_all(&dir)?;
+    let dir = Path::new(base_output_path);
+    std::fs::create_dir_all(dir)?;
 
     info!(
         "Generating Macroforge types (per-file) to {} ({} files)",
@@ -356,11 +364,25 @@ fn generate_macroforge_per_file(
     );
 
     for group in &plan.groups {
-        let imports = resolve_imports(group, &plan, structs, enums, naming);
+        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
         let body = generate_macroforge_for_types(&type_names, structs, enums);
 
         let mut file_content = String::new();
+
+        // Add macro import line if types have non-standard derives
+        if let Some(macro_import) = compute_macro_import_line(&type_names, structs, enums) {
+            file_content.push_str(&macro_import);
+            file_content.push('\n');
+        }
+
+        // Add extra imports (effect types, RecordLink)
+        let extra_imports = compute_extra_imports(&type_names, structs, enums);
+        for import_line in &extra_imports {
+            file_content.push_str(import_line);
+            file_content.push('\n');
+        }
+
         let import_lines = format_imports(&imports);
         if !import_lines.is_empty() {
             file_content.push_str(&import_lines);
@@ -372,14 +394,14 @@ fn generate_macroforge_per_file(
         file_content.push_str(&body);
 
         let filename = type_name_to_filename(&group.primary_type, naming);
-        let file_path = dir.join(format!("{}.ts", filename));
+        let file_path = dir.join(format!("{}{}", filename, file_ext));
         std::fs::write(&file_path, file_content)?;
         debug!("Written {}", file_path.display());
     }
 
     if barrel_file {
-        let barrel_content = generate_barrel_file(&plan, naming);
-        let barrel_path = dir.join("index.ts");
+        let barrel_content = generate_barrel_file(&plan, naming, file_ext);
+        let barrel_path = dir.join(barrel_filename(file_ext));
         std::fs::write(&barrel_path, barrel_content)?;
         debug!("Written barrel file {}", barrel_path.display());
     }
