@@ -1141,6 +1141,8 @@ mod tests {
                 fields: Vec::new(),
                 validators: Vec::new(),
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
             relation: None,
             permissions: None,

@@ -417,6 +417,8 @@ mod tests {
                 fields: Vec::new(),
                 validators: Vec::new(),
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
             relation: None,
             permissions: None,
@@ -470,6 +472,7 @@ mod tests {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         };
 
         let result = field
@@ -515,6 +518,7 @@ mod tests {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         };
 
         let result = field
@@ -556,6 +560,7 @@ mod tests {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         };
 
         let result = field

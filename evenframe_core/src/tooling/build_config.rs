@@ -96,11 +96,19 @@ impl BuildConfig {
         Self::parse_toml(&content, path)
     }
 
-    /// Searches for evenframe.toml starting from the given directory.
+    /// Searches for `.evenframe/config.toml` (preferred) or `evenframe.toml` (fallback)
+    /// starting from the given directory.
     fn from_toml_search(start_dir: &Path) -> Result<Self, EvenframeError> {
         let mut current = start_dir.to_path_buf();
 
         loop {
+            // Check .evenframe/config.toml first (preferred)
+            let dotdir_config = current.join(".evenframe").join("config.toml");
+            if dotdir_config.exists() {
+                return Self::from_toml_path(&dotdir_config);
+            }
+
+            // Fall back to evenframe.toml
             let config_path = current.join("evenframe.toml");
             if config_path.exists() {
                 return Self::from_toml_path(&config_path);
@@ -131,12 +139,20 @@ impl BuildConfig {
                 .collect();
         }
 
+        // Derive project root: for .evenframe/config.toml go up one more level
+        let config_dir = path.parent().unwrap_or(Path::new("."));
+        let project_root =
+            if config_dir.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
+                config_dir.parent().unwrap_or(Path::new("."))
+            } else {
+                config_dir
+            };
+
         // Parse [typesync] section
         if let Some(typesync) = value.get("typesync").and_then(|v| v.as_table()) {
             if let Some(output) = typesync.get("output_path").and_then(|v| v.as_str()) {
-                // Resolve relative paths from the config file's directory
-                let base_dir = path.parent().unwrap_or(Path::new("."));
-                config.output_path = base_dir.join(output);
+                // Resolve relative paths from the project root
+                config.output_path = project_root.join(output);
             }
 
             if let Some(v) = typesync.get("should_generate_arktype_types") {
@@ -193,10 +209,8 @@ impl BuildConfig {
             }
         }
 
-        // Set scan_path to the directory containing the config file
-        if let Some(parent) = path.parent() {
-            config.scan_path = parent.to_path_buf();
-        }
+        // Set scan_path to the project root
+        config.scan_path = project_root.to_path_buf();
 
         Ok(config)
     }

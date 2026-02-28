@@ -93,9 +93,6 @@ impl<'a> Schemasync<'a> {
     /// Initialize database connection and config from environment
     async fn initialize(&mut self) -> Result<()> {
         info!("Initializing Schemasync database connection and configuration");
-        dotenv::dotenv().ok();
-        debug!("Loaded environment variables from .env file");
-
         let config = EvenframeConfig::new()?;
         debug!("Loaded Evenframe configuration successfully");
         trace!("Database URL: {}", config.schemasync.database.url);
@@ -475,25 +472,25 @@ impl<'a> Schemasync<'a> {
         db: &Surreal<Client>,
         config: &crate::schemasync::config::SchemasyncConfig,
     ) -> Result<()> {
-        if let Some(ref functions_surql) = config.database.resolved.functions_surql {
-            if !functions_surql.is_empty() {
-                info!("Executing function definitions from surql");
-                evenframe_log!(functions_surql, "function_definitions.surql");
+        if let Some(ref functions_surql) = config.database.resolved.functions_surql
+            && !functions_surql.is_empty()
+        {
+            info!("Executing function definitions from surql");
+            evenframe_log!(functions_surql, "function_definitions.surql");
 
-                let result = execute_and_validate(db, functions_surql, "define", "functions").await;
-                match result {
-                    Ok(_) => {
-                        evenframe_log!(
-                            "Successfully executed function definitions",
-                            "results.log",
-                            true
-                        );
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to execute function definitions: {}", e);
-                        evenframe_log!(&error_msg, "results.log", true);
-                        return Err(EvenframeError::database(error_msg));
-                    }
+            let result = execute_and_validate(db, functions_surql, "define", "functions").await;
+            match result {
+                Ok(_) => {
+                    evenframe_log!(
+                        "Successfully executed function definitions",
+                        "results.log",
+                        true
+                    );
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to execute function definitions: {}", e);
+                    evenframe_log!(&error_msg, "results.log", true);
+                    return Err(EvenframeError::database(error_msg));
                 }
             }
         }

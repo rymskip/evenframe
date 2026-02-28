@@ -5,7 +5,8 @@ use crate::error::Result;
 use crate::{
     derive::{
         attributes::{
-            parse_doccom_attribute, parse_event_attributes, parse_format_attribute_bin,
+            parse_annotation_attributes, parse_doccom_attribute, parse_event_attributes,
+            parse_format_attribute_bin, parse_macroforge_derive_attribute,
             parse_mock_data_attribute, parse_relation_attribute, parse_table_validators,
         },
         validator_parser::parse_field_validators_as_enums,
@@ -265,6 +266,12 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         .unwrap_or_default();
 
     let doccom = parse_doccom_attribute(&item_struct.attrs).ok().flatten();
+    let macroforge_derives = parse_macroforge_derive_attribute(&item_struct.attrs)
+        .ok()
+        .unwrap_or_default();
+    let annotations = parse_annotation_attributes(&item_struct.attrs)
+        .ok()
+        .unwrap_or_default();
 
     Some(StructConfig {
         struct_name,
@@ -274,6 +281,8 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
             .map(|v| Validator::StringValidator(StringValidator::StringEmbedded(v)))
             .collect(),
         doccom,
+        macroforge_derives,
+        annotations,
     })
 }
 
@@ -283,12 +292,24 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
     let mut variants = Vec::new();
 
     let enum_doccom = parse_doccom_attribute(&item_enum.attrs).ok().flatten();
+    let enum_macroforge_derives = parse_macroforge_derive_attribute(&item_enum.attrs)
+        .ok()
+        .unwrap_or_default();
+    let enum_annotations = parse_annotation_attributes(&item_enum.attrs)
+        .ok()
+        .unwrap_or_default();
 
     for variant in &item_enum.variants {
         let variant_name = variant.ident.to_string();
         trace!("Processing variant: {} in enum {}", variant_name, enum_name);
 
         let variant_doccom = parse_doccom_attribute(&variant.attrs).ok().flatten();
+        let variant_annotations = parse_annotation_attributes(&variant.attrs)
+            .ok()
+            .unwrap_or_default();
+        let variant_macroforge_derives = parse_macroforge_derive_attribute(&variant.attrs)
+            .ok()
+            .unwrap_or_default();
 
         let data = match &variant.fields {
             Fields::Unit => None,
@@ -321,6 +342,8 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                     fields: struct_fields,
                     validators: vec![],
                     doccom: None,
+                    macroforge_derives: variant_macroforge_derives,
+                    annotations: vec![],
                 }))
             }
         };
@@ -329,6 +352,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
             name: variant_name,
             data,
             doccom: variant_doccom,
+            annotations: variant_annotations,
         });
     }
 
@@ -336,6 +360,8 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         enum_name,
         variants,
         doccom: enum_doccom,
+        macroforge_derives: enum_macroforge_derives,
+        annotations: enum_annotations,
     })
 }
 
@@ -356,6 +382,9 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
         let format = parse_format_attribute_bin(&field.attrs).ok().flatten();
         let validators = parse_field_validators_as_enums(&field.attrs);
         let doccom = parse_doccom_attribute(&field.attrs).ok().flatten();
+        let annotations = parse_annotation_attributes(&field.attrs)
+            .ok()
+            .unwrap_or_default();
 
         struct_fields.push(StructField {
             field_name,
@@ -366,6 +395,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             validators,
             always_regenerate: false,
             doccom,
+            annotations,
         });
     }
     struct_fields

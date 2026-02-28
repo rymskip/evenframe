@@ -525,6 +525,83 @@ pub fn parse_doccom_attribute(attrs: &[Attribute]) -> Result<Option<String>, syn
     Ok(None)
 }
 
+pub fn parse_macroforge_derive_attribute(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
+    for attr in attrs {
+        if attr.path().is_ident("macroforge_derive") {
+            let result: Result<syn::punctuated::Punctuated<Meta, syn::Token![,]>, _> =
+                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
+
+            match result {
+                Ok(metas) => {
+                    let mut derives = Vec::new();
+                    for meta in metas {
+                        match meta {
+                            Meta::Path(path) => {
+                                if let Some(ident) = path.get_ident() {
+                                    derives.push(ident.to_string());
+                                } else {
+                                    return Err(syn::Error::new(
+                                        path.span(),
+                                        "Expected a simple identifier in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                                    ));
+                                }
+                            }
+                            _ => {
+                                return Err(syn::Error::new(
+                                    meta.span(),
+                                    "Expected bare identifiers in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                                ));
+                            }
+                        }
+                    }
+                    return Ok(derives);
+                }
+                Err(err) => {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        format!(
+                            "Failed to parse macroforge_derive attribute: {}\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                            err
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+pub fn parse_annotation_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
+    let mut annotations = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("annotation") {
+            let lit: LitStr = attr.parse_args().map_err(|e| {
+                syn::Error::new(
+                    attr.span(),
+                    format!(
+                        "Failed to parse annotation attribute: {}\n\nExpected usage: #[annotation(\"@decorator({{{{ key: \\\"value\\\" }}}})\")]",
+                        e
+                    ),
+                )
+            })?;
+
+            let value = lit.value();
+
+            if value.trim().is_empty() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "Annotation cannot be empty.\n\nExample: #[annotation(\"@default\")]",
+                ));
+            }
+
+            annotations.push(value);
+        }
+    }
+
+    Ok(annotations)
+}
+
 pub fn parse_format_attribute(
     attrs: &[Attribute],
 ) -> Result<Option<proc_macro2::TokenStream>, syn::Error> {

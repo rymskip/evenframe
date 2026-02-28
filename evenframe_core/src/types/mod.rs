@@ -20,6 +20,10 @@ pub struct TaggedUnion {
     pub variants: Vec<Variant>,
     #[serde(default)]
     pub doccom: Option<String>,
+    #[serde(default)]
+    pub macroforge_derives: Vec<String>,
+    #[serde(default)]
+    pub annotations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,6 +83,8 @@ pub struct Variant {
     pub data: Option<VariantData>,
     #[serde(default)]
     pub doccom: Option<String>,
+    #[serde(default)]
+    pub annotations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,6 +104,8 @@ pub struct StructField {
     pub always_regenerate: bool,
     #[serde(default)]
     pub doccom: Option<String>,
+    #[serde(default)]
+    pub annotations: Vec<String>,
 }
 
 impl StructField {
@@ -111,6 +119,7 @@ impl StructField {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: Vec::new(),
         }
     }
 
@@ -124,6 +133,7 @@ impl StructField {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: Vec::new(),
         }
     }
     pub fn generate_define_statement(
@@ -595,6 +605,10 @@ pub struct StructConfig {
     pub validators: Vec<Validator>,
     #[serde(default)]
     pub doccom: Option<String>,
+    #[serde(default)]
+    pub macroforge_derives: Vec<String>,
+    #[serde(default)]
+    pub annotations: Vec<String>,
 }
 
 #[cfg(test)]
@@ -609,11 +623,15 @@ mod tests {
             enum_name: "Status".to_string(),
             variants: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
             variants: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         assert_eq!(tu1, tu2);
     }
@@ -627,14 +645,18 @@ mod tests {
                     name: "Active".to_string(),
                     data: None,
                     doccom: None,
+                    annotations: vec![],
                 },
                 Variant {
                     name: "Inactive".to_string(),
                     data: None,
                     doccom: None,
+                    annotations: vec![],
                 },
             ],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -648,8 +670,11 @@ mod tests {
                 name: "Red".to_string(),
                 data: None,
                 doccom: None,
+                annotations: vec![],
             }],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -664,11 +689,15 @@ mod tests {
             enum_name: "A".to_string(),
             variants: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
             variants: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         set.insert(tu1);
         set.insert(tu2);
@@ -683,6 +712,7 @@ mod tests {
             name: "None".to_string(),
             data: None,
             doccom: None,
+            annotations: vec![],
         };
         assert!(v.data.is_none());
     }
@@ -693,6 +723,7 @@ mod tests {
             name: "Some".to_string(),
             data: Some(VariantData::DataStructureRef(FieldType::String)),
             doccom: None,
+            annotations: vec![],
         };
         assert!(matches!(v.data, Some(VariantData::DataStructureRef(FieldType::String))));
     }
@@ -704,11 +735,14 @@ mod tests {
             fields: vec![],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         let v = Variant {
             name: "Complex".to_string(),
             data: Some(VariantData::InlineStruct(struct_config)),
             doccom: None,
+            annotations: vec![],
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }
@@ -730,6 +764,8 @@ mod tests {
             fields: vec![],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         });
         assert_ne!(vd1, vd2);
     }
@@ -768,6 +804,7 @@ mod tests {
             validators: vec![],
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -782,6 +819,8 @@ mod tests {
             fields: vec![],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         assert!(sc.fields.is_empty());
     }
@@ -800,6 +839,7 @@ mod tests {
                     validators: vec![],
                     always_regenerate: false,
                     doccom: None,
+                    annotations: vec![],
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -810,10 +850,13 @@ mod tests {
                     validators: vec![],
                     always_regenerate: false,
                     doccom: None,
+                    annotations: vec![],
                 },
             ],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -825,6 +868,8 @@ mod tests {
             fields: vec![],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -954,6 +999,8 @@ mod tests {
             fields: vec![],
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         };
         assert!(sc.struct_name.is_empty());
     }
@@ -983,6 +1030,7 @@ mod tests {
             validators: vec![Validator::StringValidator(StringValidator::Email)],
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         };
         assert_eq!(field.validators.len(), 1);
     }

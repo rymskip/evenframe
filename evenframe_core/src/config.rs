@@ -48,6 +48,11 @@ pub struct GeneralConfig {
     /// Source of truth configuration
     #[serde(default)]
     pub source: SourceConfig,
+
+    /// Path to the .env file, relative to the project root.
+    /// Defaults to `.env` in the project root directory.
+    #[serde(default)]
+    pub env_path: Option<String>,
 }
 
 /// Unified configuration for Evenframe operations
@@ -67,12 +72,27 @@ pub struct EvenframeConfig {
 }
 
 impl EvenframeConfig {
+    /// Best-effort early .env load for use before full config is parsed.
+    /// Finds the config file, derives the project root, and loads `.env` from there.
+    /// Falls back to `dotenv::dotenv()` if config discovery fails.
+    pub fn load_env_early() {
+        if let Ok(config_path) = Self::find_config_file() {
+            let parent = config_path.parent().unwrap_or(Path::new("."));
+            let project_root = if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
+                parent.parent().unwrap_or(Path::new("."))
+            } else {
+                parent
+            };
+            let _ = dotenv::from_path(project_root.join(".env"));
+        } else {
+            let _ = dotenv::dotenv();
+        }
+    }
+
     /// Load configuration by searching for evenframe.toml in the current
     /// directory and its ancestors.
     pub fn new() -> Result<EvenframeConfig> {
         info!("Loading Evenframe configuration");
-        dotenv::dotenv().ok();
-        debug!("Environment variables loaded from .env if present");
 
         let config_path = Self::find_config_file()?;
         info!("Found configuration file at: {:?}", config_path);
@@ -91,6 +111,12 @@ impl EvenframeConfig {
 
         debug!("Successfully parsed TOML configuration");
 
+        // Store config file path early so project_root() works
+        config.config_file_path = config_path;
+
+        // Load .env file from configured or default path
+        Self::load_env_file(&config);
+
         // Process environment variable substitutions for all database-related fields
         // TODO: This should find all environment variable references in the config, not just these hardcoded ones
         debug!("Substituting environment variables in configuration");
@@ -101,8 +127,7 @@ impl EvenframeConfig {
             Self::substitute_env_vars(&config.schemasync.database.database)?;
         config.typesync.output_path = Self::substitute_env_vars(&config.typesync.output_path)?;
 
-        // Store config file path and resolve surql paths
-        config.config_file_path = config_path;
+        // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
 
         if let crate::schemasync::config::AccessesSource::Path { ref path } = config.schemasync.database.accesses {
@@ -167,6 +192,33 @@ impl EvenframeConfig {
         }
     }
 
+    /// Resolves the .env file path based on config.
+    /// If `general.env_path` is set, resolves it relative to project root.
+    /// Otherwise defaults to `<project_root>/.env`.
+    pub fn resolve_env_path(&self) -> PathBuf {
+        let project_root = self.project_root();
+        match &self.general.env_path {
+            Some(custom) => project_root.join(custom),
+            None => project_root.join(".env"),
+        }
+    }
+
+    /// Load environment variables from the .env file resolved from config.
+    fn load_env_file(config: &EvenframeConfig) {
+        let env_path = config.resolve_env_path();
+        debug!("Loading environment variables from: {:?}", env_path);
+        match dotenv::from_path(&env_path) {
+            Ok(_) => info!("Loaded environment variables from {:?}", env_path),
+            Err(e) => {
+                if env_path.exists() {
+                    warn!("Failed to load .env file {:?}: {}", env_path, e);
+                } else {
+                    debug!("No .env file found at {:?}, skipping", env_path);
+                }
+            }
+        }
+    }
+
     /// Load surql content from a file or directory path, with env var substitution.
     /// If the path points to a file, reads its contents.
     /// If it points to a directory, reads all `*.surql` files sorted by name and concatenates them.
@@ -220,7 +272,9 @@ impl EvenframeConfig {
         let mut result = value.to_string();
 
         // Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
-        let re = regex::Regex::new(r"\$\{([^}:]+)(?::-([^}]*))?\}")
+        // Only matches valid env var names (uppercase letters, digits, underscores)
+        // to avoid colliding with JS template literals like ${foo.bar()}
+        let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
             .expect("Invalid regex for environment variable substitution");
 
         for cap in re.captures_iter(value) {
@@ -296,6 +350,7 @@ mod tests {
         let config = GeneralConfig {
             apply_aliases: vec!["Test".to_string()],
             source: SourceConfig::default(),
+            env_path: None,
         };
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("apply_aliases"));

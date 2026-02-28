@@ -731,6 +731,7 @@ mod tests {
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
+            annotations: vec![],
         }
     }
 
@@ -917,6 +918,8 @@ mod tests {
             fields,
             validators: Vec::new(),
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         }
     }
 
@@ -1111,14 +1114,18 @@ mod tests {
                             "UserData".to_string(),
                         ))),
                         doccom: None,
+                        annotations: vec![],
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                 ],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 
@@ -1604,8 +1611,11 @@ mod tests {
                         "data_table".to_string(),
                     ))),
                     doccom: None,
+                    annotations: vec![],
                 }],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 
