@@ -237,6 +237,8 @@ mod tests {
                 .collect(),
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         }
     }
 

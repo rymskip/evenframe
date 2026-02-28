@@ -88,6 +88,8 @@ fn convert_message(
         fields,
         validators: Vec::new(),
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     };
 
     result.structs.insert(name.clone(), struct_config);
@@ -147,6 +149,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
         validators: Vec::new(),
         always_regenerate: false,
         doccom: None,
+        annotations: vec![],
     }
 }
 
@@ -208,6 +211,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
             name: v.name().to_string(),
             data: None, // Protobuf enums don't have associated data
             doccom: None,
+            annotations: vec![],
         })
         .collect();
 
@@ -215,6 +219,8 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         enum_name: enum_type.name().to_string(),
         variants,
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     }
 }
 

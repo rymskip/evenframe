@@ -695,6 +695,8 @@ mod tests {
                 ],
                 validators: vec![],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 
@@ -729,19 +731,24 @@ mod tests {
                         name: "Active".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                     Variant {
                         name: "Pending".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                 ],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 
@@ -802,6 +809,8 @@ mod tests {
                 ],
                 validators: vec![],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 
@@ -815,14 +824,18 @@ mod tests {
                         name: "Admin".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                     Variant {
                         name: "User".to_string(),
                         data: None,
                         doccom: None,
+                        annotations: vec![],
                     },
                 ],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 

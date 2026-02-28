@@ -76,6 +76,8 @@ fn convert_table(table: &TableDef) -> StructConfig {
         fields,
         validators: Vec::new(), // Validators will be extracted separately
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     }
 }
 
@@ -87,6 +89,8 @@ fn convert_struct(struct_def: &StructDef) -> StructConfig {
         fields,
         validators: Vec::new(),
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     }
 }
 
@@ -100,6 +104,7 @@ fn convert_field(field: &FieldDef) -> StructField {
         validators: Vec::new(), // Validators extracted separately
         always_regenerate: false,
         doccom: None,
+        annotations: vec![],
     }
 }
 
@@ -140,6 +145,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
             name: v.name.clone(),
             data: None, // FlatBuffers enums don't have associated data
             doccom: None,
+            annotations: vec![],
         })
         .collect();
 
@@ -147,6 +153,8 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         enum_name: enum_def.name.clone(),
         variants,
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     }
 }
 
@@ -163,6 +171,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                     type_name.clone(),
                 ))),
                 doccom: None,
+                annotations: vec![],
             }
         })
         .collect();
@@ -171,6 +180,8 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         enum_name: union_def.name.clone(),
         variants,
         doccom: None,
+        macroforge_derives: vec![],
+        annotations: vec![],
     }
 }
 

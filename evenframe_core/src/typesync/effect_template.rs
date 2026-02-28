@@ -489,6 +489,7 @@ mod tests {
                         format: None,
                         always_regenerate: false,
                         doccom: None,
+                        annotations: vec![],
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -499,6 +500,7 @@ mod tests {
                         format: None,
                         always_regenerate: false,
                         doccom: None,
+                        annotations: vec![],
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -509,10 +511,13 @@ mod tests {
                         format: None,
                         always_regenerate: false,
                         doccom: None,
+                        annotations: vec![],
                     },
                 ],
                 validators: vec![],
                 doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
             },
         );
 

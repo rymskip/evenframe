@@ -29,6 +29,20 @@ pub fn type_name_to_filename(type_name: &str, naming: FileNamingConvention) -> S
     }
 }
 
+/// Computes the import specifier suffix from a file extension.
+/// For `.ts` → no suffix (TypeScript resolves extensionless imports).
+/// For `.svelte.ts` → `.svelte` (strip trailing `.ts`).
+/// For other compound extensions → strip trailing `.ts`/`.js` if present.
+pub fn import_specifier_suffix(file_extension: &str) -> &str {
+    if file_extension == ".ts" || file_extension == ".js" {
+        ""
+    } else {
+        file_extension.strip_suffix(".ts")
+            .or_else(|| file_extension.strip_suffix(".js"))
+            .unwrap_or(file_extension)
+    }
+}
+
 /// Resolves what imports a given file group needs from other groups.
 ///
 /// For each type in the group, collects its `deps_of()`, filters to types NOT in
@@ -40,8 +54,10 @@ pub fn resolve_imports(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     naming: FileNamingConvention,
+    file_extension: &str,
 ) -> Vec<ImportStatement> {
     let group_types: HashSet<String> = group.all_types().into_iter().collect();
+    let suffix = import_specifier_suffix(file_extension);
 
     // Collect all external dependencies from all types in this group.
     let mut external_deps: HashSet<String> = HashSet::new();
@@ -69,7 +85,7 @@ pub fn resolve_imports(
         let filename = type_name_to_filename(primary, naming);
         imports.push(ImportStatement {
             type_names,
-            from_path: format!("./{}", filename),
+            from_path: format!("./{}{}", filename, suffix),
         });
     }
 
@@ -82,7 +98,7 @@ pub fn format_imports(imports: &[ImportStatement]) -> String {
         .iter()
         .map(|imp| {
             format!(
-                "import {{ {} }} from \"{}\";",
+                "import type {{ {} }} from '{}';",
                 imp.type_names.join(", "),
                 imp.from_path
             )
@@ -92,13 +108,19 @@ pub fn format_imports(imports: &[ImportStatement]) -> String {
 }
 
 /// Generates a barrel file (`index.ts`) content that re-exports from all groups.
-pub fn generate_barrel_file(plan: &FileOutputPlan, naming: FileNamingConvention) -> String {
+pub fn generate_barrel_file(plan: &FileOutputPlan, naming: FileNamingConvention, file_extension: &str) -> String {
+    let suffix = import_specifier_suffix(file_extension);
     let mut lines: Vec<String> = Vec::new();
     for group in &plan.groups {
         let filename = type_name_to_filename(&group.primary_type, naming);
-        lines.push(format!("export * from \"./{}\";", filename));
+        lines.push(format!("export * from \"./{}{}\";", filename, suffix));
     }
     lines.join("\n")
+}
+
+/// Returns the barrel filename for the given extension (e.g. `index.ts` or `index.svelte.ts`).
+pub fn barrel_filename(file_extension: &str) -> String {
+    format!("index{}", file_extension)
 }
 
 #[cfg(test)]
@@ -120,6 +142,8 @@ mod tests {
                 .collect(),
             validators: vec![],
             doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
         }
     }
 
@@ -163,7 +187,7 @@ mod tests {
         let user_group_idx = plan.type_to_group["User"];
         let user_group = &plan.groups[user_group_idx];
 
-        let imports = resolve_imports(user_group, &plan, &structs, &enums, FileNamingConvention::Kebab);
+        let imports = resolve_imports(user_group, &plan, &structs, &enums, FileNamingConvention::Kebab, ".ts");
 
         // User group (User + Address) should import Role from ./role
         assert_eq!(imports.len(), 1);
@@ -185,8 +209,8 @@ mod tests {
         ];
 
         let formatted = format_imports(&imports);
-        assert!(formatted.contains("import { Role } from \"./role\";"));
-        assert!(formatted.contains("import { Address, City } from \"./address\";"));
+        assert!(formatted.contains("import type { Role } from './role';"));
+        assert!(formatted.contains("import type { Address, City } from './address';"));
     }
 
     #[test]
@@ -209,7 +233,7 @@ mod tests {
             type_to_group: HashMap::new(),
         };
 
-        let barrel = generate_barrel_file(&plan, FileNamingConvention::Kebab);
+        let barrel = generate_barrel_file(&plan, FileNamingConvention::Kebab, ".ts");
         assert!(barrel.contains("export * from \"./user\";"));
         assert!(barrel.contains("export * from \"./post\";"));
         assert!(barrel.contains("export * from \"./role\";"));

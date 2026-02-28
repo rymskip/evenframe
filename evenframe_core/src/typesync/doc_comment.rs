@@ -9,7 +9,7 @@ pub fn format_jsdoc(desc: &str, indent: &str) -> String {
     let lines: Vec<&str> = escaped.lines().collect();
 
     if lines.len() == 1 {
-        format!("{}/** {} */\n", indent, lines[0])
+        format!("{}/** {} */", indent, lines[0])
     } else {
         let mut out = format!("{}/**\n", indent);
         for line in &lines {
@@ -19,7 +19,7 @@ pub fn format_jsdoc(desc: &str, indent: &str) -> String {
                 out.push_str(&format!("{} * {}\n", indent, line));
             }
         }
-        out.push_str(&format!("{} */\n", indent));
+        out.push_str(&format!("{} */", indent));
         out
     }
 }
@@ -58,7 +58,7 @@ mod tests {
     fn test_format_jsdoc_single_line() {
         assert_eq!(
             format_jsdoc("A user account", ""),
-            "/** A user account */\n"
+            "/** A user account */"
         );
     }
 
@@ -66,20 +66,20 @@ mod tests {
     fn test_format_jsdoc_single_line_with_indent() {
         assert_eq!(
             format_jsdoc("The email address", "  "),
-            "  /** The email address */\n"
+            "  /** The email address */"
         );
     }
 
     #[test]
     fn test_format_jsdoc_multi_line() {
         let result = format_jsdoc("Line one\nLine two", "");
-        assert_eq!(result, "/**\n * Line one\n * Line two\n */\n");
+        assert_eq!(result, "/**\n * Line one\n * Line two\n */");
     }
 
     #[test]
     fn test_format_jsdoc_escapes_close() {
         let result = format_jsdoc("contains */ sequence", "");
-        assert_eq!(result, "/** contains * / sequence */\n");
+        assert_eq!(result, "/** contains * / sequence */");
     }
 
     #[test]

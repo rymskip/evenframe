@@ -38,6 +38,14 @@ pub struct OutputConfig {
     /// Naming convention for generated filenames.
     #[serde(default)]
     pub file_naming: FileNamingConvention,
+    /// File extension for generated files (default: `.ts`).
+    /// Use `.svelte.ts` for SvelteKit projects, etc.
+    #[serde(default = "default_file_extension")]
+    pub file_extension: String,
+}
+
+fn default_file_extension() -> String {
+    ".ts".to_string()
 }
 
 /// Configuration for Typesync operations (TypeScript/Effect type generation)
