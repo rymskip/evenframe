@@ -643,6 +643,11 @@ pub(crate) fn generate_recursive(
         }
 
         if let Some(field_value) = value.get(&field.field_name) {
+            // Skip null values — no RELATE should be generated for null edges
+            if field_value.is_null() {
+                continue;
+            }
+
             if let Some(edge_config) = &field.edge_config {
                 let from_record_id = &record_id;
                 let relation_table = &edge_config.edge_name;
@@ -660,6 +665,9 @@ pub(crate) fn generate_recursive(
                 };
 
                 for value in field_values {
+                    if value.is_null() {
+                        continue;
+                    }
                     if let Some(field_value_obj) = value.as_object() {
                         let mut relation_data_parts = Vec::new();
 
