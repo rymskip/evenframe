@@ -589,7 +589,7 @@ impl StructField {
             && needs_wildcard
         {
             stmt.push_str(&format!(
-                "DEFINE FIELD {}.* ON TABLE {} TYPE {};\n",
+                "DEFINE FIELD OVERWRITE {}.* ON TABLE {} TYPE {};\n",
                 self.field_name, table_name, wildcard_value_type
             ));
         }
