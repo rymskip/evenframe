@@ -207,6 +207,22 @@ impl<'a> Mockmaker<'a> {
     /// Remove old data based on schema changes
     pub async fn remove_old_data(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         tracing::trace!("Removing old data based on schema changes");
+
+        // In full refresh mode, delete all records from all tables first
+        if self.schemasync_config.mock_gen_config.full_refresh_mode {
+            tracing::info!("Full refresh mode - deleting all records from all tables");
+            let mut delete_all = String::new();
+            for table_name in self.tables.keys() {
+                delete_all.push_str(&format!("DELETE {};\n", table_name));
+            }
+            if !delete_all.is_empty() {
+                evenframe_log!(&delete_all, "remove_statements.surql");
+                self.db.query(delete_all).await?;
+            }
+            tracing::trace!("Full refresh data deletion complete");
+            return Ok(());
+        }
+
         let comparator = self.comparator.as_ref().unwrap();
         let schema_changes = comparator.get_schema_changes().unwrap();
 

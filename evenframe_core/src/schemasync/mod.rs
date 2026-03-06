@@ -269,7 +269,7 @@ impl<'a> Schemasync<'a> {
             .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
         info!("Defining database tables and schema");
-        self.define_tables(&db, define_statements, schema_changes)
+        self.define_tables(&db, define_statements, schema_changes, config.mock_gen_config.full_refresh_mode)
             .await
             .map_err(|e| {
                 error!("Failed to define tables: {}", e);
@@ -313,8 +313,9 @@ impl<'a> Schemasync<'a> {
         db: &Surreal<Client>,
         define_statments: HashMap<&String, String>,
         schema_changes: &SchemaChanges,
+        full_refresh_mode: bool,
     ) -> Result<()> {
-        info!("Defining tables based on schema changes");
+        info!("Defining tables based on schema changes (full_refresh_mode: {full_refresh_mode})");
         debug!(
             "Schema changes before define statement execution: {:?}",
             schema_changes
@@ -339,6 +340,23 @@ impl<'a> Schemasync<'a> {
                 }
             }
         };
+
+        // In full refresh mode, define ALL tables regardless of schema changes
+        if full_refresh_mode {
+            info!("Full refresh mode - defining all {} tables", define_statments.len());
+            for (table_name, define_stmt) in &define_statments {
+                debug!("Defining table (full refresh): {}", table_name);
+                for stmt in define_stmt.split_inclusive(';') {
+                    let trimmed = stmt.trim_start();
+                    if trimmed.starts_with("DEFINE TABLE")
+                        || trimmed.starts_with("DEFINE FIELD")
+                    {
+                        execute(table_name, stmt).await?;
+                    }
+                }
+            }
+            return Ok(());
+        }
 
         // Process new tables first
         if !schema_changes.new_tables.is_empty() {
