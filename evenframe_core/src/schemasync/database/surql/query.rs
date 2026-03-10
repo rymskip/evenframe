@@ -643,8 +643,14 @@ pub(crate) fn generate_recursive(
         }
 
         if let Some(field_value) = value.get(&field.field_name) {
-            // Skip null values — no RELATE should be generated for null edges
+            // Skip null values for edge fields — no RELATE should be
+            // generated for null edges.  For regular fields, include null
+            // so that MERGE can clear Option fields to NONE.
             if field_value.is_null() {
+                if field.edge_config.is_some() {
+                    continue;
+                }
+                content_parts.push(format!("{}: null", field.field_name));
                 continue;
             }
 
@@ -860,7 +866,7 @@ pub struct FilterDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterValue {
-    pub field_key: String,
+    pub field_path: Vec<String>,
     pub filter_type: FilterPrimitive,
     pub operator: FilterOperator,
     pub value: serde_json::Value,
@@ -888,49 +894,27 @@ pub fn generate_where_clause(filters: &[FilterValue]) -> String {
         .map(|filter| {
             let field_type = map_filter_primitive_to_field_type(&filter.filter_type);
             let surreal_value = value::to_surreal_string(&field_type, &filter.value);
+            let field = filter
+                .field_path
+                .iter()
+                .map(|s| s.to_case(Case::Snake))
+                .collect::<Vec<_>>()
+                .join(".");
 
             match filter.operator {
                 FilterOperator::Contains => {
-                    format!(
-                        "{} CONTAINS {}",
-                        filter.field_key.to_case(Case::Snake),
-                        surreal_value
-                    )
+                    format!("string::contains(<string>{field}, {surreal_value})")
                 }
-                FilterOperator::Equals => format!(
-                    "{} = {}",
-                    filter.field_key.to_case(Case::Snake),
-                    surreal_value
-                ),
+                FilterOperator::Equals => format!("{field} = {surreal_value}"),
                 FilterOperator::StartsWith => {
-                    format!(
-                        "string::starts_with({}, {})",
-                        filter.field_key.to_case(Case::Snake),
-                        surreal_value
-                    )
+                    format!("string::starts_with(<string>{field}, {surreal_value})")
                 }
                 FilterOperator::EndsWith => {
-                    format!(
-                        "string::ends_with({}, {})",
-                        filter.field_key.to_case(Case::Snake),
-                        surreal_value
-                    )
+                    format!("string::ends_with(<string>{field}, {surreal_value})")
                 }
-                FilterOperator::GreaterThan => format!(
-                    "{} > {}",
-                    filter.field_key.to_case(Case::Snake),
-                    surreal_value
-                ),
-                FilterOperator::LessThan => format!(
-                    "{} < {}",
-                    filter.field_key.to_case(Case::Snake),
-                    surreal_value
-                ),
-                FilterOperator::Is => format!(
-                    "{} IS {}",
-                    filter.field_key.to_case(Case::Snake),
-                    surreal_value
-                ),
+                FilterOperator::GreaterThan => format!("{field} > {surreal_value}"),
+                FilterOperator::LessThan => format!("{field} < {surreal_value}"),
+                FilterOperator::Is => format!("{field} IS {surreal_value}"),
             }
         })
         .collect();
@@ -1185,7 +1169,7 @@ mod tests {
     fn generate_query_select_includes_where_and_order_by() {
         let table_config = sample_table_config();
         let filters = vec![FilterValue {
-            field_key: "name".to_string(),
+            field_path: vec!["name".to_string()],
             filter_type: FilterPrimitive::String,
             operator: FilterOperator::Equals,
             value: json!("Alice"),
