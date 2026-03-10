@@ -282,7 +282,7 @@ fn field_type_to_typescript(field_type: &FieldType) -> String {
             {:case FieldType::DateTime}
                 DateTime.Utc
             {:case FieldType::EvenframeDuration}
-                number
+                Duration.Duration
             {:case FieldType::Timezone}
                 string
             {:case FieldType::Option(inner)}
@@ -470,15 +470,19 @@ pub fn compute_extra_imports(
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
     let mut needs_datetime = false;
     let mut needs_bigdecimal = false;
+    let mut needs_duration = false;
     let mut needs_record_link = false;
 
     let check_field_type =
-        |ft: &FieldType, dt: &mut bool, bd: &mut bool, rl: &mut bool| {
+        |ft: &FieldType, dt: &mut bool, bd: &mut bool, dur: &mut bool, rl: &mut bool| {
             if field_type_contains(ft, &|f| matches!(f, FieldType::DateTime)) {
                 *dt = true;
             }
             if field_type_contains(ft, &|f| matches!(f, FieldType::Decimal)) {
                 *bd = true;
+            }
+            if field_type_contains(ft, &|f| matches!(f, FieldType::EvenframeDuration)) {
+                *dur = true;
             }
             if field_type_contains(ft, &|f| matches!(f, FieldType::RecordLink(_))) {
                 *rl = true;
@@ -492,6 +496,7 @@ pub fn compute_extra_imports(
                     &field.field_type,
                     &mut needs_datetime,
                     &mut needs_bigdecimal,
+                    &mut needs_duration,
                     &mut needs_record_link,
                 );
             }
@@ -509,6 +514,7 @@ pub fn compute_extra_imports(
                                     &field.field_type,
                                     &mut needs_datetime,
                                     &mut needs_bigdecimal,
+                                    &mut needs_duration,
                                     &mut needs_record_link,
                                 );
                             }
@@ -518,6 +524,7 @@ pub fn compute_extra_imports(
                                 ft,
                                 &mut needs_datetime,
                                 &mut needs_bigdecimal,
+                                &mut needs_duration,
                                 &mut needs_record_link,
                             );
                         }
@@ -536,6 +543,9 @@ pub fn compute_extra_imports(
     }
     if needs_datetime {
         effect_imports.push("DateTime");
+    }
+    if needs_duration {
+        effect_imports.push("Duration");
     }
     if !effect_imports.is_empty() {
         lines.push(format!(
