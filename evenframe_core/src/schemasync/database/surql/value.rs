@@ -18,7 +18,7 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
                 "false".to_string()
             }
         }
-        FieldType::Other(_) => value.to_string(),
+        FieldType::Other(_) => to_surreal_string_inferred(value),
         FieldType::Decimal => {
             if value.is_string() {
                 value.as_str().unwrap_or("0.0").to_string()
@@ -66,6 +66,11 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
                 format!("duration::from_nanos({})", nanos)
             } else if let Some(nanos) = value.as_u64() {
                 format!("duration::from_nanos({})", nanos)
+            } else if let Some(arr) = value.as_array() {
+                let seconds = arr.first().and_then(|v| v.as_i64()).unwrap_or(0);
+                let nanos = arr.get(1).and_then(|v| v.as_i64()).unwrap_or(0);
+                let total_nanos = seconds * 1_000_000_000 + nanos;
+                format!("duration::from_nanos({})", total_nanos)
             } else {
                 "duration::from_nanos(0)".to_string()
             }
@@ -170,6 +175,14 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
                     } else {
                         "null".to_string()
                     }
+                } else if let Some(id_value) = obj.get("id") {
+                    // When the record was FETCHed, the full object is present
+                    // with a lowercase "id" field. Extract just the ID.
+                    if let Some(id_str) = id_value.as_str() {
+                        id_str.replace('`', "")
+                    } else {
+                        "null".to_string()
+                    }
                 } else if let Some(obj_value) = obj.get("Object") {
                     to_surreal_string(inner_ftype, obj_value)
                 } else {
@@ -180,6 +193,47 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value) -> String {
             }
         }
     }
+}
+
+/// Recursively convert a JSON value to SurrealQL syntax by inferring types.
+/// Used for `FieldType::Other` (nested Evenframe structs) where field type
+/// information is not available. Detects ISO 8601 datetimes and wraps them
+/// in SurrealQL `d'...'` syntax so they are stored as proper datetime values
+/// rather than strings.
+fn to_surreal_string_inferred(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => {
+            if is_iso8601_datetime(s) {
+                format!("d'{}'", escape_single_quotes(s))
+            } else {
+                format!("'{}'", escape_single_quotes(s))
+            }
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(to_surreal_string_inferred).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(obj) => {
+            let pairs: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, to_surreal_string_inferred(v)))
+                .collect();
+            format!("{{ {} }}", pairs.join(", "))
+        }
+    }
+}
+
+/// Check if a string is an ISO 8601 datetime (e.g. "2025-05-29T23:00:00Z").
+fn is_iso8601_datetime(s: &str) -> bool {
+    if s.len() < 20 {
+        return false;
+    }
+    let b = s.as_bytes();
+    // YYYY-MM-DDTHH:MM:SS...
+    b[4] == b'-' && b[7] == b'-' && b[10] == b'T' && b[13] == b':' && b[16] == b':'
 }
 
 fn escape_single_quotes(s: &str) -> String {
