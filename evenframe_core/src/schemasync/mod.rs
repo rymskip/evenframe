@@ -256,11 +256,18 @@ impl<'a> Schemasync<'a> {
         })?;
         debug!("Old data removal completed");
 
+        // Execution order matters:
+        // 1. Access first — defines SIGNUP/SIGNIN on the database (independent of tables)
+        // 2. Tables second — defines table schemas, fields, and events
+        // 3. Functions last — function params use typed references like `record<site>`
+        //    which require the referenced tables to already exist in the database
+
         info!("Executing access control setup");
         mockmaker.execute_access().await.map_err(|e| {
             error!("Failed to execute access setup: {}", e);
             e
         })?;
+        debug!("Access control setup completed");
 
         let schema_changes = mockmaker
             .comparator
@@ -276,8 +283,6 @@ impl<'a> Schemasync<'a> {
                 e
             })?;
         debug!("Table definitions completed successfully");
-
-        debug!("Access control setup completed");
 
         info!("Executing function definitions");
         self.execute_functions(&db, &config).await.map_err(|e| {
@@ -321,6 +326,7 @@ impl<'a> Schemasync<'a> {
             schema_changes
         );
 
+        // Validates individual TABLE/FIELD statements (safe to split by ';')
         let execute = async |name, stmt: &str| -> Result<()> {
             let define_result = execute_and_validate(db, stmt, "define", name).await;
             match define_result {
@@ -341,11 +347,34 @@ impl<'a> Schemasync<'a> {
             }
         };
 
+        // Events contain ';' inside { } blocks (e.g. `fn::foo($a, $b);`), so they
+        // can't go through execute_and_validate which naively splits by ';' to count
+        // expected results. Send event blocks directly via db.query() instead.
+        let execute_events = async |table_name: &str, event_block: &str| -> Result<()> {
+            debug!("Executing event definitions for table: {}", table_name);
+            db.query(event_block).await.map_err(|e| {
+                let error_msg = format!(
+                    "Failed to execute event definitions for table {}:\n{}\n{}",
+                    table_name, e, event_block
+                );
+                error!("{}", error_msg);
+                evenframe_log!(&error_msg, "errors.log", true);
+                EvenframeError::database(error_msg)
+            })?;
+            evenframe_log!(
+                &format!("Successfully executed event definitions for table {}", table_name),
+                "results.log",
+                true
+            );
+            Ok(())
+        };
+
         // In full refresh mode, define ALL tables regardless of schema changes
         if full_refresh_mode {
             info!("Full refresh mode - defining all {} tables", define_statments.len());
             for (table_name, define_stmt) in &define_statments {
                 debug!("Defining table (full refresh): {}", table_name);
+                // TABLE and FIELD are single-line statements, safe to split by ';'
                 for stmt in define_stmt.split_inclusive(';') {
                     let trimmed = stmt.trim_start();
                     if trimmed.starts_with("DEFINE TABLE")
@@ -353,6 +382,10 @@ impl<'a> Schemasync<'a> {
                     {
                         execute(table_name, stmt).await?;
                     }
+                }
+                // Events are sent as a raw block (bypasses ';'-based validation)
+                if let Some(idx) = define_stmt.find("DEFINE EVENT") {
+                    execute_events(table_name, &define_stmt[idx..]).await?;
                 }
             }
             return Ok(());
@@ -371,6 +404,9 @@ impl<'a> Schemasync<'a> {
                         {
                             execute(table_name, stmt).await?;
                         }
+                    }
+                    if let Some(idx) = define_stmt.find("DEFINE EVENT") {
+                        execute_events(table_name, &define_stmt[idx..]).await?;
                     }
                 }
             }
@@ -447,6 +483,20 @@ impl<'a> Schemasync<'a> {
                                     );
                                 }
                             }
+                        }
+                    }
+
+                    // Define new or changed events
+                    if !table_change.new_events.is_empty() {
+                        debug!(
+                            "Defining {} new/changed events for table {}",
+                            table_change.new_events.len(),
+                            table_name
+                        );
+
+                        for event_stmt in &table_change.new_events {
+                            trace!("Defining event on table: {}", table_name);
+                            execute_events(table_name, event_stmt).await?;
                         }
                     }
                 }
