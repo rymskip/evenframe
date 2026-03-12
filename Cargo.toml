@@ -10,5 +10,5 @@ regex = "1.11.1"
 syn = { version = "2.0.104", features = ["full"] }
 tracing = "0.1.41"
 convert_case = "0.11.0"
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }
 toml = "1.0.3"

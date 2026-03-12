@@ -17,7 +17,7 @@ use crate::schemasync::database::{
     DatabaseConfig, DatabaseProvider, ProviderType, Relationship, RelationshipDirection,
     SchemaExport, TableInfo, TableSchema, ColumnSchema, DatabaseType, Transaction,
 };
-use crate::schemasync::database::type_mapper::TypeMapper;
+use crate::schemasync::database::TypeMapper;
 
 /// PostgreSQL database provider implementation
 pub struct PostgresProvider {

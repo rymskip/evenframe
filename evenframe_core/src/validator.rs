@@ -1,4 +1,4 @@
-use crate::format::Format;
+use crate::schemasync::mockmake::format::Format;
 use derive_more::From;
 use ordered_float::OrderedFloat;
 use proc_macro2::TokenStream;

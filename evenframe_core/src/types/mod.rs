@@ -3,7 +3,7 @@ mod field_type;
 pub use crate::types::field_type::FieldType;
 use crate::{
     EvenframeError, Result, evenframe_log,
-    format::Format,
+    schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig, TableConfig},
     traits::EvenframePersistableStruct,
     validator::Validator,
@@ -140,6 +140,7 @@ impl StructField {
             unique: false,
         }
     }
+    #[cfg(feature = "surrealdb")]
     pub fn generate_define_statement(
         &self,
         enums: HashMap<String, TaggedUnion>,

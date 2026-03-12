@@ -1,4 +1,4 @@
-use crate::mockmake::MockGenerationConfig;
+use crate::schemasync::mockmake::MockGenerationConfig;
 use crate::schemasync::{edge::EdgeConfig, event::EventConfig, permissions::PermissionsConfig};
 use crate::types::StructConfig;
 

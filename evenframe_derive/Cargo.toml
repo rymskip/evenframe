@@ -20,7 +20,7 @@ proc-macro = true
 serde_json = { workspace = true }
 regex = { workspace = true }
 convert_case = { workspace = true }
-evenframe_core = { version = "0.1.0", path = "../evenframe_core" }
+evenframe_core = { version = "0.1.0", path = "../evenframe_core", default-features = false }
 
 proc-macro2 = "1.0.95"
 quote = "1.0.40"

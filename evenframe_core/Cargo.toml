@@ -12,20 +12,107 @@ keywords = ["typescript", "codegen", "surrealdb", "schema", "types"]
 categories = ["development-tools", "database"]
 
 [features]
-default = ["surrealdb"]
+# By default, no optional features are enabled. This compiles only the minimal
+# core needed for derive macros: types, config, validators, wrappers, and the
+# schemasync data types (DefineConfig, EdgeConfig, etc.). This is the fastest
+# possible compile and is what evenframe_derive depends on.
+default = []
 
+# ---------------------------------------------------------------------------
+# Type synchronization (TypeScript / schema generation)
+# ---------------------------------------------------------------------------
+
+# Enables the core typesync module for generating TypeScript types from Rust
+# structs. Includes ArkType and Effect-TS generators, file grouping, import
+# resolution, and doc-comment support. The typesync config types are always
+# compiled (used by EvenframeConfig), but the generators require this feature.
+typesync = []
+
+# Enables Protocol Buffers (.proto) schema generation from Rust types.
+# Pulls in the `protox` parser and `prost-types` for proto file handling.
+# Implies: typesync
+protobuf = ["typesync", "dep:protox", "dep:prost-types"]
+
+# Enables FlatBuffers (.fbs) schema generation from Rust types.
+# Pulls in the `logos` lexer generator for FlatBuffers parsing.
+# Implies: typesync
+flatbuffers = ["typesync", "dep:logos"]
+
+# Enables Macroforge template-based TypeScript generation with JSDoc annotations.
+# Pulls in the `macroforge_ts` template engine.
+# Implies: typesync
+macroforge = ["typesync", "dep:macroforge_ts"]
+
+# Enables all typesync generators: ArkType, Effect-TS, Protocol Buffers,
+# FlatBuffers, and Macroforge.
+typesync-all = ["typesync", "protobuf", "flatbuffers", "macroforge"]
+
+# ---------------------------------------------------------------------------
+# Schema synchronization (database operations)
+# ---------------------------------------------------------------------------
+
+# Enables the schemasync engine for comparing and synchronizing Rust struct
+# definitions against a live SurrealDB database. Includes schema comparison,
+# DEFINE statement generation, mock data field value generators, and the
+# database execution pipeline.
+# Implies: surrealdb
+schemasync = ["surrealdb"]
+
+# Enables full timezone support for mock data generation via the `chrono-tz`
+# crate, providing access to the complete IANA timezone database. Without this
+# feature, timezone fields fall back to a small hardcoded set (UTC, America/
+# New_York, Europe/London, Asia/Tokyo).
+# Implies: schemasync
+mockmake = ["schemasync", "dep:chrono-tz"]
+
+# Enables the complete schemasync pipeline with full mock data generation
+# capabilities including timezone support.
+schemasync-full = ["schemasync", "mockmake"]
+
+# ---------------------------------------------------------------------------
 # Database providers
+# ---------------------------------------------------------------------------
+
+# Enables SurrealDB as a database backend. Pulls in the full surrealdb client
+# with in-memory (kv-mem) and HTTP protocol support. This is the heaviest
+# single dependency in the tree (~200+ transitive crates).
 surrealdb = ["dep:surrealdb"]
+
+# Enables the SQL database abstraction layer via sqlx. This is the base
+# feature required by all SQL providers (postgres, mysql, sqlite). Includes
+# the tokio runtime and rustls TLS support.
 sql = ["dep:sqlx"]
+
+# Enables PostgreSQL as a database backend via sqlx.
+# Implies: sql
 postgres = ["sql", "sqlx?/postgres"]
+
+# Enables MySQL/MariaDB as a database backend via sqlx.
+# Implies: sql
 mysql = ["sql", "sqlx?/mysql"]
+
+# Enables SQLite as a database backend via sqlx.
+# Implies: sql
 sqlite = ["sql", "sqlx?/sqlite"]
 
-# Convenience feature for all SQL databases
+# Enables all SQL database backends (PostgreSQL, MySQL, SQLite).
 sql-all = ["postgres", "mysql", "sqlite"]
 
-# All providers
+# Enables every database provider (SurrealDB + all SQL backends).
 all-providers = ["surrealdb", "sql-all"]
+
+# ---------------------------------------------------------------------------
+# Convenience bundles
+# ---------------------------------------------------------------------------
+
+# Enables every feature: all generators, full schemasync with mock data,
+# and all database providers. Use this for CI or when you need everything.
+full = ["schemasync-full", "typesync-all", "all-providers"]
+
+# The feature set used by the evenframe CLI binary. Enables full schemasync
+# with mock data, all type generators, and SurrealDB (the primary provider
+# for the CLI workflow). Does not include SQL providers.
+cli = ["schemasync-full", "typesync-all", "surrealdb"]
 
 [dependencies]
 # workspace dependencies
@@ -42,23 +129,17 @@ toml = { workspace = true }
 surrealdb = { version = "3.0.0", features = ["kv-mem", "protocol-http"], optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls"], optional = true }
 
-# Required for async traits in provider abstraction
+# Always compiled (core)
 async-trait = "0.1"
 dotenv = "0.15.0"
 proc-macro2 = "1.0.95"
 quote = "1.0.40"
 serde = { version = "1.0.219", features = ["derive"] }
-rand = "0.9.2"
-rand_distr = "0.5.1"
 heck = "0.5.0"
 chrono = "0.4.41"
-chrono-tz = "0.10.4"
 derive_more = { version = "2.0.1", features = ["from"] }
 petgraph = "0.8.2"
 futures = "0.3.31"
-bon = "3.6.5"
-uuid = { version = "1.17", features = ["v4"] }
-axum = { version = "0.8.4", features = ["macros"] }
 serde-value = "0.7.0"
 thiserror = "2.0.12"
 ordered-float = { version = "5.0.0", features = ["serde"] }
@@ -67,13 +148,20 @@ linkme = "0.3.33"
 once_cell = "1.21.3"
 walkdir = "2.5"
 
-# For FlatBuffers/Protobuf parsing
-logos = "0.15"
-protox = "0.8"
-prost-types = "0.13"
+# Always compiled (used in type definitions throughout)
+bon = "3.6.5"
+rand = "0.9.2"
+rand_distr = "0.5.1"
+uuid = { version = "1.17", features = ["v4", "serde"] }
 
-# For ts_template! macro experiment
-macroforge_ts = "0.1.17"
+# Optional: mockmake runtime dependencies
+chrono-tz = { version = "0.10.4", optional = true }
+
+# Optional: typesync parser dependencies
+logos = { version = "0.15", optional = true }
+protox = { version = "0.8", optional = true }
+prost-types = { version = "0.13", optional = true }
+macroforge_ts = { version = "0.1.17", optional = true }
 
 [dev-dependencies]
 proptest = "1.4"

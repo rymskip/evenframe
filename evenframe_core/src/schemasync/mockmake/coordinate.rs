@@ -1,14 +1,21 @@
-use crate::error::EvenframeError;
-use crate::format::Format;
-use crate::mockmake::{Mockmaker, field_value::FieldValueGenerator};
-use crate::types::{FieldType, StructField};
 use bon::Builder;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use try_from_expr::TryFromExpr;
 use uuid::Uuid;
+
+#[cfg(feature = "surrealdb")]
+use crate::error::EvenframeError;
+#[cfg(feature = "surrealdb")]
+use crate::schemasync::mockmake::{Mockmaker, format::Format};
+#[cfg(feature = "schemasync")]
+use crate::schemasync::mockmake::field_value::FieldValueGenerator;
+#[cfg(feature = "surrealdb")]
+use crate::types::{FieldType, StructField};
+#[cfg(feature = "surrealdb")]
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+#[cfg(feature = "surrealdb")]
+use rand::Rng;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, Builder)]
 pub struct CoordinationId {
@@ -16,6 +23,7 @@ pub struct CoordinationId {
     pub field_name: String,
 }
 
+#[cfg(feature = "surrealdb")]
 impl CoordinationId {
     /// Parse a field path like "recurrence_rule.recurrence_begins" into (table_name, struct_name) for Mockmaker extraction
     fn parse_field_path(&self, mockmaker: &Mockmaker<'_>) -> (String, String) {
@@ -89,6 +97,7 @@ pub struct CoordinationGroup {
     #[builder(default)]
     pub coordination_pairs: Vec<CoordinationPair>,
 }
+#[cfg(feature = "schemasync")]
 impl Mockmaker<'_> {
     pub fn generate_coordinated_values(&mut self) {
         tracing::debug!("Generating coordinated values for all tables");
@@ -571,11 +580,11 @@ impl Mockmaker<'_> {
     /// Generate coherent values from predefined datasets
     fn generate_coherent_values(
         _fields: &[&StructField],
-        dataset: &crate::coordinate::CoherentDataset,
+        dataset: &crate::schemasync::mockmake::coordinate::CoherentDataset,
         index: usize,
     ) -> HashMap<String, String> {
         tracing::trace!(index = index, "Generating coherent values");
-        use crate::coordinate::*;
+        use crate::schemasync::mockmake::coordinate::*;
 
         /// Coherent address data
         const COHERENT_ADDRESSES: &[(&str, &str, &str, &str)] = &[
@@ -627,7 +636,7 @@ impl Mockmaker<'_> {
                 full_name,
             } => {
                 // Use the extended person names from coordinate.rs
-                let names = crate::coordinate::EXTENDED_PERSON_NAMES;
+                let names = crate::schemasync::mockmake::coordinate::EXTENDED_PERSON_NAMES;
                 let (first, last, _gender) = names[index % names.len()];
                 let mut values = HashMap::new();
                 values.insert(first_name.clone(), first.to_string());
@@ -707,6 +716,7 @@ pub enum Coordination {
     InitializeCoherent(CoherentDataset),
 }
 
+#[cfg(feature = "surrealdb")]
 impl Coordination {
     /// Validate that this coordination can be applied to the given fields
     pub fn validate(
@@ -1049,6 +1059,7 @@ impl Coordination {
 }
 
 // Helper functions for type checking
+#[cfg(feature = "surrealdb")]
 fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     match (type1, type2) {
         (FieldType::Option(inner1), FieldType::Option(inner2)) => {
@@ -1061,6 +1072,7 @@ fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 fn is_numeric_type(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::F32
@@ -1084,6 +1096,7 @@ fn is_numeric_type(field_type: &FieldType) -> bool {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 fn is_string_like(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::String | FieldType::Char => true,
@@ -1092,6 +1105,7 @@ fn is_string_like(field_type: &FieldType) -> bool {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 fn validate_string_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1118,6 +1132,7 @@ fn validate_string_field(
     Ok(())
 }
 
+#[cfg(feature = "surrealdb")]
 fn validate_numeric_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1144,6 +1159,7 @@ fn validate_numeric_field(
     Ok(())
 }
 
+#[cfg(feature = "surrealdb")]
 fn validate_datetime_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,

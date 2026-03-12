@@ -4,11 +4,17 @@ use serde::{
     de::{self, MapAccess, Visitor},
 };
 use std::{marker::PhantomData, ops::Deref};
+
+// === EvenframeRecordId: surrealdb-backed implementation ===
+
+#[cfg(feature = "surrealdb")]
 use surrealdb::types::{RecordId, ToSql};
 
+#[cfg(feature = "surrealdb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvenframeRecordId(pub RecordId);
 
+#[cfg(feature = "surrealdb")]
 impl From<String> for EvenframeRecordId {
     fn from(value: String) -> Self {
         let mut parts = value.splitn(2, ':');
@@ -18,6 +24,7 @@ impl From<String> for EvenframeRecordId {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 impl Deref for EvenframeRecordId {
     type Target = RecordId;
 
@@ -26,6 +33,7 @@ impl Deref for EvenframeRecordId {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 impl EvenframeRecordId {
     pub fn as_inner(&self) -> &RecordId {
         &self.0
@@ -36,6 +44,7 @@ impl EvenframeRecordId {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 impl fmt::Display for EvenframeRecordId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -45,6 +54,8 @@ impl fmt::Display for EvenframeRecordId {
         )
     }
 }
+
+#[cfg(feature = "surrealdb")]
 impl serde::Serialize for EvenframeRecordId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -53,6 +64,8 @@ impl serde::Serialize for EvenframeRecordId {
         serializer.serialize_str(&self.0.to_sql().replace(['⟨', '⟩', '`'], ""))
     }
 }
+
+#[cfg(feature = "surrealdb")]
 impl<'de> Deserialize<'de> for EvenframeRecordId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -107,6 +120,96 @@ impl<'de> Deserialize<'de> for EvenframeRecordId {
     }
 }
 
+// === EvenframeRecordId: string-based fallback when surrealdb is disabled ===
+
+#[cfg(not(feature = "surrealdb"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvenframeRecordId {
+    pub table: String,
+    pub key: String,
+}
+
+#[cfg(not(feature = "surrealdb"))]
+impl From<String> for EvenframeRecordId {
+    fn from(value: String) -> Self {
+        let mut parts = value.splitn(2, ':');
+        let table = parts.next().unwrap_or("").to_string();
+        let key = parts
+            .next()
+            .unwrap_or("")
+            .replace(['⟨', '⟩', '`'], "")
+            .to_string();
+        EvenframeRecordId { table, key }
+    }
+}
+
+#[cfg(not(feature = "surrealdb"))]
+impl fmt::Display for EvenframeRecordId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.table, self.key)
+    }
+}
+
+#[cfg(not(feature = "surrealdb"))]
+impl serde::Serialize for EvenframeRecordId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!("{}:{}", self.table, self.key))
+    }
+}
+
+#[cfg(not(feature = "surrealdb"))]
+impl<'de> Deserialize<'de> for EvenframeRecordId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EvenframeRecordIdVisitor;
+
+        impl<'de> Visitor<'de> for EvenframeRecordIdVisitor {
+            type Value = EvenframeRecordId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string in the format 'table:key', or null")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let mut parts = value.splitn(2, ':');
+                let table = parts.next().unwrap_or("").to_string();
+                let key = parts
+                    .next()
+                    .unwrap_or("")
+                    .replace(['⟨', '⟩', '`'], "")
+                    .to_string();
+                Ok(EvenframeRecordId { table, key })
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(&value)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str("no:access")
+            }
+        }
+
+        deserializer.deserialize_any(EvenframeRecordIdVisitor)
+    }
+}
+
+// === EvenframePhantomData (always compiled) ===
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvenframePhantomData<T>(pub PhantomData<T>);
@@ -133,6 +236,8 @@ impl<T> EvenframePhantomData<T> {
     }
 }
 
+// === EvenframeValue (always compiled) ===
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvenframeValue(pub serde_value::Value);
@@ -154,6 +259,8 @@ impl EvenframeValue {
         self.0
     }
 }
+
+// === EvenframeDuration (always compiled) ===
 
 // We remove `Serialize` from the derive macro to provide a custom implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

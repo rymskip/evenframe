@@ -1,4 +1,4 @@
-use crate::{compare::SchemaChanges, mockmake::Mockmaker};
+use crate::schemasync::{compare::SchemaChanges, mockmake::Mockmaker};
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 

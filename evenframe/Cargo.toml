@@ -15,10 +15,66 @@ categories = ["development-tools", "database"]
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Default includes the CLI feature set, which is what most users need when
+# depending on the evenframe crate directly (full schemasync + all generators
+# + SurrealDB). Library consumers should use `default-features = false` and
+# pick only what they need.
+default = ["cli"]
+
+# The CLI feature set: full schemasync pipeline with mock data generation,
+# all TypeScript/schema generators, and SurrealDB support. This is what the
+# evenframe binary requires. See evenframe_core for the full feature breakdown.
+cli = ["evenframe_core/cli"]
+
+# --- Type synchronization (forwarded to evenframe_core) ---
+
+# Core typesync generators (ArkType, Effect-TS).
+typesync = ["evenframe_core/typesync"]
+# All typesync generators including Protocol Buffers, FlatBuffers, and Macroforge.
+typesync-all = ["evenframe_core/typesync-all"]
+# Protocol Buffers (.proto) generation. Implies: typesync.
+protobuf = ["evenframe_core/protobuf"]
+# FlatBuffers (.fbs) generation. Implies: typesync.
+flatbuffers = ["evenframe_core/flatbuffers"]
+# Macroforge template-based TypeScript generation. Implies: typesync.
+macroforge = ["evenframe_core/macroforge"]
+
+# --- Schema synchronization (forwarded to evenframe_core) ---
+
+# Schema comparison and synchronization engine. Implies: surrealdb.
+schemasync = ["evenframe_core/schemasync"]
+# Full schemasync with timezone-aware mock data generation. Implies: schemasync.
+schemasync-full = ["evenframe_core/schemasync-full"]
+# Timezone-aware mock data via chrono-tz. Implies: schemasync.
+mockmake = ["evenframe_core/mockmake"]
+
+# --- Database providers (forwarded to evenframe_core) ---
+
+# SurrealDB client (kv-mem + HTTP protocol). Heaviest single dependency.
+surrealdb = ["evenframe_core/surrealdb"]
+# SQL abstraction layer via sqlx. Base for postgres/mysql/sqlite.
+sql = ["evenframe_core/sql"]
+# PostgreSQL via sqlx. Implies: sql.
+postgres = ["evenframe_core/postgres"]
+# MySQL/MariaDB via sqlx. Implies: sql.
+mysql = ["evenframe_core/mysql"]
+# SQLite via sqlx. Implies: sql.
+sqlite = ["evenframe_core/sqlite"]
+# All SQL backends (PostgreSQL, MySQL, SQLite).
+sql-all = ["evenframe_core/sql-all"]
+# Every database provider (SurrealDB + all SQL backends).
+all-providers = ["evenframe_core/all-providers"]
+
+# --- Convenience ---
+
+# Everything: all generators, full schemasync, all database providers.
+full = ["evenframe_core/full"]
+
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.1.0", path = "../evenframe_core" }
+evenframe_core = { version = "0.1.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }

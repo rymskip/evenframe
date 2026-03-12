@@ -5,38 +5,42 @@
 //! submodules (surrealdb.rs, sql.rs).
 
 pub mod filter;
+#[cfg(feature = "surrealdb")]
 pub mod import;
 pub mod types;
+#[cfg(feature = "surrealdb")]
 pub mod surql;
 #[cfg(feature = "sql")]
 pub mod sql;
 
 // Re-export commonly used types
 pub use crate::schemasync::mockmake::MockGenerationConfig;
+#[cfg(feature = "surrealdb")]
 pub use import::SchemaImporter;
 pub use types::{
     AccessDefinition, FieldDefinition, ObjectType, PermissionSet, SchemaDefinition,
     SchemaType, TableDefinition,
 };
+#[cfg(feature = "surrealdb")]
 pub use surql::SurrealdbComparator;
 
 use crate::{
     EvenframeError, Result,
-    schemasync::{
-        TableConfig,
-        config::{PerformanceConfig, SchemasyncMockGenConfig},
-    },
+    schemasync::TableConfig,
     types::{FieldType, TaggedUnion, VariantData},
 };
-use async_trait::async_trait;
-use quote::{ToTokens, quote};
+#[cfg(feature = "surrealdb")]
+use crate::schemasync::config::{PerformanceConfig, SchemasyncMockGenConfig};
+use quote::quote;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(feature = "surrealdb")]
 use ::surrealdb::engine::remote::http::Client;
+#[cfg(feature = "surrealdb")]
 use ::surrealdb::Surreal;
-use tracing;
 
+#[cfg(feature = "schemasync")]
 use crate::schemasync::database::types::SchemaExport;
 
 // ============================================================================
@@ -44,7 +48,8 @@ use crate::schemasync::database::types::SchemaExport;
 // ============================================================================
 
 /// Trait for database schema comparison strategies
-#[async_trait]
+#[cfg(feature = "schemasync")]
+#[async_trait::async_trait]
 pub trait SchemaComparator: Send + Sync {
     /// Compare the current database schema with the expected schema from Rust structs
     async fn compare_schemas(
@@ -62,6 +67,7 @@ pub trait SchemaComparator: Send + Sync {
 }
 
 /// Factory function to create the appropriate comparator for a provider
+#[cfg(feature = "schemasync")]
 pub fn create_comparator<'a>(
     _provider: &'a dyn crate::schemasync::database::DatabaseProvider,
 ) -> Box<dyn SchemaComparator + 'a> {
@@ -71,9 +77,6 @@ pub fn create_comparator<'a>(
     }
     #[cfg(not(feature = "sql"))]
     {
-        // For non-SQL providers, we'd need a different implementation
-        // For now, this is a placeholder that should be replaced with
-        // the appropriate comparator based on provider type
         panic!("No SQL feature enabled - use SurrealdbComparator directly for SurrealDB")
     }
 }
@@ -90,33 +93,7 @@ pub struct Comparator;
 // Schema Change Types
 // ============================================================================
 
-#[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
-pub enum PreservationMode {
-    /// No preservation - generate all new data
-    None,
-    #[default]
-    /// Smart preservation - preserve unchanged fields, regenerate modified fields
-    Smart,
-    /// Full preservation - preserve all existing data, only generate for new fields
-    Full,
-}
-
-impl ToTokens for PreservationMode {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let variant_tokens = match self {
-            PreservationMode::None => {
-                quote! { ::evenframe::schemasync::compare::PreservationMode::None }
-            }
-            PreservationMode::Smart => {
-                quote! { ::evenframe::schemasync::compare::PreservationMode::Smart }
-            }
-            PreservationMode::Full => {
-                quote! { ::evenframe::schemasync::compare::PreservationMode::Full }
-            }
-        };
-        tokens.extend(variant_tokens);
-    }
-}
+pub use super::PreservationMode;
 
 /// Types of changes that can occur in an access definition
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -941,12 +918,14 @@ pub fn collect_referenced_objects(
 // ============================================================================
 
 /// Main entry point for Schemasync Merge functionality
+#[cfg(feature = "surrealdb")]
 pub struct Merger<'a> {
     pub client: &'a Surreal<Client>,
     pub default_mock_gen_config: SchemasyncMockGenConfig,
     pub performance: PerformanceConfig,
 }
 
+#[cfg(feature = "surrealdb")]
 impl<'a> Merger<'a> {
     /// Create a new Merger instance
     pub async fn new(

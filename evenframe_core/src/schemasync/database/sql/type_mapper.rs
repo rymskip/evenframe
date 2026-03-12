@@ -2,7 +2,7 @@
 //!
 //! Implementations of the TypeMapper trait for SQL databases.
 
-use crate::schemasync::database::type_mapper::TypeMapper;
+use crate::schemasync::database::TypeMapper;
 use crate::types::FieldType;
 
 /// PostgreSQL type mapper

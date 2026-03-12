@@ -1,48 +1,93 @@
 // SchemaSync - Database schema synchronization
+
+// Always compiled: pure data types needed by derive macros
+#[cfg(feature = "schemasync")]
 pub mod compare;
 pub mod config;
+pub mod define_config;
 pub mod edge;
 pub mod event;
 pub mod mockmake;
 pub mod permissions;
+#[cfg(feature = "schemasync")]
 pub mod database;
 pub mod table;
 
-use crate::{
-    compare::SchemaChanges,
-    config::EvenframeConfig,
-    error::{EvenframeError, Result},
-    schemasync::database::surql::{define::generate_define_statements, execute::execute_and_validate},
-};
-use std::collections::HashMap;
-use tracing::{debug, error, info, trace};
-
-// Re-export commonly used types
+// Re-export commonly used types (always available)
+pub use define_config::DefineConfig;
 pub use edge::{Direction, EdgeConfig, Subquery};
 pub use event::EventConfig;
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
+pub use table::TableConfig;
+
+// PreservationMode - always available (used by MockGenerationConfig data type)
+#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum PreservationMode {
+    /// No preservation - generate all new data
+    None,
+    #[default]
+    /// Smart preservation - preserve unchanged fields, regenerate modified fields
+    Smart,
+    /// Full preservation - preserve all existing data, only generate for new fields
+    Full,
+}
+
+impl quote::ToTokens for PreservationMode {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let variant_tokens = match self {
+            PreservationMode::None => {
+                quote::quote! { ::evenframe::schemasync::PreservationMode::None }
+            }
+            PreservationMode::Smart => {
+                quote::quote! { ::evenframe::schemasync::PreservationMode::Smart }
+            }
+            PreservationMode::Full => {
+                quote::quote! { ::evenframe::schemasync::PreservationMode::Full }
+            }
+        };
+        tokens.extend(variant_tokens);
+    }
+}
+
+// Re-exports that require surrealdb feature
+#[cfg(feature = "surrealdb")]
 pub use database::surql::{
-    define::DefineConfig,
     query::{
         FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType, SelectConfig,
         SortDefinition, SortDirection, SortValue, generate_query, generate_sort_clause,
         generate_where_clause,
     },
 };
+
+// Schemasync orchestrator: requires surrealdb at runtime
+#[cfg(feature = "surrealdb")]
+use crate::{
+    schemasync::compare::SchemaChanges,
+    config::EvenframeConfig,
+    error::{EvenframeError, Result},
+    schemasync::database::surql::{define::generate_define_statements, execute::execute_and_validate},
+};
+#[cfg(feature = "surrealdb")]
+use std::collections::HashMap;
+#[cfg(feature = "surrealdb")]
+use tracing::{debug, error, info, trace};
+
+#[cfg(feature = "surrealdb")]
 use surrealdb::{
     Surreal,
     engine::remote::http::{Client, Http},
     opt::auth::Root,
 };
-pub use table::TableConfig;
 
+#[cfg(feature = "surrealdb")]
 use crate::{
     evenframe_log,
-    mockmake::Mockmaker,
+    schemasync::mockmake::Mockmaker,
     types::{StructConfig, TaggedUnion},
 };
 
+#[cfg(feature = "surrealdb")]
 #[derive(Default)]
 pub struct Schemasync<'a> {
     // Input parameters - set via builder methods
@@ -55,6 +100,7 @@ pub struct Schemasync<'a> {
     schemasync_config: Option<crate::schemasync::config::SchemasyncConfig>,
 }
 
+#[cfg(feature = "surrealdb")]
 impl<'a> Schemasync<'a> {
     /// Create a new empty Schemasync instance
     pub fn new() -> Self {

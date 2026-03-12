@@ -1,10 +1,11 @@
 use crate::{
-    format::Format,
-    mockmake::Mockmaker,
+    schemasync::mockmake::format::Format,
+    schemasync::mockmake::Mockmaker,
     schemasync::TableConfig,
     types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData},
 };
 use bon::Builder;
+#[cfg(feature = "mockmake")]
 use chrono_tz::TZ_VARIANTS;
 use convert_case::{Case, Casing};
 use rand::{Rng, rngs::ThreadRng, seq::IndexedRandom};
@@ -72,9 +73,16 @@ impl<'a> FieldValueGenerator<'a> {
                 format!("duration::from_nanos({})", nanos)
             }
             FieldType::Timezone => {
-                // Generate random IANA timezone string from chrono_tz
-                let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
-                format!("'{}'", tz.name())
+                #[cfg(feature = "mockmake")]
+                {
+                    let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
+                    format!("'{}'", tz.name())
+                }
+                #[cfg(not(feature = "mockmake"))]
+                {
+                    let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+                    format!("'{}'", timezones[rng.random_range(0..timezones.len())])
+                }
             }
             FieldType::EvenframeRecordId => self.handle_record_id(
                 &self.field.field_name,

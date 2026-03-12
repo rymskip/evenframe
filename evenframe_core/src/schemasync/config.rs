@@ -1,4 +1,4 @@
-use crate::{coordinate::CoordinationGroup, schemasync::compare::PreservationMode};
+use crate::schemasync::{PreservationMode, mockmake::coordinate::CoordinationGroup};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
@@ -230,6 +230,7 @@ impl DatabaseConfig {
     }
 
     /// Convert to provider-specific DatabaseConfig
+    #[cfg(feature = "schemasync")]
     pub fn to_provider_config(&self) -> crate::schemasync::database::DatabaseConfig {
         crate::schemasync::database::DatabaseConfig {
             provider: match self.provider {

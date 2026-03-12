@@ -1,9 +1,9 @@
 use crate::{
-    compare::SchemaChanges,
-    mockmake::Mockmaker,
+    schemasync::compare::SchemaChanges,
+    schemasync::mockmake::Mockmaker,
     schemasync::{
-        TableConfig,
-        compare::{PreservationMode, collect_referenced_objects},
+        PreservationMode, TableConfig,
+        compare::collect_referenced_objects,
     },
     types::{FieldType, StructConfig, StructField, TaggedUnion},
 };

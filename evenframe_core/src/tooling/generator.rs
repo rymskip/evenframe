@@ -5,9 +5,13 @@ use crate::error::EvenframeError;
 use crate::types::{StructConfig, TaggedUnion};
 use crate::typesync::{
     arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
-    flatbuffers::generate_flatbuffers_schema_string,
-    macroforge::generate_macroforge_type_string, protobuf::generate_protobuf_schema_string,
 };
+#[cfg(feature = "flatbuffers")]
+use crate::typesync::flatbuffers::generate_flatbuffers_schema_string;
+#[cfg(feature = "macroforge")]
+use crate::typesync::macroforge::generate_macroforge_type_string;
+#[cfg(feature = "protobuf")]
+use crate::typesync::protobuf::generate_protobuf_schema_string;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -128,16 +132,19 @@ impl TypeGenerator {
             report.add_file(file);
         }
 
+        #[cfg(feature = "macroforge")]
         if self.config.macroforge {
             let file = self.generate_macroforge_internal(&structs, &enums)?;
             report.add_file(file);
         }
 
+        #[cfg(feature = "flatbuffers")]
         if self.config.flatbuffers {
             let file = self.generate_flatbuffers_internal(&structs, &enums)?;
             report.add_file(file);
         }
 
+        #[cfg(feature = "protobuf")]
         if self.config.protobuf {
             let file = self.generate_protobuf_internal(&structs, &enums)?;
             report.add_file(file);
@@ -172,6 +179,7 @@ impl TypeGenerator {
     }
 
     /// Generates only Macroforge types.
+    #[cfg(feature = "macroforge")]
     pub fn generate_macroforge(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
@@ -182,6 +190,7 @@ impl TypeGenerator {
     }
 
     /// Generates only FlatBuffers schema.
+    #[cfg(feature = "flatbuffers")]
     pub fn generate_flatbuffers(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
@@ -192,6 +201,7 @@ impl TypeGenerator {
     }
 
     /// Generates only Protocol Buffers schema.
+    #[cfg(feature = "protobuf")]
     pub fn generate_protobuf(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
@@ -260,6 +270,7 @@ impl TypeGenerator {
         })
     }
 
+    #[cfg(feature = "macroforge")]
     fn generate_macroforge_internal(
         &self,
         structs: &HashMap<String, StructConfig>,
@@ -286,6 +297,7 @@ impl TypeGenerator {
         })
     }
 
+    #[cfg(feature = "flatbuffers")]
     fn generate_flatbuffers_internal(
         &self,
         structs: &HashMap<String, StructConfig>,
@@ -316,6 +328,7 @@ impl TypeGenerator {
         })
     }
 
+    #[cfg(feature = "protobuf")]
     fn generate_protobuf_internal(
         &self,
         structs: &HashMap<String, StructConfig>,

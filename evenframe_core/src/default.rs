@@ -1,4 +1,4 @@
-use super::schemasync::*;
+use crate::schemasync::TableConfig;
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use rand::{rng, seq::IndexedRandom};
@@ -204,6 +204,7 @@ pub fn field_type_to_default_value(
     result
 }
 
+#[cfg(feature = "surrealdb")]
 /// Generate default values for SurrealDB queries (CREATE/UPDATE statements)
 pub fn field_type_to_surql_default(
     field_name: &String,
@@ -426,6 +427,7 @@ pub fn field_type_to_surql_default(
     result
 }
 
+#[cfg(feature = "surrealdb")]
 pub fn field_type_to_surreal_type(
     field_name: &String,
     table_name: &String,

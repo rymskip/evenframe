@@ -1,6 +1,6 @@
 use crate::evenframe_log;
-use crate::mockmake::Mockmaker;
-use crate::mockmake::field_value::FieldValueGenerator;
+use crate::schemasync::mockmake::Mockmaker;
+use crate::schemasync::mockmake::field_value::FieldValueGenerator;
 use crate::schemasync::table::TableConfig;
 use crate::types::FieldType;
 use convert_case::{Case, Casing};

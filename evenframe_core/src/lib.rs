@@ -1,6 +1,6 @@
 // Evenframe - Unified framework for TypeScript generation and database schema synchronization
 
-// Common modules
+// Common modules (always compiled)
 pub mod config;
 pub mod default;
 pub mod dependency;
@@ -13,16 +13,20 @@ pub mod traits;
 pub mod types;
 pub mod validator;
 pub mod wrappers;
-// TypeSync - TypeScript type generation
+
 pub mod typesync;
 
-// SchemaSync - Database schema synchronization
+// schemasync module is always declared (data types live here),
+// but heavy sub-modules inside are feature-gated
 pub mod schemasync;
 
 // Re-export commonly used items for convenience
 pub use error::{EvenframeError, Result};
+
+// Schemasync re-exports that require surrealdb
+#[cfg(feature = "surrealdb")]
 pub use schemasync::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig, SortDefinition,
-    SortDirection, SortValue, compare, generate_sort_clause, generate_where_clause, mockmake,
-    mockmake::coordinate, mockmake::format,
+    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig,
+    SortDefinition, SortDirection, SortValue, generate_sort_clause, generate_where_clause,
+    mockmake, mockmake::coordinate, mockmake::format,
 };

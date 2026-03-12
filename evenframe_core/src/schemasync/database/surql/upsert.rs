@@ -1,5 +1,5 @@
 use crate::{
-    mockmake::{Mockmaker, field_value::FieldValueGenerator},
+    schemasync::mockmake::{Mockmaker, field_value::FieldValueGenerator},
     schemasync::table::TableConfig,
 };
 use convert_case::{Case, Casing};

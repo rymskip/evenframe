@@ -1,9 +1,11 @@
-use super::regex_val_gen::RegexValGen;
 use chrono::{Datelike, Duration, Utc};
 use quote::{ToTokens, quote};
 use regex::Regex;
 use tracing;
 use try_from_expr::TryFromExpr;
+
+#[cfg(feature = "schemasync")]
+use super::regex_val_gen::RegexValGen;
 
 /// Generate a regex pattern for dates within a specified number of days from now
 fn generate_date_range_pattern(days: i64) -> String {
@@ -125,6 +127,7 @@ pub enum Format {
     AppointmentDurationNs,
 }
 
+#[cfg(feature = "schemasync")]
 impl Format {
     /// Helper function to generate a value from regex pattern
     fn generate_from_regex(&self) -> String {
@@ -146,7 +149,9 @@ impl Format {
         tracing::debug!(format = ?self, "Generating formatted value");
         self.generate_from_regex()
     }
+}
 
+impl Format {
     /// Convert this Format into a Regex
     pub fn into_regex(self) -> Regex {
         tracing::trace!(format = ?self, "Converting format to regex");

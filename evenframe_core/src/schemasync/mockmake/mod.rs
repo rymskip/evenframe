@@ -1,32 +1,43 @@
 pub mod coordinate;
+#[cfg(feature = "schemasync")]
 pub mod field_value;
+#[cfg(feature = "schemasync")]
 pub mod field_value_recursive;
 pub mod format;
+#[cfg(feature = "schemasync")]
 pub mod regex_val_gen;
 
+#[cfg(feature = "surrealdb")]
 use crate::{
-    compare::surql::SurrealdbComparator,
-    coordinate::{
+    schemasync::compare::surql::SurrealdbComparator,
+    schemasync::mockmake::coordinate::{
         CoherentDataset, Coordination, CoordinationGroup, CoordinationId, CoordinationPair,
     },
     dependency::sort_tables_by_dependencies,
     evenframe_log,
-    mockmake::format::Format,
+    schemasync::mockmake::format::Format,
     schemasync::{
-        StructConfig, TableConfig, TaggedUnion, compare::PreservationMode,
+        PreservationMode,
         database::surql::access::execute_access_query,
     },
-    types::StructField,
+    schemasync::TableConfig,
+    types::{StructConfig, StructField, TaggedUnion},
     wrappers::EvenframeRecordId,
 };
+#[cfg(feature = "surrealdb")]
 use rand::Rng;
+#[cfg(feature = "surrealdb")]
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "surrealdb")]
 use surrealdb::Surreal;
+#[cfg(feature = "surrealdb")]
 use surrealdb::engine::local::Db;
+#[cfg(feature = "surrealdb")]
 use surrealdb::engine::remote::http::Client;
-use tracing;
+#[cfg(feature = "surrealdb")]
 use uuid::Uuid;
 
+#[cfg(feature = "surrealdb")]
 #[derive(Debug)]
 pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
@@ -44,6 +55,7 @@ pub struct Mockmaker<'a> {
     pub coordinated_values: HashMap<CoordinationId, String>,
 }
 
+#[cfg(feature = "surrealdb")]
 impl<'a> Mockmaker<'a> {
     pub fn new(
         db: &'a Surreal<Client>,
@@ -658,13 +670,21 @@ impl<'a> Mockmaker<'a> {
     }
 }
 
+// Import for MockGenerationConfig (always available, but avoid duplicates with surrealdb imports)
+#[cfg(not(feature = "surrealdb"))]
+use crate::schemasync::PreservationMode;
+#[cfg(not(feature = "surrealdb"))]
+use crate::schemasync::mockmake::format::Format;
+#[cfg(not(feature = "surrealdb"))]
+use crate::types::StructField;
+
 /// Unified configuration for mock data generation
 /// Combines features from both MockGenerationConfig and merge::MockConfig
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MockGenerationConfig {
     // From original MockGenerationConfig
     pub n: usize,
-    pub table_level_override: Option<HashMap<StructField, Format>>,
+    pub table_level_override: Option<std::collections::HashMap<StructField, Format>>,
     pub coordination_rules: Vec<crate::schemasync::mockmake::coordinate::Coordination>,
     pub batch_size: usize,
     pub regenerate_fields: Vec<String>,
@@ -717,13 +737,13 @@ impl quote::ToTokens for MockGenerationConfig {
         // Convert preservation mode to tokens
         let preservation_mode_tokens = match &self.preservation_mode {
             PreservationMode::Smart => {
-                quote::quote! { ::evenframe::schemasync::compare::PreservationMode::Smart }
+                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::Smart }
             }
             PreservationMode::Full => {
-                quote::quote! { ::evenframe::schemasync::compare::PreservationMode::Full }
+                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::Full }
             }
             PreservationMode::None => {
-                quote::quote! { ::evenframe::schemasync::compare::PreservationMode::None }
+                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::None }
             }
         };
 

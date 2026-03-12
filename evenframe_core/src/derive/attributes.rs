@@ -3,9 +3,7 @@ use syn::{Attribute, Expr, ExprArray, ExprLit, Lit, LitStr, Meta, spanned::Spann
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    format::Format,
-    mockmake::{MockGenerationConfig, coordinate::Coordination},
-    schemasync::{Direction, EdgeConfig},
+    schemasync::{Direction, EdgeConfig, mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format}},
     types::StructField,
 };
 use std::{collections::HashMap, convert::TryFrom};
