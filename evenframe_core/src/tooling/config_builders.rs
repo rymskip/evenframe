@@ -396,6 +396,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             always_regenerate: false,
             doccom,
             annotations,
+            unique: false,
         });
     }
     struct_fields

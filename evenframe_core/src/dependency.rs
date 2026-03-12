@@ -732,6 +732,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         }
     }
 

@@ -105,6 +105,7 @@ fn convert_field(field: &FieldDef) -> StructField {
         always_regenerate: false,
         doccom: None,
         annotations: vec![],
+        unique: false,
     }
 }
 

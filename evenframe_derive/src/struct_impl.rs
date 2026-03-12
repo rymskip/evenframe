@@ -210,6 +210,9 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 Err(err) => return err.to_compile_error(),
             };
 
+            // Parse unique attribute (marker attribute, no arguments)
+            let is_unique = field.attrs.iter().any(|attr| attr.path().is_ident("unique"));
+
             // Build validators token for this field
             let validators_tokens = if field_validators.is_empty() {
                 quote! { vec![] }
@@ -234,6 +237,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                     always_regenerate: false,
                     doccom: None,
                     annotations: #field_annotations_tokens,
+                    unique: #is_unique,
                 }
             });
 

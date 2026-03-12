@@ -1291,6 +1291,7 @@ impl<'a> Merger<'a> {
                         always_regenerate: false,
                         doccom: None,
                         annotations: vec![],
+                        unique: false,
                     };
                     Self::generate_field_value(&inner_field, _table_config)
                 } else {

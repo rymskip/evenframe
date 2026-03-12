@@ -66,6 +66,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                         always_regenerate: false,
                                         doccom: None,
                                         annotations: vec![],
+                                        unique: false,
                                     }
                                 }
                             })
@@ -102,6 +103,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                     always_regenerate: false,
                                     doccom: None,
                                     annotations: vec![],
+                                    unique: false,
                                 }
                             }
                         })

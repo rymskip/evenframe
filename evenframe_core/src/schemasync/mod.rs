@@ -379,6 +379,7 @@ impl<'a> Schemasync<'a> {
                     let trimmed = stmt.trim_start();
                     if trimmed.starts_with("DEFINE TABLE")
                         || trimmed.starts_with("DEFINE FIELD")
+                        || trimmed.starts_with("DEFINE INDEX")
                     {
                         execute(table_name, stmt).await?;
                     }
@@ -401,6 +402,7 @@ impl<'a> Schemasync<'a> {
                         let trimmed = stmt.trim_start();
                         if trimmed.starts_with("DEFINE TABLE")
                             || trimmed.starts_with("DEFINE FIELD")
+                            || trimmed.starts_with("DEFINE INDEX")
                         {
                             execute(table_name, stmt).await?;
                         }
@@ -483,6 +485,14 @@ impl<'a> Schemasync<'a> {
                                     );
                                 }
                             }
+                        }
+                    }
+
+                    // Always redefine indexes for modified tables (idempotent with OVERWRITE)
+                    for stmt in define_stmt.split_inclusive(';') {
+                        let trimmed = stmt.trim_start();
+                        if trimmed.starts_with("DEFINE INDEX") {
+                            execute(table_name, stmt).await?;
                         }
                     }
 

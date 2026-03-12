@@ -21,7 +21,8 @@ mod union_impl;
         event,
         doccom,
         macroforge_derive,
-        annotation
+        annotation,
+        unique
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {

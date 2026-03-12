@@ -106,6 +106,8 @@ pub struct StructField {
     pub doccom: Option<String>,
     #[serde(default)]
     pub annotations: Vec<String>,
+    #[serde(default)]
+    pub unique: bool,
 }
 
 impl StructField {
@@ -120,6 +122,7 @@ impl StructField {
             always_regenerate: false,
             doccom: None,
             annotations: Vec::new(),
+            unique: false,
         }
     }
 
@@ -134,6 +137,7 @@ impl StructField {
             always_regenerate: false,
             doccom: None,
             annotations: Vec::new(),
+            unique: false,
         }
     }
     pub fn generate_define_statement(
@@ -805,6 +809,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -840,6 +845,7 @@ mod tests {
                     always_regenerate: false,
                     doccom: None,
                     annotations: vec![],
+                    unique: false,
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -851,6 +857,7 @@ mod tests {
                     always_regenerate: false,
                     doccom: None,
                     annotations: vec![],
+                    unique: false,
                 },
             ],
             validators: vec![],
@@ -1031,6 +1038,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         };
         assert_eq!(field.validators.len(), 1);
     }

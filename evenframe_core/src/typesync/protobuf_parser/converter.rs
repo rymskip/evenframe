@@ -150,6 +150,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
         always_regenerate: false,
         doccom: None,
         annotations: vec![],
+        unique: false,
     }
 }
 

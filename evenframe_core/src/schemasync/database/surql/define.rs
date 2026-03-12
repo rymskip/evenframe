@@ -379,6 +379,21 @@ pub fn generate_define_statements(
         }
     }
 
+    // Generate DEFINE INDEX statements for unique fields
+    for table_field in &table_config.struct_config.fields {
+        if table_field.unique {
+            debug!(
+                table_name = %table_name,
+                field_name = %table_field.field_name,
+                "Generating unique index for field"
+            );
+            output.push_str(&format!(
+                "DEFINE INDEX OVERWRITE idx_{}_{} ON TABLE {} FIELDS {} UNIQUE;\n",
+                table_name, table_field.field_name, table_name, table_field.field_name
+            ));
+        }
+    }
+
     if !table_config.events.is_empty() {
         trace!(
             table_name = %table_name,
@@ -473,6 +488,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         };
 
         let result = field
@@ -519,6 +535,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         };
 
         let result = field
@@ -561,6 +578,7 @@ mod tests {
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
+            unique: false,
         };
 
         let result = field
@@ -576,5 +594,95 @@ mod tests {
         assert!(result.contains("DEFAULT ''"));
         assert!(result.contains("COMMENT 'User email address'"));
         assert!(!result.contains("COMPUTED"));
+    }
+
+    #[test]
+    fn generate_define_statements_includes_unique_index() {
+        dotenv::dotenv().ok();
+        let table_config = TableConfig {
+            table_name: "user".to_string(),
+            struct_config: StructConfig {
+                struct_name: "User".to_string(),
+                fields: vec![
+                    StructField {
+                        field_name: "email".to_string(),
+                        field_type: FieldType::String,
+                        edge_config: None,
+                        define_config: Some(DefineConfig {
+                            select_permissions: Some("FULL".to_string()),
+                            update_permissions: Some("FULL".to_string()),
+                            create_permissions: Some("FULL".to_string()),
+                            data_type: None,
+                            should_skip: false,
+                            default: None,
+                            default_always: None,
+                            value: None,
+                            assert: None,
+                            readonly: None,
+                            flexible: Some(false),
+                            computed: None,
+                            comment: None,
+                        }),
+                        format: None,
+                        validators: Vec::new(),
+                        always_regenerate: false,
+                        doccom: None,
+                        annotations: vec![],
+                        unique: true,
+                    },
+                    StructField {
+                        field_name: "name".to_string(),
+                        field_type: FieldType::String,
+                        edge_config: None,
+                        define_config: Some(DefineConfig {
+                            select_permissions: Some("FULL".to_string()),
+                            update_permissions: Some("FULL".to_string()),
+                            create_permissions: Some("FULL".to_string()),
+                            data_type: None,
+                            should_skip: false,
+                            default: None,
+                            default_always: None,
+                            value: None,
+                            assert: None,
+                            readonly: None,
+                            flexible: Some(false),
+                            computed: None,
+                            comment: None,
+                        }),
+                        format: None,
+                        validators: Vec::new(),
+                        always_regenerate: false,
+                        doccom: None,
+                        annotations: vec![],
+                        unique: false,
+                    },
+                ],
+                validators: Vec::new(),
+                doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: vec![],
+        };
+
+        let query_details: HashMap<String, TableConfig> = HashMap::new();
+        let server_only: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        let statements = generate_define_statements(
+            "user",
+            &table_config,
+            &query_details,
+            &server_only,
+            &enums,
+            false,
+        );
+
+        // Should contain unique index for email but not for name
+        assert!(statements.contains("DEFINE INDEX OVERWRITE idx_user_email ON TABLE user FIELDS email UNIQUE;"));
+        assert!(!statements.contains("idx_user_name"));
     }
 }

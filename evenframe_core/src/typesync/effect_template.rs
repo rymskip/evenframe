@@ -490,6 +490,7 @@ mod tests {
                         always_regenerate: false,
                         doccom: None,
                         annotations: vec![],
+                        unique: false,
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -501,6 +502,7 @@ mod tests {
                         always_regenerate: false,
                         doccom: None,
                         annotations: vec![],
+                        unique: false,
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -512,6 +514,7 @@ mod tests {
                         always_regenerate: false,
                         doccom: None,
                         annotations: vec![],
+                        unique: false,
                     },
                 ],
                 validators: vec![],
