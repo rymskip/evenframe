@@ -227,6 +227,19 @@ impl<'a> Mockmaker<'a> {
             for table_name in self.tables.keys() {
                 delete_all.push_str(&format!("DELETE {};\n", table_name));
             }
+
+            // Even in full refresh, we must remove fields that were deleted from
+            // Rust structs — DEFINE FIELD OVERWRITE only updates existing fields,
+            // it does not remove stale ones from the database schema.
+            if let Some(comparator) = self.comparator.as_ref()
+                && let Some(schema_changes) = comparator.get_schema_changes() {
+                    let remove_stmts = self.generate_remove_statements(schema_changes);
+                    if !remove_stmts.is_empty() {
+                        tracing::info!("Full refresh mode - removing stale fields/tables");
+                        delete_all.push_str(&remove_stmts);
+                    }
+                }
+
             if !delete_all.is_empty() {
                 evenframe_log!(&delete_all, "remove_statements.surql");
                 self.db.query(delete_all).await?;
