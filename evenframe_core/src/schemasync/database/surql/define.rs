@@ -1,5 +1,4 @@
 use crate::{
-    schemasync::DefineConfig,
     schemasync::table::TableConfig,
     types::{StructConfig, TaggedUnion},
 };

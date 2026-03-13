@@ -31,7 +31,6 @@ use crate::{
 };
 #[cfg(feature = "surrealdb")]
 use crate::schemasync::config::{PerformanceConfig, SchemasyncMockGenConfig};
-use quote::quote;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
