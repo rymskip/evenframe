@@ -2,16 +2,19 @@ mod field_type;
 
 pub use crate::types::field_type::FieldType;
 use crate::{
-    EvenframeError, Result, evenframe_log,
     schemasync::mockmake::format::Format,
-    schemasync::{DefineConfig, EdgeConfig, TableConfig},
+    schemasync::{DefineConfig, EdgeConfig},
     traits::EvenframePersistableStruct,
     validator::Validator,
     wrappers::EvenframeRecordId,
 };
+#[cfg(feature = "surrealdb")]
+use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
+#[cfg(feature = "surrealdb")]
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+#[cfg(feature = "surrealdb")]
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

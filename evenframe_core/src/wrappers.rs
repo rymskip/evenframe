@@ -1,8 +1,10 @@
 use core::fmt;
 use serde::{
     Deserialize, Deserializer, Serialize,
-    de::{self, MapAccess, Visitor},
+    de::{self, Visitor},
 };
+#[cfg(feature = "surrealdb")]
+use serde::de::MapAccess;
 use std::{marker::PhantomData, ops::Deref};
 
 // === EvenframeRecordId: surrealdb-backed implementation ===
