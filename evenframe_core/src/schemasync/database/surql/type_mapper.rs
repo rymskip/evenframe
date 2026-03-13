@@ -3,20 +3,26 @@
 //! Maps Evenframe's FieldType to SurrealDB native types.
 
 use crate::schemasync::database::types::mapper::TypeMapper;
-use crate::types::FieldType;
+use crate::types::{FieldType, ForeignTypeRegistry};
 
 use super::value::to_surreal_string;
 
 /// Type mapper for SurrealDB
-pub struct SurrealdbTypeMapper;
+pub struct SurrealdbTypeMapper<'a> {
+    registry: &'a ForeignTypeRegistry,
+}
 
-impl SurrealdbTypeMapper {
-    /// Map a FieldType to SurrealQL type syntax
-    pub fn field_type_to_surql(&self, field_type: &FieldType) -> String {
-        Self::field_type_to_surql_inner(field_type)
+impl<'a> SurrealdbTypeMapper<'a> {
+    pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
+        Self { registry }
     }
 
-    fn field_type_to_surql_inner(field_type: &FieldType) -> String {
+    /// Map a FieldType to SurrealQL type syntax
+    pub fn field_type_to_surql(&self, field_type: &FieldType) -> String {
+        self.field_type_to_surql_inner(field_type)
+    }
+
+    fn field_type_to_surql_inner(&self, field_type: &FieldType) -> String {
         match field_type {
             FieldType::String => "string".to_string(),
             FieldType::Char => "string".to_string(),
@@ -30,18 +36,13 @@ impl SurrealdbTypeMapper {
             }
             FieldType::Usize => "int".to_string(),
             FieldType::F32 | FieldType::F64 => "float".to_string(),
-            FieldType::OrderedFloat(inner) => Self::field_type_to_surql_inner(inner),
-            FieldType::Decimal => "decimal".to_string(),
-            FieldType::DateTime => "datetime".to_string(),
-            FieldType::EvenframeDuration => "duration".to_string(),
-            FieldType::Timezone => "string".to_string(),
-            FieldType::EvenframeRecordId => "record".to_string(),
+            FieldType::OrderedFloat(inner) => self.field_type_to_surql_inner(inner),
             FieldType::Unit => "null".to_string(),
             FieldType::Option(inner) => {
-                format!("option<{}>", Self::field_type_to_surql_inner(inner))
+                format!("option<{}>", self.field_type_to_surql_inner(inner))
             }
             FieldType::Vec(inner) => {
-                format!("array<{}>", Self::field_type_to_surql_inner(inner))
+                format!("array<{}>", self.field_type_to_surql_inner(inner))
             }
             FieldType::Tuple(_types) => {
                 // SurrealDB doesn't have tuple types, use array<any>
@@ -57,18 +58,24 @@ impl SurrealdbTypeMapper {
                     "record".to_string()
                 }
             }
-            FieldType::Other(name) => name.clone(),
+            FieldType::Other(name) => {
+                if let Some(ftc) = self.registry.lookup(name) {
+                    ftc.surrealdb.clone()
+                } else {
+                    name.clone()
+                }
+            }
         }
     }
 }
 
-impl TypeMapper for SurrealdbTypeMapper {
+impl<'a> TypeMapper for SurrealdbTypeMapper<'a> {
     fn field_type_to_native(&self, field_type: &FieldType) -> String {
         self.field_type_to_surql(field_type)
     }
 
     fn format_value(&self, field_type: &FieldType, value: &serde_json::Value) -> String {
-        to_surreal_string(field_type, value)
+        to_surreal_string(field_type, value, self.registry)
     }
 
     fn supports_native_arrays(&self) -> bool {

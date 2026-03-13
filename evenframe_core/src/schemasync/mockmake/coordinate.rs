@@ -139,6 +139,7 @@ impl Mockmaker<'_> {
                                 .id_index(&index)
                                 .mockmaker(self)
                                 .table_config(table_config)
+                                .registry(self.registry)
                                 .build()
                                 .run();
 
@@ -246,6 +247,7 @@ impl Mockmaker<'_> {
                                     .id_index(&index)
                                     .mockmaker(self)
                                     .table_config(table_config)
+                                    .registry(self.registry)
                                     .build()
                                     .run();
 
@@ -836,8 +838,8 @@ impl Coordination {
                         CoordinateIncrement::Days(_)
                         | CoordinateIncrement::Hours(_)
                         | CoordinateIncrement::Minutes(_) => match &field.field_type {
-                            FieldType::DateTime => {}
-                            FieldType::Option(inner) if matches!(**inner, FieldType::DateTime) => {}
+                            FieldType::Other(name) if is_datetime_like(name) => {}
+                            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) => {}
                             _ => {
                                 return Err(EvenframeError::Validation(format!(
                                     "InitializeSequential with time increment: Field '{}' must be DateTime type, got {:?}",
@@ -1077,7 +1079,6 @@ fn is_numeric_type(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::F32
         | FieldType::F64
-        | FieldType::Decimal
         | FieldType::I8
         | FieldType::I16
         | FieldType::I32
@@ -1094,6 +1095,12 @@ fn is_numeric_type(field_type: &FieldType) -> bool {
         FieldType::Option(inner) => is_numeric_type(inner),
         _ => false,
     }
+}
+
+/// Check if a type name represents a datetime-like type (used for foreign types that replaced FieldType::DateTime)
+#[cfg(feature = "surrealdb")]
+fn is_datetime_like(name: &str) -> bool {
+    name == "DateTime" || name.contains("DateTime")
 }
 
 #[cfg(feature = "surrealdb")]
@@ -1177,8 +1184,8 @@ fn validate_datetime_field(
             })?;
 
         match &field.1.field_type {
-            FieldType::DateTime => {}
-            FieldType::Option(inner) if matches!(**inner, FieldType::DateTime) => {}
+            FieldType::Other(name) if is_datetime_like(name) => {}
+            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) => {}
             _ => {
                 return Err(EvenframeError::Validation(format!(
                     "Coherent dataset field '{}' must be DateTime type, got {:?}",

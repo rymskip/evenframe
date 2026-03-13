@@ -3,8 +3,6 @@ use syn::spanned::Spanned;
 use syn::{GenericArgument, PathArguments, Type};
 use tracing::{debug, trace, warn};
 
-// Remove unused import - type_parser generates tokens that need fully qualified paths
-
 /// Generate a helpful error message for unsupported types
 fn unsupported_type_error(ty: &Type, type_str: &str, hint: &str) -> proc_macro2::TokenStream {
     syn::Error::new(
@@ -12,9 +10,9 @@ fn unsupported_type_error(ty: &Type, type_str: &str, hint: &str) -> proc_macro2:
         format!(
             "Unsupported type: '{}'. {}\n\nSupported types include:\n\
             - Primitives: bool, char, String, i8-i128, u8-u128, f32, f64\n\
-            - Special: Decimal, DateTime, EvenframeDuration, EvenframeRecordId\n\
             - Containers: Option<T>, Vec<T>, HashMap<K,V>, BTreeMap<K,V>\n\
-            - Custom: RecordLink<T>, OrderedFloat<T>, or any custom struct/enum",
+            - Custom: RecordLink<T>, OrderedFloat<T>, or any custom struct/enum\n\
+            - Foreign types: configure via [general.foreign_types] in config",
             type_str, hint
         ),
     )
@@ -83,24 +81,15 @@ fn parse_generic_args(
                 .to_compile_error(),
             }
         }
-        ("DateTime" | "EvenframeDuration", _) => {
-            // These can have type params but we ignore them
-            match type_name {
-                "DateTime" => quote! { ::evenframe::types::FieldType::DateTime },
-                "EvenframeDuration" => quote! { ::evenframe::types::FieldType::EvenframeDuration },
-                _ => unreachable!(),
-            }
-        }
         (name, count) => {
             let expected = match name {
                 "Option" | "Vec" | "RecordLink" | "OrderedFloat" => 1,
                 "HashMap" | "BTreeMap" => 2,
                 _ => {
-                    return unsupported_type_error(
-                        ty,
-                        &format!("{}<...>", name),
-                        "Unknown generic type",
-                    );
+                    // Unknown generic type (e.g., DateTime<Utc>, MyType<T>)
+                    // Store just the base name as Other — foreign type config can match it at runtime
+                    let lit = syn::LitStr::new(name, ty.span());
+                    return quote! { ::evenframe::types::FieldType::Other(#lit.to_string()) };
                 }
             };
             syn::Error::new(
@@ -139,11 +128,6 @@ fn parse_simple_type(name: &str) -> Option<proc_macro2::TokenStream> {
         "u64" => Some(quote! { ::evenframe::types::FieldType::U64 }),
         "u128" => Some(quote! { ::evenframe::types::FieldType::U128 }),
         "usize" => Some(quote! { ::evenframe::types::FieldType::Usize }),
-        "EvenframeRecordId" => Some(quote! { ::evenframe::types::FieldType::EvenframeRecordId }),
-        "Decimal" => Some(quote! { ::evenframe::types::FieldType::Decimal }),
-        "DateTime" => Some(quote! { ::evenframe::types::FieldType::DateTime }),
-        "EvenframeDuration" => Some(quote! { ::evenframe::types::FieldType::EvenframeDuration }),
-        "Tz" => Some(quote! { ::evenframe::types::FieldType::Timezone }),
         "()" => Some(quote! { ::evenframe::types::FieldType::Unit }),
         _ => {
             trace!("'{}' is not a simple type", name);
@@ -271,17 +255,6 @@ fn parse_path_type(ty: &Type, type_path: &syn::TypePath) -> proc_macro2::TokenSt
             return parse_generic_args(ty, &ident_str, &angle_args.args);
         }
 
-        // Handle known types without generic args that might be namespaced
-        match ident_str.as_str() {
-            "DateTime" => return quote! { ::evenframe::types::FieldType::DateTime },
-            "EvenframeDuration" => {
-                return quote! { ::evenframe::types::FieldType::EvenframeDuration };
-            }
-            "Decimal" => return quote! { ::evenframe::types::FieldType::Decimal },
-            "Tz" => return quote! { ::evenframe::types::FieldType::Timezone },
-            _ => {}
-        }
-
         // Check for common namespaced types
         if type_str.ends_with("::String") {
             return quote! { ::evenframe::types::FieldType::String };
@@ -304,8 +277,9 @@ fn parse_path_type(ty: &Type, type_path: &syn::TypePath) -> proc_macro2::TokenSt
         }
     }
 
-    // If we get here, it's a custom type (struct/enum)
-    debug!("Treating as custom type: {}", type_str);
+    // If we get here, it's an unknown type — could be a foreign type, custom struct, or enum.
+    // Store as Other and let the runtime registry resolve it.
+    debug!("Treating as Other type: {}", type_str);
     let lit = syn::LitStr::new(&type_str, ty.span());
     quote! { ::evenframe::types::FieldType::Other(#lit.to_string()) }
 }

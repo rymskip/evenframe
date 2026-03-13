@@ -7,7 +7,7 @@ use tracing::{info, trace};
 
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::{EdgeConfig, TableConfig};
-use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
+use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion};
 
 use super::{
     PostgresTypeMapper, PostgresSchemaInspector, SchemaInspector,
@@ -23,7 +23,7 @@ use crate::schemasync::database::TypeMapper;
 pub struct PostgresProvider {
     pool: Option<PgPool>,
     config: Option<DatabaseConfig>,
-    type_mapper: PostgresTypeMapper,
+    registry: ForeignTypeRegistry,
     schema: String,
 }
 
@@ -33,9 +33,24 @@ impl PostgresProvider {
         Self {
             pool: None,
             config: None,
-            type_mapper: PostgresTypeMapper,
+            registry: ForeignTypeRegistry::default(),
             schema: "public".to_string(),
         }
+    }
+
+    /// Create a new PostgreSQL provider with a foreign type registry
+    pub fn with_registry(registry: ForeignTypeRegistry) -> Self {
+        Self {
+            pool: None,
+            config: None,
+            registry,
+            schema: "public".to_string(),
+        }
+    }
+
+    /// Get the type mapper
+    fn type_mapper(&self) -> PostgresTypeMapper<'_> {
+        PostgresTypeMapper::new(&self.registry)
     }
 
     /// Get a reference to the connection pool
@@ -456,7 +471,7 @@ impl DatabaseProvider for PostgresProvider {
                 continue; // Skip id, already added
             }
 
-            let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
+            let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
             if sql_type.is_empty() {
                 continue; // Skip unit types
             }
@@ -486,7 +501,7 @@ impl DatabaseProvider for PostgresProvider {
         _objects: &HashMap<String, StructConfig>,
         _enums: &HashMap<String, TaggedUnion>,
     ) -> String {
-        let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
+        let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
         let nullable = matches!(field.field_type, FieldType::Option(_));
         let null_str = if nullable { "" } else { " NOT NULL" };
 
@@ -500,11 +515,11 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     fn map_field_type(&self, field_type: &FieldType) -> String {
-        self.type_mapper.field_type_to_native(field_type)
+        self.type_mapper().field_type_to_native(field_type)
     }
 
     fn format_value(&self, field_type: &FieldType, value: &serde_json::Value) -> String {
-        self.type_mapper.format_value(field_type, value)
+        self.type_mapper().format_value(field_type, value)
     }
 
     fn generate_relationship_table(&self, edge: &EdgeConfig) -> Vec<String> {

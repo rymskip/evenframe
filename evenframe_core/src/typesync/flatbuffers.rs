@@ -17,6 +17,7 @@ pub fn generate_flatbuffers_schema_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     namespace: Option<&str>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -63,13 +64,13 @@ pub fn generate_flatbuffers_schema_string(
 
     // Generate enums first (they may be referenced by tables)
     for enum_def in &unique_enums {
-        output.push_str(&generate_enum(enum_def));
+        output.push_str(&generate_enum(enum_def, registry));
         output.push('\n');
     }
 
     // Generate tables
     for struct_config in &unique_structs {
-        output.push_str(&generate_table(struct_config));
+        output.push_str(&generate_table(struct_config, registry));
         output.push('\n');
     }
 
@@ -81,7 +82,7 @@ pub fn generate_flatbuffers_schema_string(
 }
 
 /// Generate a FlatBuffers enum or union from a TaggedUnion.
-fn generate_enum(enum_def: &TaggedUnion) -> String {
+fn generate_enum(enum_def: &TaggedUnion, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -100,7 +101,7 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
             if let Some(data) = &variant.data {
                 let type_name = match data {
                     VariantData::InlineStruct(s) => s.struct_name.to_case(Case::Pascal),
-                    VariantData::DataStructureRef(ft) => field_type_to_flatbuffers(ft),
+                    VariantData::DataStructureRef(ft) => field_type_to_flatbuffers(ft, registry),
                 };
                 output.push_str(&format!("    {},\n", type_name));
             }
@@ -123,7 +124,7 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
 }
 
 /// Generate a FlatBuffers table from a StructConfig.
-fn generate_table(struct_config: &StructConfig) -> String {
+fn generate_table(struct_config: &StructConfig, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -141,7 +142,7 @@ fn generate_table(struct_config: &StructConfig) -> String {
         }
 
         let field_name = field.field_name.to_case(Case::Snake);
-        let field_type = field_type_to_flatbuffers(&field.field_type);
+        let field_type = field_type_to_flatbuffers(&field.field_type, registry);
         let validators_str = collect_validators_for_field(&field.validators);
 
         output.push_str(&format!("    {}: {}", field_name, field_type));
@@ -159,7 +160,7 @@ fn generate_table(struct_config: &StructConfig) -> String {
 }
 
 /// Convert a FieldType to its FlatBuffers type representation.
-fn field_type_to_flatbuffers(field_type: &FieldType) -> String {
+fn field_type_to_flatbuffers(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "bool".to_string(),
@@ -178,20 +179,15 @@ fn field_type_to_flatbuffers(field_type: &FieldType) -> String {
         FieldType::U64 => "uint64".to_string(),
         FieldType::U128 => "string".to_string(), // No native 128-bit support
         FieldType::Usize => "uint64".to_string(),
-        FieldType::EvenframeRecordId => "string".to_string(),
-        FieldType::DateTime => "string".to_string(), // ISO 8601
-        FieldType::EvenframeDuration => "int64".to_string(), // Nanoseconds
-        FieldType::Timezone => "string".to_string(),
-        FieldType::Decimal => "string".to_string(), // Arbitrary precision
-        FieldType::OrderedFloat(inner) => field_type_to_flatbuffers(inner),
+        FieldType::OrderedFloat(inner) => field_type_to_flatbuffers(inner, registry),
 
         FieldType::Option(inner) => {
             // FlatBuffers fields are optional by default, just use inner type
-            field_type_to_flatbuffers(inner)
+            field_type_to_flatbuffers(inner, registry)
         }
 
         FieldType::Vec(inner) => {
-            format!("[{}]", field_type_to_flatbuffers(inner))
+            format!("[{}]", field_type_to_flatbuffers(inner, registry))
         }
 
         FieldType::Tuple(types) => {
@@ -205,7 +201,7 @@ fn field_type_to_flatbuffers(field_type: &FieldType) -> String {
             // For now, generate inline struct syntax (not valid FlatBuffers, but informative)
             let field_strs: Vec<String> = fields
                 .iter()
-                .map(|(name, ft)| format!("{}: {}", name, field_type_to_flatbuffers(ft)))
+                .map(|(name, ft)| format!("{}: {}", name, field_type_to_flatbuffers(ft, registry)))
                 .collect();
             format!("{{ {} }}", field_strs.join(", "))
         }
@@ -214,8 +210,8 @@ fn field_type_to_flatbuffers(field_type: &FieldType) -> String {
             // Maps become vectors of key-value pairs
             format!(
                 "[{}{}Entry]",
-                capitalize_fbs_type(&field_type_to_flatbuffers(key)),
-                capitalize_fbs_type(&field_type_to_flatbuffers(value))
+                capitalize_fbs_type(&field_type_to_flatbuffers(key, registry)),
+                capitalize_fbs_type(&field_type_to_flatbuffers(value, registry))
             )
         }
 
@@ -224,11 +220,19 @@ fn field_type_to_flatbuffers(field_type: &FieldType) -> String {
             if let FieldType::Other(type_name) = inner.as_ref() {
                 type_name.to_case(Case::Pascal)
             } else {
-                field_type_to_flatbuffers(inner)
+                field_type_to_flatbuffers(inner, registry)
             }
         }
 
-        FieldType::Other(type_name) => type_name.to_case(Case::Pascal),
+        FieldType::Other(type_name) => {
+            // Check foreign type registry first
+            if let Some(ftc) = registry.lookup(type_name) {
+                if !ftc.flatbuffers.is_empty() {
+                    return ftc.flatbuffers.clone();
+                }
+            }
+            type_name.to_case(Case::Pascal)
+        }
     }
 }
 
@@ -604,49 +608,53 @@ mod tests {
 
     #[test]
     fn test_field_type_to_flatbuffers() {
-        assert_eq!(field_type_to_flatbuffers(&FieldType::String), "string");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::Bool), "bool");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I8), "int8");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I16), "int16");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I32), "int32");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I64), "int64");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U8), "uint8");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U16), "uint16");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U32), "uint32");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U64), "uint64");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::F32), "float");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::F64), "double");
+        let registry = crate::types::ForeignTypeRegistry::default();
+        assert_eq!(field_type_to_flatbuffers(&FieldType::String, &registry), "string");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::Bool, &registry), "bool");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::I8, &registry), "int8");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::I16, &registry), "int16");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::I32, &registry), "int32");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::I64, &registry), "int64");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::U8, &registry), "uint8");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::U16, &registry), "uint16");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::U32, &registry), "uint32");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::U64, &registry), "uint64");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::F32, &registry), "float");
+        assert_eq!(field_type_to_flatbuffers(&FieldType::F64, &registry), "double");
     }
 
     #[test]
     fn test_field_type_vec_to_flatbuffers() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         assert_eq!(
-            field_type_to_flatbuffers(&FieldType::Vec(Box::new(FieldType::String))),
+            field_type_to_flatbuffers(&FieldType::Vec(Box::new(FieldType::String)), &registry),
             "[string]"
         );
         assert_eq!(
-            field_type_to_flatbuffers(&FieldType::Vec(Box::new(FieldType::I32))),
+            field_type_to_flatbuffers(&FieldType::Vec(Box::new(FieldType::I32)), &registry),
             "[int32]"
         );
     }
 
     #[test]
     fn test_field_type_option_to_flatbuffers() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         // Option just unwraps to inner type since FlatBuffers fields are optional by default
         assert_eq!(
-            field_type_to_flatbuffers(&FieldType::Option(Box::new(FieldType::String))),
+            field_type_to_flatbuffers(&FieldType::Option(Box::new(FieldType::String)), &registry),
             "string"
         );
     }
 
     #[test]
     fn test_field_type_other_to_flatbuffers() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         assert_eq!(
-            field_type_to_flatbuffers(&FieldType::Other("UserProfile".to_string())),
+            field_type_to_flatbuffers(&FieldType::Other("UserProfile".to_string()), &registry),
             "UserProfile"
         );
         assert_eq!(
-            field_type_to_flatbuffers(&FieldType::Other("user_profile".to_string())),
+            field_type_to_flatbuffers(&FieldType::Other("user_profile".to_string()), &registry),
             "UserProfile"
         );
     }
@@ -700,7 +708,7 @@ mod tests {
             },
         );
 
-        let output = generate_flatbuffers_schema_string(&structs, &HashMap::new(), None);
+        let output = generate_flatbuffers_schema_string(&structs, &HashMap::new(), None, &crate::types::ForeignTypeRegistry::default());
 
         assert!(output.contains("table User"));
         assert!(output.contains("email: string (validate: \"email\")"));
@@ -713,6 +721,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             Some("com.example.app"),
+            &crate::types::ForeignTypeRegistry::default(),
         );
         assert!(output.starts_with("namespace com.example.app;"));
     }
@@ -752,7 +761,7 @@ mod tests {
             },
         );
 
-        let output = generate_flatbuffers_schema_string(&HashMap::new(), &enums, None);
+        let output = generate_flatbuffers_schema_string(&HashMap::new(), &enums, None, &crate::types::ForeignTypeRegistry::default());
 
         assert!(output.contains("enum Status : byte"));
         assert!(output.contains("Active = 0"));
@@ -840,7 +849,7 @@ mod tests {
         );
 
         let output =
-            generate_flatbuffers_schema_string(&structs, &enums, Some("com.example.users"));
+            generate_flatbuffers_schema_string(&structs, &enums, Some("com.example.users"), &crate::types::ForeignTypeRegistry::default());
 
         // Check namespace
         assert!(output.contains("namespace com.example.users;"));

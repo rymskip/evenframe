@@ -1,6 +1,8 @@
 mod field_type;
+pub mod foreign_type_registry;
 
 pub use crate::types::field_type::FieldType;
+pub use foreign_type_registry::ForeignTypeRegistry;
 use crate::{
     schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig},
@@ -150,6 +152,7 @@ impl StructField {
         app_structs: HashMap<String, StructConfig>,
         persistable_structs: HashMap<String, TableConfig>,
         table_name: &String,
+        registry: &ForeignTypeRegistry,
     ) -> Result<String> {
         evenframe_log!(
             format!(
@@ -190,18 +193,6 @@ impl StructField {
                                 value_stack.push(("string".to_string(), false, None))
                             }
                             FieldType::Bool => value_stack.push(("bool".to_string(), false, None)),
-                            FieldType::DateTime => {
-                                value_stack.push(("datetime".to_string(), false, None))
-                            }
-                            FieldType::EvenframeDuration => {
-                                value_stack.push(("duration".to_string(), false, None))
-                            }
-                            FieldType::Timezone => {
-                                value_stack.push(("string".to_string(), false, None))
-                            }
-                            FieldType::Decimal => {
-                                value_stack.push(("decimal".to_string(), false, None))
-                            }
                             FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
                                 value_stack.push(("float".to_string(), false, None))
                             }
@@ -220,14 +211,6 @@ impl StructField {
                                 value_stack.push(("int".to_string(), false, None))
                             }
                             FieldType::Unit => value_stack.push(("any".to_string(), false, None)),
-                            FieldType::EvenframeRecordId => {
-                                let type_str = if self.field_name == "id" {
-                                    format!("record<{}>", table_name)
-                                } else {
-                                    "record<any>".to_string()
-                                };
-                                value_stack.push((type_str, false, None));
-                            }
                             FieldType::Option(inner) => {
                                 work_stack.push(WorkItem::AssembleOption);
                                 work_stack.push(WorkItem::Process(inner));
@@ -266,7 +249,18 @@ impl StructField {
                                 }
                             }
                             FieldType::Other(name) => {
-                                if let Some(enum_def) = enums.get(name) {
+                                if let Some(ftc) = registry.lookup(name) {
+                                    let type_str = if self.field_name == "id" {
+                                        ftc.surrealdb_id_format.as_ref()
+                                            .map(|fmt| fmt.replace("{table_name}", table_name))
+                                            .unwrap_or_else(|| ftc.surrealdb.clone())
+                                    } else {
+                                        ftc.surrealdb_non_id_format.as_ref()
+                                            .cloned()
+                                            .unwrap_or_else(|| ftc.surrealdb.clone())
+                                    };
+                                    value_stack.push((type_str, false, None));
+                                } else if let Some(enum_def) = enums.get(name) {
                                     let total_variants = enum_def.variants.len();
                                     work_stack.push(WorkItem::AssembleEnum {
                                         count: total_variants,
@@ -552,6 +546,7 @@ impl StructField {
                         &enums,
                         &app_structs,
                         &persistable_structs,
+                        registry,
                     )
                 ));
             }

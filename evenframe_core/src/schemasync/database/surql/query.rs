@@ -12,7 +12,7 @@ use crate::{
         edge::{Direction, EdgeConfig},
         table::TableConfig,
     },
-    types::{FieldType, StructField},
+    types::{FieldType, ForeignTypeRegistry, StructField},
 };
 use convert_case::{Case, Casing};
 use serde::Serialize;
@@ -184,6 +184,7 @@ pub fn generate_edge_update_query<T: Serialize>(
     table_config: &TableConfig,
     object: &T,
     record_id: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<String> {
     let value = serde_json::to_value(object).map_err(|e| {
         EvenframeError::serialization(format!("Failed to serialize object to JSON Value: {}", e))
@@ -202,8 +203,9 @@ pub fn generate_edge_update_query<T: Serialize>(
     }
 
     let formatted_record_id = value::to_surreal_string(
-        &FieldType::EvenframeRecordId,
+        &FieldType::Other("EvenframeRecordId".to_string()),
         &Value::String(record_id.to_string()),
+        registry,
     );
 
     let mut query_parts = Vec::new();
@@ -226,6 +228,7 @@ pub fn generate_edge_update_query<T: Serialize>(
                 relation_statements: &mut relation_statements,
                 depth: 0,
                 current_table_name: &table_config.table_name,
+                registry,
             })?;
 
             if !incoming_edges.is_empty() {
@@ -251,6 +254,7 @@ fn handle_record_link(
     let_statements: &mut Vec<String>,
     relation_statements: &mut Vec<String>,
     depth: u32,
+    registry: &ForeignTypeRegistry,
 ) -> Result<String> {
     if field_value.is_string() {
         let record_id_str = field_value.as_str().unwrap();
@@ -294,6 +298,7 @@ fn handle_record_link(
                     let_statements,
                     relation_statements,
                     depth + 1,
+                    registry,
                 )?;
 
                 let var_name = format!(
@@ -310,13 +315,13 @@ fn handle_record_link(
 
                 Ok(format!("array::first(${}.id)", var_name))
             } else {
-                Ok(value::to_surreal_string(&field.field_type, field_value))
+                Ok(value::to_surreal_string(&field.field_type, field_value, registry))
             }
         } else {
             Ok(object_id)
         }
     } else {
-        Ok(value::to_surreal_string(&field.field_type, field_value))
+        Ok(value::to_surreal_string(&field.field_type, field_value, registry))
     }
 }
 
@@ -330,6 +335,7 @@ struct ExtractEdgesParams<'a> {
     relation_statements: &'a mut Vec<String>,
     depth: u32,
     current_table_name: &'a str,
+    registry: &'a ForeignTypeRegistry,
 }
 
 /// Extract incoming edges as SurrealQL array literal
@@ -343,6 +349,7 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> Result<String>
         relation_statements,
         depth,
         current_table_name,
+        registry,
     } = params;
     // Handle null/missing values - return empty array
     if field_value.is_null() {
@@ -378,12 +385,14 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> Result<String>
             }
 
             let formatted_in = value::to_surreal_string(
-                &FieldType::EvenframeRecordId,
+                &FieldType::Other("EvenframeRecordId".to_string()),
                 &Value::String(endpoints.in_record.clone()),
+                registry,
             );
             let formatted_out = value::to_surreal_string(
-                &FieldType::EvenframeRecordId,
+                &FieldType::Other("EvenframeRecordId".to_string()),
                 &Value::String(endpoints.out_record.clone()),
+                registry,
             );
 
             edge_obj_parts.push(format!("in: {}", formatted_in));
@@ -406,9 +415,10 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> Result<String>
                                     let_statements,
                                     relation_statements,
                                     depth,
+                                    registry,
                                 )?
                             } else {
-                                value::to_surreal_string(&edge_field.field_type, edge_prop_value)
+                                value::to_surreal_string(&edge_field.field_type, edge_prop_value, registry)
                             };
                         edge_obj_parts.push(format!("{}: {}", key, surreal_string));
                     }
@@ -436,9 +446,9 @@ fn extract_incoming_edges_as_surql(params: ExtractEdgesParams) -> Result<String>
             };
 
             let formatted_in =
-                value::to_surreal_string(&FieldType::EvenframeRecordId, &Value::String(in_record));
+                value::to_surreal_string(&FieldType::Other("EvenframeRecordId".to_string()), &Value::String(in_record), registry);
             let formatted_out =
-                value::to_surreal_string(&FieldType::EvenframeRecordId, &Value::String(out_record));
+                value::to_surreal_string(&FieldType::Other("EvenframeRecordId".to_string()), &Value::String(out_record), registry);
 
             edge_objects.push(format!(
                 "{{ in: {}, out: {} }}",
@@ -511,6 +521,7 @@ pub fn generate_update_query_with_edges<T: Serialize>(
     object: &T,
     explicit_id: Option<String>,
     select_config: Option<SelectConfig>,
+    registry: &ForeignTypeRegistry,
 ) -> Result<(String, String)> {
     let (main_query, record_id) = generate_query(
         QueryType::Update,
@@ -518,6 +529,7 @@ pub fn generate_update_query_with_edges<T: Serialize>(
         object,
         explicit_id,
         select_config.clone(),
+        registry,
     )?;
 
     if let Some(ref config) = select_config
@@ -526,7 +538,7 @@ pub fn generate_update_query_with_edges<T: Serialize>(
         return Ok((main_query, record_id));
     }
 
-    let edge_query = generate_edge_update_query(table_config, object, &record_id)?;
+    let edge_query = generate_edge_update_query(table_config, object, &record_id, registry)?;
 
     if edge_query.is_empty() {
         Ok((main_query, record_id))
@@ -546,6 +558,7 @@ pub(crate) fn generate_recursive(
     let_statements: &mut Vec<String>,
     relation_statements: &mut Vec<String>,
     depth: u32,
+    registry: &ForeignTypeRegistry,
 ) -> Result<(String, String)> {
     let generated_id = match query_type {
         QueryType::Create => {
@@ -566,7 +579,7 @@ pub(crate) fn generate_recursive(
                 if let Some(id_str) = id_val.as_str() {
                     id_str.to_string()
                 } else {
-                    value::to_surreal_string(&FieldType::EvenframeRecordId, id_val)
+                    value::to_surreal_string(&FieldType::Other("EvenframeRecordId".to_string()), id_val, registry)
                 }
             } else {
                 format!(
@@ -592,7 +605,7 @@ pub(crate) fn generate_recursive(
                 if let Some(id) = explicit_id {
                     id
                 } else if let Some(id_val) = value.get("id") {
-                    value::to_surreal_string(&FieldType::EvenframeRecordId, id_val)
+                    value::to_surreal_string(&FieldType::Other("EvenframeRecordId".to_string()), id_val, registry)
                 } else {
                     format!("{}:rand()", table_config.table_name)
                 }
@@ -624,11 +637,13 @@ pub(crate) fn generate_recursive(
                     relation_statements,
                     depth,
                     current_table_name: &table_config.table_name,
+                    registry,
                 })?;
 
                 let formatted_record_id = value::to_surreal_string(
-                    &FieldType::EvenframeRecordId,
+                    &FieldType::Other("EvenframeRecordId".to_string()),
                     &Value::String(record_id.clone()),
+                    registry,
                 );
                 let edge_update_stmt = generate_single_edge_table_update(
                     &edge_config.edge_name,
@@ -695,11 +710,13 @@ pub(crate) fn generate_recursive(
                                             let_statements,
                                             relation_statements,
                                             depth,
+                                            registry,
                                         )?
                                     } else {
                                         value::to_surreal_string(
                                             &edge_field.field_type,
                                             edge_prop_value,
+                                            registry,
                                         )
                                     };
                                     relation_data_parts
@@ -714,12 +731,14 @@ pub(crate) fn generate_recursive(
                             from_record_id,
                         ) {
                             let formatted_in_id = value::to_surreal_string(
-                                &FieldType::EvenframeRecordId,
+                                &FieldType::Other("EvenframeRecordId".to_string()),
                                 &serde_json::Value::String(endpoints.in_record.clone()),
+                                registry,
                             );
                             let formatted_out_id = value::to_surreal_string(
-                                &FieldType::EvenframeRecordId,
+                                &FieldType::Other("EvenframeRecordId".to_string()),
                                 &serde_json::Value::String(endpoints.out_record.clone()),
+                                registry,
                             );
 
                             let relation_id = format!(
@@ -728,8 +747,9 @@ pub(crate) fn generate_recursive(
                                 uuid::Uuid::new_v4().to_string().replace('-', "")
                             );
                             let formatted_relation_id = value::to_surreal_string(
-                                &FieldType::EvenframeRecordId,
+                                &FieldType::Other("EvenframeRecordId".to_string()),
                                 &serde_json::Value::String(relation_id),
+                                registry,
                             );
 
                             let relation_data_str = if relation_data_parts.is_empty() {
@@ -753,14 +773,16 @@ pub(crate) fn generate_recursive(
                         }
                     } else {
                         // Handle case where the value is just an ID string
-                        let to_record_id_raw = value::to_surreal_string(&field.field_type, &value);
+                        let to_record_id_raw = value::to_surreal_string(&field.field_type, &value, registry);
                         let formatted_to_id = value::to_surreal_string(
-                            &FieldType::EvenframeRecordId,
+                            &FieldType::Other("EvenframeRecordId".to_string()),
                             &serde_json::Value::String(to_record_id_raw),
+                            registry,
                         );
                         let formatted_from_id = value::to_surreal_string(
-                            &FieldType::EvenframeRecordId,
+                            &FieldType::Other("EvenframeRecordId".to_string()),
                             &serde_json::Value::String(from_record_id.clone()),
+                            registry,
                         );
 
                         let (in_id, out_id) = match effective_direction {
@@ -785,9 +807,10 @@ pub(crate) fn generate_recursive(
                     let_statements,
                     relation_statements,
                     depth,
+                    registry,
                 )?
             } else {
-                value::to_surreal_string(&field.field_type, field_value)
+                value::to_surreal_string(&field.field_type, field_value, registry)
             };
             content_parts.push(format!("{}: {}", field.field_name, surreal_string));
         }
@@ -877,14 +900,14 @@ pub struct FilterValue {
 fn map_filter_primitive_to_field_type(primitive: &FilterPrimitive) -> FieldType {
     match primitive {
         FilterPrimitive::String => FieldType::String,
-        FilterPrimitive::Number => FieldType::Decimal,
+        FilterPrimitive::Number => FieldType::Other("Decimal".to_string()),
         FilterPrimitive::Boolean => FieldType::Bool,
-        FilterPrimitive::Date => FieldType::DateTime,
+        FilterPrimitive::Date => FieldType::Other("DateTime".to_string()),
         FilterPrimitive::Select => FieldType::String, // Assuming select options are strings
     }
 }
 
-pub fn generate_where_clause(filters: &[FilterValue]) -> String {
+pub fn generate_where_clause(filters: &[FilterValue], registry: &ForeignTypeRegistry) -> String {
     if filters.is_empty() {
         return String::new();
     }
@@ -893,7 +916,7 @@ pub fn generate_where_clause(filters: &[FilterValue]) -> String {
         .iter()
         .map(|filter| {
             let field_type = map_filter_primitive_to_field_type(&filter.filter_type);
-            let surreal_value = value::to_surreal_string(&field_type, &filter.value);
+            let surreal_value = value::to_surreal_string(&field_type, &filter.value, registry);
             let field = filter
                 .field_path
                 .iter()
@@ -949,6 +972,7 @@ pub fn generate_query<T: Serialize>(
     object: &T,
     explicit_id: Option<String>,
     select_config: Option<SelectConfig>,
+    registry: &ForeignTypeRegistry,
 ) -> Result<(String, String)> {
     if query_type == QueryType::Select {
         let target = if let Some(id) = explicit_id {
@@ -959,7 +983,7 @@ pub fn generate_query<T: Serialize>(
 
         let mut query = format!("SELECT * FROM {}", target);
         if let Some(ref config) = select_config {
-            let where_clause = generate_where_clause(&config.filters);
+            let where_clause = generate_where_clause(&config.filters, registry);
             if !where_clause.is_empty() {
                 query.push(' ');
                 query.push_str(&where_clause);
@@ -988,10 +1012,11 @@ pub fn generate_query<T: Serialize>(
         &mut all_let_statements,
         &mut all_relation_statements,
         0,
+        registry,
     )?;
 
     let where_clause = if let Some(ref config) = select_config {
-        let clause = generate_where_clause(&config.filters);
+        let clause = generate_where_clause(&config.filters, registry);
         if !clause.is_empty() {
             if let QueryType::Update = query_type {
                 let parts: Vec<&str> = main_query.splitn(3, ' ').collect();
@@ -1183,12 +1208,14 @@ mod tests {
         }];
         let select_config = SelectConfig { filters, sorts };
 
+        let registry = crate::types::ForeignTypeRegistry::from_config(&std::collections::HashMap::new());
         let (query, temp_id) = generate_query(
             QueryType::Select,
             &table_config,
             &(),
             None,
             Some(select_config),
+            &registry,
         )
         .unwrap();
 

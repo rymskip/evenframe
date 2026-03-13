@@ -2,7 +2,7 @@
 
 use super::{build_all_configs, merge_tables_and_objects, BuildConfig};
 use crate::error::EvenframeError;
-use crate::types::{StructConfig, TaggedUnion};
+use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use crate::typesync::{
     arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
 };
@@ -105,6 +105,9 @@ impl TypeGenerator {
         // Build configs from the workspace
         let (enums, tables, objects) = build_all_configs(&self.config)?;
 
+        // Build the foreign type registry from config
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
+
         report.enums_processed = enums.len();
         report.tables_processed = tables.len();
         report.structs_processed = objects.len();
@@ -123,30 +126,30 @@ impl TypeGenerator {
 
         // Generate each enabled type
         if self.config.arktype {
-            let file = self.generate_arktype_internal(&structs, &enums)?;
+            let file = self.generate_arktype_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         if self.config.effect {
-            let file = self.generate_effect_internal(&structs, &enums)?;
+            let file = self.generate_effect_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "macroforge")]
         if self.config.macroforge {
-            let file = self.generate_macroforge_internal(&structs, &enums)?;
+            let file = self.generate_macroforge_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "flatbuffers")]
         if self.config.flatbuffers {
-            let file = self.generate_flatbuffers_internal(&structs, &enums)?;
+            let file = self.generate_flatbuffers_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "protobuf")]
         if self.config.protobuf {
-            let file = self.generate_protobuf_internal(&structs, &enums)?;
+            let file = self.generate_protobuf_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
@@ -162,20 +165,18 @@ impl TypeGenerator {
     pub fn generate_arktype(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
-
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         fs::create_dir_all(&self.config.output_path)?;
-
-        self.generate_arktype_internal(&structs, &enums)
+        self.generate_arktype_internal(&structs, &enums, &registry)
     }
 
     /// Generates only Effect-TS schemas.
     pub fn generate_effect(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
-
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         fs::create_dir_all(&self.config.output_path)?;
-
-        self.generate_effect_internal(&structs, &enums)
+        self.generate_effect_internal(&structs, &enums, &registry)
     }
 
     /// Generates only Macroforge types.
@@ -183,10 +184,9 @@ impl TypeGenerator {
     pub fn generate_macroforge(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
-
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         fs::create_dir_all(&self.config.output_path)?;
-
-        self.generate_macroforge_internal(&structs, &enums)
+        self.generate_macroforge_internal(&structs, &enums, &registry)
     }
 
     /// Generates only FlatBuffers schema.
@@ -194,10 +194,9 @@ impl TypeGenerator {
     pub fn generate_flatbuffers(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
-
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         fs::create_dir_all(&self.config.output_path)?;
-
-        self.generate_flatbuffers_internal(&structs, &enums)
+        self.generate_flatbuffers_internal(&structs, &enums, &registry)
     }
 
     /// Generates only Protocol Buffers schema.
@@ -205,10 +204,9 @@ impl TypeGenerator {
     pub fn generate_protobuf(&self) -> Result<GeneratedFile, EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let structs = merge_tables_and_objects(&tables, &objects);
-
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         fs::create_dir_all(&self.config.output_path)?;
-
-        self.generate_protobuf_internal(&structs, &enums)
+        self.generate_protobuf_internal(&structs, &enums, &registry)
     }
 
     // Internal generation methods
@@ -217,10 +215,11 @@ impl TypeGenerator {
         &self,
         structs: &HashMap<String, StructConfig>,
         enums: &HashMap<String, TaggedUnion>,
+        registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating ArkType types");
 
-        let content = generate_arktype_type_string(structs, enums, false);
+        let content = generate_arktype_type_string(structs, enums, false, registry);
         let full_content = format!(
             "import {{ scope }} from 'arktype';\n\n{}\n\n export const validator = scope({{\n  ...bindings.export(),\n}}).export();",
             content
@@ -247,10 +246,11 @@ impl TypeGenerator {
         &self,
         structs: &HashMap<String, StructConfig>,
         enums: &HashMap<String, TaggedUnion>,
+        registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Effect schemas");
 
-        let content = generate_effect_schema_string(structs, enums, false);
+        let content = generate_effect_schema_string(structs, enums, false, registry);
         let full_content = format!("import {{ Schema }} from \"effect\";\n\n{}", content);
 
         let path = self
@@ -275,10 +275,11 @@ impl TypeGenerator {
         &self,
         structs: &HashMap<String, StructConfig>,
         enums: &HashMap<String, TaggedUnion>,
+        registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Macroforge types");
 
-        let content = generate_macroforge_type_string(structs, enums, false);
+        let content = generate_macroforge_type_string(structs, enums, false, registry);
 
         let path = self
             .config
@@ -302,6 +303,7 @@ impl TypeGenerator {
         &self,
         structs: &HashMap<String, StructConfig>,
         enums: &HashMap<String, TaggedUnion>,
+        registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating FlatBuffers schema");
 
@@ -309,6 +311,7 @@ impl TypeGenerator {
             structs,
             enums,
             self.config.flatbuffers_namespace.as_deref(),
+            registry,
         );
 
         let path = self
@@ -333,6 +336,7 @@ impl TypeGenerator {
         &self,
         structs: &HashMap<String, StructConfig>,
         enums: &HashMap<String, TaggedUnion>,
+        registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Protocol Buffers schema");
 
@@ -341,6 +345,7 @@ impl TypeGenerator {
             enums,
             self.config.protobuf_package.as_deref(),
             self.config.protobuf_import_validate,
+            registry,
         );
 
         let path = self

@@ -3,7 +3,7 @@
 //! Provides the TypeMapper trait for converting Evenframe's FieldType
 //! to database-specific type strings and value formatting.
 
-use crate::types::FieldType;
+use crate::types::{FieldType, ForeignTypeRegistry};
 
 /// Trait for mapping Evenframe types to database-specific types.
 ///
@@ -152,7 +152,7 @@ pub mod defaults {
     }
 
     /// Convert FieldType to a generic SQL type (override in specific mappers)
-    pub fn default_sql_type(field_type: &FieldType) -> String {
+    pub fn default_sql_type(field_type: &FieldType, registry: &ForeignTypeRegistry) -> String {
         match field_type {
             FieldType::String => "TEXT".to_string(),
             FieldType::Char => "CHAR(1)".to_string(),
@@ -171,21 +171,23 @@ pub mod defaults {
             FieldType::Usize => "BIGINT".to_string(),
             FieldType::F32 => "REAL".to_string(),
             FieldType::F64 => "DOUBLE PRECISION".to_string(),
-            FieldType::Decimal => "NUMERIC".to_string(),
-            FieldType::DateTime => "TIMESTAMP".to_string(),
-            FieldType::EvenframeDuration => "BIGINT".to_string(), // nanoseconds
-            FieldType::Timezone => "TEXT".to_string(),
-            FieldType::EvenframeRecordId => "TEXT".to_string(),
             FieldType::Unit => "".to_string(), // Skip unit types
-            FieldType::OrderedFloat(inner) => default_sql_type(inner),
-            FieldType::Option(inner) => default_sql_type(inner), // Same type, just nullable
+            FieldType::OrderedFloat(inner) => default_sql_type(inner, registry),
+            FieldType::Option(inner) => default_sql_type(inner, registry), // Same type, just nullable
             FieldType::Vec(_) => "JSON".to_string(),
             FieldType::Tuple(_) => "JSON".to_string(),
             FieldType::Struct(_) => "JSON".to_string(),
             FieldType::HashMap(_, _) => "JSON".to_string(),
             FieldType::BTreeMap(_, _) => "JSON".to_string(),
             FieldType::RecordLink(_) => "TEXT".to_string(), // Foreign key reference
-            FieldType::Other(name) => format!("/* unknown: {} */ TEXT", name),
+            FieldType::Other(name) => {
+                if let Some(ftc) = registry.lookup(name) {
+                    // Use postgres as the default SQL type
+                    ftc.postgres.clone()
+                } else {
+                    format!("/* unknown: {} */ TEXT", name)
+                }
+            }
         }
     }
 
@@ -206,8 +208,6 @@ pub mod defaults {
                 | FieldType::U64
                 | FieldType::F32
                 | FieldType::F64
-                | FieldType::Decimal
-                | FieldType::DateTime
         )
     }
 }

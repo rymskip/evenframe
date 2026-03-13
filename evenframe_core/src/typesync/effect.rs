@@ -14,6 +14,7 @@ pub fn generate_effect_schema_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     print_types: bool,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -60,7 +61,7 @@ pub fn generate_effect_schema_string(
 
     // Helper closure for field conversion that has access to `rec`.
     let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
-        field_type_to_effect_schema(ft, structs, cur, &rec, proc)
+        field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 
     for comp_id in ordered_comps {
@@ -111,7 +112,7 @@ pub fn generate_effect_schema_string(
                 ));
 
                 // Generate the `...Encoded` type alias for the enum.
-                out_encoded.push_str(&encoded_alias_for_enum(e));
+                out_encoded.push_str(&encoded_alias_for_enum(e, registry));
             } else if let Some(struct_config) = structs
                 .values()
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
@@ -171,7 +172,7 @@ pub fn generate_effect_schema_string(
                 ));
 
                 // Generate the `...Encoded` interface for the struct.
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config));
+                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry));
             }
             processed.insert(name);
         }
@@ -193,7 +194,7 @@ pub fn generate_effect_schema_string(
 // ----- Encoded Type Generation Helpers -------------------------------------
 
 /// Generates an `...Encoded` TypeScript interface for a given struct.
-fn encoded_interface_for_struct(struct_config: &StructConfig) -> String {
+fn encoded_interface_for_struct(struct_config: &StructConfig, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let body = struct_config
         .fields
@@ -202,7 +203,7 @@ fn encoded_interface_for_struct(struct_config: &StructConfig) -> String {
             format!(
                 "  readonly {}: {};",
                 f.field_name.to_case(Case::Camel),
-                field_type_to_ts_encoded(&f.field_type)
+                field_type_to_ts_encoded(&f.field_type, registry)
             )
         })
         .collect::<Vec<_>>()
@@ -212,7 +213,7 @@ fn encoded_interface_for_struct(struct_config: &StructConfig) -> String {
 }
 
 /// Generates an `...Encoded` TypeScript type alias for a given enum/union.
-fn encoded_alias_for_enum(en: &TaggedUnion) -> String {
+fn encoded_alias_for_enum(en: &TaggedUnion, registry: &crate::types::ForeignTypeRegistry) -> String {
     tracing::trace!(enum_name = %en.enum_name, "Creating encoded alias for enum");
     let name = en.enum_name.to_case(Case::Pascal);
     let union = en
@@ -224,7 +225,7 @@ fn encoded_alias_for_enum(en: &TaggedUnion) -> String {
                     // For inline structs, use the variant name + "Encoded"
                     format!("{}Encoded", v.name.to_case(Case::Pascal))
                 }
-                VariantData::DataStructureRef(field_type) => field_type_to_ts_encoded(field_type),
+                VariantData::DataStructureRef(field_type) => field_type_to_ts_encoded(field_type, registry),
             },
             None => format!("\"{}\"", v.name),
         })
@@ -243,6 +244,7 @@ fn field_type_to_effect_schema(
     current: &str,
     rec: &RecursionInfo,
     processed: &HashSet<String>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     enum WorkItem<'a> {
         Generate(&'a FieldType),
@@ -273,7 +275,6 @@ fn field_type_to_effect_schema(
                 }
                 FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
                 FieldType::Unit => value_stack.push("Schema.Null".to_string()),
-                FieldType::Decimal => value_stack.push("Schema.NumberFromString".to_string()),
                 FieldType::OrderedFloat(_) => value_stack.push("Schema.Number".to_string()),
                 FieldType::F32 | FieldType::F64 => value_stack.push("Schema.Number".to_string()),
                 FieldType::I8
@@ -288,10 +289,6 @@ fn field_type_to_effect_schema(
                 | FieldType::U64
                 | FieldType::U128
                 | FieldType::Usize => value_stack.push("Schema.Number".to_string()),
-                FieldType::EvenframeRecordId => value_stack.push("Schema.String".to_string()),
-                FieldType::DateTime => value_stack.push("Schema.DateTimeUtc".to_string()),
-                FieldType::EvenframeDuration => value_stack.push("Schema.Duration".to_string()),
-                FieldType::Timezone => value_stack.push("Schema.TimeZoneNamed".to_string()),
                 FieldType::Option(i) => {
                     work_stack.push(WorkItem::AssembleOption);
                     work_stack.push(WorkItem::Generate(i));
@@ -324,6 +321,14 @@ fn field_type_to_effect_schema(
                     work_stack.push(WorkItem::Generate(k));
                 }
                 FieldType::Other(name) => {
+                    // Check foreign type registry first
+                    if let Some(ftc) = registry.lookup(name) {
+                        if !ftc.effect_schema.is_empty() {
+                            value_stack.push(ftc.effect_schema.clone());
+                            continue;
+                        }
+                    }
+
                     let pascal = name.to_case(Case::Pascal);
                     let wrap_id = format!("{}Ref", pascal);
                     // Decide whether we need Schema.suspend for recursion.
@@ -398,7 +403,7 @@ fn field_type_to_effect_schema(
 }
 
 /// Converts a `FieldType` into its corresponding raw TypeScript type for the `...Encoded` interface.
-fn field_type_to_ts_encoded(ft: &FieldType) -> String {
+fn field_type_to_ts_encoded(ft: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
     enum WorkItem<'a> {
         Generate(&'a FieldType),
         AssembleOption,
@@ -420,19 +425,9 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
                 match ft {
                     // Primitives
                     FieldType::String
-                    | FieldType::Char
-                    | FieldType::EvenframeRecordId
-                    | FieldType::Timezone => value_stack.push("string".to_string()),
+                    | FieldType::Char => value_stack.push("string".to_string()),
                     FieldType::Bool => value_stack.push("boolean".to_string()),
-                    FieldType::DateTime => value_stack.push("string".to_string()), // ISO 8601 string
-                    FieldType::EvenframeDuration => {
-                        value_stack.push(
-                            "| Schema.DurationEncoded |readonly [seconds: number, nanos: number]"
-                                .to_string(),
-                        );
-                    }
                     FieldType::Unit => value_stack.push("null".to_string()),
-                    FieldType::Decimal => value_stack.push("string".to_string()),
                     FieldType::OrderedFloat(_)
                     | FieldType::F32
                     | FieldType::F64
@@ -484,6 +479,13 @@ fn field_type_to_ts_encoded(ft: &FieldType) -> String {
 
                     // User-defined types
                     FieldType::Other(name) => {
+                        // Check foreign type registry first
+                        if let Some(ftc) = registry.lookup(name) {
+                            if !ftc.effect_encoded.is_empty() {
+                                value_stack.push(ftc.effect_encoded.clone());
+                                continue;
+                            }
+                        }
                         value_stack.push(format!("{}Encoded", name.to_case(Case::Pascal)))
                     }
                 }
@@ -538,6 +540,7 @@ pub fn generate_effect_schema_for_types(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
 
@@ -576,7 +579,7 @@ pub fn generate_effect_schema_for_types(
         .collect();
 
     let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
-        field_type_to_effect_schema(ft, structs, cur, &rec, proc)
+        field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 
     let mut out_classes = String::new();
@@ -621,7 +624,7 @@ pub fn generate_effect_schema_for_types(
                     "export type {}Type = typeof {}.Type;\n",
                     name, name
                 ));
-                out_encoded.push_str(&encoded_alias_for_enum(e));
+                out_encoded.push_str(&encoded_alias_for_enum(e, registry));
             } else if let Some(struct_config) = structs
                 .values()
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
@@ -672,7 +675,7 @@ pub fn generate_effect_schema_for_types(
                     "export type {}Type = typeof {}.Type;\n",
                     name, name
                 ));
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config));
+                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry));
             }
             processed.insert(name);
         }

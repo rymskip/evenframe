@@ -5,6 +5,7 @@ use crate::config_builders;
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
+    types::ForeignTypeRegistry,
     typesync::{
         arktype::generate_arktype_type_string,
         config::{FileNamingConvention, OutputMode},
@@ -46,6 +47,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let build_config = config_builders::BuildConfig::from_toml()?;
     let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
     let structs = config_builders::merge_tables_and_objects(&tables, &objects);
+    let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
 
     info!(
         "Found {} enums, {} tables, {} objects",
@@ -75,7 +77,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                 if output_mode == OutputMode::PerFile {
                     warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
                 }
-                generate_arktype(&structs, &enums, &output_path)?;
+                generate_arktype(&structs, &enums, &output_path, &registry)?;
             }
             TypesyncCommands::Effect(effect_args) => {
                 let output_path = effect_args
@@ -83,7 +85,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}bindings.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => generate_effect(&structs, &enums, &output_path)?,
+                    OutputMode::Single => generate_effect(&structs, &enums, &output_path, &registry)?,
                     OutputMode::PerFile => generate_effect_per_file(
                         &structs,
                         &enums,
@@ -92,6 +94,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        &registry,
                     )?,
                 }
             }
@@ -101,7 +104,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path)?,
+                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path, &registry)?,
                     OutputMode::PerFile => generate_macroforge_per_file(
                         &structs,
                         &enums,
@@ -109,6 +112,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        &registry,
                     )?,
                 }
             }
@@ -120,7 +124,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                 let namespace = fbs_args
                     .namespace
                     .or(config.typesync.flatbuffers_namespace.clone());
-                generate_flatbuffers(&structs, &enums, &output_path, namespace.as_deref())?;
+                generate_flatbuffers(&structs, &enums, &output_path, namespace.as_deref(), &registry)?;
             }
             TypesyncCommands::Protobuf(proto_args) => {
                 let output_path = proto_args
@@ -143,6 +147,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     &output_path,
                     package.as_deref(),
                     import_validate,
+                    &registry,
                 )?;
             }
         }
@@ -189,12 +194,12 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
                 }
                 let path = format!("{}arktype.ts", config.typesync.output_path);
-                generate_arktype(&structs, &enums, &path)?;
+                generate_arktype(&structs, &enums, &path, &registry)?;
             }
             TypeFormat::Effect => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}bindings.ts", config.typesync.output_path);
-                    generate_effect(&structs, &enums, &path)?;
+                    generate_effect(&structs, &enums, &path, &registry)?;
                 }
                 OutputMode::PerFile => {
                     generate_effect_per_file(
@@ -205,13 +210,14 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        &registry,
                     )?;
                 }
             },
             TypeFormat::Macroforge => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}macroforge.ts", config.typesync.output_path);
-                    generate_macroforge(&structs, &enums, &path)?;
+                    generate_macroforge(&structs, &enums, &path, &registry)?;
                 }
                 OutputMode::PerFile => {
                     generate_macroforge_per_file(
@@ -221,6 +227,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        &registry,
                     )?;
                 }
             },
@@ -231,6 +238,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     &enums,
                     &path,
                     config.typesync.flatbuffers_namespace.as_deref(),
+                    &registry,
                 )?;
             }
             TypeFormat::Protobuf => {
@@ -241,6 +249,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     &path,
                     config.typesync.protobuf_package.as_deref(),
                     config.typesync.protobuf_import_validate,
+                    &registry,
                 )?;
             }
         }
@@ -257,9 +266,10 @@ fn generate_arktype(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating ArkType types to {}", output_path);
-    let content = generate_arktype_type_string(structs, enums, false);
+    let content = generate_arktype_type_string(structs, enums, false, registry);
     let full_content = format!(
         "import {{ scope }} from 'arktype';\n\n{}\n\n export const validator = scope({{\n  ...bindings.export(),\n}}).export();",
         content
@@ -273,9 +283,10 @@ fn generate_effect(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating Effect schemas to {}", output_path);
-    let content = generate_effect_schema_string(structs, enums, false);
+    let content = generate_effect_schema_string(structs, enums, false, registry);
     let full_content = format!("import {{ Schema }} from \"effect\";\n\n{}", content);
     std::fs::write(output_path, full_content)?;
     debug!("Effect schemas written successfully");
@@ -290,6 +301,7 @@ fn generate_effect_per_file(
     barrel_file: bool,
     naming: FileNamingConvention,
     file_ext: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path).join(subdir);
@@ -305,7 +317,7 @@ fn generate_effect_per_file(
     for group in &plan.groups {
         let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
-        let body = generate_effect_schema_for_types(&type_names, structs, enums);
+        let body = generate_effect_schema_for_types(&type_names, structs, enums, registry);
 
         let mut file_content = String::new();
         file_content.push_str("import { Schema } from \"effect\";\n");
@@ -338,9 +350,10 @@ fn generate_macroforge(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating Macroforge types to {}", output_path);
-    let content = generate_macroforge_type_string(structs, enums, false);
+    let content = generate_macroforge_type_string(structs, enums, false, registry);
     std::fs::write(output_path, content)?;
     debug!("Macroforge types written successfully");
     Ok(())
@@ -353,6 +366,7 @@ fn generate_macroforge_per_file(
     barrel_file: bool,
     naming: FileNamingConvention,
     file_ext: &str,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path);
@@ -368,7 +382,7 @@ fn generate_macroforge_per_file(
     for group in &plan.groups {
         let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
-        let body = generate_macroforge_for_types(&type_names, structs, enums);
+        let body = generate_macroforge_for_types(&type_names, structs, enums, registry);
 
         let mut file_content = String::new();
 
@@ -379,7 +393,7 @@ fn generate_macroforge_per_file(
         }
 
         // Add extra imports (effect types, RecordLink)
-        let extra_imports = compute_extra_imports(&type_names, structs, enums);
+        let extra_imports = compute_extra_imports(&type_names, structs, enums, registry);
         for import_line in &extra_imports {
             file_content.push_str(import_line);
             file_content.push('\n');
@@ -417,9 +431,10 @@ fn generate_flatbuffers(
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     namespace: Option<&str>,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating FlatBuffers schema to {}", output_path);
-    let content = generate_flatbuffers_schema_string(structs, enums, namespace);
+    let content = generate_flatbuffers_schema_string(structs, enums, namespace, registry);
     std::fs::write(output_path, content)?;
     debug!("FlatBuffers schema written successfully");
     Ok(())
@@ -431,9 +446,10 @@ fn generate_protobuf(
     output_path: &str,
     package: Option<&str>,
     import_validate: bool,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating Protocol Buffers schema to {}", output_path);
-    let content = generate_protobuf_schema_string(structs, enums, package, import_validate);
+    let content = generate_protobuf_schema_string(structs, enums, package, import_validate, registry);
     std::fs::write(output_path, content)?;
     debug!("Protocol Buffers schema written successfully");
     Ok(())

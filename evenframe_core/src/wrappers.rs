@@ -10,6 +10,8 @@ use std::{marker::PhantomData, ops::Deref};
 // === EvenframeRecordId: surrealdb-backed implementation ===
 
 #[cfg(feature = "surrealdb")]
+use serde::de::MapAccess;
+#[cfg(feature = "surrealdb")]
 use surrealdb::types::{RecordId, ToSql};
 
 #[cfg(feature = "surrealdb")]

@@ -3,7 +3,7 @@ use crate::{
     schemasync::mockmake::format::Format,
     schemasync::mockmake::Mockmaker,
     schemasync::TableConfig,
-    types::{FieldType, StructField, VariantData},
+    types::{FieldType, ForeignTypeRegistry, StructField, VariantData},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -38,6 +38,7 @@ pub struct FieldValueGenerator<'a> {
     table_config: &'a TableConfig,
     field: &'a StructField,
     id_index: &'a usize,
+    registry: &'a ForeignTypeRegistry,
 }
 
 impl<'a> FieldValueGenerator<'a> {
@@ -79,9 +80,6 @@ impl<'a> FieldValueGenerator<'a> {
                                 value_stack.push(format!("{}", rng.random_bool(0.5)))
                             }
                             FieldType::Unit => value_stack.push("NONE".to_string()),
-                            FieldType::Decimal => {
-                                value_stack.push(format!("{:.3}dec", rng.random_range(0.0..100.0)))
-                            }
                             FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
                                 value_stack.push(format!("{:.2}f", rng.random_range(0.0..100.0)))
                             }
@@ -100,33 +98,6 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::U128
                             | FieldType::Usize => {
                                 value_stack.push(format!("{}", rng.random_range(0..100)))
-                            }
-                            FieldType::DateTime => {
-                                value_stack.push(format!("d'{}'", chrono::Utc::now().to_rfc3339()))
-                            }
-                            FieldType::EvenframeDuration => value_stack.push(format!(
-                                "duration::from_nanos({})",
-                                rng.random_range(0..86_400_000_000_000i64)
-                            )),
-                            FieldType::Timezone => {
-                                #[cfg(feature = "mockmake")]
-                                {
-                                    let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
-                                    value_stack.push(format!("'{}'", tz.name()));
-                                }
-                                #[cfg(not(feature = "mockmake"))]
-                                {
-                                    let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
-                                    value_stack.push(format!("'{}'", timezones[rng.random_range(0..timezones.len())]));
-                                }
-                            }
-                            FieldType::EvenframeRecordId => {
-                                value_stack.push(self.handle_record_id(
-                                    &ctx.field.field_name,
-                                    &ctx.table_config.table_name,
-                                    ctx.table_config,
-                                    &mut rng,
-                                ))
                             }
                             FieldType::Option(inner_type) => {
                                 if rng.random_bool(0.5) {
@@ -297,6 +268,52 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                             }
                             FieldType::Other(type_name) => {
+                                // Check if this is a foreign type with a mock strategy
+                                if let Some(ftc) = self.registry.lookup(type_name) {
+                                    match ftc.mock_strategy.as_str() {
+                                        "datetime" => {
+                                            value_stack.push(format!("d'{}'", chrono::Utc::now().to_rfc3339()));
+                                            continue;
+                                        }
+                                        "duration" => {
+                                            value_stack.push(format!(
+                                                "duration::from_nanos({})",
+                                                rng.random_range(0..86_400_000_000_000i64)
+                                            ));
+                                            continue;
+                                        }
+                                        "timezone" => {
+                                            #[cfg(feature = "mockmake")]
+                                            {
+                                                let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
+                                                value_stack.push(format!("'{}'", tz.name()));
+                                            }
+                                            #[cfg(not(feature = "mockmake"))]
+                                            {
+                                                let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+                                                value_stack.push(format!("'{}'", timezones[rng.random_range(0..timezones.len())]));
+                                            }
+                                            continue;
+                                        }
+                                        "decimal" => {
+                                            value_stack.push(format!("{:.3}dec", rng.random_range(0.0..100.0)));
+                                            continue;
+                                        }
+                                        "record_id" => {
+                                            value_stack.push(self.handle_record_id(
+                                                &ctx.field.field_name,
+                                                &ctx.table_config.table_name,
+                                                ctx.table_config,
+                                                &mut rng,
+                                            ));
+                                            continue;
+                                        }
+                                        _ => {
+                                            // Fall through to existing Other logic
+                                        }
+                                    }
+                                }
+
                                 // Check if we've already visited this type to avoid infinite recursion
                                 if ctx.visited_types.contains(type_name) {
                                     tracing::debug!(

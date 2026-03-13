@@ -12,6 +12,7 @@ pub fn field_type_to_default_value(
     field_type: &FieldType,
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     trace!("Generating default value for field type: {:?}", field_type);
     let result = match field_type {
@@ -23,32 +24,16 @@ pub fn field_type_to_default_value(
             trace!("Generating default for Bool type");
             "false".to_string()
         }
-        FieldType::DateTime => {
-            trace!("Generating default for DateTime type");
-            r#""2024-01-01T00:00:00Z""#.to_string()
-        }
-        FieldType::EvenframeDuration => {
-            trace!("Generating default for EvenframeDuration type");
-            "0".to_string() // nanoseconds
-        }
-        FieldType::Timezone => {
-            trace!("Generating default for Timezone type");
-            r#""UTC""#.to_string() // IANA timezone string
-        }
         FieldType::Unit => {
             trace!("Generating default for Unit type");
             "undefined".to_string()
-        }
-        FieldType::Decimal => {
-            trace!("Generating default for Decimal type");
-            r#""0""#.to_string()
         }
         FieldType::OrderedFloat(inner) => {
             trace!(
                 "Generating default for OrderedFloat with inner: {:?}",
                 inner
             );
-            field_type_to_default_value(inner, structs, enums)
+            field_type_to_default_value(inner, structs, enums, registry)
         }
         FieldType::F32
         | FieldType::F64
@@ -67,10 +52,6 @@ pub fn field_type_to_default_value(
             trace!("Generating default for numeric type");
             "0".to_string()
         }
-        FieldType::EvenframeRecordId => {
-            trace!("Generating default for EvenframeRecordId");
-            "''".to_string()
-        }
         FieldType::Tuple(inner_types) => {
             trace!(
                 "Generating default for Tuple with {} types",
@@ -78,7 +59,7 @@ pub fn field_type_to_default_value(
             );
             let tuple_defaults: Vec<String> = inner_types
                 .iter()
-                .map(|ty| field_type_to_default_value(ty, structs, enums))
+                .map(|ty| field_type_to_default_value(ty, structs, enums, registry))
                 .collect();
             format!("[{}]", tuple_defaults.join(", "))
         }
@@ -90,7 +71,7 @@ pub fn field_type_to_default_value(
                     format!(
                         "{}: {}",
                         name.to_case(Case::Camel),
-                        field_type_to_default_value(ftype, structs, enums)
+                        field_type_to_default_value(ftype, structs, enums, registry)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -135,6 +116,11 @@ pub fn field_type_to_default_value(
             "''".to_string()
         }
         FieldType::Other(name) => {
+            // 0) Check if it's a configured foreign type
+            if let Some(ftc) = registry.lookup(name) {
+                return ftc.default_value_ts.clone();
+            }
+
             // 1) If this is an enum, pick a random variant.
             // 2) Otherwise if it matches a known table, produce a default object for that table.
             // 3) If neither, fall back to 'undefined'.
@@ -159,7 +145,7 @@ pub fn field_type_to_default_value(
                             VariantData::DataStructureRef(field_type) => field_type,
                         };
                         let data_default =
-                            field_type_to_default_value(variant_data_field_type, structs, enums);
+                            field_type_to_default_value(variant_data_field_type, structs, enums, registry);
                         return data_default;
                     } else {
                         // A variant without data
@@ -187,7 +173,7 @@ pub fn field_type_to_default_value(
                         format!(
                             "{}: {}",
                             table_field.field_name.to_case(Case::Camel),
-                            field_type_to_default_value(&table_field.field_type, structs, enums)
+                            field_type_to_default_value(&table_field.field_type, structs, enums, registry)
                         )
                     })
                     .collect::<Vec<_>>()
@@ -216,6 +202,7 @@ pub fn field_type_to_surql_default(
     enums: &HashMap<String, TaggedUnion>,
     app_structs: &HashMap<String, StructConfig>,
     persistable_structs: &HashMap<String, TableConfig>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     trace!(
         "Generating SURQL default for field '{}' in table '{}', type: {:?}",
@@ -230,28 +217,9 @@ pub fn field_type_to_surql_default(
             trace!("Generating SURQL default for Bool");
             "false".to_string()
         }
-        FieldType::DateTime => {
-            // Generate current timestamp in SurrealDB datetime format
-            trace!("Generating SURQL default for DateTime");
-            "d'2024-01-01T00:00:00Z'".to_string()
-        }
-        FieldType::EvenframeDuration => {
-            // Default duration of 0 nanoseconds
-            trace!("Generating SURQL default for EvenframeDuration");
-            "duration::from_nanos(0)".to_string()
-        }
-        FieldType::Timezone => {
-            // Default timezone UTC
-            trace!("Generating SURQL default for Timezone");
-            "'UTC'".to_string()
-        }
         FieldType::Unit => {
             trace!("Generating SURQL default for Unit");
             "NULL".to_string()
-        }
-        FieldType::Decimal => {
-            trace!("Generating SURQL default for Decimal");
-            "0.00dec".to_string()
         }
         FieldType::OrderedFloat(inner) => {
             trace!(
@@ -279,11 +247,6 @@ pub fn field_type_to_surql_default(
             trace!("Generating SURQL default for integer type");
             "0".to_string()
         }
-        FieldType::EvenframeRecordId => {
-            // For id fields, let SurrealDB auto-generate
-            debug!("Generating RecordId default for field '{}'", field_name);
-            "NONE".to_string()
-        }
         FieldType::Tuple(inner_types) => {
             trace!(
                 "Generating SURQL default for Tuple with {} types",
@@ -299,6 +262,7 @@ pub fn field_type_to_surql_default(
                         enums,
                         app_structs,
                         persistable_structs,
+                        registry,
                     )
                 })
                 .collect();
@@ -321,7 +285,8 @@ pub fn field_type_to_surql_default(
                             ftype,
                             enums,
                             app_structs,
-                            persistable_structs
+                            persistable_structs,
+                            registry
                         )
                     )
                 })
@@ -356,6 +321,12 @@ pub fn field_type_to_surql_default(
         }
         FieldType::Other(name) => {
             debug!("Processing Other type '{}' for SURQL default", name);
+
+            // Check if it's a configured foreign type
+            if let Some(ftc) = registry.lookup(name) {
+                return ftc.default_value_surql.clone();
+            }
+
             // Check if it's an enum
             if let Some(enum_schema) = enums.values().find(|e| e.enum_name == *name) {
                 trace!(
@@ -379,6 +350,7 @@ pub fn field_type_to_surql_default(
                         enums,
                         app_structs,
                         persistable_structs,
+                        registry,
                     )
                 } else {
                     // For simple enum variant
@@ -407,7 +379,8 @@ pub fn field_type_to_surql_default(
                                 &table_field.field_type,
                                 enums,
                                 app_structs,
-                                persistable_structs
+                                persistable_structs,
+                                registry
                             )
                         )
                     })
@@ -438,6 +411,7 @@ pub fn field_type_to_surreal_type(
     enums: &HashMap<String, TaggedUnion>,
     app_structs: &HashMap<String, StructConfig>,
     persistable_structs: &HashMap<String, TableConfig>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> (String, bool, Option<String>) {
     trace!(
         "Converting field '{}' in table '{}' to SurrealDB type, field_type: {:?}",
@@ -451,22 +425,6 @@ pub fn field_type_to_surreal_type(
         FieldType::Bool => {
             trace!("Converting Bool to SurrealDB type");
             ("bool".to_string(), false, None)
-        }
-        FieldType::DateTime => {
-            trace!("Converting DateTime to SurrealDB type");
-            ("datetime".to_string(), false, None)
-        }
-        FieldType::EvenframeDuration => {
-            trace!("Converting EvenframeDuration to SurrealDB type");
-            ("duration".to_string(), false, None)
-        }
-        FieldType::Timezone => {
-            trace!("Converting Timezone to SurrealDB type");
-            ("string".to_string(), false, None)
-        }
-        FieldType::Decimal => {
-            trace!("Converting Decimal to SurrealDB type");
-            ("decimal".to_string(), false, None)
         }
         FieldType::OrderedFloat(inner) => {
             trace!(
@@ -494,16 +452,6 @@ pub fn field_type_to_surreal_type(
             trace!("Converting integer to SurrealDB type");
             ("int".to_string(), false, None)
         }
-        FieldType::EvenframeRecordId => {
-            let type_str = if field_name == "id" {
-                debug!("Creating record type for id field in table {}", table_name);
-                format!("record<{}>", table_name)
-            } else {
-                debug!("Creating generic record type for field {}", field_name);
-                "record<any>".to_string()
-            };
-            (type_str, false, None)
-        }
         FieldType::Unit => {
             trace!("Converting Unit to SurrealDB type");
             ("any".to_string(), false, None)
@@ -517,6 +465,7 @@ pub fn field_type_to_surreal_type(
                 enums,
                 app_structs,
                 persistable_structs,
+                registry,
             );
             ("object".to_string(), true, Some(value_type))
         }
@@ -529,6 +478,7 @@ pub fn field_type_to_surreal_type(
                 enums,
                 app_structs,
                 persistable_structs,
+                registry,
             );
             ("object".to_string(), true, Some(value_type))
         }
@@ -544,6 +494,7 @@ pub fn field_type_to_surreal_type(
                 enums,
                 app_structs,
                 persistable_structs,
+                registry,
             );
             (inner_type, needs_wildcard, wildcard_type)
         }
@@ -552,6 +503,23 @@ pub fn field_type_to_surreal_type(
                 "Processing Other type '{}' for SurrealDB type conversion",
                 name
             );
+
+            // Check if it's a configured foreign type
+            if let Some(ftc) = registry.lookup(name) {
+                let type_str = if field_name == "id" {
+                    if let Some(ref id_fmt) = ftc.surrealdb_id_format {
+                        id_fmt.replace("{table_name}", table_name)
+                    } else {
+                        ftc.surrealdb.clone()
+                    }
+                } else if let Some(ref non_id_fmt) = ftc.surrealdb_non_id_format {
+                    non_id_fmt.clone()
+                } else {
+                    ftc.surrealdb.clone()
+                };
+                return (type_str, false, None);
+            }
+
             // If this type name is defined as an enum, output its union literal.
             if let Some(enum_def) = enums.get(name) {
                 debug!(
@@ -577,6 +545,7 @@ pub fn field_type_to_surreal_type(
                                 enums,
                                 app_structs,
                                 persistable_structs,
+                                registry,
                             );
                             variant_type
                         } else {
@@ -602,6 +571,7 @@ pub fn field_type_to_surreal_type(
                             enums,
                             app_structs,
                             persistable_structs,
+                            registry,
                         );
                         format!("{}: {}", f.field_name, field_type)
                     })
@@ -632,6 +602,7 @@ pub fn field_type_to_surreal_type(
                 enums,
                 app_structs,
                 persistable_structs,
+                registry,
             );
             (
                 format!("null | {}", inner_type),
@@ -648,6 +619,7 @@ pub fn field_type_to_surreal_type(
                 enums,
                 app_structs,
                 persistable_structs,
+                registry,
             );
             (format!("array<{}>", inner_type), false, None)
         }
@@ -666,6 +638,7 @@ pub fn field_type_to_surreal_type(
                         enums,
                         app_structs,
                         persistable_structs,
+                        registry,
                     );
                     inner_type
                 })
@@ -688,6 +661,7 @@ pub fn field_type_to_surreal_type(
                         enums,
                         app_structs,
                         persistable_structs,
+                        registry,
                     );
                     format!("{}: {}", name, field_type)
                 })

@@ -24,11 +24,6 @@ pub enum FieldType {
     U64,
     U128,
     Usize,
-    EvenframeRecordId,
-    DateTime,
-    EvenframeDuration,
-    Timezone,
-    Decimal,
     OrderedFloat(Box<FieldType>), // Wraps F32 or F64
     Tuple(Vec<FieldType>),
     Struct(Vec<(String, FieldType)>),
@@ -60,11 +55,6 @@ impl ToTokens for FieldType {
             FieldType::U64 => tokens.extend(quote! { FieldType::U64 }),
             FieldType::U128 => tokens.extend(quote! { FieldType::U128 }),
             FieldType::Usize => tokens.extend(quote! { FieldType::Usize }),
-            FieldType::EvenframeRecordId => tokens.extend(quote! { FieldType::EvenframeRecordId }),
-            FieldType::DateTime => tokens.extend(quote! { FieldType::DateTime }),
-            FieldType::EvenframeDuration => tokens.extend(quote! { FieldType::EvenframeDuration }),
-            FieldType::Timezone => tokens.extend(quote! { FieldType::Timezone }),
-            FieldType::Decimal => tokens.extend(quote! { FieldType::Decimal }),
             FieldType::Unit => tokens.extend(quote! { FieldType::Unit }),
             FieldType::OrderedFloat(inner) => {
                 tokens.extend(quote! {
@@ -72,7 +62,6 @@ impl ToTokens for FieldType {
                 });
             }
             FieldType::Other(s) => {
-                // Wrap the string in a LitStr so it becomes a literal token.
                 let lit = syn::LitStr::new(s, proc_macro2::Span::call_site());
                 tokens.extend(quote! { FieldType::Other(#lit.to_string()) });
             }
@@ -116,31 +105,14 @@ impl FieldType {
         tracing::trace!("Parsing syn type: {}", ty.to_token_stream());
 
         let result = match ty {
-            // Path types (most common - String, Vec<T>, custom types, etc.)
             SynType::Path(tp) => Self::handle_type_path(tp),
-
-            // Tuple types - (T1, T2, ...) or unit ()
             SynType::Tuple(t) => Self::handle_tuple(t),
-
-            // [T] -> treat as Vec<T>
             SynType::Slice(s) => FieldType::Vec(Box::new(Self::parse_syn_ty(&s.elem))),
-
-            // [T; N] -> treat as Vec<T> (ignore size)
             SynType::Array(arr) => FieldType::Vec(Box::new(Self::parse_syn_ty(&arr.elem))),
-
-            // &T or &mut T -> parse inner type
             SynType::Reference(r) => Self::parse_syn_ty(&r.elem),
-
-            // *const T or *mut T -> parse inner type
             SynType::Ptr(p) => Self::parse_syn_ty(&p.elem),
-
-            // (T) -> unwrap parentheses
             SynType::Paren(p) => Self::parse_syn_ty(&p.elem),
-
-            // Group tokens -> unwrap
             SynType::Group(g) => Self::parse_syn_ty(&g.elem),
-
-            // impl Trait -> fallback to string
             SynType::ImplTrait(it) => {
                 tracing::debug!(
                     "impl Trait not directly supported: {}",
@@ -148,8 +120,6 @@ impl FieldType {
                 );
                 FieldType::Other(it.to_token_stream().to_string())
             }
-
-            // dyn Trait -> fallback to string
             SynType::TraitObject(to) => {
                 tracing::debug!(
                     "Trait object not directly supported: {}",
@@ -157,8 +127,6 @@ impl FieldType {
                 );
                 FieldType::Other(to.to_token_stream().to_string())
             }
-
-            // fn(...) -> ... -> fallback to string
             SynType::BareFn(f) => {
                 tracing::debug!(
                     "Function pointer not directly supported: {}",
@@ -166,23 +134,13 @@ impl FieldType {
                 );
                 FieldType::Other(f.to_token_stream().to_string())
             }
-
-            // _ (infer) -> fallback to string
             SynType::Infer(i) => FieldType::Other(i.to_token_stream().to_string()),
-
-            // ! (never) -> fallback to string
             SynType::Never(n) => FieldType::Other(n.to_token_stream().to_string()),
-
-            // type_macro!(...) -> fallback to string
             SynType::Macro(m) => {
                 tracing::debug!("Type macro not supported: {}", m.to_token_stream());
                 FieldType::Other(m.to_token_stream().to_string())
             }
-
-            // Verbatim tokens from macro expansion -> fallback to string
             SynType::Verbatim(ts) => FieldType::Other(ts.to_string()),
-
-            // Future-proofing for new syn variants
             _ => {
                 tracing::warn!("Unknown type variant: {}", ty.to_token_stream());
                 FieldType::Other(ty.to_token_stream().to_string())
@@ -195,7 +153,6 @@ impl FieldType {
 
     fn handle_tuple(t: &syn::TypeTuple) -> FieldType {
         if t.elems.is_empty() {
-            // Unit type ()
             FieldType::Unit
         } else {
             let elems = t.elems.iter().map(Self::parse_syn_ty).collect();
@@ -206,12 +163,10 @@ impl FieldType {
     fn handle_type_path(tp: &syn::TypePath) -> FieldType {
         use quote::ToTokens;
 
-        // If qualified self type (e.g., <T as Trait>::Assoc), fallback
         if tp.qself.is_some() {
             return FieldType::Other(tp.to_token_stream().to_string());
         }
 
-        // Get the last segment (works for both `String` and `std::string::String`)
         let last = match tp.path.segments.last() {
             Some(s) => s,
             None => return FieldType::Other(tp.to_token_stream().to_string()),
@@ -221,7 +176,6 @@ impl FieldType {
 
         // Handle generic types with angle brackets
         if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-            // Extract only type arguments (ignore lifetimes and const generics)
             let type_args: Vec<_> = args
                 .args
                 .iter()
@@ -260,17 +214,15 @@ impl FieldType {
                     tracing::debug!("Found OrderedFloat with inner type");
                     return FieldType::OrderedFloat(Box::new(Self::parse_syn_ty(type_args[0])));
                 }
-                "DateTime" => {
-                    // DateTime<Utc>, DateTime<Local>, etc. all become DateTime
-                    return FieldType::DateTime;
-                }
                 _ => {
-                    // Unknown generic type, fall through to check if it's a known non-generic
+                    // For any unknown generic type (e.g., DateTime<Utc>),
+                    // store just the base name as Other so foreign type config can match it.
+                    return FieldType::Other(ident);
                 }
             }
         }
 
-        // Match known types without generics
+        // Match known built-in types without generics
         match ident.as_str() {
             "String" | "str" => FieldType::String,
             "char" => FieldType::Char,
@@ -289,11 +241,6 @@ impl FieldType {
             "u64" => FieldType::U64,
             "u128" => FieldType::U128,
             "usize" => FieldType::Usize,
-            "EvenframeRecordId" => FieldType::EvenframeRecordId,
-            "DateTime" => FieldType::DateTime,
-            "EvenframeDuration" => FieldType::EvenframeDuration,
-            "Tz" | "Timezone" => FieldType::Timezone,
-            "Decimal" => FieldType::Decimal,
             _ => {
                 // Unknown type - store as Other (use only the last segment identifier,
                 // not the full path, so `crate::module::Foo` becomes just `Foo`)
@@ -305,13 +252,11 @@ impl FieldType {
     }
 
     pub fn parse_type_str(type_str: &str) -> FieldType {
-        // Remove whitespace for consistent parsing
         let clean_str = type_str
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>();
 
-        // Check for simple primitive types first
         match clean_str.as_str() {
             "String" => FieldType::String,
             "char" => FieldType::Char,
@@ -330,11 +275,6 @@ impl FieldType {
             "u64" => FieldType::U64,
             "u128" => FieldType::U128,
             "usize" => FieldType::Usize,
-            "EvenframeRecordId" => FieldType::EvenframeRecordId,
-            "DateTime" => FieldType::DateTime,
-            "EvenframeDuration" => FieldType::EvenframeDuration,
-            "Tz" | "Timezone" => FieldType::Timezone,
-            "Decimal" => FieldType::Decimal,
             "()" => FieldType::Unit,
             _ => {
                 // Check for generic types like Option<T> or Vec<T>
@@ -353,20 +293,15 @@ impl FieldType {
                                 FieldType::Vec(Box::new(inner_type))
                             }
                             "Box" => Self::parse_type_str(inner),
-                            "DateTime" => FieldType::DateTime,
-                            "EvenframeDuration" => FieldType::EvenframeDuration,
-                            _ => FieldType::Other(clean_str),
+                            // For any generic type (e.g., DateTime<Utc>), store just the base name
+                            _ => FieldType::Other(outer.to_string()),
                         }
                     } else {
-                        // Malformed generic type (missing closing '>')
                         FieldType::Other(clean_str)
                     }
                 } else if clean_str.starts_with('(') && clean_str.ends_with(')') {
-                    // Handle tuple types
-                    // Strip the outer parentheses
                     let inner = &clean_str[1..clean_str.len() - 1];
 
-                    // Split by commas, but handle nested generics carefully
                     let mut elements = Vec::new();
                     let mut current = String::new();
                     let mut depth = 0;
@@ -391,14 +326,13 @@ impl FieldType {
                         }
                     }
 
-                    // Don't forget the last element
                     if !current.is_empty() {
                         elements.push(Self::parse_type_str(&current));
                     }
 
                     FieldType::Tuple(elements)
                 } else {
-                    // Unknown or complex type
+                    // Unknown or complex type — could be a foreign type or custom struct/enum
                     FieldType::Other(clean_str)
                 }
             }
@@ -427,11 +361,6 @@ impl fmt::Display for FieldType {
             FieldType::U64 => write!(f, "U64"),
             FieldType::U128 => write!(f, "U128"),
             FieldType::Usize => write!(f, "Usize"),
-            FieldType::EvenframeRecordId => write!(f, "EvenframeRecordId"),
-            FieldType::DateTime => write!(f, "DateTime"),
-            FieldType::EvenframeDuration => write!(f, "EvenframeDuration"),
-            FieldType::Timezone => write!(f, "Timezone"),
-            FieldType::Decimal => write!(f, "Decimal"),
             FieldType::OrderedFloat(inner) => write!(f, "OrderedFloat<{}>", inner),
             FieldType::Tuple(types) => {
                 write!(f, "Tuple(")?;
