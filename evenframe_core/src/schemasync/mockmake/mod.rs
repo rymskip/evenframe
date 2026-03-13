@@ -737,13 +737,13 @@ impl quote::ToTokens for MockGenerationConfig {
         // Convert preservation mode to tokens
         let preservation_mode_tokens = match &self.preservation_mode {
             PreservationMode::Smart => {
-                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::Smart }
+                quote::quote! { ::evenframe::schemasync::PreservationMode::Smart }
             }
             PreservationMode::Full => {
-                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::Full }
+                quote::quote! { ::evenframe::schemasync::PreservationMode::Full }
             }
             PreservationMode::None => {
-                quote::quote! { ::evenframe::schemasync::schemasync::PreservationMode::None }
+                quote::quote! { ::evenframe::schemasync::PreservationMode::None }
             }
         };
 
