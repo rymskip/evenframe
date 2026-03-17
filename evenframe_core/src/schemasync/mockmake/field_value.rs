@@ -80,7 +80,7 @@ impl<'a> FieldValueGenerator<'a> {
                                 value_stack.push(format!("{}", rng.random_bool(0.5)))
                             }
                             FieldType::Unit => value_stack.push("NONE".to_string()),
-                            FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
+                            FieldType::F32 | FieldType::F64 => {
                                 value_stack.push(format!("{:.2}f", rng.random_range(0.0..100.0)))
                             }
                             FieldType::I8
@@ -297,6 +297,10 @@ impl<'a> FieldValueGenerator<'a> {
                                         }
                                         "decimal" => {
                                             value_stack.push(format!("{:.3}dec", rng.random_range(0.0..100.0)));
+                                            continue;
+                                        }
+                                        "float" => {
+                                            value_stack.push(format!("{:.2}f", rng.random_range(0.0..100.0)));
                                             continue;
                                         }
                                         "record_id" => {

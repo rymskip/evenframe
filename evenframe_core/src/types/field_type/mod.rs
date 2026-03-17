@@ -24,7 +24,6 @@ pub enum FieldType {
     U64,
     U128,
     Usize,
-    OrderedFloat(Box<FieldType>), // Wraps F32 or F64
     Tuple(Vec<FieldType>),
     Struct(Vec<(String, FieldType)>),
     Option(Box<FieldType>),
@@ -56,11 +55,6 @@ impl ToTokens for FieldType {
             FieldType::U128 => tokens.extend(quote! { FieldType::U128 }),
             FieldType::Usize => tokens.extend(quote! { FieldType::Usize }),
             FieldType::Unit => tokens.extend(quote! { FieldType::Unit }),
-            FieldType::OrderedFloat(inner) => {
-                tokens.extend(quote! {
-                    FieldType::OrderedFloat(Box::new(#inner))
-                });
-            }
             FieldType::Other(s) => {
                 let lit = syn::LitStr::new(s, proc_macro2::Span::call_site());
                 tokens.extend(quote! { FieldType::Other(#lit.to_string()) });
@@ -210,10 +204,6 @@ impl FieldType {
                 "RecordLink" if type_args.len() == 1 => {
                     return FieldType::RecordLink(Box::new(Self::parse_syn_ty(type_args[0])));
                 }
-                "OrderedFloat" if type_args.len() == 1 => {
-                    tracing::debug!("Found OrderedFloat with inner type");
-                    return FieldType::OrderedFloat(Box::new(Self::parse_syn_ty(type_args[0])));
-                }
                 _ => {
                     // For any unknown generic type (e.g., DateTime<Utc>),
                     // store just the base name as Other so foreign type config can match it.
@@ -361,7 +351,6 @@ impl fmt::Display for FieldType {
             FieldType::U64 => write!(f, "U64"),
             FieldType::U128 => write!(f, "U128"),
             FieldType::Usize => write!(f, "Usize"),
-            FieldType::OrderedFloat(inner) => write!(f, "OrderedFloat<{}>", inner),
             FieldType::Tuple(types) => {
                 write!(f, "Tuple(")?;
                 let mut first = true;

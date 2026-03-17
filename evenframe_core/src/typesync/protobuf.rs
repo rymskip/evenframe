@@ -229,8 +229,6 @@ fn field_type_to_protobuf(field_type: &FieldType, registry: &crate::types::Forei
         FieldType::U64 => "uint64".to_string(),
         FieldType::U128 => "string".to_string(), // No native 128-bit support
         FieldType::Usize => "uint64".to_string(),
-        FieldType::OrderedFloat(inner) => field_type_to_protobuf(inner, registry),
-
         FieldType::Option(inner) => {
             // For nested options, just return the inner type
             field_type_to_protobuf(inner, registry)

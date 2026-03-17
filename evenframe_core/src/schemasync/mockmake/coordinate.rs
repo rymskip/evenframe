@@ -1090,8 +1090,7 @@ fn is_numeric_type(field_type: &FieldType) -> bool {
         | FieldType::U32
         | FieldType::U64
         | FieldType::U128
-        | FieldType::Usize
-        | FieldType::OrderedFloat(_) => true,
+        | FieldType::Usize => true,
         FieldType::Option(inner) => is_numeric_type(inner),
         _ => false,
     }

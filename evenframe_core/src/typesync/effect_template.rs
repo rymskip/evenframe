@@ -193,7 +193,7 @@ fn field_type_to_effect_schema(
                 Schema.Boolean
             {:case FieldType::Unit}
                 Schema.Null
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 Schema.Number
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 Schema.Number
@@ -252,7 +252,7 @@ fn field_type_to_ts_encoded(field_type: &FieldType, registry: &ForeignTypeRegist
                 boolean
             {:case FieldType::Unit}
                 null
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 number
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 number

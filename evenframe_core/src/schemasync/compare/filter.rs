@@ -299,7 +299,6 @@ fn resolve_path(
         match current_type {
             FieldType::Option(inner)
             | FieldType::Vec(inner)
-            | FieldType::OrderedFloat(inner)
             | FieldType::RecordLink(inner) => {
                 current_type = inner;
             }

@@ -36,7 +36,6 @@ impl<'a> TypeMapper for PostgresTypeMapper<'a> {
             FieldType::Usize => "BIGINT".to_string(),
             FieldType::F32 => "REAL".to_string(),
             FieldType::F64 => "DOUBLE PRECISION".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
             FieldType::Unit => "".to_string(), // Skip
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(inner) => {
@@ -166,7 +165,6 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
             FieldType::Usize => "BIGINT UNSIGNED".to_string(),
             FieldType::F32 => "FLOAT".to_string(),
             FieldType::F64 => "DOUBLE".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
             FieldType::Unit => "".to_string(),
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(_) => "JSON".to_string(),
@@ -264,7 +262,6 @@ impl<'a> TypeMapper for SqliteTypeMapper<'a> {
             | FieldType::Isize | FieldType::Usize => "INTEGER".to_string(),
             FieldType::I128 | FieldType::U128 => "TEXT".to_string(), // Too large for INTEGER
             FieldType::F32 | FieldType::F64 => "REAL".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
             FieldType::Unit => "".to_string(),
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(_) => "TEXT".to_string(), // JSON string

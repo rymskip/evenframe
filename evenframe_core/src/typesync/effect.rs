@@ -275,7 +275,6 @@ fn field_type_to_effect_schema(
                 }
                 FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
                 FieldType::Unit => value_stack.push("Schema.Null".to_string()),
-                FieldType::OrderedFloat(_) => value_stack.push("Schema.Number".to_string()),
                 FieldType::F32 | FieldType::F64 => value_stack.push("Schema.Number".to_string()),
                 FieldType::I8
                 | FieldType::I16
@@ -428,8 +427,7 @@ fn field_type_to_ts_encoded(ft: &FieldType, registry: &crate::types::ForeignType
                     | FieldType::Char => value_stack.push("string".to_string()),
                     FieldType::Bool => value_stack.push("boolean".to_string()),
                     FieldType::Unit => value_stack.push("null".to_string()),
-                    FieldType::OrderedFloat(_)
-                    | FieldType::F32
+                    FieldType::F32
                     | FieldType::F64
                     | FieldType::I8
                     | FieldType::I16

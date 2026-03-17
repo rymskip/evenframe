@@ -11,7 +11,7 @@ fn unsupported_type_error(ty: &Type, type_str: &str, hint: &str) -> proc_macro2:
             "Unsupported type: '{}'. {}\n\nSupported types include:\n\
             - Primitives: bool, char, String, i8-i128, u8-u128, f32, f64\n\
             - Containers: Option<T>, Vec<T>, HashMap<K,V>, BTreeMap<K,V>\n\
-            - Custom: RecordLink<T>, OrderedFloat<T>, or any custom struct/enum\n\
+            - Custom: RecordLink<T>, or any custom struct/enum\n\
             - Foreign types: configure via [general.foreign_types] in config",
             type_str, hint
         ),
@@ -31,7 +31,7 @@ fn parse_generic_args(
         args.len()
     );
     match (type_name, args.len()) {
-        ("Option" | "Vec" | "RecordLink" | "OrderedFloat", 1) => {
+        ("Option" | "Vec" | "RecordLink", 1) => {
             if let Some(GenericArgument::Type(inner_ty)) = args.first() {
                 trace!("Processing inner type for {}", type_name);
                 let inner_parsed = parse_data_type(inner_ty);
@@ -44,9 +44,6 @@ fn parse_generic_args(
                     }
                     "RecordLink" => {
                         quote! { ::evenframe::types::FieldType::RecordLink(Box::new(#inner_parsed)) }
-                    }
-                    "OrderedFloat" => {
-                        quote! { ::evenframe::types::FieldType::OrderedFloat(Box::new(#inner_parsed)) }
                     }
                     _ => unreachable!(),
                 }
@@ -83,7 +80,7 @@ fn parse_generic_args(
         }
         (name, count) => {
             let expected = match name {
-                "Option" | "Vec" | "RecordLink" | "OrderedFloat" => 1,
+                "Option" | "Vec" | "RecordLink" => 1,
                 "HashMap" | "BTreeMap" => 2,
                 _ => {
                     // Unknown generic type (e.g., DateTime<Utc>, MyType<T>)

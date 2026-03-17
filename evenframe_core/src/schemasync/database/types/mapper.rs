@@ -172,7 +172,6 @@ pub mod defaults {
             FieldType::F32 => "REAL".to_string(),
             FieldType::F64 => "DOUBLE PRECISION".to_string(),
             FieldType::Unit => "".to_string(), // Skip unit types
-            FieldType::OrderedFloat(inner) => default_sql_type(inner, registry),
             FieldType::Option(inner) => default_sql_type(inner, registry), // Same type, just nullable
             FieldType::Vec(_) => "JSON".to_string(),
             FieldType::Tuple(_) => "JSON".to_string(),

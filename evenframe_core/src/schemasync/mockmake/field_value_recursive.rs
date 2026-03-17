@@ -45,7 +45,7 @@ impl<'a> FieldValueGenerator<'a> {
             }
             FieldType::Bool => format!("{}", rng.random_bool(0.5)),
             FieldType::Unit => "NONE".to_string(),
-            FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
+            FieldType::F32 | FieldType::F64 => {
                 format!("{:.2}f", rng.random_range(0.0..100.0))
             }
             // Combine signed integer types
@@ -290,6 +290,7 @@ impl<'a> FieldValueGenerator<'a> {
                     }
                 }
                 "decimal" => return format!("{:.3}dec", rng.random_range(0.0..100.0)),
+                "float" => return format!("{:.2}f", rng.random_range(0.0..100.0)),
                 "record_id" => {
                     return self.handle_record_id(
                         &self.field.field_name,

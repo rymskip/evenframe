@@ -18,7 +18,6 @@ pub fn field_type_to_arktype(
         FieldType::Char => "'string'".to_string(),
         FieldType::Bool => "'boolean'".to_string(),
         FieldType::Unit => "'null'".to_string(),
-        FieldType::OrderedFloat(_inner) => "'number'".to_string(), // OrderedFloat is treated as number
         FieldType::F32 | FieldType::F64 => "'number'".to_string(),
         FieldType::I8
         | FieldType::I16

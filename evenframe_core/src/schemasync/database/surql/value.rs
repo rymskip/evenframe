@@ -70,7 +70,6 @@ pub fn to_surreal_string(field_type: &FieldType, value: &Value, registry: &Forei
         }
         FieldType::F32
         | FieldType::F64
-        | FieldType::OrderedFloat(_)
         | FieldType::I8
         | FieldType::I16
         | FieldType::I32

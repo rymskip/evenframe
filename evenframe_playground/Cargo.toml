@@ -10,7 +10,7 @@ description = "A playground demonstrating Evenframe integration with Axum"
 
 [dependencies]
 # Evenframe dependencies
-evenframe = { path = "../evenframe", features = ["cli"] }
+evenframe = { path = "../evenframe", features = ["schemasync"] }
 evenframe_derive = { path = "../evenframe_derive" }
 evenframe_core = { path = "../evenframe_core" }
 

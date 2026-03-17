@@ -3585,9 +3585,9 @@ checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.6"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "091397be61a01d4be58e7841595bd4bfedb15f1cd54977d79b8271e94ed799a3"
+checksum = "7a9db96d7fa8782dd8c15ce32ffe8680bbd1e978a43bf51a34d39483540495f5"
 dependencies = [
  "portable-atomic",
 ]
@@ -4911,9 +4911,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surrealdb"
-version = "3.0.4"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b19f5232640cfe8b1423b49582f36bc4c867dac9e85ad87f9a81b5fd1633621f"
+checksum = "c8062e4e1760499593dce33e780976f70a7a1554ac317fdc0b295d7aeb6c4712"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4949,9 +4949,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-core"
-version = "3.0.4"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "089a8dc4b88097a84ca3663ad0c152ae53d2e23ffc8b636dac7f65aa86ba3766"
+checksum = "0f4ce9f65f242afc7e8535f603b1b62ef0a08ec982aac362ac24a01cd1bab7b5"
 dependencies = [
  "addr",
  "affinitypool",
@@ -5063,9 +5063,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types"
-version = "3.0.4"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69a8277f923a20960c82cd7d133524fb2c5d0a73d5f52abd74f28d8d83a8b6fa"
+checksum = "221012e96d93ccbe79f9b1de2b4df579e93ad7fcde7628063a6971de2d9fa1f3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5089,9 +5089,9 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-types-derive"
-version = "3.0.4"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "491b1457e76011c800818421d814472e0a9a4d3c690ae1edb44381678e97a554"
+checksum = "521afc1b691597be4ce36fe8b60c4432894760572902b5c06e7c973aead6d6af"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5917,8 +5917,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "try_from_expr"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "675b40e166da041af1c68f1419f7c7b3620c5be982817b2859fda875ddb2aa6d"
 dependencies = [
  "ordered-float 5.1.0",
  "syn 2.0.111",
@@ -5928,8 +5926,6 @@ dependencies = [
 [[package]]
 name = "try_from_expr_derive"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25c43a247412af987ad9118b573f127ee4e14e8b49496182d4c48a8bc123ff7d"
 dependencies = [
  "proc-macro2",
  "quote",

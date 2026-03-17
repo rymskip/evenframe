@@ -179,8 +179,6 @@ fn field_type_to_flatbuffers(field_type: &FieldType, registry: &crate::types::Fo
         FieldType::U64 => "uint64".to_string(),
         FieldType::U128 => "string".to_string(), // No native 128-bit support
         FieldType::Usize => "uint64".to_string(),
-        FieldType::OrderedFloat(inner) => field_type_to_flatbuffers(inner, registry),
-
         FieldType::Option(inner) => {
             // FlatBuffers fields are optional by default, just use inner type
             field_type_to_flatbuffers(inner, registry)

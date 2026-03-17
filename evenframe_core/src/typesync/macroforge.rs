@@ -279,7 +279,7 @@ fn field_type_to_typescript(field_type: &FieldType, registry: &crate::types::For
                 boolean
             {:case FieldType::Unit}
                 null
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 number
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 number
@@ -452,8 +452,7 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
     match ft {
         FieldType::Option(inner)
         | FieldType::Vec(inner)
-        | FieldType::RecordLink(inner)
-        | FieldType::OrderedFloat(inner) => field_type_contains(inner, predicate),
+        | FieldType::RecordLink(inner) => field_type_contains(inner, predicate),
         FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
             field_type_contains(k, predicate) || field_type_contains(v, predicate)
         }
@@ -488,8 +487,7 @@ pub fn compute_extra_imports(
         match ft {
             FieldType::Option(inner)
             | FieldType::Vec(inner)
-            | FieldType::RecordLink(inner)
-            | FieldType::OrderedFloat(inner) => collect_foreign_imports_recursive(inner, registry, fi),
+            | FieldType::RecordLink(inner) => collect_foreign_imports_recursive(inner, registry, fi),
             FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
                 collect_foreign_imports_recursive(k, registry, fi);
                 collect_foreign_imports_recursive(v, registry, fi);

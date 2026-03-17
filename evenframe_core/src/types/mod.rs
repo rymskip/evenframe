@@ -193,7 +193,7 @@ impl StructField {
                                 value_stack.push(("string".to_string(), false, None))
                             }
                             FieldType::Bool => value_stack.push(("bool".to_string(), false, None)),
-                            FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
+                            FieldType::F32 | FieldType::F64 => {
                                 value_stack.push(("float".to_string(), false, None))
                             }
                             FieldType::I8

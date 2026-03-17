@@ -28,13 +28,6 @@ pub fn field_type_to_default_value(
             trace!("Generating default for Unit type");
             "undefined".to_string()
         }
-        FieldType::OrderedFloat(inner) => {
-            trace!(
-                "Generating default for OrderedFloat with inner: {:?}",
-                inner
-            );
-            field_type_to_default_value(inner, structs, enums, registry)
-        }
         FieldType::F32
         | FieldType::F64
         | FieldType::I8
@@ -220,13 +213,6 @@ pub fn field_type_to_surql_default(
         FieldType::Unit => {
             trace!("Generating SURQL default for Unit");
             "NULL".to_string()
-        }
-        FieldType::OrderedFloat(inner) => {
-            trace!(
-                "Generating SURQL default for OrderedFloat with inner: {:?}",
-                inner
-            );
-            "0.0f".to_string() // OrderedFloat is treated as float
         }
         FieldType::F32 | FieldType::F64 => {
             trace!("Generating SURQL default for float type");
@@ -425,13 +411,6 @@ pub fn field_type_to_surreal_type(
         FieldType::Bool => {
             trace!("Converting Bool to SurrealDB type");
             ("bool".to_string(), false, None)
-        }
-        FieldType::OrderedFloat(inner) => {
-            trace!(
-                "Converting OrderedFloat to SurrealDB type with inner: {:?}",
-                inner
-            );
-            ("float".to_string(), false, None) // OrderedFloat is treated as float
         }
         FieldType::F32 | FieldType::F64 => {
             trace!("Converting float to SurrealDB type");
