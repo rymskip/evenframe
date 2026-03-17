@@ -10,7 +10,7 @@ description = "A playground demonstrating Evenframe integration with Axum"
 
 [dependencies]
 # Evenframe dependencies
-evenframe = { path = "../evenframe" }
+evenframe = { path = "../evenframe", features = ["cli"] }
 evenframe_derive = { path = "../evenframe_derive" }
 evenframe_core = { path = "../evenframe_core" }
 
@@ -37,5 +37,4 @@ url = "2"
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-evenframe_build = { path = "../evenframe_build" }
 tempfile = "3"

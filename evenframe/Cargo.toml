@@ -25,7 +25,7 @@ default = ["cli"]
 # The CLI feature set: full schemasync pipeline with mock data generation,
 # all TypeScript/schema generators, and SurrealDB support. This is what the
 # evenframe binary requires. See evenframe_core for the full feature breakdown.
-cli = ["evenframe_core/cli"]
+cli = ["evenframe_core/cli", "schemasync", "surrealdb", "typesync-all"]
 
 # --- Type synchronization (forwarded to evenframe_core) ---
 

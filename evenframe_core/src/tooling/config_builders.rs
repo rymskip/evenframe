@@ -58,6 +58,8 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         table_configs.len()
     );
 
+    resolve_relation_endpoints(&mut table_configs, &enum_configs);
+
     Ok((enum_configs, table_configs, struct_configs))
 }
 
@@ -111,7 +113,115 @@ pub fn build_all_configs_default() -> AllConfigs {
         table_configs.len()
     );
 
+    resolve_relation_endpoints(&mut table_configs, &enum_configs);
+
     (enum_configs, table_configs, struct_configs)
+}
+
+/// Resolves `from`/`to` on relation tables by inspecting `in`/`out` field types.
+///
+/// For each table with a relation config that has empty `from`/`to`, this looks at
+/// the `in` and `out` fields' `RecordLink<T>` types and resolves `T` to table names.
+/// If `T` is a persistable_union enum, all variant table names are collected.
+fn resolve_relation_endpoints(
+    table_configs: &mut HashMap<String, TableConfig>,
+    enum_configs: &HashMap<String, TaggedUnion>,
+) {
+    // Snapshot table names to avoid borrow conflicts
+    let known_tables: std::collections::HashSet<String> =
+        table_configs.keys().cloned().collect();
+
+    for table_config in table_configs.values_mut() {
+        let Some(relation) = table_config.relation.as_mut() else {
+            continue;
+        };
+
+        // Default edge_name from table_name if empty
+        if relation.edge_name.is_empty() {
+            relation.edge_name = table_config.table_name.clone();
+        }
+
+        // Resolve from/to from in/out field types
+        if relation.from.is_empty()
+            && let Some(tables) = resolve_field_to_tables(
+                &table_config.struct_config,
+                "in",
+                enum_configs,
+                &known_tables,
+            )
+        {
+            debug!(
+                "Auto-resolved relation.from for '{}': {:?}",
+                table_config.table_name, tables
+            );
+            relation.from = tables;
+        }
+        if relation.to.is_empty()
+            && let Some(tables) = resolve_field_to_tables(
+                &table_config.struct_config,
+                "out",
+                enum_configs,
+                &known_tables,
+            )
+        {
+            debug!(
+                "Auto-resolved relation.to for '{}': {:?}",
+                table_config.table_name, tables
+            );
+            relation.to = tables;
+        }
+    }
+}
+
+/// Resolves a relation field (`in` or `out`) to the table names it references.
+fn resolve_field_to_tables(
+    struct_config: &crate::types::StructConfig,
+    field_name: &str,
+    enum_configs: &HashMap<String, TaggedUnion>,
+    known_tables: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    let field = struct_config
+        .fields
+        .iter()
+        .find(|f| f.field_name == field_name)?;
+
+    // Extract the inner type name from RecordLink<T>
+    let inner_type_name = match &field.field_type {
+        FieldType::RecordLink(inner) => match inner.as_ref() {
+            FieldType::Other(name) => name.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    // Try direct table match
+    let snake = inner_type_name.to_case(Case::Snake);
+    if known_tables.contains(&snake) {
+        return Some(vec![snake]);
+    }
+
+    // Try enum variant resolution
+    if let Some(tagged) = enum_configs.get(&inner_type_name) {
+        let mut tables = Vec::new();
+        for variant in &tagged.variants {
+            if let Some(data) = &variant.data {
+                let struct_name = match data {
+                    VariantData::InlineStruct(s) => &s.struct_name,
+                    VariantData::DataStructureRef(FieldType::Other(name)) => name,
+                    _ => continue,
+                };
+                let t = struct_name.to_case(Case::Snake);
+                if known_tables.contains(&t) {
+                    tables.push(t);
+                }
+            }
+        }
+        if !tables.is_empty() {
+            return Some(tables);
+        }
+    }
+
+    None
 }
 
 /// Processes found Evenframe types into configurations.

@@ -315,14 +315,14 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
     for attr in attrs {
         if attr.path().is_ident("relation") {
             debug!("Found relation attribute");
+
+            // Handle bare #[relation] with no arguments
             let result: Result<syn::punctuated::Punctuated<Meta, syn::Token![,]>, _> =
                 attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
 
             match result {
                 Ok(metas) => {
                     let mut edge_name = None;
-                    let mut from: Vec<String> = Vec::new();
-                    let mut to: Vec<String> = Vec::new();
                     let mut direction: Option<Direction> = None;
 
                     for meta in metas {
@@ -338,61 +338,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                 } else {
                                     return Err(syn::Error::new(
                                         nv.value.span(),
-                                        "The 'edge_name' (or 'name') parameter must be a string literal.\n\nExample: edge_name = \"has_user\"",
-                                    ));
-                                }
-                            }
-                            Meta::NameValue(nv) if nv.path.is_ident("from") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(lit), ..
-                                }) = &nv.value
-                                {
-                                    from.push(lit.value());
-                                } else if let Expr::Array(arr) = &nv.value {
-                                    for expr in &arr.elems {
-                                        if let Expr::Lit(ExprLit {
-                                            lit: Lit::Str(lit), ..
-                                        }) = expr
-                                        {
-                                            from.push(lit.value());
-                                        } else {
-                                            return Err(syn::Error::new(
-                                                expr.span(),
-                                                "Each element in the 'from' array must be a string literal.\n\nExample: from = [\"Order\", \"Shipment\"]",
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    return Err(syn::Error::new(
-                                        nv.value.span(),
-                                        "The 'from' parameter must be a string literal or an array of string literals.\n\nExamples: from = \"Order\" | from = [\"Order\", \"Shipment\"]",
-                                    ));
-                                }
-                            }
-                            Meta::NameValue(nv) if nv.path.is_ident("to") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(lit), ..
-                                }) = &nv.value
-                                {
-                                    to.push(lit.value());
-                                } else if let Expr::Array(arr) = &nv.value {
-                                    for expr in &arr.elems {
-                                        if let Expr::Lit(ExprLit {
-                                            lit: Lit::Str(lit), ..
-                                        }) = expr
-                                        {
-                                            to.push(lit.value());
-                                        } else {
-                                            return Err(syn::Error::new(
-                                                expr.span(),
-                                                "Each element in the 'to' array must be a string literal.\n\nExample: to = [\"User\", \"Admin\"]",
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    return Err(syn::Error::new(
-                                        nv.value.span(),
-                                        "The 'to' parameter must be a string literal or an array of string literals.\n\nExamples: to = \"User\" | to = [\"User\", \"Admin\"]",
+                                        "The 'edge_name' (or 'name') parameter must be a string literal.\n\nExample: #[relation(edge_name = \"has_user\")]",
                                     ));
                                 }
                             }
@@ -418,7 +364,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                 } else {
                                     return Err(syn::Error::new(
                                         nv.value.span(),
-                                        "The 'direction' parameter must be a string literal with value \"from\" or \"to\".\n\nExample: direction = \"from\"",
+                                        "The 'direction' parameter must be a string literal with value \"from\", \"to\", or \"both\".\n\nExample: direction = \"from\"",
                                     ));
                                 }
                             }
@@ -431,7 +377,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                                 return Err(syn::Error::new(
                                     nv.path.span(),
                                     format!(
-                                        "Unknown parameter '{}' in relation attribute.\n\nValid parameters are: edge_name (or name), from, to, direction\n\nExample: #[relation(edge_name = \"has_user\", from = \"Order\", to = \"User\", direction = \"from\")]",
+                                        "Unknown parameter '{}' in relation attribute.\n\nValid parameters are: edge_name (or name), direction\n\nExamples:\n#[relation]\n#[relation(edge_name = \"custom_name\")]\n#[relation(edge_name = \"custom_name\", direction = \"from\")]",
                                         param_name
                                     ),
                                 ));
@@ -439,54 +385,32 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                             _ => {
                                 return Err(syn::Error::new(
                                     meta.span(),
-                                    "Invalid syntax in relation attribute.\n\nExpected format: #[relation(edge_name = \"...\", from = \"...\", to = \"...\", direction = \"...\")]",
+                                    "Invalid syntax in relation attribute.\n\nExamples:\n#[relation]\n#[relation(edge_name = \"custom_name\")]\n#[relation(edge_name = \"custom_name\", direction = \"from\")]",
                                 ));
                             }
                         }
                     }
 
-                    match (&edge_name, !from.is_empty(), !to.is_empty()) {
-                        (Some(edge_name), true, true) => {
-                            info!(
-                                "Successfully parsed relation attribute: edge_name={}, from={:?}, to={:?}, direction={:?}",
-                                edge_name, from, to, direction
-                            );
-                            return Ok(Some(EdgeConfig {
-                                edge_name: edge_name.to_owned(),
-                                from: from.clone(),
-                                to: to.clone(),
-                                direction: direction.to_owned(),
-                            }));
-                        }
-                        _ => {
-                            let missing = vec![
-                                edge_name.is_none().then_some("edge_name/name"),
-                                from.is_empty().then_some("from"),
-                                to.is_empty().then_some("to"),
-                            ]
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>()
-                            .join(", ");
-
-                            return Err(syn::Error::new(
-                                attr.span(),
-                                format!(
-                                    "Missing required parameters in relation attribute: {}\n\nRequired parameters are: edge_name (or name), from, to.\n\nExamples:\n#[relation(\n    edge_name = \"has_user\",\n    from = \"Order\",\n    to = \"User\"\n)]\n#[relation(\n    edge_name = \"has_user\",\n    from = [\"Order\", \"Shipment\"],\n    to = [\"User\"],\n    direction = \"from\"\n)]",
-                                    missing
-                                ),
-                            ));
-                        }
-                    }
+                    info!(
+                        "Successfully parsed relation attribute: edge_name={:?}, direction={:?}",
+                        edge_name, direction
+                    );
+                    return Ok(Some(EdgeConfig {
+                        edge_name: edge_name.unwrap_or_default(),
+                        from: vec![],
+                        to: vec![],
+                        direction,
+                    }));
                 }
-                Err(err) => {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        format!(
-                            "Failed to parse relation attribute: {}\n\nExample usage:\n#[relation(\n    edge_name = \"has_user\",\n    from = \"Order\",\n    to = \"User\",\n    direction = \"from\"\n)]",
-                            err
-                        ),
-                    ));
+                Err(_) => {
+                    // No arguments — bare #[relation]
+                    info!("Parsed bare #[relation] attribute");
+                    return Ok(Some(EdgeConfig {
+                        edge_name: String::new(),
+                        from: vec![],
+                        to: vec![],
+                        direction: None,
+                    }));
                 }
             }
         }

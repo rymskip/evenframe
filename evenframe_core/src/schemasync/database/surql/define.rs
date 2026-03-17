@@ -145,7 +145,7 @@ pub fn generate_define_statements(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schemasync::EventConfig;
+    use crate::schemasync::{DefineConfig, EventConfig};
     use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
 
     #[test]

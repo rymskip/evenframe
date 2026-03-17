@@ -295,8 +295,9 @@ impl FieldType {
             "Tz" | "Timezone" => FieldType::Timezone,
             "Decimal" => FieldType::Decimal,
             _ => {
-                // Unknown type - store as Other
-                let type_str = tp.to_token_stream().to_string();
+                // Unknown type - store as Other (use only the last segment identifier,
+                // not the full path, so `crate::module::Foo` becomes just `Foo`)
+                let type_str = ident.clone();
                 tracing::trace!("Unknown type '{}', storing as Other", type_str);
                 FieldType::Other(type_str)
             }

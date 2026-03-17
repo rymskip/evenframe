@@ -190,6 +190,21 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                             }
                             FieldType::RecordLink(inner_type) => {
+                                // For relation tables, in/out fields must use relation.from/to
+                                // to stay in sync with the DEFINE TABLE ... FROM ... TO ... clause.
+                                if ctx.table_config.relation.is_some()
+                                    && (ctx.field.field_name == "in"
+                                        || ctx.field.field_name == "out")
+                                {
+                                    value_stack.push(self.handle_record_id(
+                                        &ctx.field.field_name,
+                                        &ctx.table_config.table_name,
+                                        ctx.table_config,
+                                        &mut rng,
+                                    ));
+                                    continue;
+                                }
+
                                 // RecordLink should ultimately reference a persistable table.
                                 // If the inner type is an enum (persistable struct union), choose a variant that maps to a table.
                                 match inner_type.as_ref() {

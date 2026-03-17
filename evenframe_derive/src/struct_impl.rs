@@ -66,7 +66,25 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
 
         // Parse relation attribute
         let relation_config = match parse_relation_attribute(&input.attrs) {
-            Ok(config) => config,
+            Ok(Some(mut config)) => {
+                // Default edge_name to snake_case of struct name if not explicitly set
+                if config.edge_name.is_empty() {
+                    config.edge_name = {
+                        // Manual PascalCase to snake_case conversion
+                        let name = ident.to_string();
+                        let mut snake = String::new();
+                        for (i, ch) in name.chars().enumerate() {
+                            if ch.is_uppercase() && i > 0 {
+                                snake.push('_');
+                            }
+                            snake.push(ch.to_lowercase().next().unwrap());
+                        }
+                        snake
+                    };
+                }
+                Some(config)
+            }
+            Ok(None) => None,
             Err(err) => return err.to_compile_error(),
         };
 

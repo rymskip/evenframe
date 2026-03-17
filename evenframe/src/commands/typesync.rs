@@ -9,7 +9,7 @@ use evenframe_core::{
         arktype::generate_arktype_type_string,
         config::{FileNamingConvention, OutputMode},
         effect::{generate_effect_schema_for_types, generate_effect_schema_string},
-        file_grouping::compute_file_grouping,
+        file_grouping::{compute_file_grouping, FileOutputPlan},
         flatbuffers::generate_flatbuffers_schema_string,
         import_resolver::{
             barrel_filename, format_imports, generate_barrel_file, resolve_imports,
@@ -294,6 +294,7 @@ fn generate_effect_per_file(
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path).join(subdir);
     std::fs::create_dir_all(&dir)?;
+    cleanup_obsolete_files(&dir, &plan, naming, file_ext)?;
 
     info!(
         "Generating Effect schemas (per-file) to {} ({} files)",
@@ -356,6 +357,7 @@ fn generate_macroforge_per_file(
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path);
     std::fs::create_dir_all(dir)?;
+    cleanup_obsolete_files(dir, &plan, naming, file_ext)?;
 
     info!(
         "Generating Macroforge types (per-file) to {} ({} files)",
@@ -434,5 +436,35 @@ fn generate_protobuf(
     let content = generate_protobuf_schema_string(structs, enums, package, import_validate);
     std::fs::write(output_path, content)?;
     debug!("Protocol Buffers schema written successfully");
+    Ok(())
+}
+
+/// Removes files in `dir` matching `*{file_ext}` that are not part of the current output plan.
+/// This cleans up obsolete files when types are regrouped into different files.
+fn cleanup_obsolete_files(
+    dir: &Path,
+    plan: &FileOutputPlan,
+    naming: FileNamingConvention,
+    file_ext: &str,
+) -> Result<()> {
+    let mut expected: HashSet<String> = plan
+        .groups
+        .iter()
+        .map(|g| format!("{}{}", type_name_to_filename(&g.primary_type, naming), file_ext))
+        .collect();
+    expected.insert(barrel_filename(file_ext));
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if file_name.ends_with(file_ext) && !expected.contains(&file_name) {
+            info!("Removing obsolete file: {}", entry.path().display());
+            std::fs::remove_file(entry.path())?;
+        }
+    }
     Ok(())
 }
