@@ -7,7 +7,7 @@ use evenframe_core::{
     error::Result,
     typesync::{
         arktype::generate_arktype_type_string,
-        config::{FileNamingConvention, OutputMode},
+        config::{ArrayStyle, FileNamingConvention, OutputMode},
         effect::{generate_effect_schema_for_types, generate_effect_schema_string},
         file_grouping::{compute_file_grouping, FileOutputPlan},
         flatbuffers::generate_flatbuffers_schema_string,
@@ -63,6 +63,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let barrel_file = config.typesync.output.barrel_file;
     let file_naming = config.typesync.output.file_naming;
     let file_extension = &config.typesync.output.file_extension;
+    let array_style = config.typesync.output.array_style;
 
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
@@ -101,7 +102,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path)?,
+                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path, array_style)?,
                     OutputMode::PerFile => generate_macroforge_per_file(
                         &structs,
                         &enums,
@@ -109,6 +110,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        array_style,
                     )?,
                 }
             }
@@ -211,7 +213,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
             TypeFormat::Macroforge => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}macroforge.ts", config.typesync.output_path);
-                    generate_macroforge(&structs, &enums, &path)?;
+                    generate_macroforge(&structs, &enums, &path, array_style)?;
                 }
                 OutputMode::PerFile => {
                     generate_macroforge_per_file(
@@ -221,6 +223,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         file_naming,
                         file_extension,
+                        array_style,
                     )?;
                 }
             },
@@ -338,9 +341,10 @@ fn generate_macroforge(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
+    array_style: ArrayStyle,
 ) -> Result<()> {
     info!("Generating Macroforge types to {}", output_path);
-    let content = generate_macroforge_type_string(structs, enums, false);
+    let content = generate_macroforge_type_string(structs, enums, false, array_style);
     std::fs::write(output_path, content)?;
     debug!("Macroforge types written successfully");
     Ok(())
@@ -353,6 +357,7 @@ fn generate_macroforge_per_file(
     barrel_file: bool,
     naming: FileNamingConvention,
     file_ext: &str,
+    array_style: ArrayStyle,
 ) -> Result<()> {
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path);
@@ -368,7 +373,7 @@ fn generate_macroforge_per_file(
     for group in &plan.groups {
         let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
-        let body = generate_macroforge_for_types(&type_names, structs, enums);
+        let body = generate_macroforge_for_types(&type_names, structs, enums, array_style);
 
         let mut file_content = String::new();
 

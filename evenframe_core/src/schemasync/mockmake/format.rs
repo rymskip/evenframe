@@ -428,7 +428,7 @@ impl ToTokens for Format {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "schemasync"))]
 mod tests {
     use super::*;
 

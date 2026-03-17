@@ -7,7 +7,7 @@
 //! 4. The builder pattern works correctly
 //! 5. Configuration loading works
 
-use evenframe_build::{BuildConfig, GeneratorType, TypeGenerator};
+use evenframe_core::tooling::{BuildConfig, GeneratorType, TypeGenerator};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -594,7 +594,7 @@ fn test_generate_with_config_function() {
         .build();
 
     // Use the top-level generate_with_config function
-    let result = evenframe_build::generate_with_config(config);
+    let result = evenframe_core::tooling::generate_with_config(config);
 
     assert!(
         result.is_ok(),

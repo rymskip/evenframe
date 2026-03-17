@@ -1,7 +1,7 @@
 //! Build-time configuration for type generation.
 
 use crate::error::EvenframeError;
-use crate::typesync::config::{FileNamingConvention, OutputConfig, OutputMode};
+use crate::typesync::config::{ArrayStyle, FileNamingConvention, OutputConfig, OutputMode};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -206,6 +206,13 @@ impl BuildConfig {
                         _ => FileNamingConvention::Kebab,
                     };
                 }
+                if let Some(style_str) = output_table.get("array_style").and_then(|v| v.as_str())
+                {
+                    config.output.array_style = match style_str {
+                        "generic" => ArrayStyle::Generic,
+                        _ => ArrayStyle::Shorthand,
+                    };
+                }
             }
         }
 
@@ -337,6 +344,12 @@ impl BuildConfigBuilder {
     /// Sets the file naming convention for per-file output.
     pub fn file_naming(mut self, naming: FileNamingConvention) -> Self {
         self.config.output.file_naming = naming;
+        self
+    }
+
+    /// Sets the TypeScript array syntax style.
+    pub fn array_style(mut self, style: ArrayStyle) -> Self {
+        self.config.output.array_style = style;
         self
     }
 

@@ -3,6 +3,7 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
+use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
@@ -18,6 +19,7 @@ pub fn generate_macroforge_type_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     _print_types: bool,
+    array_style: ArrayStyle,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -73,10 +75,10 @@ pub fn generate_macroforge_type_string(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &unique_structs {
-        parts.push(generate_struct_block(struct_config));
+        parts.push(generate_struct_block(struct_config, array_style));
     }
     for enum_def in &unique_enums {
-        parts.push(generate_enum_block(enum_def));
+        parts.push(generate_enum_block(enum_def, array_style));
     }
 
     result.push_str(&parts.join("\n"));
@@ -92,6 +94,7 @@ pub fn generate_macroforge_for_types(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    array_style: ArrayStyle,
 ) -> String {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
 
@@ -128,16 +131,16 @@ pub fn generate_macroforge_for_types(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &filtered_structs {
-        parts.push(generate_struct_block(struct_config));
+        parts.push(generate_struct_block(struct_config, array_style));
     }
     for enum_def in &filtered_enums {
-        parts.push(generate_enum_block(enum_def));
+        parts.push(generate_enum_block(enum_def, array_style));
     }
     parts.join("\n")
 }
 
 /// Generate a single struct's TypeScript interface block.
-fn generate_struct_block(struct_config: &StructConfig) -> String {
+fn generate_struct_block(struct_config: &StructConfig, array_style: ArrayStyle) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let derive_line = format_derive_line(&struct_config.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
@@ -151,7 +154,7 @@ fn generate_struct_block(struct_config: &StructConfig) -> String {
     }
     lines.push(format!("export interface {} {{", name));
     for field in &struct_config.fields {
-        lines.push(render_field_block(field));
+        lines.push(render_field_block(field, array_style));
     }
     lines.push("}".to_string());
     lines.push(String::new());
@@ -159,7 +162,7 @@ fn generate_struct_block(struct_config: &StructConfig) -> String {
 }
 
 /// Generate a single enum's TypeScript type block.
-fn generate_enum_block(enum_def: &TaggedUnion) -> String {
+fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
     let derive_line = format_derive_line(&enum_def.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
@@ -186,7 +189,7 @@ fn generate_enum_block(enum_def: &TaggedUnion) -> String {
                     format!("{}{}", ann_prefix, s.struct_name.to_case(Case::Pascal))
                 }
                 Some(VariantData::DataStructureRef(ft)) => {
-                    format!("{}{}", ann_prefix, field_type_to_typescript(ft).trim())
+                    format!("{}{}", ann_prefix, field_type_to_typescript(ft, array_style).trim())
                 }
                 None => {
                     format!("{}\"{}\"", ann_prefix, variant.name)
@@ -206,7 +209,7 @@ fn generate_enum_block(enum_def: &TaggedUnion) -> String {
 
 /// Render a complete field block including annotations, @serde, and the field declaration.
 /// This handles both inline @serde (for RecordLink fields) and separate-line @serde.
-fn render_field_block(field: &crate::types::StructField) -> String {
+fn render_field_block(field: &crate::types::StructField, array_style: ArrayStyle) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     // 1. Field annotations (each on its own line)
@@ -239,9 +242,9 @@ fn render_field_block(field: &crate::types::StructField) -> String {
     // 5. Field declaration line
     let field_name = field.field_name.to_case(Case::Camel);
     let type_str = if is_inline && !serde_annotation.is_empty() {
-        render_field_type(&field.field_type, &serde_annotation, true)
+        render_field_type(&field.field_type, &serde_annotation, true, array_style)
     } else {
-        field_type_to_typescript(&field.field_type)
+        field_type_to_typescript(&field.field_type, array_style)
     };
 
     lines.push(format!("  {}: {};", field_name, type_str.trim()));
@@ -260,7 +263,7 @@ fn format_derive_line(derives: &[String]) -> String {
 }
 
 /// Convert a FieldType to its TypeScript representation.
-fn field_type_to_typescript(field_type: &FieldType) -> String {
+fn field_type_to_typescript(field_type: &FieldType, array_style: ArrayStyle) -> String {
     ts_template! {
         {#match field_type}
             {:case FieldType::String | FieldType::Char}
@@ -286,17 +289,17 @@ fn field_type_to_typescript(field_type: &FieldType) -> String {
             {:case FieldType::Timezone}
                 string
             {:case FieldType::Option(inner)}
-                @{wrap_union_type(inner)} | null
+                @{wrap_union_type(inner, array_style)} | null
             {:case FieldType::Vec(inner)}
-                @{wrap_union_type(inner)}[]
+                @{format_array(inner, array_style)}
             {:case FieldType::Tuple(items)}
-                [@{items.iter().map(field_type_to_typescript).collect::<Vec<_>>().join(", ")}]
+                [@{items.iter().map(|i| field_type_to_typescript(i, array_style)).collect::<Vec<_>>().join(", ")}]
             {:case FieldType::Struct(fields)}
-                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft))).collect::<Vec<_>>().join("; ")} }
+                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, array_style))).collect::<Vec<_>>().join("; ")} }
             {:case FieldType::RecordLink(inner)}
-                RecordLink<@{field_type_to_typescript(inner).trim()}>
+                RecordLink<@{field_type_to_typescript(inner, array_style).trim()}>
             {:case FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value)}
-                { [key: @{field_type_to_typescript(key)}]: @{field_type_to_typescript(value)} }
+                { [key: @{field_type_to_typescript(key, array_style)}]: @{field_type_to_typescript(value, array_style)} }
             {:case FieldType::Other(type_name)}
                 @{type_name.to_case(Case::Pascal)}
         {/match}
@@ -305,12 +308,23 @@ fn field_type_to_typescript(field_type: &FieldType) -> String {
     .to_string()
 }
 
+/// Format a Vec type as either `Type[]` (shorthand) or `Array<Type>` (generic).
+fn format_array(inner: &FieldType, array_style: ArrayStyle) -> String {
+    match array_style {
+        ArrayStyle::Shorthand => format!("{}[]", wrap_union_type(inner, array_style)),
+        ArrayStyle::Generic => {
+            format!("Array<{}>", field_type_to_typescript(inner, array_style).trim())
+        }
+    }
+}
+
 /// Render a field type for use as an inner type in Vec/Option.
-/// Wraps union types (RecordLink, Option) in parentheses for correct TypeScript semantics.
-fn wrap_union_type(ft: &FieldType) -> String {
-    let rendered = field_type_to_typescript(ft);
+/// Wraps union types (Option) in parentheses for correct `Type[]` semantics.
+/// Not needed for generic `Array<Type>` syntax since the angle brackets handle grouping.
+fn wrap_union_type(ft: &FieldType, array_style: ArrayStyle) -> String {
+    let rendered = field_type_to_typescript(ft, array_style);
     let trimmed = rendered.trim();
-    if matches!(ft, FieldType::Option(_)) {
+    if matches!(ft, FieldType::Option(_)) && array_style == ArrayStyle::Shorthand {
         format!("({})", trimmed)
     } else {
         trimmed.to_string()
@@ -376,18 +390,18 @@ fn build_serde_annotation(
 }
 
 /// Render the field type, with optional inline @serde for RecordLink fields.
-fn render_field_type(field_type: &FieldType, serde_annotation: &str, inline: bool) -> String {
+fn render_field_type(field_type: &FieldType, serde_annotation: &str, inline: bool, array_style: ArrayStyle) -> String {
     if inline && !serde_annotation.is_empty() {
         // For RecordLink, render @serde inline: /** @serde(...) */ RecordLink<Type>
         if let FieldType::RecordLink(inner) = field_type {
             return format!(
                 "{} RecordLink<{}>",
                 serde_annotation,
-                field_type_to_typescript(inner).trim()
+                field_type_to_typescript(inner, array_style).trim()
             );
         }
     }
-    field_type_to_typescript(field_type)
+    field_type_to_typescript(field_type, array_style)
 }
 
 /// Compute the `/** import macro {...} from "@dealdraft/macros"; */` line
@@ -901,22 +915,56 @@ mod tests {
 
     #[test]
     fn test_field_type_to_typescript() {
+        let s = ArrayStyle::Shorthand;
         // ts_template! adds whitespace, so we trim for comparison
-        assert!(field_type_to_typescript(&FieldType::String).trim() == "string");
-        assert!(field_type_to_typescript(&FieldType::Bool).trim() == "boolean");
-        assert!(field_type_to_typescript(&FieldType::I32).trim() == "number");
-        assert!(field_type_to_typescript(&FieldType::F64).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::String, s).trim() == "string");
+        assert!(field_type_to_typescript(&FieldType::Bool, s).trim() == "boolean");
+        assert!(field_type_to_typescript(&FieldType::I32, s).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::F64, s).trim() == "number");
         assert!(
-            field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)))
+            field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), s)
                 .contains("string")
-                && field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)))
+                && field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), s)
                     .contains("null")
         );
-        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)));
+        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), s);
         assert!(vec_output.contains("number") && vec_output.contains("[]"));
         assert!(
-            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()))
+            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), s)
                 .contains("UserProfile")
+        );
+    }
+
+    #[test]
+    fn test_field_type_to_typescript_generic_array_style() {
+        let g = ArrayStyle::Generic;
+        // Vec<i32> → Array<number>
+        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), g);
+        assert!(
+            vec_output.contains("Array<number>"),
+            "Expected Array<number>, got: {}",
+            vec_output.trim()
+        );
+        assert!(
+            !vec_output.contains("[]"),
+            "Generic style should not contain [], got: {}",
+            vec_output.trim()
+        );
+        // Vec<Option<String>> → Array<string | null>
+        let vec_opt = field_type_to_typescript(
+            &FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
+            g,
+        );
+        assert!(
+            vec_opt.contains("Array<") && vec_opt.contains("string") && vec_opt.contains("null"),
+            "Expected Array<string | null>, got: {}",
+            vec_opt.trim()
+        );
+        // No parentheses wrapping needed in generic style
+        assert!(
+            !vec_opt.contains("("),
+            "Generic style should not wrap in parens, got: {}",
+            vec_opt.trim()
         );
     }
 
@@ -1013,7 +1061,7 @@ mod tests {
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true);
+        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
@@ -1131,7 +1179,7 @@ mod tests {
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &enums, true);
+        let output = generate_macroforge_type_string(&structs, &enums, true, ArrayStyle::Shorthand);
 
         // Struct: custom derives
         assert!(
@@ -1186,7 +1234,7 @@ mod tests {
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true);
+        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
         assert!(
             output.contains("/** @derive(Deserialize) */"),
             "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",
@@ -1196,20 +1244,22 @@ mod tests {
 
     #[test]
     fn test_datetime_maps_to_datetime_utc() {
-        assert!(field_type_to_typescript(&FieldType::DateTime).contains("DateTime.Utc"));
+        let s = ArrayStyle::Shorthand;
+        assert!(field_type_to_typescript(&FieldType::DateTime, s).contains("DateTime.Utc"));
         // Option<DateTime> should produce DateTime.Utc | null
-        let opt_dt = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::DateTime)));
+        let opt_dt = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::DateTime)), s);
         assert!(opt_dt.contains("DateTime.Utc") && opt_dt.contains("null"));
         // Vec<DateTime> should produce DateTime.Utc[]
-        let vec_dt = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::DateTime)));
+        let vec_dt = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::DateTime)), s);
         assert!(vec_dt.contains("DateTime.Utc") && vec_dt.contains("[]"));
     }
 
     #[test]
     fn test_decimal_maps_to_bigdecimal() {
-        assert!(field_type_to_typescript(&FieldType::Decimal).contains("BigDecimal.BigDecimal"));
+        let s = ArrayStyle::Shorthand;
+        assert!(field_type_to_typescript(&FieldType::Decimal, s).contains("BigDecimal.BigDecimal"));
         // Option<Decimal> should produce BigDecimal.BigDecimal | null
-        let opt_dec = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::Decimal)));
+        let opt_dec = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::Decimal)), s);
         assert!(opt_dec.contains("BigDecimal.BigDecimal") && opt_dec.contains("null"));
     }
 
@@ -1345,6 +1395,7 @@ mod tests {
             &["Order".to_string()],
             &structs,
             &HashMap::new(),
+            ArrayStyle::Shorthand,
         );
 
         assert!(

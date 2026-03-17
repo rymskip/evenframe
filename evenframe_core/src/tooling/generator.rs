@@ -278,7 +278,7 @@ impl TypeGenerator {
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Macroforge types");
 
-        let content = generate_macroforge_type_string(structs, enums, false);
+        let content = generate_macroforge_type_string(structs, enums, false, self.config.output.array_style);
 
         let path = self
             .config

@@ -11,6 +11,17 @@ pub enum OutputMode {
     PerFile,
 }
 
+/// TypeScript array syntax style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrayStyle {
+    /// Shorthand syntax: `Type[]` — default
+    #[default]
+    Shorthand,
+    /// Generic syntax: `Array<Type>`
+    Generic,
+}
+
 /// Naming convention for generated per-file filenames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +53,10 @@ pub struct OutputConfig {
     /// Use `.svelte.ts` for SvelteKit projects, etc.
     #[serde(default = "default_file_extension")]
     pub file_extension: String,
+    /// TypeScript array syntax style (default: shorthand `Type[]`).
+    /// Set to `generic` for `Array<Type>` syntax.
+    #[serde(default)]
+    pub array_style: ArrayStyle,
 }
 
 fn default_file_extension() -> String {
