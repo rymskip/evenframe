@@ -460,6 +460,15 @@ impl<'a> Mockmaker<'a> {
                                 start_date,
                                 end_date,
                             } => vec![start_date.clone(), end_date.clone()],
+                            CoherentDataset::GeoRadius {
+                                latitude,
+                                longitude,
+                                ..
+                            } => [latitude, longitude]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .cloned()
+                                .collect(),
                         },
                     };
 
@@ -567,6 +576,15 @@ impl<'a> Mockmaker<'a> {
                                 start_date,
                                 end_date,
                             } => vec![start_date.clone(), end_date.clone()],
+                            CoherentDataset::GeoRadius {
+                                latitude,
+                                longitude,
+                                ..
+                            } => [latitude, longitude]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .cloned()
+                                .collect(),
                         },
                     };
 
@@ -627,6 +645,15 @@ impl<'a> Mockmaker<'a> {
                                     } => {
                                         vec![start_date.clone(), end_date.clone()]
                                     }
+                                    CoherentDataset::GeoRadius {
+                                        latitude,
+                                        longitude,
+                                        ..
+                                    } => [latitude, longitude]
+                                        .into_iter()
+                                        .filter(|s| !s.is_empty())
+                                        .cloned()
+                                        .collect(),
                                 },
                             };
 

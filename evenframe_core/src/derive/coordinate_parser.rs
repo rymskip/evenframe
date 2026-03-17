@@ -534,10 +534,13 @@ fn parse_coherent_dataset(expr: &Expr) -> Result<TokenStream, syn::Error> {
             "Financial" => {
                 Ok(quote! { helpers::schemasync::coordinate::CoherentDataset::Financial })
             }
+            "GeoRadius" => {
+                Ok(quote! { helpers::schemasync::coordinate::CoherentDataset::GeoRadius })
+            }
             _ => Err(syn::Error::new(
                 path.span(),
                 format!(
-                    "Unknown dataset type '{}'. Valid datasets are:\n- Address\n- PersonName\n- GeoLocation\n- DateRange\n- Financial",
+                    "Unknown dataset type '{}'. Valid datasets are:\n- Address\n- PersonName\n- GeoLocation\n- GeoRadius\n- DateRange\n- Financial",
                     dataset_name
                 ),
             )),

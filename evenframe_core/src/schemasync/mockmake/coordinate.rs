@@ -679,6 +679,37 @@ impl Mockmaker<'_> {
                 values.insert(end_date.clone(), end.to_string());
                 values
             }
+            CoherentDataset::GeoRadius {
+                latitude,
+                longitude,
+                center_lat,
+                center_lng,
+                radius_km,
+            } => {
+                let mut rng = rand::rng();
+                let earth_radius_km = 6371.0_f64;
+
+                // sqrt for uniform area distribution within circle
+                let distance_km = radius_km * rng.random::<f64>().sqrt();
+                let bearing = rng.random::<f64>() * 2.0 * std::f64::consts::PI;
+
+                // Haversine inverse formula
+                let angular_dist = distance_km / earth_radius_km;
+                let lat1 = center_lat.to_radians();
+                let lng1 = center_lng.to_radians();
+
+                let lat2 = (lat1.sin() * angular_dist.cos()
+                    + lat1.cos() * angular_dist.sin() * bearing.cos())
+                .asin();
+                let lng2 = lng1
+                    + (bearing.sin() * angular_dist.sin() * lat1.cos())
+                        .atan2(angular_dist.cos() - lat1.sin() * lat2.sin());
+
+                let mut values = HashMap::new();
+                values.insert(latitude.clone(), format!("{:.6}", lat2.to_degrees()));
+                values.insert(longitude.clone(), format!("{:.6}", lng2.to_degrees()));
+                values
+            }
         }
     }
 }
@@ -1050,6 +1081,34 @@ impl Coordination {
                         validate_datetime_field(&fields, start_date, "start_date")?;
                         validate_datetime_field(&fields, end_date, "end_date")?;
                     }
+                    CoherentDataset::GeoRadius {
+                        latitude,
+                        longitude,
+                        center_lat,
+                        center_lng,
+                        radius_km,
+                    } => {
+                        validate_numeric_field(&fields, latitude, "latitude")?;
+                        validate_numeric_field(&fields, longitude, "longitude")?;
+                        if !(-90.0..=90.0).contains(center_lat) {
+                            return Err(EvenframeError::mock_generation(format!(
+                                "center_lat must be between -90 and 90, got {}",
+                                center_lat
+                            )));
+                        }
+                        if !(-180.0..=180.0).contains(center_lng) {
+                            return Err(EvenframeError::mock_generation(format!(
+                                "center_lng must be between -180 and 180, got {}",
+                                center_lng
+                            )));
+                        }
+                        if *radius_km <= 0.0 {
+                            return Err(EvenframeError::mock_generation(format!(
+                                "radius_km must be positive, got {}",
+                                radius_km
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -1246,6 +1305,14 @@ pub enum CoherentDataset {
     DateRange {
         start_date: String,
         end_date: String,
+    },
+    /// Generate random coordinates within a radius of a center point.
+    GeoRadius {
+        latitude: String,
+        longitude: String,
+        center_lat: f64,
+        center_lng: f64,
+        radius_km: f64,
     },
 }
 
@@ -1586,3 +1653,69 @@ pub const PRODUCT_CATALOG: &[(&str, &str, f64, &str)] = &[
     ("Training Course", "TRN-029", 399.99, "Education"),
     ("Certification Exam", "CRT-030", 299.99, "Education"),
 ];
+
+#[cfg(all(test, feature = "surrealdb"))]
+mod tests {
+    use super::*;
+
+    /// Haversine distance in km between two (lat, lng) points in degrees.
+    fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
+        let r = 6371.0_f64;
+        let dlat = (lat2 - lat1).to_radians();
+        let dlng = (lng2 - lng1).to_radians();
+        let a = (dlat / 2.0).sin().powi(2)
+            + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlng / 2.0).sin().powi(2);
+        r * 2.0 * a.sqrt().asin()
+    }
+
+    #[test]
+    fn test_geo_radius_generates_within_radius() {
+        let dataset = CoherentDataset::GeoRadius {
+            latitude: "lat".to_string(),
+            longitude: "lng".to_string(),
+            center_lat: 52.52,
+            center_lng: 13.405,
+            radius_km: 25.0,
+        };
+
+        for i in 0..100 {
+            let values =
+                Mockmaker::generate_coherent_values(&[], &dataset, i);
+            let lat: f64 = values["lat"].parse().expect("lat should be a valid f64");
+            let lng: f64 = values["lng"].parse().expect("lng should be a valid f64");
+
+            assert!((-90.0..=90.0).contains(&lat), "lat out of range: {}", lat);
+            assert!((-180.0..=180.0).contains(&lng), "lng out of range: {}", lng);
+
+            let dist = haversine_km(52.52, 13.405, lat, lng);
+            assert!(
+                dist <= 25.5, // small tolerance for floating point
+                "Point ({}, {}) is {:.2}km from center, expected <= 25km",
+                lat, lng, dist
+            );
+        }
+    }
+
+    #[test]
+    fn test_geo_radius_produces_varied_output() {
+        let dataset = CoherentDataset::GeoRadius {
+            latitude: "lat".to_string(),
+            longitude: "lng".to_string(),
+            center_lat: 0.0,
+            center_lng: 0.0,
+            radius_km: 100.0,
+        };
+
+        let mut lats = std::collections::HashSet::new();
+        for i in 0..20 {
+            let values =
+                Mockmaker::generate_coherent_values(&[], &dataset, i);
+            lats.insert(values["lat"].clone());
+        }
+        assert!(
+            lats.len() > 1,
+            "GeoRadius should produce varied coordinates, got {} unique values",
+            lats.len()
+        );
+    }
+}
