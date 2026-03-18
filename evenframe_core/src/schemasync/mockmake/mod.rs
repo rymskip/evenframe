@@ -136,6 +136,8 @@ impl<'a> Mockmaker<'a> {
         let mut map = HashMap::new();
         let mut record_diffs = HashMap::new();
 
+        let full_refresh = self.schemasync_config.mock_gen_config.full_refresh_mode;
+
         // Process tables sequentially to avoid reference issues
         // Since these are just SELECT queries, they should be fast enough
         for (table_name, table_config) in self.tables {
@@ -148,6 +150,25 @@ impl<'a> Mockmaker<'a> {
                 } else {
                     self.schemasync_config.mock_gen_config.default_batch_size
                 };
+
+            // In full refresh mode, all data will be deleted and recreated.
+            // Generate clean sequential IDs instead of reusing stale DB IDs,
+            // which may reference records that no longer exist after deletion.
+            if full_refresh {
+                let ids: Vec<String> = (1..=desired_count)
+                    .map(|i| format!("{table_name}:{i}"))
+                    .collect();
+
+                tracing::trace!(
+                    table = %table_name,
+                    desired_count = desired_count,
+                    "Full refresh mode - generating fresh sequential IDs"
+                );
+
+                record_diffs.insert(table_name.clone(), desired_count as i32);
+                map.insert(table_name.clone(), ids);
+                continue;
+            }
 
             // Query existing IDs
             let query = format!("SELECT id FROM {table_name};",);

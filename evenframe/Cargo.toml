@@ -48,6 +48,8 @@ schemasync = ["evenframe_core/schemasync"]
 schemasync-full = ["evenframe_core/schemasync-full"]
 # Timezone-aware mock data via chrono-tz. Implies: schemasync.
 mockmake = ["evenframe_core/mockmake"]
+# WASM-based mockmake plugins. Implies: schemasync.
+wasm-plugins = ["evenframe_core/wasm-plugins"]
 
 # --- Database providers (forwarded to evenframe_core) ---
 

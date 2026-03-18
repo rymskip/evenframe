@@ -95,12 +95,21 @@ impl<'a> FieldValueGenerator<'a> {
                                     continue;
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "Plugin '{}' failed for field '{}': {}, falling back",
-                                        plugin_name,
-                                        ctx.field_path,
-                                        e
-                                    );
+                                    let msg = e.to_string();
+                                    if msg.contains("skip") {
+                                        tracing::trace!(
+                                            "Plugin '{}' skipped field '{}', using default",
+                                            plugin_name,
+                                            ctx.field_path,
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            "Plugin '{}' failed for field '{}': {}, falling back",
+                                            plugin_name,
+                                            ctx.field_path,
+                                            e
+                                        );
+                                    }
                                 }
                             }
                         } else {
