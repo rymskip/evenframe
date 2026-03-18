@@ -65,6 +65,11 @@ schemasync = ["surrealdb"]
 # Implies: schemasync
 mockmake = ["schemasync", "dep:chrono-tz"]
 
+# Enables WASM plugin support for custom mock data generation logic.
+# Pulls in the wasmtime runtime. Users opt in explicitly.
+# Implies: schemasync
+wasm-plugins = ["schemasync", "dep:wasmtime"]
+
 # Enables the complete schemasync pipeline with full mock data generation
 # capabilities including timezone support.
 schemasync-full = ["schemasync", "mockmake"]
@@ -156,6 +161,9 @@ uuid = { version = "1.17", features = ["v4", "serde"] }
 
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
+
+# Optional: WASM plugin runtime
+wasmtime = { version = "29", optional = true }
 
 # Optional: typesync parser dependencies
 logos = { version = "0.15", optional = true }

@@ -1,7 +1,15 @@
 use crate::schemasync::{PreservationMode, mockmake::coordinate::CoordinationGroup};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::{debug, trace};
+
+/// Configuration for a WASM mock data plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PluginConfig {
+    /// Path to the `.wasm` file, relative to project root.
+    pub path: String,
+}
 
 /// Configuration for Schemasync operations (database synchronization)
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
@@ -14,6 +22,10 @@ pub struct SchemasyncConfig {
     pub mock_gen_config: SchemasyncMockGenConfig,
     /// Performance tuning configuration
     pub performance: PerformanceConfig,
+    /// WASM plugin definitions for mock data generation.
+    #[serde(default)]
+    #[builder(default)]
+    pub plugins: HashMap<String, PluginConfig>,
 }
 
 /// Database provider type for configuration

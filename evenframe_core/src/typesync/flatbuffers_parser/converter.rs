@@ -106,6 +106,7 @@ fn convert_field(field: &FieldDef) -> StructField {
         doccom: None,
         annotations: vec![],
         unique: false,
+        mock_plugin: None,
     }
 }
 

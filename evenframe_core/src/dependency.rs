@@ -733,6 +733,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         }
     }
 

@@ -94,6 +94,20 @@ pub fn parse_mock_data_attribute(
                             Meta::NameValue(nv) if nv.path.is_ident("coordinate") => {
                                 // Skip here - coordinate is parsed separately by coordinate_parser
                             }
+                            Meta::NameValue(nv) if nv.path.is_ident("plugin") => {
+                                debug!("Processing 'plugin' parameter");
+                                if let Expr::Lit(ExprLit {
+                                    lit: Lit::Str(lit), ..
+                                }) = &nv.value
+                                {
+                                    base_config.plugin = Some(lit.value());
+                                } else {
+                                    return Err(syn::Error::new(
+                                        nv.value.span(),
+                                        "The 'plugin' parameter must be a string literal.\n\nExample: #[mock_data(plugin = \"my_plugin\")]",
+                                    ));
+                                }
+                            }
                             Meta::NameValue(nv) => {
                                 let param_name = nv
                                     .path
@@ -103,7 +117,7 @@ pub fn parse_mock_data_attribute(
                                 return Err(syn::Error::new(
                                     nv.path.span(),
                                     format!(
-                                        "Unknown parameter '{}' in mock_data attribute.\n\nValid parameters are: n, overrides, coordinate\n\nExample: #[mock_data(n = 1000, overrides = \"config\", coordinate = [InitializeEqual([\"field1\", \"field2\"])])]",
+                                        "Unknown parameter '{}' in mock_data attribute.\n\nValid parameters are: n, overrides, coordinate, plugin\n\nExample: #[mock_data(n = 1000, plugin = \"my_plugin\")]",
                                         param_name
                                     ),
                                 ));
@@ -190,6 +204,49 @@ pub fn parse_mock_data_attribute(
         }
     }
     debug!("No mock_data attribute found");
+    Ok(None)
+}
+
+/// Parse `#[mockmake(plugin = "name")]` attribute on a field.
+pub fn parse_mockmake_attribute(attrs: &[Attribute]) -> Result<Option<String>, syn::Error> {
+    for attr in attrs {
+        if attr.path().is_ident("mockmake") {
+            let result: Result<syn::punctuated::Punctuated<Meta, syn::Token![,]>, _> =
+                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
+
+            match result {
+                Ok(metas) => {
+                    for meta in &metas {
+                        if let Meta::NameValue(nv) = meta
+                            && nv.path.is_ident("plugin")
+                        {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(lit), ..
+                            }) = &nv.value
+                            {
+                                return Ok(Some(lit.value()));
+                            } else {
+                                return Err(syn::Error::new(
+                                    nv.value.span(),
+                                    "The 'plugin' parameter must be a string literal.\n\nExample: #[mockmake(plugin = \"my_plugin\")]",
+                                ));
+                            }
+                        }
+                    }
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "Unknown parameter in mockmake attribute.\n\nValid parameter: plugin\n\nExample: #[mockmake(plugin = \"my_plugin\")]",
+                    ));
+                }
+                Err(err) => {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        format!("Failed to parse mockmake attribute: {}\n\nExample: #[mockmake(plugin = \"my_plugin\")]", err),
+                    ));
+                }
+            }
+        }
+    }
     Ok(None)
 }
 

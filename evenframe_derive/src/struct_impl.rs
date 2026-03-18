@@ -4,7 +4,7 @@ use evenframe_core::{
         attributes::{
             parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
             parse_macroforge_derive_attribute, parse_mock_data_attribute,
-            parse_relation_attribute,
+            parse_mockmake_attribute, parse_relation_attribute,
         },
         validator_parser::parse_field_validators,
     },
@@ -231,6 +231,21 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
             // Parse unique attribute (marker attribute, no arguments)
             let is_unique = field.attrs.iter().any(|attr| attr.path().is_ident("unique"));
 
+            // Parse mockmake plugin attribute
+            let mock_plugin = match parse_mockmake_attribute(&field.attrs) {
+                Ok(p) => p,
+                Err(err) => {
+                    return syn::Error::new(
+                        field.span(),
+                        format!(
+                            "Failed to parse mockmake attribute for field '{}': {}",
+                            field_name, err
+                        ),
+                    )
+                    .to_compile_error();
+                }
+            };
+
             // Build validators token for this field
             let validators_tokens = if field_validators.is_empty() {
                 quote! { vec![] }
@@ -242,6 +257,11 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 quote! { vec![] }
             } else {
                 quote! { vec![#(#field_annotations.to_string()),*] }
+            };
+
+            let mock_plugin_tokens = match &mock_plugin {
+                Some(name) => quote! { Some(#name.to_string()) },
+                None => quote! { None },
             };
 
             table_field_tokens.push(quote! {
@@ -256,6 +276,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                     doccom: None,
                     annotations: #field_annotations_tokens,
                     unique: #is_unique,
+                    mock_plugin: #mock_plugin_tokens,
                 }
             });
 

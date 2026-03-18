@@ -54,6 +54,9 @@ pub enum EvenframeError {
     #[error("Mock generation error: {0}")]
     MockGeneration(String),
 
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
     #[error("Permission error: {0}")]
     Permission(String),
 
@@ -211,6 +214,10 @@ impl EvenframeError {
 
     pub fn schema_sync(message: impl Into<String>) -> Self {
         EvenframeError::SchemaSync(message.into())
+    }
+
+    pub fn plugin(message: impl Into<String>) -> Self {
+        EvenframeError::Plugin(message.into())
     }
 
     pub fn mock_generation(message: impl Into<String>) -> Self {

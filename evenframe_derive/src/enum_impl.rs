@@ -67,6 +67,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                         doccom: None,
                                         annotations: vec![],
                                         unique: false,
+                                        mock_plugin: None,
                                     }
                                 }
                             })
@@ -104,6 +105,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                     doccom: None,
                                     annotations: vec![],
                                     unique: false,
+                                    mock_plugin: None,
                                 }
                             }
                         })
