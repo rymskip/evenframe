@@ -1,0 +1,13 @@
+[package]
+name = "evenframe_plugin"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jakob Lochinski"]
+license = "MIT"
+description = "Helper crate for writing evenframe mockmake WASM plugins"
+repository = "https://github.com/rymskip/evenframe"
+keywords = ["evenframe", "wasm", "plugin", "mock"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

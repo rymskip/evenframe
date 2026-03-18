@@ -522,17 +522,10 @@ pub fn compute_extra_imports(
             for variant in &e.variants {
                 if let Some(data) = &variant.data {
                     match data {
-                        VariantData::InlineStruct(s) => {
-                            for field in &s.fields {
-                                check_field_type(
-                                    &field.field_type,
-                                    &mut needs_datetime,
-                                    &mut needs_bigdecimal,
-                                    &mut needs_duration,
-                                    &mut needs_record_link,
-                                );
-                            }
-                        }
+                        // InlineStruct variants are rendered as just the struct name
+                        // in the union type — their fields are checked separately via
+                        // the structs.values() loop above when the struct is a primary type.
+                        VariantData::InlineStruct(_) => {}
                         VariantData::DataStructureRef(ft) => {
                             check_field_type(
                                 ft,

@@ -59,9 +59,19 @@ impl<'a> FieldValueGenerator<'a> {
         while let Some(work_item) = work_stack.pop() {
             match work_item {
                 WorkItem::Generate(ctx) => {
-                    // Tier 0: WASM plugin override
+                    // Tier 0: WASM plugin override (field-level or table-level)
                     #[cfg(feature = "wasm-plugins")]
-                    if let Some(ref plugin_name) = ctx.field.mock_plugin {
+                    let _plugin_name: Option<&String> = ctx
+                        .field
+                        .mock_plugin
+                        .as_ref()
+                        .or(self
+                            .table_config
+                            .mock_generation_config
+                            .as_ref()
+                            .and_then(|c| c.plugin.as_ref()));
+                    #[cfg(feature = "wasm-plugins")]
+                    if let Some(plugin_name) = _plugin_name {
                         if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
                             let pm = &mut *pm_cell.borrow_mut();
                             let input = super::plugin_types::PluginFieldInput {
@@ -104,9 +114,16 @@ impl<'a> FieldValueGenerator<'a> {
 
                     // Tier 0 (no wasm-plugins feature): warn and fall through
                     #[cfg(not(feature = "wasm-plugins"))]
-                    if ctx.field.mock_plugin.is_some() {
+                    if ctx.field.mock_plugin.is_some()
+                        || self
+                            .table_config
+                            .mock_generation_config
+                            .as_ref()
+                            .and_then(|c| c.plugin.as_ref())
+                            .is_some()
+                    {
                         tracing::warn!(
-                            "Field '{}' has mock_plugin set but wasm-plugins feature is not enabled",
+                            "Field '{}' has a plugin configured but wasm-plugins feature is not enabled",
                             ctx.field_path
                         );
                     }

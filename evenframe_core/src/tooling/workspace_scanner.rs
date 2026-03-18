@@ -864,10 +864,8 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(
-            temp_dir.path().to_path_buf(),
-            vec!["MyMacro".to_string()],
-        );
+        let scanner =
+            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()]);
         let mut types = Vec::new();
 
         scanner
@@ -895,10 +893,8 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(
-            temp_dir.path().to_path_buf(),
-            vec!["MyMacro".to_string()],
-        );
+        let scanner =
+            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()]);
         let mut types = Vec::new();
 
         scanner
@@ -930,7 +926,9 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
         let mut types = Vec::new();
 
-        scanner.scan_directory(&src_dir, &mut types, "test_crate", 0).unwrap();
+        scanner
+            .scan_directory(&src_dir, &mut types, "test_crate", 0)
+            .unwrap();
 
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].name, "User");
@@ -965,7 +963,9 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
         let mut types = Vec::new();
 
-        scanner.scan_directory(&src_dir, &mut types, "test_crate", 0).unwrap();
+        scanner
+            .scan_directory(&src_dir, &mut types, "test_crate", 0)
+            .unwrap();
 
         // Should only find the main type, not the test type
         assert_eq!(types.len(), 1);
@@ -1000,7 +1000,9 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
         let mut types = Vec::new();
 
-        scanner.scan_directory(&src_dir, &mut types, "test_crate", 0).unwrap();
+        scanner
+            .scan_directory(&src_dir, &mut types, "test_crate", 0)
+            .unwrap();
 
         // Should only find the main type, not the bench type
         assert_eq!(types.len(), 1);
@@ -1052,7 +1054,9 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
         let mut types = Vec::new();
 
-        scanner.scan_directory(&src_dir, &mut types, "test_crate", 0).unwrap();
+        scanner
+            .scan_directory(&src_dir, &mut types, "test_crate", 0)
+            .unwrap();
 
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].name, "ModUser");
@@ -1088,7 +1092,9 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
         let mut types = Vec::new();
 
-        scanner.scan_directory(&src_dir, &mut types, "test_crate", 0).unwrap();
+        scanner
+            .scan_directory(&src_dir, &mut types, "test_crate", 0)
+            .unwrap();
 
         assert_eq!(types.len(), 2);
 
@@ -1110,7 +1116,7 @@ mod tests {
             [package]
             name = "my_crate"
             version = "0.1.0"
-            edition = "2021"
+            edition = "2024"
         "#;
 
         let lib_content = r#"
