@@ -50,15 +50,6 @@ impl quote::ToTokens for PreservationMode {
     }
 }
 
-// Re-exports that require surrealdb feature
-#[cfg(feature = "surrealdb")]
-pub use database::surql::{
-    query::{
-        FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, QueryType, SelectConfig,
-        SortDefinition, SortDirection, SortValue, generate_query, generate_sort_clause,
-        generate_where_clause,
-    },
-};
 
 // Schemasync orchestrator: requires surrealdb at runtime
 #[cfg(feature = "surrealdb")]

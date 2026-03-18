@@ -1,9 +1,41 @@
 use crate::{
     schemasync::mockmake::{Mockmaker, field_value::FieldValueGenerator},
     schemasync::table::TableConfig,
+    types::{FieldType, StructField},
 };
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
+
+/// Check if a field is nullable (wrapped in Option)
+fn is_nullable_field(field: &StructField) -> bool {
+    matches!(&field.field_type, FieldType::Option(_))
+}
+
+/// Check if a field is a nullable partial struct that needs conditional wrapping
+fn is_nullable_partial_struct(field: &StructField, original_table: Option<&TableConfig>) -> bool {
+    if let FieldType::Struct(_) = &field.field_type
+        && let Some(table) = original_table
+        && let Some(original_field) = table
+            .struct_config
+            .fields
+            .iter()
+            .find(|f| f.field_name == field.field_name)
+    {
+        return is_nullable_field(original_field);
+    }
+    false
+}
+
+/// Check if any field needs null-preserving conditional logic
+fn needs_null_preservation(field: &StructField, original_table: Option<&TableConfig>) -> bool {
+    if is_nullable_field(field) {
+        return true;
+    }
+    if is_nullable_partial_struct(field, original_table) {
+        return true;
+    }
+    false
+}
 
 impl Mockmaker<'_> {
     pub fn generate_upsert_statements(
@@ -63,7 +95,7 @@ impl Mockmaker<'_> {
 
                     // Check if this field needs null preservation
                     let needs_conditional =
-                        super::query::needs_null_preservation(table_field, self.tables.get(table_name));
+                        needs_null_preservation(table_field, self.tables.get(table_name));
 
                     if needs_conditional {
                         // Wrap in conditional to preserve NULL state

@@ -26,7 +26,5 @@ pub use error::{EvenframeError, Result};
 // Schemasync re-exports that require surrealdb
 #[cfg(feature = "surrealdb")]
 pub use schemasync::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig,
-    SortDefinition, SortDirection, SortValue, generate_sort_clause, generate_where_clause,
     mockmake, mockmake::coordinate, mockmake::format,
 };

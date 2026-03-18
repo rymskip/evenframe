@@ -8,7 +8,6 @@ pub mod assert;
 pub mod define;
 pub mod execute;
 pub mod insert;
-pub mod query;
 pub mod remove;
 mod type_mapper;
 pub mod upsert;

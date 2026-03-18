@@ -1,10 +1,5 @@
-pub use evenframe_core::{config, registry, traits, types, validator, wrappers};
-
-#[cfg(feature = "surrealdb")]
-pub use evenframe_core::{
-    FilterDefinition, FilterOperator, FilterPrimitive, FilterValue, SelectConfig,
-    generate_sort_clause, generate_where_clause,
-};
+pub use evenframe_core::{config, error, registry, traits, types, validator, wrappers};
+pub use evenframe_core::error::{EvenframeError, Result};
 
 #[cfg(feature = "schemasync")]
 pub use evenframe_core::schemasync;
