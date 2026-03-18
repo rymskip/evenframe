@@ -8,6 +8,10 @@ description = "A playground demonstrating Evenframe integration with Axum"
 # Empty workspace to exclude from parent workspace
 [workspace]
 
+[features]
+default = []
+wasm-plugins = ["evenframe_core/wasm-plugins"]
+
 [dependencies]
 # Evenframe dependencies
 evenframe = { path = "../evenframe", features = ["cli"] }

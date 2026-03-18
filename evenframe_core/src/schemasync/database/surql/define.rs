@@ -214,6 +214,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         };
 
         let result = field
@@ -261,6 +262,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         };
 
         let result = field
@@ -304,6 +306,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         };
 
         let result = field
@@ -354,6 +357,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: true,
+                        mock_plugin: None,
                     },
                     StructField {
                         field_name: "name".to_string(),
@@ -380,6 +384,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
+                        mock_plugin: None,
                     },
                 ],
                 validators: Vec::new(),

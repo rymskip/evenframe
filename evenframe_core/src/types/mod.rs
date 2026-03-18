@@ -111,6 +111,9 @@ pub struct StructField {
     pub annotations: Vec<String>,
     #[serde(default)]
     pub unique: bool,
+    /// Name of the WASM plugin to use for mock data generation (if any).
+    #[serde(default)]
+    pub mock_plugin: Option<String>,
 }
 
 impl StructField {
@@ -126,6 +129,7 @@ impl StructField {
             doccom: None,
             annotations: Vec::new(),
             unique: false,
+            mock_plugin: None,
         }
     }
 
@@ -141,6 +145,7 @@ impl StructField {
             doccom: None,
             annotations: Vec::new(),
             unique: false,
+            mock_plugin: None,
         }
     }
     #[cfg(feature = "surrealdb")]
@@ -814,6 +819,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -850,6 +856,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     unique: false,
+                    mock_plugin: None,
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -862,6 +869,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     unique: false,
+                    mock_plugin: None,
                 },
             ],
             validators: vec![],
@@ -1043,6 +1051,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
+            mock_plugin: None,
         };
         assert_eq!(field.validators.len(), 1);
     }

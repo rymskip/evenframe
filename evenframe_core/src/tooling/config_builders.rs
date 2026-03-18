@@ -507,6 +507,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             doccom,
             annotations,
             unique: false,
+            mock_plugin: None,
         });
     }
     struct_fields

@@ -491,6 +491,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
+                        mock_plugin: None,
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -503,6 +504,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
+                        mock_plugin: None,
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -515,6 +517,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
+                        mock_plugin: None,
                     },
                 ],
                 validators: vec![],

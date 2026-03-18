@@ -151,6 +151,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
         doccom: None,
         annotations: vec![],
         unique: false,
+        mock_plugin: None,
     }
 }
 

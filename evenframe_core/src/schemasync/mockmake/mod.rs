@@ -4,6 +4,9 @@ pub mod field_value;
 #[cfg(feature = "schemasync")]
 pub mod field_value_recursive;
 pub mod format;
+#[cfg(feature = "wasm-plugins")]
+pub mod plugin;
+pub mod plugin_types;
 #[cfg(feature = "schemasync")]
 pub mod regex_val_gen;
 
@@ -53,6 +56,8 @@ pub struct Mockmaker<'a> {
     filtered_tables: HashMap<String, TableConfig>,
     filtered_objects: HashMap<String, StructConfig>,
     pub coordinated_values: HashMap<CoordinationId, String>,
+    #[cfg(feature = "wasm-plugins")]
+    pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
 
 #[cfg(feature = "surrealdb")]
@@ -76,6 +81,22 @@ impl<'a> Mockmaker<'a> {
             filtered_tables: HashMap::new(),
             filtered_objects: HashMap::new(),
             coordinated_values: HashMap::new(),
+            #[cfg(feature = "wasm-plugins")]
+            plugin_manager: {
+                if schemasync_config.plugins.is_empty() {
+                    None
+                } else {
+                    // Resolve project root from config
+                    let project_root = std::env::current_dir().unwrap_or_default();
+                    match plugin::PluginManager::new(&schemasync_config.plugins, &project_root) {
+                        Ok(pm) => Some(std::cell::RefCell::new(pm)),
+                        Err(e) => {
+                            tracing::error!("Failed to initialize WASM plugins: {}", e);
+                            None
+                        }
+                    }
+                }
+            },
         }
     }
 
@@ -729,6 +750,9 @@ pub struct MockGenerationConfig {
     pub batch_size: usize,
     pub regenerate_fields: Vec<String>,
     pub preservation_mode: PreservationMode,
+    /// Name of the WASM plugin to use for table-level mock generation.
+    #[serde(default)]
+    pub plugin: Option<String>,
 }
 
 impl Default for MockGenerationConfig {
@@ -753,6 +777,7 @@ impl Default for MockGenerationConfig {
             batch_size,
             regenerate_fields: vec![],
             preservation_mode,
+            plugin: None,
         }
     }
 }
@@ -788,6 +813,11 @@ impl quote::ToTokens for MockGenerationConfig {
         };
 
         // Generate the full config token stream
+        let plugin_tokens = match &self.plugin {
+            Some(name) => quote::quote! { Some(#name.to_string()) },
+            None => quote::quote! { None },
+        };
+
         let config_tokens = quote::quote! {
             MockGenerationConfig {
                 n: #n,
@@ -796,6 +826,7 @@ impl quote::ToTokens for MockGenerationConfig {
                 batch_size: #batch_size,
                 regenerate_fields: vec![#(#regenerate_fields.to_string()),*],
                 preservation_mode: #preservation_mode_tokens,
+                plugin: #plugin_tokens,
             }
         };
 

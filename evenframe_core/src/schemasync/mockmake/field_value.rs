@@ -59,6 +59,58 @@ impl<'a> FieldValueGenerator<'a> {
         while let Some(work_item) = work_stack.pop() {
             match work_item {
                 WorkItem::Generate(ctx) => {
+                    // Tier 0: WASM plugin override
+                    #[cfg(feature = "wasm-plugins")]
+                    if let Some(ref plugin_name) = ctx.field.mock_plugin {
+                        if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
+                            let pm = &mut *pm_cell.borrow_mut();
+                            let input = super::plugin_types::PluginFieldInput {
+                                table_name: self.table_config.table_name.to_string(),
+                                field_name: ctx.field_path.clone(),
+                                field_type: format!("{:?}", ctx.field_type),
+                                record_index: *self.id_index,
+                                total_records: self.table_config
+                                    .mock_generation_config
+                                    .as_ref()
+                                    .map(|c| c.n)
+                                    .unwrap_or(10),
+                                record_id: format!(
+                                    "{}:{}",
+                                    self.table_config.table_name, self.id_index
+                                ),
+                            };
+                            match pm.generate_field_value(plugin_name, &input) {
+                                Ok(value) => {
+                                    value_stack.push(value);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Plugin '{}' failed for field '{}': {}, falling back",
+                                        plugin_name,
+                                        ctx.field_path,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Field '{}' references plugin '{}' but wasm-plugins feature has no PluginManager initialized",
+                                ctx.field_path,
+                                plugin_name
+                            );
+                        }
+                    }
+
+                    // Tier 0 (no wasm-plugins feature): warn and fall through
+                    #[cfg(not(feature = "wasm-plugins"))]
+                    if ctx.field.mock_plugin.is_some() {
+                        tracing::warn!(
+                            "Field '{}' has mock_plugin set but wasm-plugins feature is not enabled",
+                            ctx.field_path
+                        );
+                    }
+
                     if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(
                         &CoordinationId::builder()
                             .field_name(ctx.field_path.clone())
