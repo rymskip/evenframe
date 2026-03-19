@@ -1,7 +1,7 @@
 use crate::{
-    schemasync::mockmake::format::Format,
-    schemasync::mockmake::Mockmaker,
     schemasync::TableConfig,
+    schemasync::mockmake::Mockmaker,
+    schemasync::mockmake::format::Format,
     types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData},
 };
 use bon::Builder;

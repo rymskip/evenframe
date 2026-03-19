@@ -135,16 +135,20 @@ pub mod defaults {
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::String(s) => mapper.escape_string(s),
             serde_json::Value::Array(arr) => {
-                let formatted: Vec<String> = arr
-                    .iter()
-                    .map(|v| format_json_value(v, mapper))
-                    .collect();
+                let formatted: Vec<String> =
+                    arr.iter().map(|v| format_json_value(v, mapper)).collect();
                 format!("[{}]", formatted.join(", "))
             }
             serde_json::Value::Object(obj) => {
                 let pairs: Vec<String> = obj
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", mapper.escape_string(k), format_json_value(v, mapper)))
+                    .map(|(k, v)| {
+                        format!(
+                            "{}: {}",
+                            mapper.escape_string(k),
+                            format_json_value(v, mapper)
+                        )
+                    })
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
             }

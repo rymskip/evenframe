@@ -1,6 +1,9 @@
 use crate::error::{EvenframeError, Result};
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 use toml;
 use tracing::{debug, error, info, trace, warn};
 
@@ -78,7 +81,8 @@ impl EvenframeConfig {
     pub fn load_env_early() {
         if let Ok(config_path) = Self::find_config_file() {
             let parent = config_path.parent().unwrap_or(Path::new("."));
-            let project_root = if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
+            let project_root = if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe")
+            {
                 parent.parent().unwrap_or(Path::new("."))
             } else {
                 parent
@@ -120,7 +124,8 @@ impl EvenframeConfig {
         // Process environment variable substitutions for all database-related fields
         // TODO: This should find all environment variable references in the config, not just these hardcoded ones
         debug!("Substituting environment variables in configuration");
-        config.schemasync.database.url = Self::substitute_env_vars(&config.schemasync.database.url)?;
+        config.schemasync.database.url =
+            Self::substitute_env_vars(&config.schemasync.database.url)?;
         config.schemasync.database.namespace =
             Self::substitute_env_vars(&config.schemasync.database.namespace)?;
         config.schemasync.database.database =
@@ -130,7 +135,9 @@ impl EvenframeConfig {
         // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
 
-        if let crate::schemasync::config::AccessesSource::Path { ref path } = config.schemasync.database.accesses {
+        if let crate::schemasync::config::AccessesSource::Path { ref path } =
+            config.schemasync.database.accesses
+        {
             config.schemasync.database.resolved.access_surql =
                 Some(Self::load_surql_from_path(&project_root, path)?);
         }
@@ -228,7 +235,12 @@ impl EvenframeConfig {
 
         let content = if full_path.is_dir() {
             let mut entries: Vec<_> = fs::read_dir(&full_path)
-                .map_err(|e| EvenframeError::config(format!("Failed to read directory {:?}: {}", full_path, e)))?
+                .map_err(|e| {
+                    EvenframeError::config(format!(
+                        "Failed to read directory {:?}: {}",
+                        full_path, e
+                    ))
+                })?
                 .filter_map(|entry| entry.ok())
                 .filter(|entry| {
                     entry.path().extension().and_then(|ext| ext.to_str()) == Some("surql")
@@ -238,7 +250,8 @@ impl EvenframeConfig {
 
             if entries.is_empty() {
                 return Err(EvenframeError::config(format!(
-                    "No .surql files found in directory {:?}", full_path
+                    "No .surql files found in directory {:?}",
+                    full_path
                 )));
             }
 
@@ -259,7 +272,8 @@ impl EvenframeConfig {
             })?
         } else {
             return Err(EvenframeError::config(format!(
-                "Surql path does not exist: {:?}", full_path
+                "Surql path does not exist: {:?}",
+                full_path
             )));
         };
 
@@ -370,7 +384,8 @@ mod tests {
     #[test]
     fn test_substitute_env_vars_with_surrounding_text() {
         temp_env::with_var("TEST_VAR_SURROUND", Some("world"), || {
-            let result = EvenframeConfig::substitute_env_vars("hello ${TEST_VAR_SURROUND}!").unwrap();
+            let result =
+                EvenframeConfig::substitute_env_vars("hello ${TEST_VAR_SURROUND}!").unwrap();
             assert_eq!(result, "hello world!");
         });
     }
@@ -384,7 +399,8 @@ mod tests {
             ],
             || {
                 let result =
-                    EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}").unwrap();
+                    EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}")
+                        .unwrap();
                 assert_eq!(result, "foo:bar");
             },
         );
@@ -424,7 +440,8 @@ mod tests {
     #[test]
     fn test_substitute_env_vars_with_underscores() {
         temp_env::with_var("TEST_VAR_WITH_UNDERSCORES", Some("value"), || {
-            let result = EvenframeConfig::substitute_env_vars("${TEST_VAR_WITH_UNDERSCORES}").unwrap();
+            let result =
+                EvenframeConfig::substitute_env_vars("${TEST_VAR_WITH_UNDERSCORES}").unwrap();
             assert_eq!(result, "value");
         });
     }
@@ -439,16 +456,10 @@ mod tests {
 
     #[test]
     fn test_substitute_env_vars_adjacent() {
-        temp_env::with_vars(
-            [
-                ("TEST_ADJ1", Some("a")),
-                ("TEST_ADJ2", Some("b")),
-            ],
-            || {
-                let result = EvenframeConfig::substitute_env_vars("${TEST_ADJ1}${TEST_ADJ2}").unwrap();
-                assert_eq!(result, "ab");
-            },
-        );
+        temp_env::with_vars([("TEST_ADJ1", Some("a")), ("TEST_ADJ2", Some("b"))], || {
+            let result = EvenframeConfig::substitute_env_vars("${TEST_ADJ1}${TEST_ADJ2}").unwrap();
+            assert_eq!(result, "ab");
+        });
     }
 
     #[test]

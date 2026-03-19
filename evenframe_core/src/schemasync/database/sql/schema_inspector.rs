@@ -139,16 +139,29 @@ impl SchemaInspector for PostgresSchemaInspector {
             name: row.get("column_name")?.as_str()?.to_string(),
             data_type: row.get("data_type")?.as_str()?.to_string(),
             nullable: row.get("is_nullable")?.as_str()? == "YES",
-            default: row.get("column_default").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            default: row
+                .get("column_default")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             is_primary_key: false, // Will be set separately
-            max_length: row.get("character_maximum_length").and_then(|v| v.as_u64()).map(|v| v as u32),
-            numeric_precision: row.get("numeric_precision").and_then(|v| v.as_u64()).map(|v| v as u8),
-            numeric_scale: row.get("numeric_scale").and_then(|v| v.as_u64()).map(|v| v as u8),
+            max_length: row
+                .get("character_maximum_length")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            numeric_precision: row
+                .get("numeric_precision")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u8),
+            numeric_scale: row
+                .get("numeric_scale")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u8),
         })
     }
 
     fn parse_index_row(&self, row: &serde_json::Value) -> Option<IndexInfo> {
-        let columns = row.get("columns")?
+        let columns = row
+            .get("columns")?
             .as_array()?
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -158,17 +171,22 @@ impl SchemaInspector for PostgresSchemaInspector {
             name: row.get("index_name")?.as_str()?.to_string(),
             columns,
             unique: row.get("is_unique")?.as_bool()?,
-            index_type: row.get("index_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            index_type: row
+                .get("index_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
     }
 
     fn parse_foreign_key_row(&self, row: &serde_json::Value) -> Option<ForeignKeyInfo> {
-        let delete_rule = row.get("delete_rule")
+        let delete_rule = row
+            .get("delete_rule")
             .and_then(|v| v.as_str())
             .map(parse_fk_action)
             .unwrap_or_default();
 
-        let update_rule = row.get("update_rule")
+        let update_rule = row
+            .get("update_rule")
             .and_then(|v| v.as_str())
             .map(parse_fk_action)
             .unwrap_or_default();
@@ -276,29 +294,39 @@ impl SchemaInspector for MysqlSchemaInspector {
 
     fn parse_column_row(&self, row: &serde_json::Value) -> Option<ColumnInfo> {
         Some(ColumnInfo {
-            name: row.get("column_name")
-                .or_else(|| row.get("COLUMN_NAME"))
-                ?.as_str()?.to_string(),
-            data_type: row.get("data_type")
-                .or_else(|| row.get("DATA_TYPE"))
-                ?.as_str()?.to_string(),
-            nullable: row.get("is_nullable")
-                .or_else(|| row.get("IS_NULLABLE"))
-                ?.as_str()? == "YES",
-            default: row.get("column_default")
+            name: row
+                .get("column_name")
+                .or_else(|| row.get("COLUMN_NAME"))?
+                .as_str()?
+                .to_string(),
+            data_type: row
+                .get("data_type")
+                .or_else(|| row.get("DATA_TYPE"))?
+                .as_str()?
+                .to_string(),
+            nullable: row
+                .get("is_nullable")
+                .or_else(|| row.get("IS_NULLABLE"))?
+                .as_str()?
+                == "YES",
+            default: row
+                .get("column_default")
                 .or_else(|| row.get("COLUMN_DEFAULT"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             is_primary_key: false,
-            max_length: row.get("character_maximum_length")
+            max_length: row
+                .get("character_maximum_length")
                 .or_else(|| row.get("CHARACTER_MAXIMUM_LENGTH"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32),
-            numeric_precision: row.get("numeric_precision")
+            numeric_precision: row
+                .get("numeric_precision")
                 .or_else(|| row.get("NUMERIC_PRECISION"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u8),
-            numeric_scale: row.get("numeric_scale")
+            numeric_scale: row
+                .get("numeric_scale")
                 .or_else(|| row.get("NUMERIC_SCALE"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u8),
@@ -307,13 +335,19 @@ impl SchemaInspector for MysqlSchemaInspector {
 
     fn parse_index_row(&self, row: &serde_json::Value) -> Option<IndexInfo> {
         let columns_str = row.get("columns")?.as_str()?;
-        let columns: Vec<String> = columns_str.split(',').map(|s| s.trim().to_string()).collect();
+        let columns: Vec<String> = columns_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
 
         Some(IndexInfo {
             name: row.get("index_name")?.as_str()?.to_string(),
             columns,
             unique: row.get("is_unique")?.as_bool().unwrap_or(false),
-            index_type: row.get("index_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            index_type: row
+                .get("index_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
     }
 
@@ -352,7 +386,8 @@ impl SchemaInspector for SqliteSchemaInspector {
         WHERE type = 'table'
           AND name NOT LIKE 'sqlite_%'
         ORDER BY name
-        "#.to_string()
+        "#
+        .to_string()
     }
 
     fn list_columns_query(&self, table_name: &str) -> String {
@@ -379,7 +414,10 @@ impl SchemaInspector for SqliteSchemaInspector {
             name: row.get("name")?.as_str()?.to_string(),
             data_type: row.get("type")?.as_str()?.to_string(),
             nullable: row.get("notnull")?.as_i64()? == 0,
-            default: row.get("dflt_value").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            default: row
+                .get("dflt_value")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             is_primary_key: row.get("pk")?.as_i64()? == 1,
             max_length: None,
             numeric_precision: None,
@@ -402,11 +440,13 @@ impl SchemaInspector for SqliteSchemaInspector {
             columns: vec![row.get("from")?.as_str()?.to_string()],
             referenced_table: row.get("table")?.as_str()?.to_string(),
             referenced_columns: vec![row.get("to")?.as_str()?.to_string()],
-            on_delete: row.get("on_delete")
+            on_delete: row
+                .get("on_delete")
                 .and_then(|v| v.as_str())
                 .map(parse_fk_action)
                 .unwrap_or_default(),
-            on_update: row.get("on_update")
+            on_update: row
+                .get("on_update")
                 .and_then(|v| v.as_str())
                 .map(parse_fk_action)
                 .unwrap_or_default(),

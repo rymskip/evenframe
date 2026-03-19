@@ -1,10 +1,10 @@
 use core::fmt;
+#[cfg(feature = "surrealdb")]
+use serde::de::MapAccess;
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, Visitor},
 };
-#[cfg(feature = "surrealdb")]
-use serde::de::MapAccess;
 use std::{marker::PhantomData, ops::Deref};
 
 // === EvenframeRecordId: surrealdb-backed implementation ===
@@ -49,11 +49,7 @@ impl EvenframeRecordId {
 #[cfg(feature = "surrealdb")]
 impl fmt::Display for EvenframeRecordId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.0.to_sql().replace(['⟨', '⟩', '`'], "")
-        )
+        write!(f, "{}", self.0.to_sql().replace(['⟨', '⟩', '`'], ""))
     }
 }
 

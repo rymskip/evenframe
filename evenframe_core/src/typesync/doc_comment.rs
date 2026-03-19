@@ -56,10 +56,7 @@ mod tests {
 
     #[test]
     fn test_format_jsdoc_single_line() {
-        assert_eq!(
-            format_jsdoc("A user account", ""),
-            "/** A user account */"
-        );
+        assert_eq!(format_jsdoc("A user account", ""), "/** A user account */");
     }
 
     #[test]
@@ -84,10 +81,7 @@ mod tests {
 
     #[test]
     fn test_format_triple_slash() {
-        assert_eq!(
-            format_triple_slash("A table", ""),
-            "/// A table\n"
-        );
+        assert_eq!(format_triple_slash("A table", ""), "/// A table\n");
     }
 
     #[test]
@@ -100,17 +94,11 @@ mod tests {
 
     #[test]
     fn test_format_double_slash() {
-        assert_eq!(
-            format_double_slash("A message", ""),
-            "// A message\n"
-        );
+        assert_eq!(format_double_slash("A message", ""), "// A message\n");
     }
 
     #[test]
     fn test_format_double_slash_with_indent() {
-        assert_eq!(
-            format_double_slash("A field", "    "),
-            "    // A field\n"
-        );
+        assert_eq!(format_double_slash("A field", "    "), "    // A field\n");
     }
 }

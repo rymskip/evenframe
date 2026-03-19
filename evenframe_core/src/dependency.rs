@@ -846,7 +846,10 @@ mod tests {
 
         collect_refs(
             &FieldType::Struct(vec![
-                ("field1".to_string(), FieldType::Other("FieldType1".to_string())),
+                (
+                    "field1".to_string(),
+                    FieldType::Other("FieldType1".to_string()),
+                ),
                 ("field2".to_string(), FieldType::I32),
             ]),
             &known,
@@ -1083,7 +1086,10 @@ mod tests {
         );
         structs.insert(
             "Child".to_string(),
-            create_struct_config("Child", vec![create_struct_field("name", FieldType::String)]),
+            create_struct_config(
+                "Child",
+                vec![create_struct_field("name", FieldType::String)],
+            ),
         );
 
         let deps = deps_of("Parent", &structs, &HashMap::new());
@@ -1172,10 +1178,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let info = analyse_recursion_tables(&tables);
@@ -1190,10 +1193,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let deps = deps_of_table("user", &tables);
@@ -1216,10 +1216,7 @@ mod tests {
         );
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let deps = deps_of_table("post", &tables);
@@ -1255,10 +1252,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
         tables.insert(
             "post".to_string(),
@@ -1291,10 +1285,7 @@ mod tests {
         );
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
@@ -1313,14 +1304,20 @@ mod tests {
             "C".to_string(),
             create_table_config(
                 "C",
-                vec![create_struct_field("b_ref", FieldType::Other("B".to_string()))],
+                vec![create_struct_field(
+                    "b_ref",
+                    FieldType::Other("B".to_string()),
+                )],
             ),
         );
         tables.insert(
             "B".to_string(),
             create_table_config(
                 "B",
-                vec![create_struct_field("a_ref", FieldType::Other("A".to_string()))],
+                vec![create_struct_field(
+                    "a_ref",
+                    FieldType::Other("A".to_string()),
+                )],
             ),
         );
         tables.insert(
@@ -1346,14 +1343,20 @@ mod tests {
             "A".to_string(),
             create_table_config(
                 "A",
-                vec![create_struct_field("b_ref", FieldType::Other("B".to_string()))],
+                vec![create_struct_field(
+                    "b_ref",
+                    FieldType::Other("B".to_string()),
+                )],
             ),
         );
         tables.insert(
             "B".to_string(),
             create_table_config(
                 "B",
-                vec![create_struct_field("a_ref", FieldType::Other("A".to_string()))],
+                vec![create_struct_field(
+                    "a_ref",
+                    FieldType::Other("A".to_string()),
+                )],
             ),
         );
 
@@ -1392,10 +1395,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "user".to_string(),
-            create_table_config(
-                "user",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let mut deps = HashSet::new();
@@ -1448,10 +1448,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "item".to_string(),
-            create_table_config(
-                "item",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("item", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let mut deps = HashSet::new();
@@ -1474,10 +1471,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "item".to_string(),
-            create_table_config(
-                "item",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("item", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let mut deps = HashSet::new();
@@ -1500,17 +1494,11 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "a".to_string(),
-            create_table_config(
-                "a",
-                vec![create_struct_field("val", FieldType::String)],
-            ),
+            create_table_config("a", vec![create_struct_field("val", FieldType::String)]),
         );
         tables.insert(
             "b".to_string(),
-            create_table_config(
-                "b",
-                vec![create_struct_field("val", FieldType::I32)],
-            ),
+            create_table_config("b", vec![create_struct_field("val", FieldType::I32)]),
         );
 
         let mut deps = HashSet::new();
@@ -1578,10 +1566,7 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert(
             "City".to_string(),
-            create_table_config(
-                "City",
-                vec![create_struct_field("name", FieldType::String)],
-            ),
+            create_table_config("City", vec![create_struct_field("name", FieldType::String)]),
         );
 
         let mut deps = HashSet::new();

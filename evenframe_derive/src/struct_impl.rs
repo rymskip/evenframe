@@ -3,8 +3,8 @@ use evenframe_core::{
     derive::{
         attributes::{
             parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
-            parse_macroforge_derive_attribute, parse_mock_data_attribute,
-            parse_mockmake_attribute, parse_relation_attribute,
+            parse_macroforge_derive_attribute, parse_mock_data_attribute, parse_mockmake_attribute,
+            parse_relation_attribute,
         },
         validator_parser::parse_field_validators,
     },
@@ -229,7 +229,10 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
             };
 
             // Parse unique attribute (marker attribute, no arguments)
-            let is_unique = field.attrs.iter().any(|attr| attr.path().is_ident("unique"));
+            let is_unique = field
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("unique"));
 
             // Parse mockmake plugin attribute
             let mock_plugin = match parse_mockmake_attribute(&field.attrs) {

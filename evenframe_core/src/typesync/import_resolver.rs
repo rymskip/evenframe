@@ -4,9 +4,9 @@
 //! type dependencies.
 
 use crate::dependency::deps_of;
+use crate::types::{StructConfig, TaggedUnion};
 use crate::typesync::config::FileNamingConvention;
 use crate::typesync::file_grouping::{FileOutputPlan, TypeFileGroup};
-use crate::types::{StructConfig, TaggedUnion};
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -37,7 +37,8 @@ pub fn import_specifier_suffix(file_extension: &str) -> &str {
     if file_extension == ".ts" || file_extension == ".js" {
         ""
     } else {
-        file_extension.strip_suffix(".ts")
+        file_extension
+            .strip_suffix(".ts")
             .or_else(|| file_extension.strip_suffix(".js"))
             .unwrap_or(file_extension)
     }
@@ -108,7 +109,11 @@ pub fn format_imports(imports: &[ImportStatement]) -> String {
 }
 
 /// Generates a barrel file (`index.ts`) content that re-exports from all groups.
-pub fn generate_barrel_file(plan: &FileOutputPlan, naming: FileNamingConvention, file_extension: &str) -> String {
+pub fn generate_barrel_file(
+    plan: &FileOutputPlan,
+    naming: FileNamingConvention,
+    file_extension: &str,
+) -> String {
     let suffix = import_specifier_suffix(file_extension);
     let mut lines: Vec<String> = Vec::new();
     for group in &plan.groups {
@@ -126,8 +131,8 @@ pub fn barrel_filename(file_extension: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::typesync::file_grouping::compute_file_grouping;
     use crate::types::{FieldType, StructField};
+    use crate::typesync::file_grouping::compute_file_grouping;
 
     fn make_struct(name: &str, fields: Vec<(&str, FieldType)>) -> StructConfig {
         StructConfig {
@@ -149,10 +154,22 @@ mod tests {
 
     #[test]
     fn test_type_name_to_filename() {
-        assert_eq!(type_name_to_filename("UserProfile", FileNamingConvention::Kebab), "user-profile");
-        assert_eq!(type_name_to_filename("UserProfile", FileNamingConvention::Snake), "user_profile");
-        assert_eq!(type_name_to_filename("UserProfile", FileNamingConvention::Pascal), "UserProfile");
-        assert_eq!(type_name_to_filename("UserProfile", FileNamingConvention::Camel), "userProfile");
+        assert_eq!(
+            type_name_to_filename("UserProfile", FileNamingConvention::Kebab),
+            "user-profile"
+        );
+        assert_eq!(
+            type_name_to_filename("UserProfile", FileNamingConvention::Snake),
+            "user_profile"
+        );
+        assert_eq!(
+            type_name_to_filename("UserProfile", FileNamingConvention::Pascal),
+            "UserProfile"
+        );
+        assert_eq!(
+            type_name_to_filename("UserProfile", FileNamingConvention::Camel),
+            "userProfile"
+        );
     }
 
     #[test]
@@ -187,7 +204,14 @@ mod tests {
         let user_group_idx = plan.type_to_group["User"];
         let user_group = &plan.groups[user_group_idx];
 
-        let imports = resolve_imports(user_group, &plan, &structs, &enums, FileNamingConvention::Kebab, ".ts");
+        let imports = resolve_imports(
+            user_group,
+            &plan,
+            &structs,
+            &enums,
+            FileNamingConvention::Kebab,
+            ".ts",
+        );
 
         // User group (User + Address) should import Role from ./role
         assert_eq!(imports.len(), 1);

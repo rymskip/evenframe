@@ -252,9 +252,11 @@ mod tests {
 
         let tokens = tokenize(source).unwrap();
         assert!(tokens.iter().any(|t| matches!(&t.token, Token::Table)));
-        assert!(tokens
-            .iter()
-            .any(|t| matches!(&t.token, Token::Identifier(s) if s == "Person")));
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(&t.token, Token::Identifier(s) if s == "Person"))
+        );
     }
 
     #[test]
@@ -267,8 +269,10 @@ mod tests {
 
         let tokens = tokenize(source).unwrap();
         assert!(tokens.iter().any(|t| matches!(&t.token, Token::LParen)));
-        assert!(tokens
-            .iter()
-            .any(|t| matches!(&t.token, Token::Identifier(s) if s == "validate")));
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(&t.token, Token::Identifier(s) if s == "validate"))
+        );
     }
 }

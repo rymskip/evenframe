@@ -2,8 +2,8 @@
 
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, Variant};
 use prost_types::{
-    field_descriptor_proto::{Label, Type},
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet,
+    field_descriptor_proto::{Label, Type},
 };
 use std::collections::HashMap;
 
@@ -57,18 +57,16 @@ pub fn convert_descriptor_set(fds: &FileDescriptorSet) -> ProtobufParseResult {
         // Convert enums
         for enum_type in &file.enum_type {
             let tagged_union = convert_enum(enum_type);
-            result.enums.insert(enum_type.name().to_string(), tagged_union);
+            result
+                .enums
+                .insert(enum_type.name().to_string(), tagged_union);
         }
     }
 
     result
 }
 
-fn convert_message(
-    message: &DescriptorProto,
-    prefix: &str,
-    result: &mut ProtobufParseResult,
-) {
+fn convert_message(message: &DescriptorProto, prefix: &str, result: &mut ProtobufParseResult) {
     let name = message.name().to_string();
     let full_name = if prefix.is_empty() {
         name.clone()
@@ -77,11 +75,7 @@ fn convert_message(
     };
 
     // Convert fields
-    let fields = message
-        .field
-        .iter()
-        .map(convert_field)
-        .collect();
+    let fields = message.field.iter().map(convert_field).collect();
 
     let struct_config = StructConfig {
         struct_name: name.clone(),
@@ -103,7 +97,12 @@ fn convert_message(
 
     for nested in &message.nested_type {
         // Skip map entry types (synthetic messages for map fields)
-        if nested.options.as_ref().map(|o| o.map_entry()).unwrap_or(false) {
+        if nested
+            .options
+            .as_ref()
+            .map(|o| o.map_entry())
+            .unwrap_or(false)
+        {
             continue;
         }
         convert_message(nested, &nested_prefix, result);
@@ -112,7 +111,9 @@ fn convert_message(
     // Handle nested enums
     for enum_type in &message.enum_type {
         let tagged_union = convert_enum(enum_type);
-        result.enums.insert(enum_type.name().to_string(), tagged_union);
+        result
+            .enums
+            .insert(enum_type.name().to_string(), tagged_union);
     }
 }
 
@@ -168,12 +169,18 @@ fn convert_field_type(field: &FieldDescriptorProto) -> FieldType {
         Type::Bytes => FieldType::Vec(Box::new(FieldType::U8)),
         Type::Enum | Type::Message => {
             // Extract type name without leading dot
-            let type_name = field.type_name.as_ref()
+            let type_name = field
+                .type_name
+                .as_ref()
                 .map(|s| s.trim_start_matches('.').to_string())
                 .unwrap_or_else(|| "Unknown".to_string());
 
             // Use just the last segment of the type name
-            let short_name = type_name.rsplit('.').next().unwrap_or(&type_name).to_string();
+            let short_name = type_name
+                .rsplit('.')
+                .next()
+                .unwrap_or(&type_name)
+                .to_string();
             FieldType::Other(short_name)
         }
         Type::Group => {

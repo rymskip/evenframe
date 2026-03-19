@@ -9,7 +9,7 @@ use evenframe_core::{
         arktype::generate_arktype_type_string,
         config::{ArrayStyle, FileNamingConvention, OutputMode},
         effect::{generate_effect_schema_for_types, generate_effect_schema_string},
-        file_grouping::{compute_file_grouping, FileOutputPlan},
+        file_grouping::{FileOutputPlan, compute_file_grouping},
         flatbuffers::generate_flatbuffers_schema_string,
         import_resolver::{
             barrel_filename, format_imports, generate_barrel_file, resolve_imports,
@@ -74,7 +74,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}arktype.ts", config.typesync.output_path));
                 if output_mode == OutputMode::PerFile {
-                    warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
+                    warn!(
+                        "ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode."
+                    );
                 }
                 generate_arktype(&structs, &enums, &output_path)?;
             }
@@ -102,7 +104,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => generate_macroforge(&structs, &enums, &output_path, array_style)?,
+                    OutputMode::Single => {
+                        generate_macroforge(&structs, &enums, &output_path, array_style)?
+                    }
                     OutputMode::PerFile => generate_macroforge_per_file(
                         &structs,
                         &enums,
@@ -188,7 +192,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
         match format {
             TypeFormat::Arktype => {
                 if output_mode == OutputMode::PerFile {
-                    warn!("ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode.");
+                    warn!(
+                        "ArkType does not support per-file output (scope requires all types in one file). Falling back to single-file mode."
+                    );
                 }
                 let path = format!("{}arktype.ts", config.typesync.output_path);
                 generate_arktype(&structs, &enums, &path)?;
@@ -455,7 +461,13 @@ fn cleanup_obsolete_files(
     let mut expected: HashSet<String> = plan
         .groups
         .iter()
-        .map(|g| format!("{}{}", type_name_to_filename(&g.primary_type, naming), file_ext))
+        .map(|g| {
+            format!(
+                "{}{}",
+                type_name_to_filename(&g.primary_type, naming),
+                file_ext
+            )
+        })
         .collect();
     expected.insert(barrel_filename(file_ext));
 

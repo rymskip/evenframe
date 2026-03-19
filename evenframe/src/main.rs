@@ -6,7 +6,7 @@ mod workspace_scanner;
 use clap::Parser;
 use cli::{Cli, Commands};
 use evenframe_core::{config::EvenframeConfig, error::Result, evenframe_log};
-use tracing::{error, info, Level};
+use tracing::{Level, error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {

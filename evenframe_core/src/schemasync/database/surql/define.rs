@@ -412,7 +412,11 @@ mod tests {
         );
 
         // Should contain unique index for email but not for name
-        assert!(statements.contains("DEFINE INDEX OVERWRITE idx_user_email ON TABLE user FIELDS email UNIQUE;"));
+        assert!(
+            statements.contains(
+                "DEFINE INDEX OVERWRITE idx_user_email ON TABLE user FIELDS email UNIQUE;"
+            )
+        );
         assert!(!statements.contains("idx_user_name"));
     }
 }

@@ -2,6 +2,4 @@
 //!
 //! This module re-exports functionality from `evenframe_core::tooling`.
 
-pub use evenframe_core::tooling::{
-    build_all_configs, merge_tables_and_objects, BuildConfig,
-};
+pub use evenframe_core::tooling::{BuildConfig, build_all_configs, merge_tables_and_objects};

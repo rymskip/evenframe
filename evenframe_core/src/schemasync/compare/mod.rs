@@ -7,37 +7,37 @@
 pub mod filter;
 #[cfg(feature = "surrealdb")]
 pub mod import;
-pub mod types;
-#[cfg(feature = "surrealdb")]
-pub mod surql;
 #[cfg(feature = "sql")]
 pub mod sql;
+#[cfg(feature = "surrealdb")]
+pub mod surql;
+pub mod types;
 
 // Re-export commonly used types
 pub use crate::schemasync::mockmake::MockGenerationConfig;
 #[cfg(feature = "surrealdb")]
 pub use import::SchemaImporter;
-pub use types::{
-    AccessDefinition, FieldDefinition, ObjectType, PermissionSet, SchemaDefinition,
-    SchemaType, TableDefinition,
-};
 #[cfg(feature = "surrealdb")]
 pub use surql::SurrealdbComparator;
+pub use types::{
+    AccessDefinition, FieldDefinition, ObjectType, PermissionSet, SchemaDefinition, SchemaType,
+    TableDefinition,
+};
 
+#[cfg(feature = "surrealdb")]
+use crate::schemasync::config::{PerformanceConfig, SchemasyncMockGenConfig};
 use crate::{
     EvenframeError, Result,
     schemasync::TableConfig,
     types::{FieldType, TaggedUnion, VariantData},
 };
 #[cfg(feature = "surrealdb")]
-use crate::schemasync::config::{PerformanceConfig, SchemasyncMockGenConfig};
+use ::surrealdb::Surreal;
+#[cfg(feature = "surrealdb")]
+use ::surrealdb::engine::remote::http::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
-#[cfg(feature = "surrealdb")]
-use ::surrealdb::engine::remote::http::Client;
-#[cfg(feature = "surrealdb")]
-use ::surrealdb::Surreal;
 
 #[cfg(feature = "schemasync")]
 use crate::schemasync::database::types::SchemaExport;

@@ -50,8 +50,7 @@ pub async fn validate_surql_response(
     for (index, statement) in statement_lines.iter().enumerate() {
         match response.take::<surrealdb::types::Value>(index) {
             Ok(surreal_value) => {
-                let value: Value =
-                    serde_json::to_value(&surreal_value).unwrap_or(Value::Null);
+                let value: Value = serde_json::to_value(&surreal_value).unwrap_or(Value::Null);
                 // Check if the result is an error disguised as success
                 if let Some(obj) = value.as_object() {
                     // Check for error indicators in the response

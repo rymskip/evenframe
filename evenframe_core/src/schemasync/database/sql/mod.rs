@@ -12,12 +12,12 @@ pub mod mysql;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-mod schema_inspector;
 mod join_table;
+mod schema_inspector;
 mod type_mapper;
 
-pub use schema_inspector::*;
 pub use join_table::*;
+pub use schema_inspector::*;
 pub use type_mapper::*;
 
 use crate::schemasync::database::types::*;
@@ -27,24 +27,25 @@ pub struct SqlQueryBuilder;
 
 impl SqlQueryBuilder {
     /// Generate a CREATE TABLE statement
-    pub fn create_table(
-        table: &TableSchema,
-        quote_char: char,
-    ) -> String {
+    pub fn create_table(table: &TableSchema, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
 
         let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (\n", q(&table.name));
 
-        let mut column_defs: Vec<String> = table.columns.iter().map(|col| {
-            let mut def = format!("    {} {}", q(&col.name), &col.data_type);
-            if !col.nullable {
-                def.push_str(" NOT NULL");
-            }
-            if let Some(default) = &col.default {
-                def.push_str(&format!(" DEFAULT {}", default));
-            }
-            def
-        }).collect();
+        let mut column_defs: Vec<String> = table
+            .columns
+            .iter()
+            .map(|col| {
+                let mut def = format!("    {} {}", q(&col.name), &col.data_type);
+                if !col.nullable {
+                    def.push_str(" NOT NULL");
+                }
+                if let Some(default) = &col.default {
+                    def.push_str(&format!(" DEFAULT {}", default));
+                }
+                def
+            })
+            .collect();
 
         // Add primary key constraint
         if !table.primary_key.is_empty() {
@@ -65,11 +66,7 @@ impl SqlQueryBuilder {
     }
 
     /// Generate ALTER TABLE ADD COLUMN statement
-    pub fn add_column(
-        table_name: &str,
-        column: &ColumnSchema,
-        quote_char: char,
-    ) -> String {
+    pub fn add_column(table_name: &str, column: &ColumnSchema, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
 
         let mut sql = format!(
@@ -91,11 +88,7 @@ impl SqlQueryBuilder {
     }
 
     /// Generate DROP COLUMN statement
-    pub fn drop_column(
-        table_name: &str,
-        column_name: &str,
-        quote_char: char,
-    ) -> String {
+    pub fn drop_column(table_name: &str, column_name: &str, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
         format!(
             "ALTER TABLE {} DROP COLUMN IF EXISTS {};",
@@ -105,10 +98,7 @@ impl SqlQueryBuilder {
     }
 
     /// Generate CREATE INDEX statement
-    pub fn create_index(
-        index: &IndexSchema,
-        quote_char: char,
-    ) -> String {
+    pub fn create_index(index: &IndexSchema, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
 
         let unique = if index.unique { "UNIQUE " } else { "" };
@@ -124,26 +114,20 @@ impl SqlQueryBuilder {
     }
 
     /// Generate DROP INDEX statement
-    pub fn drop_index(
-        index_name: &str,
-        table_name: &str,
-        quote_char: char,
-    ) -> String {
+    pub fn drop_index(index_name: &str, table_name: &str, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
-        format!("DROP INDEX IF EXISTS {} ON {};", q(index_name), q(table_name))
+        format!(
+            "DROP INDEX IF EXISTS {} ON {};",
+            q(index_name),
+            q(table_name)
+        )
     }
 
     /// Generate INSERT statement
-    pub fn insert(
-        table_name: &str,
-        columns: &[&str],
-        quote_char: char,
-    ) -> String {
+    pub fn insert(table_name: &str, columns: &[&str], quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
         let cols: Vec<String> = columns.iter().map(|c| q(c)).collect();
-        let placeholders: Vec<String> = (1..=columns.len())
-            .map(|i| format!("${}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("${}", i)).collect();
 
         format!(
             "INSERT INTO {} ({}) VALUES ({});",
@@ -178,11 +162,7 @@ impl SqlQueryBuilder {
     }
 
     /// Generate DELETE statement
-    pub fn delete(
-        table_name: &str,
-        filter: Option<&str>,
-        quote_char: char,
-    ) -> String {
+    pub fn delete(table_name: &str, filter: Option<&str>, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
 
         let mut sql = format!("DELETE FROM {}", q(table_name));
@@ -196,11 +176,7 @@ impl SqlQueryBuilder {
     }
 
     /// Generate COUNT query
-    pub fn count(
-        table_name: &str,
-        filter: Option<&str>,
-        quote_char: char,
-    ) -> String {
+    pub fn count(table_name: &str, filter: Option<&str>, quote_char: char) -> String {
         let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
 
         let mut sql = format!("SELECT COUNT(*) as count FROM {}", q(table_name));

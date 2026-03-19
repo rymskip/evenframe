@@ -243,21 +243,31 @@ impl From<Format> for Regex {
                 let pattern = [
                     r"^P(",
                     // Branch: starts with Year
-                    r"\d{1,2}Y((0?[0-9]|1[0-1])M)?(\d{1,4}W)?([0-2]?[0-9]D)?(T", TIME, r")?",
+                    r"\d{1,2}Y((0?[0-9]|1[0-1])M)?(\d{1,4}W)?([0-2]?[0-9]D)?(T",
+                    TIME,
+                    r")?",
                     r"|",
                     // Branch: starts with Month
-                    r"(0?[0-9]|1[0-1])M(\d{1,4}W)?([0-2]?[0-9]D)?(T", TIME, r")?",
+                    r"(0?[0-9]|1[0-1])M(\d{1,4}W)?([0-2]?[0-9]D)?(T",
+                    TIME,
+                    r")?",
                     r"|",
                     // Branch: starts with Week
-                    r"\d{1,4}W([0-2]?[0-9]D)?(T", TIME, r")?",
+                    r"\d{1,4}W([0-2]?[0-9]D)?(T",
+                    TIME,
+                    r")?",
                     r"|",
                     // Branch: starts with Day
-                    r"[0-2]?[0-9]D(T", TIME, r")?",
+                    r"[0-2]?[0-9]D(T",
+                    TIME,
+                    r")?",
                     r"|",
                     // Branch: time only
-                    r"T", TIME,
+                    r"T",
+                    TIME,
                     r")$",
-                ].concat();
+                ]
+                .concat();
                 return Regex::new(&pattern).expect("Failed to create ISO 8601 duration regex");
             }
             Format::TimeZone => {

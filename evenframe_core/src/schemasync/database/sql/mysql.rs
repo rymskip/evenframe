@@ -3,7 +3,7 @@
 //! Stub implementation - to be fully implemented
 
 use async_trait::async_trait;
-use sqlx::{MySqlPool, mysql::MySqlPoolOptions, Row};
+use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
 use std::collections::HashMap;
 use tracing::info;
 
@@ -12,14 +12,14 @@ use crate::schemasync::{EdgeConfig, TableConfig};
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
 
 use super::{
-    MysqlTypeMapper, MysqlSchemaInspector, SchemaInspector,
-    JoinTableConfig, generate_join_table_sql,
+    JoinTableConfig, MysqlSchemaInspector, MysqlTypeMapper, SchemaInspector,
+    generate_join_table_sql,
 };
+use crate::schemasync::database::TypeMapper;
 use crate::schemasync::database::{
     DatabaseConfig, DatabaseProvider, ProviderType, Relationship, RelationshipDirection,
     SchemaExport, TableInfo, Transaction,
 };
-use crate::schemasync::database::TypeMapper;
 
 /// MySQL database provider implementation
 pub struct MysqlProvider {
@@ -48,9 +48,15 @@ impl Default for MysqlProvider {
 
 #[async_trait]
 impl DatabaseProvider for MysqlProvider {
-    fn name(&self) -> &'static str { "mysql" }
-    fn supports_graph_queries(&self) -> bool { false }
-    fn supports_embedded_mode(&self) -> bool { false }
+    fn name(&self) -> &'static str {
+        "mysql"
+    }
+    fn supports_graph_queries(&self) -> bool {
+        false
+    }
+    fn supports_embedded_mode(&self) -> bool {
+        false
+    }
 
     async fn connect(&mut self, config: &DatabaseConfig) -> Result<()> {
         if config.provider != ProviderType::MySql {
@@ -81,18 +87,24 @@ impl DatabaseProvider for MysqlProvider {
         Ok(())
     }
 
-    fn is_connected(&self) -> bool { self.pool.is_some() }
+    fn is_connected(&self) -> bool {
+        self.pool.is_some()
+    }
 
     async fn export_schema(&self) -> Result<SchemaExport> {
         Ok(SchemaExport::default())
     }
 
     async fn apply_schema(&self, statements: &[String]) -> Result<()> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         for stmt in statements {
-            sqlx::query(stmt).execute(pool).await
+            sqlx::query(stmt)
+                .execute(pool)
+                .await
                 .map_err(|e| EvenframeError::database(format!("Execute failed: {e}")))?;
         }
         Ok(())
@@ -103,7 +115,9 @@ impl DatabaseProvider for MysqlProvider {
     }
 
     async fn list_tables(&self) -> Result<Vec<String>> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         let inspector = MysqlSchemaInspector::new(&self.database);
@@ -112,14 +126,21 @@ impl DatabaseProvider for MysqlProvider {
             .await
             .map_err(|e| EvenframeError::database(format!("List tables failed: {e}")))?;
 
-        Ok(rows.iter().filter_map(|r| r.try_get::<String, _>("table_name").ok()).collect())
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>("table_name").ok())
+            .collect())
     }
 
     async fn execute(&self, query: &str) -> Result<Vec<serde_json::Value>> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
-        sqlx::query(query).fetch_all(pool).await
+        sqlx::query(query)
+            .fetch_all(pool)
+            .await
             .map_err(|e| EvenframeError::database(format!("Execute failed: {e}")))?;
 
         Ok(vec![])
@@ -150,7 +171,9 @@ impl DatabaseProvider for MysqlProvider {
     }
 
     async fn count(&self, table: &str, filter: Option<&str>) -> Result<u64> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         let query = match filter {
@@ -158,14 +181,18 @@ impl DatabaseProvider for MysqlProvider {
             None => format!("SELECT COUNT(*) as count FROM `{}`", table),
         };
 
-        let row = sqlx::query(&query).fetch_one(pool).await
+        let row = sqlx::query(&query)
+            .fetch_one(pool)
+            .await
             .map_err(|e| EvenframeError::database(format!("Count failed: {e}")))?;
 
         Ok(row.get::<i64, _>("count") as u64)
     }
 
     async fn delete(&self, table: &str, ids: &[String]) -> Result<()> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         for id in ids {
@@ -188,14 +215,27 @@ impl DatabaseProvider for MysqlProvider {
         let mut cols = vec!["    `id` INT AUTO_INCREMENT PRIMARY KEY".to_string()];
 
         for field in &config.struct_config.fields {
-            if field.field_name == "id" { continue; }
+            if field.field_name == "id" {
+                continue;
+            }
             let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
-            if sql_type.is_empty() { continue; }
+            if sql_type.is_empty() {
+                continue;
+            }
             let nullable = matches!(field.field_type, FieldType::Option(_));
-            cols.push(format!("    `{}` {}{}", field.field_name, sql_type, if nullable { "" } else { " NOT NULL" }));
+            cols.push(format!(
+                "    `{}` {}{}",
+                field.field_name,
+                sql_type,
+                if nullable { "" } else { " NOT NULL" }
+            ));
         }
 
-        format!("CREATE TABLE IF NOT EXISTS `{}` (\n{}\n);", table_name, cols.join(",\n"))
+        format!(
+            "CREATE TABLE IF NOT EXISTS `{}` (\n{}\n);",
+            table_name,
+            cols.join(",\n")
+        )
     }
 
     fn generate_create_field(
@@ -206,7 +246,10 @@ impl DatabaseProvider for MysqlProvider {
         _enums: &HashMap<String, TaggedUnion>,
     ) -> String {
         let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
-        format!("ALTER TABLE `{}` ADD COLUMN `{}` {};", table_name, field.field_name, sql_type)
+        format!(
+            "ALTER TABLE `{}` ADD COLUMN `{}` {};",
+            table_name, field.field_name, sql_type
+        )
     }
 
     fn map_field_type(&self, field_type: &FieldType) -> String {
@@ -221,15 +264,31 @@ impl DatabaseProvider for MysqlProvider {
         generate_join_table_sql(edge, &JoinTableConfig::mysql())
     }
 
-    async fn create_relationship(&self, _edge_table: &str, _from_id: &str, _to_id: &str, _data: Option<&serde_json::Value>) -> Result<String> {
+    async fn create_relationship(
+        &self,
+        _edge_table: &str,
+        _from_id: &str,
+        _to_id: &str,
+        _data: Option<&serde_json::Value>,
+    ) -> Result<String> {
         Ok(String::new())
     }
 
-    async fn delete_relationship(&self, _edge_table: &str, _from_id: &str, _to_id: &str) -> Result<()> {
+    async fn delete_relationship(
+        &self,
+        _edge_table: &str,
+        _from_id: &str,
+        _to_id: &str,
+    ) -> Result<()> {
         Ok(())
     }
 
-    async fn get_relationships(&self, _edge_table: &str, _record_id: &str, _direction: RelationshipDirection) -> Result<Vec<Relationship>> {
+    async fn get_relationships(
+        &self,
+        _edge_table: &str,
+        _record_id: &str,
+        _direction: RelationshipDirection,
+    ) -> Result<Vec<Relationship>> {
         Ok(vec![])
     }
 

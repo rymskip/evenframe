@@ -252,8 +252,16 @@ impl DatabaseConfig {
                 DatabaseProvider::Sqlite => crate::schemasync::database::ProviderType::Sqlite,
             },
             url: self.url.clone(),
-            namespace: if self.namespace.is_empty() { None } else { Some(self.namespace.clone()) },
-            database: if self.database.is_empty() { None } else { Some(self.database.clone()) },
+            namespace: if self.namespace.is_empty() {
+                None
+            } else {
+                Some(self.namespace.clone())
+            },
+            database: if self.database.is_empty() {
+                None
+            } else {
+                Some(self.database.clone())
+            },
             username: None, // Will be loaded from env vars
             password: None, // Will be loaded from env vars
             max_connections: self.max_connections,

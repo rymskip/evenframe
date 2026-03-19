@@ -2,11 +2,7 @@
 
 use crate::cli::{Cli, GenerateArgs, TypesyncArgs};
 use crate::config_builders;
-use evenframe_core::{
-    config::EvenframeConfig,
-    error::Result,
-    schemasync::Schemasync,
-};
+use evenframe_core::{config::EvenframeConfig, error::Result, schemasync::Schemasync};
 use tracing::{debug, error, info};
 
 /// Runs the full generation pipeline with default settings.

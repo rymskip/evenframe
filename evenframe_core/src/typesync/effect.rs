@@ -570,10 +570,7 @@ pub fn generate_effect_schema_for_types(
         .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
-    let mut processed: HashSet<String> = all_types
-        .difference(&type_set)
-        .cloned()
-        .collect();
+    let mut processed: HashSet<String> = all_types.difference(&type_set).cloned().collect();
 
     let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
         field_type_to_effect_schema(ft, structs, cur, &rec, proc)

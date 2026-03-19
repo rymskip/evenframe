@@ -12,18 +12,15 @@ pub mod regex_val_gen;
 
 #[cfg(feature = "surrealdb")]
 use crate::{
+    dependency::sort_tables_by_dependencies,
+    evenframe_log,
+    schemasync::TableConfig,
     schemasync::compare::surql::SurrealdbComparator,
     schemasync::mockmake::coordinate::{
         CoherentDataset, Coordination, CoordinationGroup, CoordinationId, CoordinationPair,
     },
-    dependency::sort_tables_by_dependencies,
-    evenframe_log,
     schemasync::mockmake::format::Format,
-    schemasync::{
-        PreservationMode,
-        database::surql::access::execute_access_query,
-    },
-    schemasync::TableConfig,
+    schemasync::{PreservationMode, database::surql::access::execute_access_query},
     types::{StructConfig, StructField, TaggedUnion},
     wrappers::EvenframeRecordId,
 };
@@ -178,8 +175,7 @@ impl<'a> Mockmaker<'a> {
             );
             evenframe_log!(&format!("{:?}", response), "record_diffs.log", true);
 
-            let existing_values: Vec<serde_json::Value> =
-                response.take(0).unwrap_or_default();
+            let existing_values: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
 
             struct IdResponse {
                 id: EvenframeRecordId,
@@ -274,13 +270,14 @@ impl<'a> Mockmaker<'a> {
             // Rust structs — DEFINE FIELD OVERWRITE only updates existing fields,
             // it does not remove stale ones from the database schema.
             if let Some(comparator) = self.comparator.as_ref()
-                && let Some(schema_changes) = comparator.get_schema_changes() {
-                    let remove_stmts = self.generate_remove_statements(schema_changes);
-                    if !remove_stmts.is_empty() {
-                        tracing::info!("Full refresh mode - removing stale fields/tables");
-                        delete_all.push_str(&remove_stmts);
-                    }
+                && let Some(schema_changes) = comparator.get_schema_changes()
+            {
+                let remove_stmts = self.generate_remove_statements(schema_changes);
+                if !remove_stmts.is_empty() {
+                    tracing::info!("Full refresh mode - removing stale fields/tables");
+                    delete_all.push_str(&remove_stmts);
                 }
+            }
 
             if !delete_all.is_empty() {
                 evenframe_log!(&delete_all, "remove_statements.surql");

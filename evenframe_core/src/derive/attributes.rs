@@ -3,7 +3,10 @@ use syn::{Attribute, Expr, ExprArray, ExprLit, Lit, LitStr, Meta, spanned::Spann
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    schemasync::{Direction, EdgeConfig, mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format}},
+    schemasync::{
+        Direction, EdgeConfig,
+        mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
+    },
     types::StructField,
 };
 use std::{collections::HashMap, convert::TryFrom};
@@ -241,7 +244,10 @@ pub fn parse_mockmake_attribute(attrs: &[Attribute]) -> Result<Option<String>, s
                 Err(err) => {
                     return Err(syn::Error::new(
                         attr.span(),
-                        format!("Failed to parse mockmake attribute: {}\n\nExample: #[mockmake(plugin = \"my_plugin\")]", err),
+                        format!(
+                            "Failed to parse mockmake attribute: {}\n\nExample: #[mockmake(plugin = \"my_plugin\")]",
+                            err
+                        ),
                     ));
                 }
             }

@@ -61,10 +61,7 @@ impl JoinTableConfig {
 }
 
 /// Generate a join table schema from an edge configuration
-pub fn generate_join_table_schema(
-    edge: &EdgeConfig,
-    config: &JoinTableConfig,
-) -> TableSchema {
+pub fn generate_join_table_schema(edge: &EdgeConfig, config: &JoinTableConfig) -> TableSchema {
     let mut columns = Vec::new();
 
     // Primary key column
@@ -72,7 +69,9 @@ pub fn generate_join_table_schema(
         columns.push(ColumnSchema {
             name: "id".to_string(),
             data_type: "UUID".to_string(),
-            database_type: DatabaseType::String { max_length: Some(36) },
+            database_type: DatabaseType::String {
+                max_length: Some(36),
+            },
             nullable: false,
             default: config.uuid_expr.clone(),
             constraints: vec![ColumnConstraint::PrimaryKey],
@@ -81,7 +80,10 @@ pub fn generate_join_table_schema(
         columns.push(ColumnSchema {
             name: "id".to_string(),
             data_type: "INTEGER".to_string(),
-            database_type: DatabaseType::Integer { bits: 64, signed: true },
+            database_type: DatabaseType::Integer {
+                bits: 64,
+                signed: true,
+            },
             nullable: false,
             default: None, // AUTO_INCREMENT handled separately
             constraints: vec![ColumnConstraint::PrimaryKey],
@@ -89,17 +91,30 @@ pub fn generate_join_table_schema(
     }
 
     // Determine the source table(s)
-    let from_table = edge.from.first().cloned().unwrap_or_else(|| "unknown".to_string());
-    let to_table = edge.to.first().cloned().unwrap_or_else(|| "unknown".to_string());
+    let from_table = edge
+        .from
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+    let to_table = edge
+        .to
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
 
     // from_id foreign key column
     columns.push(ColumnSchema {
         name: "from_id".to_string(),
         data_type: if config.use_uuid { "UUID" } else { "INTEGER" }.to_string(),
         database_type: if config.use_uuid {
-            DatabaseType::String { max_length: Some(36) }
+            DatabaseType::String {
+                max_length: Some(36),
+            }
         } else {
-            DatabaseType::Integer { bits: 64, signed: true }
+            DatabaseType::Integer {
+                bits: 64,
+                signed: true,
+            }
         },
         nullable: false,
         default: None,
@@ -119,9 +134,14 @@ pub fn generate_join_table_schema(
         name: "to_id".to_string(),
         data_type: if config.use_uuid { "UUID" } else { "INTEGER" }.to_string(),
         database_type: if config.use_uuid {
-            DatabaseType::String { max_length: Some(36) }
+            DatabaseType::String {
+                max_length: Some(36),
+            }
         } else {
-            DatabaseType::Integer { bits: 64, signed: true }
+            DatabaseType::Integer {
+                bits: 64,
+                signed: true,
+            }
         },
         nullable: false,
         default: None,
@@ -157,18 +177,23 @@ pub fn generate_join_table_schema(
 }
 
 /// Generate SQL statements for creating a join table
-pub fn generate_join_table_sql(
-    edge: &EdgeConfig,
-    config: &JoinTableConfig,
-) -> Vec<String> {
+pub fn generate_join_table_sql(edge: &EdgeConfig, config: &JoinTableConfig) -> Vec<String> {
     let q = |name: &str| format!("{}{}{}", config.quote_char, name, config.quote_char);
     let schema = generate_join_table_schema(edge, config);
 
     let mut statements = Vec::new();
 
     // Determine source tables for foreign keys
-    let from_table = edge.from.first().cloned().unwrap_or_else(|| "unknown".to_string());
-    let to_table = edge.to.first().cloned().unwrap_or_else(|| "unknown".to_string());
+    let from_table = edge
+        .from
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+    let to_table = edge
+        .to
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Build CREATE TABLE statement
     let mut create_table = format!("CREATE TABLE IF NOT EXISTS {} (\n", q(&schema.name));
@@ -191,7 +216,9 @@ pub fn generate_join_table_sql(
             def.push_str(" NOT NULL");
         }
 
-        if let Some(default) = &col.default && (col.name != "id" || config.use_uuid) {
+        if let Some(default) = &col.default
+            && (col.name != "id" || config.use_uuid)
+        {
             def.push_str(&format!(" DEFAULT {}", default));
         }
 
@@ -206,11 +233,15 @@ pub fn generate_join_table_sql(
     // Add foreign key constraints
     column_defs.push(format!(
         "    FOREIGN KEY ({}) REFERENCES {}({}) ON DELETE CASCADE ON UPDATE CASCADE",
-        q("from_id"), q(&from_table), q("id")
+        q("from_id"),
+        q(&from_table),
+        q("id")
     ));
     column_defs.push(format!(
         "    FOREIGN KEY ({}) REFERENCES {}({}) ON DELETE CASCADE ON UPDATE CASCADE",
-        q("to_id"), q(&to_table), q("id")
+        q("to_id"),
+        q(&to_table),
+        q("id")
     ));
 
     // Add unique constraint
@@ -249,12 +280,11 @@ pub fn generate_relationship_insert(
     let q = |name: &str| format!("{}{}{}", config.quote_char, name, config.quote_char);
 
     let mut columns = vec!["from_id", "to_id"];
-    let mut values = vec![
-        format!("'{}'", from_id),
-        format!("'{}'", to_id),
-    ];
+    let mut values = vec![format!("'{}'", from_id), format!("'{}'", to_id)];
 
-    if let Some(data) = additional_data && let Some(obj) = data.as_object() {
+    if let Some(data) = additional_data
+        && let Some(obj) = data.as_object()
+    {
         for (key, value) in obj {
             if key != "id" && key != "from_id" && key != "to_id" && key != "created_at" {
                 columns.push(key);

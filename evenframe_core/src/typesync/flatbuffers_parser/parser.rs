@@ -582,7 +582,9 @@ impl Parser {
     }
 
     fn check(&self, expected: &Token) -> bool {
-        self.peek().map(|t| std::mem::discriminant(t) == std::mem::discriminant(expected)).unwrap_or(false)
+        self.peek()
+            .map(|t| std::mem::discriminant(t) == std::mem::discriminant(expected))
+            .unwrap_or(false)
     }
 
     fn check_doc_comment(&self) -> bool {

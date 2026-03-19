@@ -1,7 +1,9 @@
 //! Build-time configuration for type generation.
 
 use crate::error::EvenframeError;
-use crate::typesync::config::{ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode};
+use crate::typesync::config::{
+    ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode,
+};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -145,12 +147,12 @@ impl BuildConfig {
 
         // Derive project root: for .evenframe/config.toml go up one more level
         let config_dir = path.parent().unwrap_or(Path::new("."));
-        let project_root =
-            if config_dir.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
-                config_dir.parent().unwrap_or(Path::new("."))
-            } else {
-                config_dir
-            };
+        let project_root = if config_dir.file_name().and_then(|n| n.to_str()) == Some(".evenframe")
+        {
+            config_dir.parent().unwrap_or(Path::new("."))
+        } else {
+            config_dir
+        };
 
         // Parse [typesync] section
         if let Some(typesync) = value.get("typesync").and_then(|v| v.as_table()) {
@@ -179,7 +181,10 @@ impl BuildConfig {
                 config.protobuf = v.as_bool().unwrap_or(false);
             }
 
-            if let Some(ns) = typesync.get("flatbuffers_namespace").and_then(|v| v.as_str()) {
+            if let Some(ns) = typesync
+                .get("flatbuffers_namespace")
+                .and_then(|v| v.as_str())
+            {
                 config.flatbuffers_namespace = Some(ns.to_string());
             }
 
@@ -191,7 +196,8 @@ impl BuildConfig {
                 config.protobuf_import_validate = v.as_bool().unwrap_or(false);
             }
 
-            if let Some(strategy_str) = typesync.get("collision_strategy").and_then(|v| v.as_str()) {
+            if let Some(strategy_str) = typesync.get("collision_strategy").and_then(|v| v.as_str())
+            {
                 config.collision_strategy = match strategy_str {
                     "auto_rename" => CollisionStrategy::AutoRename,
                     _ => CollisionStrategy::Error,
@@ -208,8 +214,7 @@ impl BuildConfig {
                 if let Some(v) = output_table.get("barrel_file").and_then(|v| v.as_bool()) {
                     config.output.barrel_file = v;
                 }
-                if let Some(naming_str) = output_table.get("file_naming").and_then(|v| v.as_str())
-                {
+                if let Some(naming_str) = output_table.get("file_naming").and_then(|v| v.as_str()) {
                     config.output.file_naming = match naming_str {
                         "pascal" => FileNamingConvention::Pascal,
                         "snake" => FileNamingConvention::Snake,
@@ -217,8 +222,7 @@ impl BuildConfig {
                         _ => FileNamingConvention::Kebab,
                     };
                 }
-                if let Some(style_str) = output_table.get("array_style").and_then(|v| v.as_str())
-                {
+                if let Some(style_str) = output_table.get("array_style").and_then(|v| v.as_str()) {
                     config.output.array_style = match style_str {
                         "generic" => ArrayStyle::Generic,
                         _ => ArrayStyle::Shorthand,

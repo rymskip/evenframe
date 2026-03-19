@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 #[cfg(feature = "surrealdb")]
 use crate::error::EvenframeError;
-#[cfg(feature = "surrealdb")]
-use crate::schemasync::mockmake::{Mockmaker, format::Format};
 #[cfg(feature = "schemasync")]
 use crate::schemasync::mockmake::field_value::FieldValueGenerator;
+#[cfg(feature = "surrealdb")]
+use crate::schemasync::mockmake::{Mockmaker, format::Format};
 #[cfg(feature = "surrealdb")]
 use crate::types::{FieldType, StructField};
 #[cfg(feature = "surrealdb")]
@@ -1679,8 +1679,7 @@ mod tests {
         };
 
         for i in 0..100 {
-            let values =
-                Mockmaker::generate_coherent_values(&[], &dataset, i);
+            let values = Mockmaker::generate_coherent_values(&[], &dataset, i);
             let lat: f64 = values["lat"].parse().expect("lat should be a valid f64");
             let lng: f64 = values["lng"].parse().expect("lng should be a valid f64");
 
@@ -1691,7 +1690,9 @@ mod tests {
             assert!(
                 dist <= 25.5, // small tolerance for floating point
                 "Point ({}, {}) is {:.2}km from center, expected <= 25km",
-                lat, lng, dist
+                lat,
+                lng,
+                dist
             );
         }
     }
@@ -1708,8 +1709,7 @@ mod tests {
 
         let mut lats = std::collections::HashSet::new();
         for i in 0..20 {
-            let values =
-                Mockmaker::generate_coherent_values(&[], &dataset, i);
+            let values = Mockmaker::generate_coherent_values(&[], &dataset, i);
             lats.insert(values["lat"].clone());
         }
         assert!(

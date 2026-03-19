@@ -25,6 +25,4 @@ pub use error::{EvenframeError, Result};
 
 // Schemasync re-exports that require surrealdb
 #[cfg(feature = "surrealdb")]
-pub use schemasync::{
-    mockmake, mockmake::coordinate, mockmake::format,
-};
+pub use schemasync::{mockmake, mockmake::coordinate, mockmake::format};

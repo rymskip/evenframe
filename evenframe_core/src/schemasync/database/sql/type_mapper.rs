@@ -59,9 +59,12 @@ impl TypeMapper for PostgresTypeMapper {
                 let s = value.as_str().unwrap_or_default();
                 format!("'{}'", s.replace('\'', "''"))
             }
-            FieldType::Bool => {
-                if value.as_bool().unwrap_or(false) { "TRUE" } else { "FALSE" }.to_string()
+            FieldType::Bool => if value.as_bool().unwrap_or(false) {
+                "TRUE"
+            } else {
+                "FALSE"
             }
+            .to_string(),
             FieldType::DateTime => {
                 if let Some(s) = value.as_str() {
                     format!("'{}'::TIMESTAMPTZ", s)
@@ -74,13 +77,19 @@ impl TypeMapper for PostgresTypeMapper {
                     // Convert nanoseconds to interval
                     let secs = nanos / 1_000_000_000;
                     let nanos_remaining = nanos % 1_000_000_000;
-                    format!("INTERVAL '{} seconds {} nanoseconds'", secs, nanos_remaining)
+                    format!(
+                        "INTERVAL '{} seconds {} nanoseconds'",
+                        secs, nanos_remaining
+                    )
                 } else {
                     "INTERVAL '0 seconds'".to_string()
                 }
             }
-            FieldType::Vec(_) | FieldType::Tuple(_) | FieldType::Struct(_)
-            | FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => {
+            FieldType::Vec(_)
+            | FieldType::Tuple(_)
+            | FieldType::Struct(_)
+            | FieldType::HashMap(_, _)
+            | FieldType::BTreeMap(_, _) => {
                 // Use JSON format
                 format!("'{}'::JSONB", value.to_string().replace('\'', "''"))
             }
@@ -105,11 +114,21 @@ impl TypeMapper for PostgresTypeMapper {
         }
     }
 
-    fn supports_native_arrays(&self) -> bool { true }
-    fn supports_jsonb(&self) -> bool { true }
-    fn supports_native_enums(&self) -> bool { true }
-    fn supports_interval(&self) -> bool { true }
-    fn quote_char(&self) -> char { '"' }
+    fn supports_native_arrays(&self) -> bool {
+        true
+    }
+    fn supports_jsonb(&self) -> bool {
+        true
+    }
+    fn supports_native_enums(&self) -> bool {
+        true
+    }
+    fn supports_interval(&self) -> bool {
+        true
+    }
+    fn quote_char(&self) -> char {
+        '"'
+    }
 
     fn format_datetime(&self, value: &str) -> String {
         format!("'{}'::TIMESTAMPTZ", value)
@@ -128,19 +147,28 @@ impl TypeMapper for PostgresTypeMapper {
         };
 
         if is_primitive(inner) {
-            let formatted: Vec<String> = values
-                .iter()
-                .map(|v| self.format_value(inner, v))
-                .collect();
+            let formatted: Vec<String> =
+                values.iter().map(|v| self.format_value(inner, v)).collect();
             format!("ARRAY[{}]", formatted.join(", "))
         } else {
-            format!("'{}'::JSONB", serde_json::to_string(values).unwrap_or_default().replace('\'', "''"))
+            format!(
+                "'{}'::JSONB",
+                serde_json::to_string(values)
+                    .unwrap_or_default()
+                    .replace('\'', "''")
+            )
         }
     }
 
-    fn auto_increment_type(&self) -> &'static str { "SERIAL" }
-    fn uuid_type(&self) -> &'static str { "UUID" }
-    fn uuid_generate_expr(&self) -> Option<&'static str> { Some("gen_random_uuid()") }
+    fn auto_increment_type(&self) -> &'static str {
+        "SERIAL"
+    }
+    fn uuid_type(&self) -> &'static str {
+        "UUID"
+    }
+    fn uuid_generate_expr(&self) -> Option<&'static str> {
+        Some("gen_random_uuid()")
+    }
 }
 
 /// MySQL type mapper
@@ -190,9 +218,12 @@ impl TypeMapper for MysqlTypeMapper {
                 let s = value.as_str().unwrap_or_default();
                 format!("'{}'", s.replace('\'', "''"))
             }
-            FieldType::Bool => {
-                if value.as_bool().unwrap_or(false) { "1" } else { "0" }.to_string()
+            FieldType::Bool => if value.as_bool().unwrap_or(false) {
+                "1"
+            } else {
+                "0"
             }
+            .to_string(),
             FieldType::DateTime => {
                 if let Some(s) = value.as_str() {
                     format!("'{}'", s)
@@ -200,11 +231,12 @@ impl TypeMapper for MysqlTypeMapper {
                     "NOW()".to_string()
                 }
             }
-            FieldType::EvenframeDuration => {
-                value.as_i64().unwrap_or(0).to_string()
-            }
-            FieldType::Vec(_) | FieldType::Tuple(_) | FieldType::Struct(_)
-            | FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => {
+            FieldType::EvenframeDuration => value.as_i64().unwrap_or(0).to_string(),
+            FieldType::Vec(_)
+            | FieldType::Tuple(_)
+            | FieldType::Struct(_)
+            | FieldType::HashMap(_, _)
+            | FieldType::BTreeMap(_, _) => {
                 format!("'{}'", value.to_string().replace('\'', "''"))
             }
             FieldType::Option(inner) => {
@@ -228,11 +260,21 @@ impl TypeMapper for MysqlTypeMapper {
         }
     }
 
-    fn supports_native_arrays(&self) -> bool { false }
-    fn supports_jsonb(&self) -> bool { false } // MySQL has JSON but not JSONB
-    fn supports_native_enums(&self) -> bool { true } // MySQL has ENUM type
-    fn supports_interval(&self) -> bool { false }
-    fn quote_char(&self) -> char { '`' }
+    fn supports_native_arrays(&self) -> bool {
+        false
+    }
+    fn supports_jsonb(&self) -> bool {
+        false
+    } // MySQL has JSON but not JSONB
+    fn supports_native_enums(&self) -> bool {
+        true
+    } // MySQL has ENUM type
+    fn supports_interval(&self) -> bool {
+        false
+    }
+    fn quote_char(&self) -> char {
+        '`'
+    }
 
     fn format_datetime(&self, value: &str) -> String {
         format!("'{}'", value)
@@ -243,12 +285,23 @@ impl TypeMapper for MysqlTypeMapper {
     }
 
     fn format_array(&self, _field_type: &FieldType, values: &[serde_json::Value]) -> String {
-        format!("'{}'", serde_json::to_string(values).unwrap_or_default().replace('\'', "''"))
+        format!(
+            "'{}'",
+            serde_json::to_string(values)
+                .unwrap_or_default()
+                .replace('\'', "''")
+        )
     }
 
-    fn auto_increment_type(&self) -> &'static str { "INT AUTO_INCREMENT" }
-    fn uuid_type(&self) -> &'static str { "VARCHAR(36)" }
-    fn uuid_generate_expr(&self) -> Option<&'static str> { Some("UUID()") }
+    fn auto_increment_type(&self) -> &'static str {
+        "INT AUTO_INCREMENT"
+    }
+    fn uuid_type(&self) -> &'static str {
+        "VARCHAR(36)"
+    }
+    fn uuid_generate_expr(&self) -> Option<&'static str> {
+        Some("UUID()")
+    }
 }
 
 /// SQLite type mapper
@@ -260,9 +313,16 @@ impl TypeMapper for SqliteTypeMapper {
         match field_type {
             FieldType::String | FieldType::Char => "TEXT".to_string(),
             FieldType::Bool => "INTEGER".to_string(),
-            FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64
-            | FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64
-            | FieldType::Isize | FieldType::Usize => "INTEGER".to_string(),
+            FieldType::I8
+            | FieldType::I16
+            | FieldType::I32
+            | FieldType::I64
+            | FieldType::U8
+            | FieldType::U16
+            | FieldType::U32
+            | FieldType::U64
+            | FieldType::Isize
+            | FieldType::Usize => "INTEGER".to_string(),
             FieldType::I128 | FieldType::U128 => "TEXT".to_string(), // Too large for INTEGER
             FieldType::F32 | FieldType::F64 => "REAL".to_string(),
             FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
@@ -289,9 +349,12 @@ impl TypeMapper for SqliteTypeMapper {
                 let s = value.as_str().unwrap_or_default();
                 format!("'{}'", s.replace('\'', "''"))
             }
-            FieldType::Bool => {
-                if value.as_bool().unwrap_or(false) { "1" } else { "0" }.to_string()
+            FieldType::Bool => if value.as_bool().unwrap_or(false) {
+                "1"
+            } else {
+                "0"
             }
+            .to_string(),
             FieldType::DateTime => {
                 if let Some(s) = value.as_str() {
                     format!("'{}'", s)
@@ -299,11 +362,12 @@ impl TypeMapper for SqliteTypeMapper {
                     "datetime('now')".to_string()
                 }
             }
-            FieldType::EvenframeDuration => {
-                value.as_i64().unwrap_or(0).to_string()
-            }
-            FieldType::Vec(_) | FieldType::Tuple(_) | FieldType::Struct(_)
-            | FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => {
+            FieldType::EvenframeDuration => value.as_i64().unwrap_or(0).to_string(),
+            FieldType::Vec(_)
+            | FieldType::Tuple(_)
+            | FieldType::Struct(_)
+            | FieldType::HashMap(_, _)
+            | FieldType::BTreeMap(_, _) => {
                 format!("'{}'", value.to_string().replace('\'', "''"))
             }
             FieldType::Option(inner) => {
@@ -327,11 +391,21 @@ impl TypeMapper for SqliteTypeMapper {
         }
     }
 
-    fn supports_native_arrays(&self) -> bool { false }
-    fn supports_jsonb(&self) -> bool { false }
-    fn supports_native_enums(&self) -> bool { false }
-    fn supports_interval(&self) -> bool { false }
-    fn quote_char(&self) -> char { '"' }
+    fn supports_native_arrays(&self) -> bool {
+        false
+    }
+    fn supports_jsonb(&self) -> bool {
+        false
+    }
+    fn supports_native_enums(&self) -> bool {
+        false
+    }
+    fn supports_interval(&self) -> bool {
+        false
+    }
+    fn quote_char(&self) -> char {
+        '"'
+    }
 
     fn format_datetime(&self, value: &str) -> String {
         format!("'{}'", value)
@@ -342,12 +416,23 @@ impl TypeMapper for SqliteTypeMapper {
     }
 
     fn format_array(&self, _field_type: &FieldType, values: &[serde_json::Value]) -> String {
-        format!("'{}'", serde_json::to_string(values).unwrap_or_default().replace('\'', "''"))
+        format!(
+            "'{}'",
+            serde_json::to_string(values)
+                .unwrap_or_default()
+                .replace('\'', "''")
+        )
     }
 
-    fn auto_increment_type(&self) -> &'static str { "INTEGER PRIMARY KEY" }
-    fn uuid_type(&self) -> &'static str { "TEXT" }
-    fn uuid_generate_expr(&self) -> Option<&'static str> { None }
+    fn auto_increment_type(&self) -> &'static str {
+        "INTEGER PRIMARY KEY"
+    }
+    fn uuid_type(&self) -> &'static str {
+        "TEXT"
+    }
+    fn uuid_generate_expr(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Check if a FieldType is a primitive that can be used in native arrays

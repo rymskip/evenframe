@@ -73,7 +73,10 @@ pub fn compute_file_grouping(
     }
     for (from, tos) in &forward_deps {
         for to in tos {
-            reverse_deps.entry(to.clone()).or_default().insert(from.clone());
+            reverse_deps
+                .entry(to.clone())
+                .or_default()
+                .insert(from.clone());
         }
     }
 
@@ -249,7 +252,10 @@ mod tests {
         let mut structs = HashMap::new();
         structs.insert(
             "User".to_string(),
-            make_struct("User", vec![("address", FieldType::Other("Address".to_string()))]),
+            make_struct(
+                "User",
+                vec![("address", FieldType::Other("Address".to_string()))],
+            ),
         );
         structs.insert(
             "Address".to_string(),
@@ -264,9 +270,15 @@ mod tests {
         let plan = compute_file_grouping(&structs, &enums);
 
         // Address should be co-located with User
-        assert_eq!(plan.type_to_group[&"User".to_string()], plan.type_to_group[&"Address".to_string()]);
+        assert_eq!(
+            plan.type_to_group[&"User".to_string()],
+            plan.type_to_group[&"Address".to_string()]
+        );
         // Post should be in its own group
-        assert_ne!(plan.type_to_group[&"Post".to_string()], plan.type_to_group[&"User".to_string()]);
+        assert_ne!(
+            plan.type_to_group[&"Post".to_string()],
+            plan.type_to_group[&"User".to_string()]
+        );
 
         // Find the User group and check co-location
         let user_group_idx = plan.type_to_group[&"User".to_string()];
@@ -344,8 +356,14 @@ mod tests {
     #[test]
     fn test_no_deps_each_gets_own_file() {
         let mut structs = HashMap::new();
-        structs.insert("A".to_string(), make_struct("A", vec![("x", FieldType::String)]));
-        structs.insert("B".to_string(), make_struct("B", vec![("y", FieldType::I32)]));
+        structs.insert(
+            "A".to_string(),
+            make_struct("A", vec![("x", FieldType::String)]),
+        );
+        structs.insert(
+            "B".to_string(),
+            make_struct("B", vec![("y", FieldType::I32)]),
+        );
         let enums = HashMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);

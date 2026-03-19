@@ -120,18 +120,16 @@ fn parse_single_validator(name: &str, args: &[&str]) -> Option<Validator> {
         }),
 
         // Number validators
-        "min" | "gte" | "greaterthanorequalto" => args
-            .first()
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|val| {
+        "min" | "gte" | "greaterthanorequalto" => {
+            args.first().and_then(|s| s.parse::<f64>().ok()).map(|val| {
                 Validator::NumberValidator(NumberValidator::GreaterThanOrEqualTo(OrderedFloat(val)))
-            }),
-        "max" | "lte" | "lessthanorequalto" => args
-            .first()
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|val| {
+            })
+        }
+        "max" | "lte" | "lessthanorequalto" => {
+            args.first().and_then(|s| s.parse::<f64>().ok()).map(|val| {
                 Validator::NumberValidator(NumberValidator::LessThanOrEqualTo(OrderedFloat(val)))
-            }),
+            })
+        }
         "gt" | "greaterthan" => args
             .first()
             .and_then(|s| s.parse::<f64>().ok())

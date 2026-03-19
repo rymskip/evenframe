@@ -105,8 +105,11 @@ pub fn parse_field_validators_with_logic(
                     let mut validator_tokens = Vec::new();
                     let mut logic_tokens = Vec::new();
                     for validator_expr in validators_list {
-                        let (val_tokens, log_tokens) =
-                            parse_validator_enum_with_logic(&validator_expr, value_ident, is_optional)?;
+                        let (val_tokens, log_tokens) = parse_validator_enum_with_logic(
+                            &validator_expr,
+                            value_ident,
+                            is_optional,
+                        )?;
                         validator_tokens.extend(val_tokens);
                         logic_tokens.extend(log_tokens);
                     }
@@ -115,7 +118,13 @@ pub fn parse_field_validators_with_logic(
                 Err(_err) => {
                     // Try parsing as a single expression for backwards compatibility
                     match attr.parse_args::<syn::Expr>() {
-                        Ok(expr) => return parse_validator_enum_with_logic(&expr, value_ident, is_optional),
+                        Ok(expr) => {
+                            return parse_validator_enum_with_logic(
+                                &expr,
+                                value_ident,
+                                is_optional,
+                            );
+                        }
                         Err(parse_err) => {
                             return Err(Error::new_spanned(
                                 attr,
@@ -201,7 +210,8 @@ pub fn parse_validator_enum_with_logic(
                 let inner_ref_ident = format!("{}_inner_ref", value_ident);
                 let value_token = syn::Ident::new(value_ident, proc_macro2::Span::call_site());
                 let inner_token = syn::Ident::new(&inner_ident, proc_macro2::Span::call_site());
-                let inner_ref_token = syn::Ident::new(&inner_ref_ident, proc_macro2::Span::call_site());
+                let inner_ref_token =
+                    syn::Ident::new(&inner_ref_ident, proc_macro2::Span::call_site());
                 let inner_validation = validator.get_validation_logic_tokens(&inner_ident);
                 quote! {
                     if let Some(ref #inner_ref_token) = #value_token {
@@ -256,18 +266,15 @@ pub fn parse_field_validators_as_enums(attrs: &[Attribute]) -> Vec<Validator> {
 
     for attr in attrs {
         if attr.path().is_ident("validators")
-            && let Ok(nested) = attr.parse_args_with(
-                Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
-            )
+            && let Ok(nested) =
+                attr.parse_args_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
         {
             for expr in nested {
                 if let Ok(validator) = Validator::try_from(&expr) {
                     tracing::trace!("Parsed validator enum: {:?}", validator);
                     validators.push(validator);
                 } else {
-                    tracing::warn!(
-                        "Failed to parse validator expression in runtime context"
-                    );
+                    tracing::warn!("Failed to parse validator expression in runtime context");
                 }
             }
         }

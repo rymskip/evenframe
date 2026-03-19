@@ -110,11 +110,9 @@ impl DatabaseProvider for SurrealdbProvider {
 
         info!("Connecting to SurrealDB at {}", config.url);
 
-        let client = Surreal::new::<Http>(&config.url)
-            .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to create SurrealDB HTTP client: {e}"
-            )))?;
+        let client = Surreal::new::<Http>(&config.url).await.map_err(|e| {
+            EvenframeError::database(format!("Failed to create SurrealDB HTTP client: {e}"))
+        })?;
 
         // Sign in if credentials provided
         if let (Some(username), Some(password)) = (&config.username, &config.password) {
@@ -125,21 +123,17 @@ impl DatabaseProvider for SurrealdbProvider {
                     password: password.to_string(),
                 })
                 .await
-                .map_err(|e| EvenframeError::database(format!(
-                    "Failed to sign in to SurrealDB: {e}"
-                )))?;
+                .map_err(|e| {
+                    EvenframeError::database(format!("Failed to sign in to SurrealDB: {e}"))
+                })?;
         }
 
         // Select namespace and database
         if let (Some(ns), Some(db)) = (&config.namespace, &config.database) {
             debug!("Using namespace '{}' and database '{}'", ns, db);
-            client
-                .use_ns(ns)
-                .use_db(db)
-                .await
-                .map_err(|e| EvenframeError::database(format!(
-                    "Failed to select namespace/database: {e}"
-                )))?;
+            client.use_ns(ns).use_db(db).await.map_err(|e| {
+                EvenframeError::database(format!("Failed to select namespace/database: {e}"))
+            })?;
         }
 
         self.client = Some(client);
@@ -160,7 +154,9 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     async fn export_schema(&self) -> Result<SchemaExport> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         // Use SurrealDB's export functionality
@@ -172,9 +168,9 @@ impl DatabaseProvider for SurrealdbProvider {
         use futures::StreamExt;
         let mut raw_statements = String::new();
         while let Some(chunk) = export_stream.next().await {
-            let chunk = chunk.map_err(|e| EvenframeError::database(format!(
-                "Error reading export stream: {e}"
-            )))?;
+            let chunk = chunk.map_err(|e| {
+                EvenframeError::database(format!("Error reading export stream: {e}"))
+            })?;
             raw_statements.push_str(&String::from_utf8_lossy(&chunk));
         }
 
@@ -187,33 +183,34 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     async fn apply_schema(&self, statements: &[String]) -> Result<()> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         for stmt in statements {
             trace!("Executing schema statement: {}", stmt);
-            client
-                .query(stmt)
-                .await
-                .map_err(|e| EvenframeError::database(format!(
+            client.query(stmt).await.map_err(|e| {
+                EvenframeError::database(format!(
                     "Failed to execute schema statement: {e}\nStatement: {stmt}"
-                )))?;
+                ))
+            })?;
         }
 
         Ok(())
     }
 
     async fn get_table_info(&self, table_name: &str) -> Result<Option<TableInfo>> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let query = format!("INFO FOR TABLE {}", table_name);
         let response: surrealdb::IndexedResults = client
             .query(&query)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to get table info: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to get table info: {e}")))?;
 
         // Parse response - for now return None if table doesn't exist
         // TODO: Parse the INFO response into TableInfo struct
@@ -222,23 +219,21 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     async fn list_tables(&self) -> Result<Vec<String>> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let query = "INFO FOR DB";
         let mut response = client
             .query(query)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to list tables: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to list tables: {e}")))?;
 
         // Parse the response to extract table names
         let result: Option<serde_json::Value> = response
             .take(0)
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to parse table list: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to parse table list: {e}")))?;
 
         let mut tables = Vec::new();
         if let Some(value) = result
@@ -251,21 +246,19 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     async fn execute(&self, query: &str) -> Result<Vec<serde_json::Value>> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let mut response = client
             .query(query)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to execute query: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to execute query: {e}")))?;
 
         let results: Vec<serde_json::Value> = response
             .take(0)
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to parse query results: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to parse query results: {e}")))?;
 
         Ok(results)
     }
@@ -279,12 +272,10 @@ impl DatabaseProvider for SurrealdbProvider {
         Ok(results)
     }
 
-    async fn insert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>> {
-        let client = self.client.as_ref()
+    async fn insert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>> {
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let mut ids = Vec::with_capacity(records.len());
@@ -294,9 +285,7 @@ impl DatabaseProvider for SurrealdbProvider {
                 .create(table)
                 .content(record.clone())
                 .await
-                .map_err(|e| EvenframeError::database(format!(
-                    "Failed to insert record: {e}"
-                )))?;
+                .map_err(|e| EvenframeError::database(format!("Failed to insert record: {e}")))?;
 
             if let Some(created) = created
                 && let Some(id) = created.get("id").and_then(|v| v.as_str())
@@ -308,12 +297,10 @@ impl DatabaseProvider for SurrealdbProvider {
         Ok(ids)
     }
 
-    async fn upsert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>> {
-        let client = self.client.as_ref()
+    async fn upsert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>> {
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let mut ids = Vec::with_capacity(records.len());
@@ -327,17 +314,19 @@ impl DatabaseProvider for SurrealdbProvider {
                     .upsert((table, id))
                     .content(record.clone())
                     .await
-                    .map_err(|e| EvenframeError::database(format!(
-                        "Failed to upsert record: {e}"
-                    )))?
+                    .map_err(|e| {
+                        EvenframeError::database(format!("Failed to upsert record: {e}"))
+                    })?
             } else {
                 client
                     .create(table)
                     .content(record.clone())
                     .await
-                    .map_err(|e| EvenframeError::database(format!(
-                        "Failed to create record during upsert: {e}"
-                    )))?
+                    .map_err(|e| {
+                        EvenframeError::database(format!(
+                            "Failed to create record during upsert: {e}"
+                        ))
+                    })?
             };
 
             if let Some(upserted) = upserted
@@ -350,11 +339,7 @@ impl DatabaseProvider for SurrealdbProvider {
         Ok(ids)
     }
 
-    async fn select(
-        &self,
-        table: &str,
-        filter: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>> {
+    async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>> {
         let query = if let Some(f) = filter {
             format!("SELECT * FROM {} WHERE {}", table, f)
         } else {
@@ -383,7 +368,9 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     async fn delete(&self, table: &str, ids: &[String]) -> Result<()> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         for id in ids {
@@ -397,9 +384,9 @@ impl DatabaseProvider for SurrealdbProvider {
             client
                 .query(format!("DELETE {}", record_id))
                 .await
-                .map_err(|e| EvenframeError::database(format!(
-                    "Failed to delete record {}: {e}", record_id
-                )))?;
+                .map_err(|e| {
+                    EvenframeError::database(format!("Failed to delete record {}: {e}", record_id))
+                })?;
         }
 
         Ok(())
@@ -415,12 +402,7 @@ impl DatabaseProvider for SurrealdbProvider {
     ) -> String {
         // Use existing generate_define_statements function
         generate_define_statements(
-            table_name,
-            config,
-            all_tables,
-            objects,
-            enums,
-            false, // full_refresh_mode
+            table_name, config, all_tables, objects, enums, false, // full_refresh_mode
         )
     }
 
@@ -435,9 +417,7 @@ impl DatabaseProvider for SurrealdbProvider {
         let field_type = self.map_field_type(&field.field_type);
         format!(
             "DEFINE FIELD {} ON TABLE {} TYPE {};",
-            field.field_name,
-            table_name,
-            field_type
+            field.field_name, table_name, field_type
         )
     }
 
@@ -445,11 +425,7 @@ impl DatabaseProvider for SurrealdbProvider {
         self.type_mapper.field_type_to_surql(field_type)
     }
 
-    fn format_value(
-        &self,
-        field_type: &FieldType,
-        value: &serde_json::Value,
-    ) -> String {
+    fn format_value(&self, field_type: &FieldType, value: &serde_json::Value) -> String {
         to_surreal_string(field_type, value)
     }
 
@@ -458,10 +434,7 @@ impl DatabaseProvider for SurrealdbProvider {
         // The actual RELATE statements create relationships
         let mut statements = Vec::new();
 
-        statements.push(format!(
-            "DEFINE TABLE {} SCHEMAFULL;",
-            edge.edge_name
-        ));
+        statements.push(format!("DEFINE TABLE {} SCHEMAFULL;", edge.edge_name));
 
         // Define in and out fields for edges
         statements.push(format!(
@@ -483,31 +456,31 @@ impl DatabaseProvider for SurrealdbProvider {
         to_id: &str,
         data: Option<&serde_json::Value>,
     ) -> Result<String> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
         let query = if let Some(data) = data {
             format!(
                 "RELATE {}->{}->{} CONTENT {}",
-                from_id, edge_table, to_id,
+                from_id,
+                edge_table,
+                to_id,
                 serde_json::to_string(data).unwrap_or_default()
             )
         } else {
-            format!("RELATE {}->{}->{}",  from_id, edge_table, to_id)
+            format!("RELATE {}->{}->{}", from_id, edge_table, to_id)
         };
 
         let mut response = client
             .query(&query)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to create relationship: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to create relationship: {e}")))?;
 
-        let results: Vec<serde_json::Value> = response
-            .take(0)
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to parse relationship result: {e}"
-            )))?;
+        let results: Vec<serde_json::Value> = response.take(0).map_err(|e| {
+            EvenframeError::database(format!("Failed to parse relationship result: {e}"))
+        })?;
 
         if let Some(first) = results.first()
             && let Some(id) = first.get("id").and_then(|v| v.as_str())
@@ -575,7 +548,7 @@ impl DatabaseProvider for SurrealdbProvider {
 
     async fn begin_transaction(&self) -> Result<Box<dyn Transaction>> {
         Err(EvenframeError::database(
-            "SurrealDB transactions are not yet implemented in the provider abstraction"
+            "SurrealDB transactions are not yet implemented in the provider abstraction",
         ))
     }
 

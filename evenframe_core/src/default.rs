@@ -1,8 +1,8 @@
 #[cfg(feature = "surrealdb")]
 use crate::schemasync::TableConfig;
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 #[cfg(feature = "surrealdb")]
 use crate::types::StructField;
+use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use rand::{rng, seq::IndexedRandom};
 use std::collections::HashMap;

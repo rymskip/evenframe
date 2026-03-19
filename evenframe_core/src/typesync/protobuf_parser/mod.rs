@@ -102,16 +102,15 @@ pub fn parse_protobuf_files(
     }
 
     // Create compiler with include paths
-    let mut compiler = protox::Compiler::new(includes).map_err(|e| {
-        ProtobufError::Parse(format!("Failed to create protox compiler: {}", e))
-    })?;
+    let mut compiler = protox::Compiler::new(includes)
+        .map_err(|e| ProtobufError::Parse(format!("Failed to create protox compiler: {}", e)))?;
 
     // Add files to compile
     for file in files {
         compiler.include_source_info(true);
-        compiler
-            .open_file(file)
-            .map_err(|e| ProtobufError::Parse(format!("Failed to open {}: {}", file.display(), e)))?;
+        compiler.open_file(file).map_err(|e| {
+            ProtobufError::Parse(format!("Failed to open {}: {}", file.display(), e))
+        })?;
     }
 
     // Compile and get file descriptor set
@@ -146,9 +145,8 @@ pub fn parse_protobuf_source(
     impl FileResolver for InMemoryResolver {
         fn open_file(&self, name: &str) -> Result<File, protox::Error> {
             if name == self.name {
-                Ok(File::from_source(name, &self.source).map_err(|e| {
-                    protox::Error::new(format!("Failed to parse source: {}", e))
-                })?)
+                Ok(File::from_source(name, &self.source)
+                    .map_err(|e| protox::Error::new(format!("Failed to parse source: {}", e)))?)
             } else {
                 Err(protox::Error::new(format!("File not found: {}", name)))
             }

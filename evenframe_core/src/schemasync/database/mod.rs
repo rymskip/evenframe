@@ -87,25 +87,13 @@ pub trait DatabaseProvider: Send + Sync {
     // === Data Operations ===
 
     /// Insert records into a table, returning the generated IDs
-    async fn insert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>>;
+    async fn insert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>>;
 
     /// Upsert records (insert or update on conflict)
-    async fn upsert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>>;
+    async fn upsert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>>;
 
     /// Select records from a table with optional filter
-    async fn select(
-        &self,
-        table: &str,
-        filter: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>>;
+    async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>>;
 
     /// Count records in a table with optional filter
     async fn count(&self, table: &str, filter: Option<&str>) -> Result<u64>;
@@ -163,12 +151,8 @@ pub trait DatabaseProvider: Send + Sync {
     ) -> Result<String>;
 
     /// Delete a relationship between two records
-    async fn delete_relationship(
-        &self,
-        edge_table: &str,
-        from_id: &str,
-        to_id: &str,
-    ) -> Result<()>;
+    async fn delete_relationship(&self, edge_table: &str, from_id: &str, to_id: &str)
+    -> Result<()>;
 
     /// Get relationships for a record
     async fn get_relationships(

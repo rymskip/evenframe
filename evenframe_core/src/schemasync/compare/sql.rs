@@ -7,12 +7,10 @@ use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
-use crate::schemasync::compare::{
-    ChangeType, FieldChange, SchemaChanges, TableChanges,
-};
-use crate::schemasync::database::types::*;
-use crate::schemasync::database::DatabaseProvider;
 use crate::schemasync::TableConfig;
+use crate::schemasync::compare::{ChangeType, FieldChange, SchemaChanges, TableChanges};
+use crate::schemasync::database::DatabaseProvider;
+use crate::schemasync::database::types::*;
 use crate::types::{StructConfig, TaggedUnion};
 
 use super::SchemaComparator;
@@ -43,7 +41,9 @@ impl<'a> SqlSchemaComparator<'a> {
             columns.push(ColumnSchema {
                 name: "id".to_string(),
                 data_type: "UUID".to_string(), // Will be mapped by provider
-                database_type: DatabaseType::String { max_length: Some(36) },
+                database_type: DatabaseType::String {
+                    max_length: Some(36),
+                },
                 nullable: false,
                 default: None,
                 constraints: vec![ColumnConstraint::PrimaryKey],

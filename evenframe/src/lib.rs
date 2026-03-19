@@ -1,5 +1,5 @@
-pub use evenframe_core::{config, error, registry, traits, types, validator, wrappers};
 pub use evenframe_core::error::{EvenframeError, Result};
+pub use evenframe_core::{config, error, registry, traits, types, validator, wrappers};
 
 #[cfg(feature = "schemasync")]
 pub use evenframe_core::schemasync;

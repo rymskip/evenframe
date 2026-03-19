@@ -1,17 +1,17 @@
 //! Type generation for build-time usage.
 
-use super::{build_all_configs, merge_tables_and_objects, BuildConfig};
+use super::{BuildConfig, build_all_configs, merge_tables_and_objects};
 use crate::error::EvenframeError;
 use crate::types::{StructConfig, TaggedUnion};
-use crate::typesync::{
-    arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
-};
 #[cfg(feature = "flatbuffers")]
 use crate::typesync::flatbuffers::generate_flatbuffers_schema_string;
 #[cfg(feature = "macroforge")]
 use crate::typesync::macroforge::generate_macroforge_type_string;
 #[cfg(feature = "protobuf")]
 use crate::typesync::protobuf::generate_protobuf_schema_string;
+use crate::typesync::{
+    arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -278,7 +278,8 @@ impl TypeGenerator {
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Macroforge types");
 
-        let content = generate_macroforge_type_string(structs, enums, false, self.config.output.array_style);
+        let content =
+            generate_macroforge_type_string(structs, enums, false, self.config.output.array_style);
 
         let path = self
             .config

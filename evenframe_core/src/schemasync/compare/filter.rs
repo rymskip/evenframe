@@ -1,10 +1,7 @@
 use crate::{
     schemasync::compare::SchemaChanges,
     schemasync::mockmake::Mockmaker,
-    schemasync::{
-        PreservationMode, TableConfig,
-        compare::collect_referenced_objects,
-    },
+    schemasync::{PreservationMode, TableConfig, compare::collect_referenced_objects},
     types::{FieldType, StructConfig, StructField, TaggedUnion},
 };
 use std::collections::{HashMap, HashSet};

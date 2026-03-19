@@ -4,13 +4,13 @@
 #[cfg(feature = "schemasync")]
 pub mod compare;
 pub mod config;
+#[cfg(feature = "schemasync")]
+pub mod database;
 pub mod define_config;
 pub mod edge;
 pub mod event;
 pub mod mockmake;
 pub mod permissions;
-#[cfg(feature = "schemasync")]
-pub mod database;
 pub mod table;
 
 // Re-export commonly used types (always available)
@@ -50,14 +50,15 @@ impl quote::ToTokens for PreservationMode {
     }
 }
 
-
 // Schemasync orchestrator: requires surrealdb at runtime
 #[cfg(feature = "surrealdb")]
 use crate::{
-    schemasync::compare::SchemaChanges,
     config::EvenframeConfig,
     error::{EvenframeError, Result},
-    schemasync::database::surql::{define::generate_define_statements, execute::execute_and_validate},
+    schemasync::compare::SchemaChanges,
+    schemasync::database::surql::{
+        define::generate_define_statements, execute::execute_and_validate,
+    },
 };
 #[cfg(feature = "surrealdb")]
 use std::collections::HashMap;
@@ -155,12 +156,7 @@ impl<'a> Schemasync<'a> {
             .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
         debug!("Retrieved database credentials from environment");
 
-        db.signin(Root {
-            username,
-            password,
-        })
-        .await
-        .map_err(|e| {
+        db.signin(Root { username, password }).await.map_err(|e| {
             EvenframeError::database(format!("There was a problem signing in as root: {e}"))
         })?;
         debug!("Successfully signed in to SurrealDB");
@@ -264,13 +260,7 @@ impl<'a> Schemasync<'a> {
         );
         // Create Mockmaker instance (which contains Comparator)
         info!("Creating Mockmaker instance for data generation and comparison");
-        let mut mockmaker = Mockmaker::new(
-            &db,
-            tables,
-            objects,
-            enums,
-            &config,
-        );
+        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config);
         debug!("Mockmaker instance created successfully");
 
         // Run initial ID generation and comparator setup
@@ -313,12 +303,17 @@ impl<'a> Schemasync<'a> {
             .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
         info!("Defining database tables and schema");
-        self.define_tables(&db, define_statements, schema_changes, config.mock_gen_config.full_refresh_mode)
-            .await
-            .map_err(|e| {
-                error!("Failed to define tables: {}", e);
-                e
-            })?;
+        self.define_tables(
+            &db,
+            define_statements,
+            schema_changes,
+            config.mock_gen_config.full_refresh_mode,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to define tables: {}", e);
+            e
+        })?;
         debug!("Table definitions completed successfully");
 
         info!("Executing function definitions");
@@ -399,7 +394,10 @@ impl<'a> Schemasync<'a> {
                 EvenframeError::database(error_msg)
             })?;
             evenframe_log!(
-                &format!("Successfully executed event definitions for table {}", table_name),
+                &format!(
+                    "Successfully executed event definitions for table {}",
+                    table_name
+                ),
                 "results.log",
                 true
             );
@@ -408,7 +406,10 @@ impl<'a> Schemasync<'a> {
 
         // In full refresh mode, define ALL tables regardless of schema changes
         if full_refresh_mode {
-            info!("Full refresh mode - defining all {} tables", define_statments.len());
+            info!(
+                "Full refresh mode - defining all {} tables",
+                define_statments.len()
+            );
             for (table_name, define_stmt) in &define_statments {
                 debug!("Defining table (full refresh): {}", table_name);
                 // TABLE and FIELD are single-line statements, safe to split by ';'

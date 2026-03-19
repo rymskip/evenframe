@@ -66,13 +66,13 @@ impl LoadedPlugin {
         let func = self
             .instance
             .get_typed_func::<(i32, i32), i64>(&mut self.store, fn_name)
-            .map_err(|e| {
-                EvenframeError::plugin(format!("Missing '{}' export: {}", fn_name, e))
-            })?;
+            .map_err(|e| EvenframeError::plugin(format!("Missing '{}' export: {}", fn_name, e)))?;
 
-        let packed = func.call(&mut self.store, (input_ptr, input_len)).map_err(|e| {
-            EvenframeError::plugin(format!("Plugin function '{}' trapped: {}", fn_name, e))
-        })?;
+        let packed = func
+            .call(&mut self.store, (input_ptr, input_len))
+            .map_err(|e| {
+                EvenframeError::plugin(format!("Plugin function '{}' trapped: {}", fn_name, e))
+            })?;
 
         // Unpack pointer and length from i64
         let out_ptr = (packed >> 32) as i32;
@@ -133,50 +133,37 @@ impl PluginManager {
                 )));
             }
 
-            info!("Loading WASM plugin '{}' from {}", name, wasm_path.display());
+            info!(
+                "Loading WASM plugin '{}' from {}",
+                name,
+                wasm_path.display()
+            );
 
             let module = Module::from_file(&engine, &wasm_path).map_err(|e| {
-                EvenframeError::plugin(format!(
-                    "Plugin '{}': failed to compile WASM: {}",
-                    name, e
-                ))
+                EvenframeError::plugin(format!("Plugin '{}': failed to compile WASM: {}", name, e))
             })?;
 
             let mut store = Store::new(&engine, ());
             let linker = Linker::new(&engine);
             let instance = linker.instantiate(&mut store, &module).map_err(|e| {
-                EvenframeError::plugin(format!(
-                    "Plugin '{}': failed to instantiate: {}",
-                    name, e
-                ))
+                EvenframeError::plugin(format!("Plugin '{}': failed to instantiate: {}", name, e))
             })?;
 
             // Verify required exports
-            let memory = instance
-                .get_memory(&mut store, "memory")
-                .ok_or_else(|| {
-                    EvenframeError::plugin(format!(
-                        "Plugin '{}': missing 'memory' export",
-                        name
-                    ))
-                })?;
+            let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
+                EvenframeError::plugin(format!("Plugin '{}': missing 'memory' export", name))
+            })?;
 
             // Verify alloc/dealloc exist
             instance
                 .get_typed_func::<i32, i32>(&mut store, "alloc")
                 .map_err(|_| {
-                    EvenframeError::plugin(format!(
-                        "Plugin '{}': missing 'alloc' export",
-                        name
-                    ))
+                    EvenframeError::plugin(format!("Plugin '{}': missing 'alloc' export", name))
                 })?;
             instance
                 .get_typed_func::<(i32, i32), ()>(&mut store, "dealloc")
                 .map_err(|_| {
-                    EvenframeError::plugin(format!(
-                        "Plugin '{}': missing 'dealloc' export",
-                        name
-                    ))
+                    EvenframeError::plugin(format!("Plugin '{}': missing 'dealloc' export", name))
                 })?;
 
             // Verify at least one generation function exists
@@ -209,7 +196,10 @@ impl PluginManager {
         }
 
         info!("Loaded {} WASM plugin(s)", plugins.len());
-        Ok(Self { _engine: engine, plugins })
+        Ok(Self {
+            _engine: engine,
+            plugins,
+        })
     }
 
     /// Generate a field value using a named plugin.
@@ -218,9 +208,10 @@ impl PluginManager {
         plugin_name: &str,
         input: &PluginFieldInput,
     ) -> Result<String, EvenframeError> {
-        let plugin = self.plugins.get_mut(plugin_name).ok_or_else(|| {
-            EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name))
-        })?;
+        let plugin = self
+            .plugins
+            .get_mut(plugin_name)
+            .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
 
         let input_json = serde_json::to_vec(input)
             .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
@@ -255,9 +246,10 @@ impl PluginManager {
         plugin_name: &str,
         input: &PluginTableInput,
     ) -> Result<HashMap<String, String>, EvenframeError> {
-        let plugin = self.plugins.get_mut(plugin_name).ok_or_else(|| {
-            EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name))
-        })?;
+        let plugin = self
+            .plugins
+            .get_mut(plugin_name)
+            .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
 
         let input_json = serde_json::to_vec(input)
             .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
@@ -285,5 +277,4 @@ impl PluginManager {
             ))
         })
     }
-
 }

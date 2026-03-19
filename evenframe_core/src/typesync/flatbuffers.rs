@@ -325,9 +325,7 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         StringValidator::Uppercased | StringValidator::UpperPreformatted => {
             Some("uppercase".to_string())
         }
-        StringValidator::Trimmed | StringValidator::TrimPreformatted => {
-            Some("trimmed".to_string())
-        }
+        StringValidator::Trimmed | StringValidator::TrimPreformatted => Some("trimmed".to_string()),
         StringValidator::Capitalized | StringValidator::CapitalizePreformatted => {
             Some("capitalized".to_string())
         }
@@ -358,14 +356,19 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         StringValidator::UrlParse => Some("urlParse".to_string()),
 
         // Substring validators
-        StringValidator::StartsWith(s) => Some(format!("startsWith(\\\"{}\\\")", escape_for_fbs(s))),
+        StringValidator::StartsWith(s) => {
+            Some(format!("startsWith(\\\"{}\\\")", escape_for_fbs(s)))
+        }
         StringValidator::EndsWith(s) => Some(format!("endsWith(\\\"{}\\\")", escape_for_fbs(s))),
         StringValidator::Includes(s) => Some(format!("includes(\\\"{}\\\")", escape_for_fbs(s))),
 
         // Pattern validators
         StringValidator::RegexLiteral(format) => {
             let regex = format.clone().into_regex();
-            Some(format!("pattern(\\\"{}\\\")", escape_for_fbs(regex.as_str())))
+            Some(format!(
+                "pattern(\\\"{}\\\")",
+                escape_for_fbs(regex.as_str())
+            ))
         }
         StringValidator::Literal(s) => Some(format!("literal(\\\"{}\\\")", escape_for_fbs(s))),
 
@@ -485,9 +488,10 @@ fn bigdecimal_validator_to_flatbuffers(bdv: &BigDecimalValidator) -> Option<Stri
 
 fn duration_validator_to_flatbuffers(dv: &DurationValidator) -> Option<String> {
     match dv {
-        DurationValidator::GreaterThanDuration(d) => {
-            Some(format!("greaterThanDuration(\\\"{}\\\")", escape_for_fbs(d)))
-        }
+        DurationValidator::GreaterThanDuration(d) => Some(format!(
+            "greaterThanDuration(\\\"{}\\\")",
+            escape_for_fbs(d)
+        )),
         DurationValidator::GreaterThanOrEqualToDuration(d) => Some(format!(
             "greaterThanOrEqualToDuration(\\\"{}\\\")",
             escape_for_fbs(d)
@@ -587,17 +591,21 @@ mod tests {
     #[test]
     fn test_array_validators_to_flatbuffers() {
         assert_eq!(
-            validator_to_flatbuffers_string(&Validator::ArrayValidator(ArrayValidator::MinItems(1))),
+            validator_to_flatbuffers_string(&Validator::ArrayValidator(ArrayValidator::MinItems(
+                1
+            ))),
             Some("minItems(1)".to_string())
         );
         assert_eq!(
-            validator_to_flatbuffers_string(&Validator::ArrayValidator(ArrayValidator::MaxItems(5))),
+            validator_to_flatbuffers_string(&Validator::ArrayValidator(ArrayValidator::MaxItems(
+                5
+            ))),
             Some("maxItems(5)".to_string())
         );
         assert_eq!(
-            validator_to_flatbuffers_string(&Validator::ArrayValidator(ArrayValidator::ItemsCount(
-                3
-            ))),
+            validator_to_flatbuffers_string(&Validator::ArrayValidator(
+                ArrayValidator::ItemsCount(3)
+            )),
             Some("itemsCount(3)".to_string())
         );
     }

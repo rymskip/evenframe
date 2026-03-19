@@ -1,7 +1,7 @@
 //! PostgreSQL Database Provider Implementation
 
 use async_trait::async_trait;
-use sqlx::{PgPool, postgres::PgPoolOptions, Row};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::collections::HashMap;
 use tracing::{info, trace};
 
@@ -10,14 +10,14 @@ use crate::schemasync::{EdgeConfig, TableConfig};
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
 
 use super::{
-    PostgresTypeMapper, PostgresSchemaInspector, SchemaInspector,
-    JoinTableConfig, generate_join_table_sql,
-};
-use crate::schemasync::database::{
-    DatabaseConfig, DatabaseProvider, ProviderType, Relationship, RelationshipDirection,
-    SchemaExport, TableInfo, TableSchema, ColumnSchema, DatabaseType, Transaction,
+    JoinTableConfig, PostgresSchemaInspector, PostgresTypeMapper, SchemaInspector,
+    generate_join_table_sql,
 };
 use crate::schemasync::database::TypeMapper;
+use crate::schemasync::database::{
+    ColumnSchema, DatabaseConfig, DatabaseProvider, DatabaseType, ProviderType, Relationship,
+    RelationshipDirection, SchemaExport, TableInfo, TableSchema, Transaction,
+};
 
 /// PostgreSQL database provider implementation
 pub struct PostgresProvider {
@@ -84,9 +84,9 @@ impl DatabaseProvider for PostgresProvider {
             .min_connections(config.min_connections.unwrap_or(1))
             .connect(&config.url)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to connect to PostgreSQL: {e}"
-            )))?;
+            .map_err(|e| {
+                EvenframeError::database(format!("Failed to connect to PostgreSQL: {e}"))
+            })?;
 
         if let Some(schema) = &config.schema {
             self.schema = schema.clone();
@@ -112,7 +112,9 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn export_schema(&self) -> Result<SchemaExport> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let inspector = self.inspector();
@@ -187,24 +189,27 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn apply_schema(&self, statements: &[String]) -> Result<()> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         for stmt in statements {
             trace!("Executing: {}", stmt);
-            sqlx::query(stmt)
-                .execute(pool)
-                .await
-                .map_err(|e| EvenframeError::database(format!(
+            sqlx::query(stmt).execute(pool).await.map_err(|e| {
+                EvenframeError::database(format!(
                     "Failed to execute statement: {e}\nStatement: {stmt}"
-                )))?;
+                ))
+            })?;
         }
 
         Ok(())
     }
 
     async fn get_table_info(&self, table_name: &str) -> Result<Option<TableInfo>> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let inspector = self.inspector();
@@ -213,9 +218,7 @@ impl DatabaseProvider for PostgresProvider {
         let rows = sqlx::query(&columns_query)
             .fetch_all(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to get table info: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to get table info: {e}")))?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -224,16 +227,25 @@ impl DatabaseProvider for PostgresProvider {
         let mut columns = HashMap::new();
         for row in rows {
             let name: String = row.get("column_name");
-            columns.insert(name.clone(), crate::schemasync::database::types::ColumnInfo {
-                name,
-                data_type: row.get("data_type"),
-                nullable: row.get::<String, _>("is_nullable") == "YES",
-                default: row.try_get("column_default").ok(),
-                is_primary_key: false,
-                max_length: row.try_get::<i32, _>("character_maximum_length").ok().map(|v| v as u32),
-                numeric_precision: row.try_get::<i32, _>("numeric_precision").ok().map(|v| v as u8),
-                numeric_scale: row.try_get::<i32, _>("numeric_scale").ok().map(|v| v as u8),
-            });
+            columns.insert(
+                name.clone(),
+                crate::schemasync::database::types::ColumnInfo {
+                    name,
+                    data_type: row.get("data_type"),
+                    nullable: row.get::<String, _>("is_nullable") == "YES",
+                    default: row.try_get("column_default").ok(),
+                    is_primary_key: false,
+                    max_length: row
+                        .try_get::<i32, _>("character_maximum_length")
+                        .ok()
+                        .map(|v| v as u32),
+                    numeric_precision: row
+                        .try_get::<i32, _>("numeric_precision")
+                        .ok()
+                        .map(|v| v as u8),
+                    numeric_scale: row.try_get::<i32, _>("numeric_scale").ok().map(|v| v as u8),
+                },
+            );
         }
 
         Ok(Some(TableInfo {
@@ -247,7 +259,9 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn list_tables(&self) -> Result<Vec<String>> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let inspector = self.inspector();
@@ -256,23 +270,21 @@ impl DatabaseProvider for PostgresProvider {
         let rows = sqlx::query(&query)
             .fetch_all(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to list tables: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to list tables: {e}")))?;
 
         Ok(rows.iter().map(|row| row.get("table_name")).collect())
     }
 
     async fn execute(&self, query: &str) -> Result<Vec<serde_json::Value>> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let rows = sqlx::query(query)
             .fetch_all(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to execute query: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to execute query: {e}")))?;
 
         // Convert rows to JSON - this is a simplified implementation
         let results: Vec<serde_json::Value> = rows
@@ -292,12 +304,10 @@ impl DatabaseProvider for PostgresProvider {
         Ok(results)
     }
 
-    async fn insert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>> {
-        let pool = self.pool.as_ref()
+    async fn insert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>> {
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let mut ids = Vec::with_capacity(records.len());
@@ -305,23 +315,23 @@ impl DatabaseProvider for PostgresProvider {
         for record in records {
             if let Some(obj) = record.as_object() {
                 let columns: Vec<&String> = obj.keys().collect();
-                let values: Vec<String> = obj.values()
-                    .map(format_pg_value)
-                    .collect();
+                let values: Vec<String> = obj.values().map(format_pg_value).collect();
 
                 let query = format!(
                     "INSERT INTO \"{}\" ({}) VALUES ({}) RETURNING id",
                     table,
-                    columns.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", "),
+                    columns
+                        .iter()
+                        .map(|c| format!("\"{}\"", c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     values.join(", ")
                 );
 
                 let row = sqlx::query(&query)
                     .fetch_one(pool)
                     .await
-                    .map_err(|e| EvenframeError::database(format!(
-                        "Failed to insert: {e}"
-                    )))?;
+                    .map_err(|e| EvenframeError::database(format!("Failed to insert: {e}")))?;
 
                 // Try to get ID - first try string, then integer
                 if let Ok(id) = row.try_get::<String, _>("id") {
@@ -335,12 +345,10 @@ impl DatabaseProvider for PostgresProvider {
         Ok(ids)
     }
 
-    async fn upsert(
-        &self,
-        table: &str,
-        records: &[serde_json::Value],
-    ) -> Result<Vec<String>> {
-        let pool = self.pool.as_ref()
+    async fn upsert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>> {
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let mut ids = Vec::with_capacity(records.len());
@@ -348,9 +356,7 @@ impl DatabaseProvider for PostgresProvider {
         for record in records {
             if let Some(obj) = record.as_object() {
                 let columns: Vec<&String> = obj.keys().collect();
-                let values: Vec<String> = obj.values()
-                    .map(format_pg_value)
-                    .collect();
+                let values: Vec<String> = obj.values().map(format_pg_value).collect();
 
                 let update_clause: String = columns
                     .iter()
@@ -362,7 +368,11 @@ impl DatabaseProvider for PostgresProvider {
                 let query = format!(
                     "INSERT INTO \"{}\" ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {} RETURNING id",
                     table,
-                    columns.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", "),
+                    columns
+                        .iter()
+                        .map(|c| format!("\"{}\"", c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     values.join(", "),
                     update_clause
                 );
@@ -370,9 +380,7 @@ impl DatabaseProvider for PostgresProvider {
                 let row = sqlx::query(&query)
                     .fetch_one(pool)
                     .await
-                    .map_err(|e| EvenframeError::database(format!(
-                        "Failed to upsert: {e}"
-                    )))?;
+                    .map_err(|e| EvenframeError::database(format!("Failed to upsert: {e}")))?;
 
                 if let Ok(id) = row.try_get::<String, _>("id") {
                     ids.push(id);
@@ -385,11 +393,7 @@ impl DatabaseProvider for PostgresProvider {
         Ok(ids)
     }
 
-    async fn select(
-        &self,
-        table: &str,
-        filter: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>> {
+    async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>> {
         let query = if let Some(f) = filter {
             format!("SELECT * FROM \"{}\" WHERE {}", table, f)
         } else {
@@ -400,7 +404,9 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn count(&self, table: &str, filter: Option<&str>) -> Result<u64> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let query = if let Some(f) = filter {
@@ -412,16 +418,16 @@ impl DatabaseProvider for PostgresProvider {
         let row = sqlx::query(&query)
             .fetch_one(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to count: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to count: {e}")))?;
 
         let count: i64 = row.get("count");
         Ok(count as u64)
     }
 
     async fn delete(&self, table: &str, ids: &[String]) -> Result<()> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         for id in ids {
@@ -429,9 +435,7 @@ impl DatabaseProvider for PostgresProvider {
             sqlx::query(&query)
                 .execute(pool)
                 .await
-                .map_err(|e| EvenframeError::database(format!(
-                    "Failed to delete: {e}"
-                )))?;
+                .map_err(|e| EvenframeError::database(format!("Failed to delete: {e}")))?;
         }
 
         Ok(())
@@ -466,9 +470,7 @@ impl DatabaseProvider for PostgresProvider {
 
             columns.push(format!(
                 "    \"{}\" {}{}",
-                field.field_name,
-                sql_type,
-                null_str
+                field.field_name, sql_type, null_str
             ));
         }
 
@@ -492,10 +494,7 @@ impl DatabaseProvider for PostgresProvider {
 
         format!(
             "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}{};",
-            table_name,
-            field.field_name,
-            sql_type,
-            null_str
+            table_name, field.field_name, sql_type, null_str
         )
     }
 
@@ -519,16 +518,17 @@ impl DatabaseProvider for PostgresProvider {
         to_id: &str,
         data: Option<&serde_json::Value>,
     ) -> Result<String> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let mut columns = vec!["from_id", "to_id"];
-        let mut values = vec![
-            format!("'{}'", from_id),
-            format!("'{}'", to_id),
-        ];
+        let mut values = vec![format!("'{}'", from_id), format!("'{}'", to_id)];
 
-        if let Some(data) = data && let Some(obj) = data.as_object() {
+        if let Some(data) = data
+            && let Some(obj) = data.as_object()
+        {
             for (k, v) in obj {
                 if k != "id" && k != "from_id" && k != "to_id" {
                     columns.push(k);
@@ -540,16 +540,18 @@ impl DatabaseProvider for PostgresProvider {
         let query = format!(
             "INSERT INTO \"{}\" ({}) VALUES ({}) RETURNING id",
             edge_table,
-            columns.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", "),
+            columns
+                .iter()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", "),
             values.join(", ")
         );
 
         let row = sqlx::query(&query)
             .fetch_one(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to create relationship: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to create relationship: {e}")))?;
 
         if let Ok(id) = row.try_get::<String, _>("id") {
             Ok(id)
@@ -564,7 +566,9 @@ impl DatabaseProvider for PostgresProvider {
         from_id: &str,
         to_id: &str,
     ) -> Result<()> {
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let query = format!(
@@ -575,9 +579,7 @@ impl DatabaseProvider for PostgresProvider {
         sqlx::query(&query)
             .execute(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to delete relationship: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to delete relationship: {e}")))?;
 
         Ok(())
     }
@@ -590,10 +592,16 @@ impl DatabaseProvider for PostgresProvider {
     ) -> Result<Vec<Relationship>> {
         let query = match direction {
             RelationshipDirection::Outgoing => {
-                format!("SELECT * FROM \"{}\" WHERE from_id = '{}'", edge_table, record_id)
+                format!(
+                    "SELECT * FROM \"{}\" WHERE from_id = '{}'",
+                    edge_table, record_id
+                )
             }
             RelationshipDirection::Incoming => {
-                format!("SELECT * FROM \"{}\" WHERE to_id = '{}'", edge_table, record_id)
+                format!(
+                    "SELECT * FROM \"{}\" WHERE to_id = '{}'",
+                    edge_table, record_id
+                )
             }
             RelationshipDirection::Both => {
                 format!(
@@ -603,15 +611,15 @@ impl DatabaseProvider for PostgresProvider {
             }
         };
 
-        let pool = self.pool.as_ref()
+        let pool = self
+            .pool
+            .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let rows = sqlx::query(&query)
             .fetch_all(pool)
             .await
-            .map_err(|e| EvenframeError::database(format!(
-                "Failed to get relationships: {e}"
-            )))?;
+            .map_err(|e| EvenframeError::database(format!("Failed to get relationships: {e}")))?;
 
         let relationships = rows
             .iter()
@@ -634,7 +642,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn begin_transaction(&self) -> Result<Box<dyn Transaction>> {
         Err(EvenframeError::database(
-            "PostgreSQL transactions not yet implemented in provider abstraction"
+            "PostgreSQL transactions not yet implemented in provider abstraction",
         ))
     }
 

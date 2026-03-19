@@ -141,7 +141,10 @@ impl SchemaDefinition {
                 fields: Self::extract_fields_from_config(config)?,
                 array_wildcard_fields: HashMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
-                indexes: config.struct_config.fields.iter()
+                indexes: config
+                    .struct_config
+                    .fields
+                    .iter()
                     .filter(|f| f.unique)
                     .map(|f| IndexDefinition {
                         name: format!("idx_{}_{}", name, f.field_name),

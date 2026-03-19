@@ -34,9 +34,7 @@ pub fn generate_assert_from_validators(validators: &[Validator], value_var: &str
                     StringValidator::Hex => {
                         assertions.push(format!("string::is_hexadecimal({})", value_var))
                     }
-                    StringValidator::Ip => {
-                        assertions.push(format!("string::is_ip({})", value_var))
-                    }
+                    StringValidator::Ip => assertions.push(format!("string::is_ip({})", value_var)),
                     StringValidator::IpV4 => {
                         assertions.push(format!("string::is_ipv4({})", value_var))
                     }
@@ -121,9 +119,7 @@ pub fn generate_assert_from_validators(validators: &[Validator], value_var: &str
                         "{} >= {} AND {} <= {}",
                         value_var, start.0, value_var, end.0
                     )),
-                    NumberValidator::Int => {
-                        assertions.push(format!("type::is_int({})", value_var))
-                    }
+                    NumberValidator::Int => assertions.push(format!("type::is_int({})", value_var)),
                     NumberValidator::Positive => assertions.push(format!("{} > 0", value_var)),
                     NumberValidator::NonNegative => assertions.push(format!("{} >= 0", value_var)),
                     NumberValidator::Negative => assertions.push(format!("{} < 0", value_var)),

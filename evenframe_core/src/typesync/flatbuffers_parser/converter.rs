@@ -50,7 +50,9 @@ pub fn convert_schema(schema: &FlatBuffersSchema) -> FlatBuffersParseResult {
     // Convert structs (FlatBuffers structs are like tables but with fixed layout)
     for struct_def in &schema.structs {
         let struct_config = convert_struct(struct_def);
-        result.structs.insert(struct_def.name.clone(), struct_config);
+        result
+            .structs
+            .insert(struct_def.name.clone(), struct_config);
     }
 
     // Convert enums

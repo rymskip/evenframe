@@ -3,9 +3,9 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
+use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -63,7 +63,11 @@ pub fn generate_macroforge_type_string(
     let all_type_names: Vec<String> = unique_structs
         .iter()
         .map(|s| s.struct_name.to_case(Case::Pascal))
-        .chain(unique_enums.iter().map(|e| e.enum_name.to_case(Case::Pascal)))
+        .chain(
+            unique_enums
+                .iter()
+                .map(|e| e.enum_name.to_case(Case::Pascal)),
+        )
         .collect();
 
     let mut result = String::new();
@@ -189,7 +193,11 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
                     format!("{}{}", ann_prefix, s.struct_name.to_case(Case::Pascal))
                 }
                 Some(VariantData::DataStructureRef(ft)) => {
-                    format!("{}{}", ann_prefix, field_type_to_typescript(ft, array_style).trim())
+                    format!(
+                        "{}{}",
+                        ann_prefix,
+                        field_type_to_typescript(ft, array_style).trim()
+                    )
                 }
                 None => {
                     format!("{}\"{}\"", ann_prefix, variant.name)
@@ -313,7 +321,10 @@ fn format_array(inner: &FieldType, array_style: ArrayStyle) -> String {
     match array_style {
         ArrayStyle::Shorthand => format!("{}[]", wrap_union_type(inner, array_style)),
         ArrayStyle::Generic => {
-            format!("Array<{}>", field_type_to_typescript(inner, array_style).trim())
+            format!(
+                "Array<{}>",
+                field_type_to_typescript(inner, array_style).trim()
+            )
         }
     }
 }
@@ -366,17 +377,19 @@ fn collect_serde_format(field_type: &FieldType) -> Option<String> {
 /// Combines validate and format annotations as needed.
 /// Returns the annotation line (or empty string), and a boolean indicating
 /// whether the serde should be rendered inline (for RecordLink fields).
-fn build_serde_annotation(
-    validators_str: &str,
-    field_type: &FieldType,
-) -> (String, bool) {
+fn build_serde_annotation(validators_str: &str, field_type: &FieldType) -> (String, bool) {
     let format_ann = collect_serde_format(field_type);
     let is_record_link = matches!(field_type, FieldType::RecordLink(_));
 
-    if !validators_str.is_empty() && let Some(format_line) = format_ann {
+    if !validators_str.is_empty()
+        && let Some(format_line) = format_ann
+    {
         // Both validate and format — render as separate lines (validate first)
         let validate_line = format!("/** @serde({{ validate: [{}] }}) */", validators_str);
-        (format!("{}\n{}", validate_line, format_line), is_record_link)
+        (
+            format!("{}\n{}", validate_line, format_line),
+            is_record_link,
+        )
     } else if !validators_str.is_empty() {
         (
             format!("/** @serde({{ validate: [{}] }}) */", validators_str),
@@ -390,7 +403,12 @@ fn build_serde_annotation(
 }
 
 /// Render the field type, with optional inline @serde for RecordLink fields.
-fn render_field_type(field_type: &FieldType, serde_annotation: &str, inline: bool, array_style: ArrayStyle) -> String {
+fn render_field_type(
+    field_type: &FieldType,
+    serde_annotation: &str,
+    inline: bool,
+    array_style: ArrayStyle,
+) -> String {
     if inline && !serde_annotation.is_empty() {
         // For RecordLink, render @serde inline: /** @serde(...) */ RecordLink<Type>
         if let FieldType::RecordLink(inner) = field_type {
@@ -466,10 +484,12 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
         FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
             field_type_contains(k, predicate) || field_type_contains(v, predicate)
         }
-        FieldType::Tuple(items) => items.iter().any(|item| field_type_contains(item, predicate)),
-        FieldType::Struct(fields) => {
-            fields.iter().any(|(_, ft)| field_type_contains(ft, predicate))
-        }
+        FieldType::Tuple(items) => items
+            .iter()
+            .any(|item| field_type_contains(item, predicate)),
+        FieldType::Struct(fields) => fields
+            .iter()
+            .any(|(_, ft)| field_type_contains(ft, predicate)),
         _ => false,
     }
 }
@@ -815,7 +835,6 @@ fn escape_for_jsdoc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1054,13 +1073,18 @@ mod tests {
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
+        let output =
+            generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
         // String fields now get nonEmpty by default
         assert!(output.contains("@serde({ validate: [\"nonEmpty\", \"email\"] })"));
-        assert!(output.contains("@serde({ validate: [\"nonEmpty\", \"minLength(8)\", \"maxLength(50)\"] })"));
+        assert!(
+            output.contains(
+                "@serde({ validate: [\"nonEmpty\", \"minLength(8)\", \"maxLength(50)\"] })"
+            )
+        );
         // Number fields don't get nonEmpty
         assert!(output.contains("@serde({ validate: [\"int\", \"between(18, 120)\"] })"));
         assert!(output.contains("email: string"));
@@ -1090,7 +1114,10 @@ mod tests {
         .to_string();
 
         println!("Raw comment output: {:?}", raw_comment_output);
-        println!("Interpolated comment output: {:?}", interpolated_comment_output);
+        println!(
+            "Interpolated comment output: {:?}",
+            interpolated_comment_output
+        );
 
         // Raw comments are converted to Rust doc syntax (with spaces: "# [doc = ...")
         assert!(
@@ -1182,7 +1209,8 @@ mod tests {
         );
         // Struct: type-level annotation
         assert!(
-            output.contains("/** @overview({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
+            output
+                .contains("/** @overview({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
             "Should contain struct-level annotation. Output:\n{}",
             output
         );
@@ -1227,7 +1255,8 @@ mod tests {
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
+        let output =
+            generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
         assert!(
             output.contains("/** @derive(Deserialize) */"),
             "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",

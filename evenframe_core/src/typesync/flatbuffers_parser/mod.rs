@@ -215,7 +215,11 @@ mod tests {
         assert_eq!(player.fields.len(), 6);
 
         // Check name field has validators
-        let name_field = player.fields.iter().find(|f| f.field_name == "name").unwrap();
+        let name_field = player
+            .fields
+            .iter()
+            .find(|f| f.field_name == "name")
+            .unwrap();
         assert!(!name_field.validators.is_empty());
 
         // Check email field has validators

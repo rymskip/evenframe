@@ -145,11 +145,8 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
         output.push_str(&format!("    {}_UNSPECIFIED = 0;\n", enum_prefix));
 
         for (i, variant) in enum_def.variants.iter().enumerate() {
-            let variant_name = format!(
-                "{}_{}",
-                enum_prefix,
-                variant.name.to_case(Case::UpperSnake)
-            );
+            let variant_name =
+                format!("{}_{}", enum_prefix, variant.name.to_case(Case::UpperSnake));
             output.push_str(&format!("    {} = {};\n", variant_name, i + 1));
         }
         output.push_str("}\n");
@@ -179,7 +176,10 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool) -> S
         let field_name = field.field_name.to_case(Case::Snake);
         let (field_prefix, field_type) = field_type_to_protobuf_with_prefix(&field.field_type);
 
-        output.push_str(&format!("    {}{} {} = {}", field_prefix, field_type, field_name, field_number));
+        output.push_str(&format!(
+            "    {}{} {} = {}",
+            field_prefix, field_type, field_name, field_number
+        ));
 
         // Add validation options if there are validators and we're including them
         if include_validators {
@@ -253,10 +253,7 @@ fn field_type_to_protobuf(field_type: &FieldType) -> String {
         FieldType::Struct(fields) => {
             // Inline struct - would need separate message definition
             // For now, generate a placeholder
-            let field_strs: Vec<String> = fields
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect();
+            let field_strs: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
             format!("InlineStruct_{}", field_strs.join("_"))
         }
 
@@ -361,7 +358,10 @@ fn string_validator_to_protobuf(sv: &StringValidator) -> Option<String> {
         // Pattern validators
         StringValidator::RegexLiteral(format) => {
             let regex = format.clone().into_regex();
-            Some(format!("pattern: \"{}\"", escape_for_protobuf(regex.as_str())))
+            Some(format!(
+                "pattern: \"{}\"",
+                escape_for_protobuf(regex.as_str())
+            ))
         }
 
         // Prefix/Suffix validators
@@ -761,8 +761,7 @@ mod tests {
 
     #[test]
     fn test_generate_message_with_import() {
-        let output =
-            generate_protobuf_schema_string(&HashMap::new(), &HashMap::new(), None, true);
+        let output = generate_protobuf_schema_string(&HashMap::new(), &HashMap::new(), None, true);
         assert!(output.contains("import \"validate/validate.proto\";"));
     }
 

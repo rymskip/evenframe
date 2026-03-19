@@ -111,12 +111,24 @@ pub struct ColumnSchema {
 pub enum DatabaseType {
     // Scalar types
     Boolean,
-    Integer { bits: u8, signed: bool },
-    Float { bits: u8 },
-    Decimal { precision: Option<u8>, scale: Option<u8> },
-    String { max_length: Option<u32> },
+    Integer {
+        bits: u8,
+        signed: bool,
+    },
+    Float {
+        bits: u8,
+    },
+    Decimal {
+        precision: Option<u8>,
+        scale: Option<u8>,
+    },
+    String {
+        max_length: Option<u32>,
+    },
     Text,
-    Binary { max_length: Option<u32> },
+    Binary {
+        max_length: Option<u32>,
+    },
 
     // Temporal types
     Date,

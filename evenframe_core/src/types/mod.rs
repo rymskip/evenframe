@@ -1,6 +1,8 @@
 mod field_type;
 
 pub use crate::types::field_type::FieldType;
+#[cfg(feature = "surrealdb")]
+use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
 use crate::{
     schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig},
@@ -8,8 +10,6 @@ use crate::{
     validator::Validator,
     wrappers::EvenframeRecordId,
 };
-#[cfg(feature = "surrealdb")]
-use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
 #[cfg(feature = "surrealdb")]
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -738,7 +738,10 @@ mod tests {
             doccom: None,
             annotations: vec![],
         };
-        assert!(matches!(v.data, Some(VariantData::DataStructureRef(FieldType::String))));
+        assert!(matches!(
+            v.data,
+            Some(VariantData::DataStructureRef(FieldType::String))
+        ));
     }
 
     #[test]
@@ -931,19 +934,13 @@ mod tests {
 
     #[test]
     fn test_field_type_hashmap() {
-        let ft = FieldType::HashMap(
-            Box::new(FieldType::String),
-            Box::new(FieldType::I32),
-        );
+        let ft = FieldType::HashMap(Box::new(FieldType::String), Box::new(FieldType::I32));
         assert!(matches!(ft, FieldType::HashMap(_, _)));
     }
 
     #[test]
     fn test_field_type_btreemap() {
-        let ft = FieldType::BTreeMap(
-            Box::new(FieldType::String),
-            Box::new(FieldType::Bool),
-        );
+        let ft = FieldType::BTreeMap(Box::new(FieldType::String), Box::new(FieldType::Bool));
         assert!(matches!(ft, FieldType::BTreeMap(_, _)));
     }
 
@@ -1026,14 +1023,10 @@ mod tests {
 
     #[test]
     fn test_deeply_nested_field_type() {
-        let ft = FieldType::Option(Box::new(
-            FieldType::Vec(Box::new(
-                FieldType::HashMap(
-                    Box::new(FieldType::String),
-                    Box::new(FieldType::Option(Box::new(FieldType::I32))),
-                ),
-            )),
-        ));
+        let ft = FieldType::Option(Box::new(FieldType::Vec(Box::new(FieldType::HashMap(
+            Box::new(FieldType::String),
+            Box::new(FieldType::Option(Box::new(FieldType::I32))),
+        )))));
         assert!(matches!(ft, FieldType::Option(_)));
     }
 

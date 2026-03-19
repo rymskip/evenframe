@@ -13,8 +13,8 @@ use crate::{
     },
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, PermissionsConfig},
-    typesync::config::CollisionStrategy,
     types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData},
+    typesync::config::CollisionStrategy,
     validator::{StringValidator, Validator},
 };
 use convert_case::{Case, Casing};
@@ -41,7 +41,8 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
     let mut struct_configs = HashMap::new();
 
     debug!("Creating workspace scanner");
-    let scanner = WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
+    let scanner =
+        WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
 
     let types = scanner.scan_for_evenframe_types()?;
     info!("Found {} Evenframe types", types.len());
@@ -86,7 +87,8 @@ pub fn build_all_configs_default() -> AllConfigs {
     };
 
     debug!("Creating workspace scanner");
-    let scanner = WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
+    let scanner =
+        WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
 
     let types = match scanner.scan_for_evenframe_types() {
         Ok(types) => {
@@ -132,8 +134,7 @@ fn resolve_relation_endpoints(
     enum_configs: &HashMap<String, TaggedUnion>,
 ) {
     // Snapshot table names to avoid borrow conflicts
-    let known_tables: std::collections::HashSet<String> =
-        table_configs.keys().cloned().collect();
+    let known_tables: std::collections::HashSet<String> = table_configs.keys().cloned().collect();
 
     for table_config in table_configs.values_mut() {
         let Some(relation) = table_config.relation.as_mut() else {
@@ -281,7 +282,9 @@ fn process_types(
                         debug!("Found Evenframe struct: {:?}", item_struct.ident);
                         if let Some(mut struct_config) = parse_struct_config(&item_struct) {
                             // Check for name collision
-                            if let Some(existing_file) = struct_origins.get(&struct_config.struct_name) {
+                            if let Some(existing_file) =
+                                struct_origins.get(&struct_config.struct_name)
+                            {
                                 match collision_strategy {
                                     CollisionStrategy::Error => {
                                         return Err(crate::error::EvenframeError::Config(format!(
@@ -309,11 +312,11 @@ fn process_types(
                                 }
                             }
 
-                            struct_origins.insert(struct_config.struct_name.clone(), file_path.clone());
+                            struct_origins
+                                .insert(struct_config.struct_name.clone(), file_path.clone());
                             trace!(
                                 "Inserting struct config {:?}: {:#?}",
-                                &struct_config.struct_name,
-                                &struct_config
+                                &struct_config.struct_name, &struct_config
                             );
                             struct_configs
                                 .insert(struct_config.struct_name.clone(), struct_config.clone());
@@ -357,8 +360,7 @@ fn process_types(
                                 };
                                 trace!(
                                     "Inserting table config {:?}: {:#?}",
-                                    &table_config.table_name,
-                                    &struct_config
+                                    &table_config.table_name, &struct_config
                                 );
                                 table_configs.insert(table_name, table_config);
                             }
@@ -401,8 +403,7 @@ fn process_types(
                             enum_origins.insert(tagged_union.enum_name.clone(), file_path.clone());
                             trace!(
                                 "Inserting enum config {:?}: {:#?}",
-                                &tagged_union.enum_name,
-                                &tagged_union
+                                &tagged_union.enum_name, &tagged_union
                             );
                             enum_configs
                                 .insert(tagged_union.enum_name.clone(), tagged_union.clone());
@@ -427,7 +428,10 @@ fn process_types(
 
     // Propagate renames through field type references
     if !renames.is_empty() {
-        debug!("Propagating {} type renames through field references", renames.len());
+        debug!(
+            "Propagating {} type renames through field references",
+            renames.len()
+        );
         for struct_config in struct_configs.values_mut() {
             for field in &mut struct_config.fields {
                 rename_field_type(&mut field.field_type, &renames);

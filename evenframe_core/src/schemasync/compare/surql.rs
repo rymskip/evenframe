@@ -4,18 +4,14 @@
 //! including the SchemaImporter for parsing SurrealQL exports and the
 //! SurrealdbComparator for comparing schemas using in-memory databases.
 
+use super::SchemaChanges;
+use super::types::{
+    AccessDefinition, FieldDefinition, ObjectType, SchemaDefinition, SchemaType, TableDefinition,
+};
 use crate::{
     EvenframeError, Result, evenframe_log,
-    schemasync::{
-        config::AccessType,
-        database::surql::access::setup_access_definitions,
-    },
+    schemasync::{config::AccessType, database::surql::access::setup_access_definitions},
 };
-use super::types::{
-    AccessDefinition, FieldDefinition, ObjectType, SchemaDefinition,
-    SchemaType, TableDefinition,
-};
-use super::SchemaChanges;
 use futures::StreamExt;
 use std::collections::HashMap;
 use surrealdb::engine::local::{Db, Mem};
@@ -139,12 +135,8 @@ impl<'a> SurrealdbComparator<'a> {
     /// Compare schemas to find changes
     async fn compare_schemas(&mut self) -> Result<()> {
         tracing::trace!("Starting schema comparison");
-        let changes = compare_schemas(
-            self.db,
-            &self.remote_schema_string,
-            &self.new_schema_string,
-        )
-        .await?;
+        let changes =
+            compare_schemas(self.db, &self.remote_schema_string, &self.new_schema_string).await?;
 
         tracing::info!(
             new_tables = changes.new_tables.len(),
@@ -923,7 +915,12 @@ impl<'a> SchemaImporter<'a> {
                 expr_end = i + 1;
             }
 
-            Some(after_computed[..expr_end].trim().trim_end_matches(';').to_string())
+            Some(
+                after_computed[..expr_end]
+                    .trim()
+                    .trim_end_matches(';')
+                    .to_string(),
+            )
         } else {
             None
         };

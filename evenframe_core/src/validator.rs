@@ -1696,49 +1696,70 @@ mod tests {
     fn test_validator_from_string_validator() {
         let sv = StringValidator::Email;
         let v: Validator = sv.into();
-        assert!(matches!(v, Validator::StringValidator(StringValidator::Email)));
+        assert!(matches!(
+            v,
+            Validator::StringValidator(StringValidator::Email)
+        ));
     }
 
     #[test]
     fn test_validator_from_number_validator() {
         let nv = NumberValidator::Positive;
         let v: Validator = nv.into();
-        assert!(matches!(v, Validator::NumberValidator(NumberValidator::Positive)));
+        assert!(matches!(
+            v,
+            Validator::NumberValidator(NumberValidator::Positive)
+        ));
     }
 
     #[test]
     fn test_validator_from_array_validator() {
         let av = ArrayValidator::MinItems(5);
         let v: Validator = av.into();
-        assert!(matches!(v, Validator::ArrayValidator(ArrayValidator::MinItems(5))));
+        assert!(matches!(
+            v,
+            Validator::ArrayValidator(ArrayValidator::MinItems(5))
+        ));
     }
 
     #[test]
     fn test_validator_from_date_validator() {
         let dv = DateValidator::ValidDate;
         let v: Validator = dv.into();
-        assert!(matches!(v, Validator::DateValidator(DateValidator::ValidDate)));
+        assert!(matches!(
+            v,
+            Validator::DateValidator(DateValidator::ValidDate)
+        ));
     }
 
     #[test]
     fn test_validator_from_bigint_validator() {
         let bv = BigIntValidator::PositiveBigInt;
         let v: Validator = bv.into();
-        assert!(matches!(v, Validator::BigIntValidator(BigIntValidator::PositiveBigInt)));
+        assert!(matches!(
+            v,
+            Validator::BigIntValidator(BigIntValidator::PositiveBigInt)
+        ));
     }
 
     #[test]
     fn test_validator_from_bigdecimal_validator() {
         let bv = BigDecimalValidator::PositiveBigDecimal;
         let v: Validator = bv.into();
-        assert!(matches!(v, Validator::BigDecimalValidator(BigDecimalValidator::PositiveBigDecimal)));
+        assert!(matches!(
+            v,
+            Validator::BigDecimalValidator(BigDecimalValidator::PositiveBigDecimal)
+        ));
     }
 
     #[test]
     fn test_validator_from_duration_validator() {
         let dv = DurationValidator::GreaterThanDuration("1h".to_string());
         let v: Validator = dv.into();
-        assert!(matches!(v, Validator::DurationValidator(DurationValidator::GreaterThanDuration(_))));
+        assert!(matches!(
+            v,
+            Validator::DurationValidator(DurationValidator::GreaterThanDuration(_))
+        ));
     }
 
     // ==================== StringValidator Tests ====================
@@ -1817,7 +1838,9 @@ mod tests {
     #[test]
     fn test_number_validator_between() {
         let v = NumberValidator::Between(OrderedFloat(1.0), OrderedFloat(10.0));
-        assert!(matches!(v, NumberValidator::Between(OrderedFloat(a), OrderedFloat(b)) if a == 1.0 && b == 10.0));
+        assert!(
+            matches!(v, NumberValidator::Between(OrderedFloat(a), OrderedFloat(b)) if a == 1.0 && b == 10.0)
+        );
     }
 
     #[test]
@@ -1894,7 +1917,9 @@ mod tests {
     #[test]
     fn test_date_validator_between() {
         let v = DateValidator::BetweenDate("2024-01-01".to_string(), "2024-12-31".to_string());
-        assert!(matches!(v, DateValidator::BetweenDate(start, end) if start == "2024-01-01" && end == "2024-12-31"));
+        assert!(
+            matches!(v, DateValidator::BetweenDate(start, end) if start == "2024-01-01" && end == "2024-12-31")
+        );
     }
 
     // ==================== BigIntValidator Tests ====================
@@ -1914,7 +1939,9 @@ mod tests {
     #[test]
     fn test_bigint_validator_between() {
         let v = BigIntValidator::BetweenBigInt("0".to_string(), "100".to_string());
-        assert!(matches!(v, BigIntValidator::BetweenBigInt(start, end) if start == "0" && end == "100"));
+        assert!(
+            matches!(v, BigIntValidator::BetweenBigInt(start, end) if start == "0" && end == "100")
+        );
     }
 
     // ==================== BigDecimalValidator Tests ====================
@@ -1942,7 +1969,9 @@ mod tests {
     #[test]
     fn test_duration_validator_between() {
         let v = DurationValidator::BetweenDuration("1m".to_string(), "1h".to_string());
-        assert!(matches!(v, DurationValidator::BetweenDuration(start, end) if start == "1m" && end == "1h"));
+        assert!(
+            matches!(v, DurationValidator::BetweenDuration(start, end) if start == "1m" && end == "1h")
+        );
     }
 
     // ==================== Serialization Tests ====================

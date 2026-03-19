@@ -18,6 +18,6 @@ pub mod protobuf;
 pub mod protobuf_parser;
 
 #[cfg(feature = "macroforge")]
-pub mod macroforge;
-#[cfg(feature = "macroforge")]
 pub mod effect_template;
+#[cfg(feature = "macroforge")]
+pub mod macroforge;

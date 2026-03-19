@@ -1,8 +1,8 @@
 use crate::{
+    schemasync::TableConfig,
+    schemasync::mockmake::Mockmaker,
     schemasync::mockmake::coordinate::CoordinationId,
     schemasync::mockmake::format::Format,
-    schemasync::mockmake::Mockmaker,
-    schemasync::TableConfig,
     types::{FieldType, StructField, VariantData},
 };
 use bon::Builder;
@@ -61,15 +61,11 @@ impl<'a> FieldValueGenerator<'a> {
                 WorkItem::Generate(ctx) => {
                     // Tier 0: WASM plugin override (field-level or table-level)
                     #[cfg(feature = "wasm-plugins")]
-                    let _plugin_name: Option<&String> = ctx
-                        .field
-                        .mock_plugin
+                    let _plugin_name: Option<&String> = ctx.field.mock_plugin.as_ref().or(self
+                        .table_config
+                        .mock_generation_config
                         .as_ref()
-                        .or(self
-                            .table_config
-                            .mock_generation_config
-                            .as_ref()
-                            .and_then(|c| c.plugin.as_ref()));
+                        .and_then(|c| c.plugin.as_ref()));
                     #[cfg(feature = "wasm-plugins")]
                     if let Some(plugin_name) = _plugin_name {
                         if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
@@ -79,7 +75,8 @@ impl<'a> FieldValueGenerator<'a> {
                                 field_name: ctx.field_path.clone(),
                                 field_type: format!("{:?}", ctx.field_type),
                                 record_index: *self.id_index,
-                                total_records: self.table_config
+                                total_records: self
+                                    .table_config
                                     .mock_generation_config
                                     .as_ref()
                                     .map(|c| c.n)
@@ -194,8 +191,12 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                                 #[cfg(not(feature = "mockmake"))]
                                 {
-                                    let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
-                                    value_stack.push(format!("'{}'", timezones[rng.random_range(0..timezones.len())]));
+                                    let timezones =
+                                        ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+                                    value_stack.push(format!(
+                                        "'{}'",
+                                        timezones[rng.random_range(0..timezones.len())]
+                                    ));
                                 }
                             }
                             FieldType::EvenframeRecordId => {
