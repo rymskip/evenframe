@@ -13,12 +13,14 @@ use crate::{
     },
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, PermissionsConfig},
+    typesync::config::CollisionStrategy,
     types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData},
     validator::{StringValidator, Validator},
 };
 use convert_case::{Case, Casing};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use syn::{Fields, FieldsNamed, Item, ItemEnum, ItemStruct, parse_file};
 use tracing::{debug, info, trace, warn};
 
@@ -49,6 +51,7 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         &mut enum_configs,
         &mut table_configs,
         &mut struct_configs,
+        config.collision_strategy,
     )?;
 
     info!(
@@ -101,6 +104,7 @@ pub fn build_all_configs_default() -> AllConfigs {
         &mut enum_configs,
         &mut table_configs,
         &mut struct_configs,
+        CollisionStrategy::Error,
     ) {
         warn!("Error processing types: {}", e);
         return (HashMap::new(), HashMap::new(), HashMap::new());
@@ -230,6 +234,7 @@ fn process_types(
     enum_configs: &mut HashMap<String, TaggedUnion>,
     table_configs: &mut HashMap<String, TableConfig>,
     struct_configs: &mut HashMap<String, StructConfig>,
+    collision_strategy: CollisionStrategy,
 ) -> Result<()> {
     debug!("Grouping types by file");
     let mut types_by_file: HashMap<String, Vec<_>> = HashMap::new();
@@ -240,6 +245,12 @@ fn process_types(
             .push(evenframe_type);
     }
     debug!("Grouped into {} files", types_by_file.len());
+
+    // Track which file each type name was first defined in (for collision messages)
+    let mut struct_origins: HashMap<String, String> = HashMap::new();
+    let mut enum_origins: HashMap<String, String> = HashMap::new();
+    // Track renames so we can update field references after all types are collected
+    let mut renames: HashMap<String, String> = HashMap::new();
 
     debug!("Starting first pass: parsing structs and enums");
     for (file_path, file_types) in &types_by_file {
@@ -268,7 +279,37 @@ fn process_types(
                         file_types.iter().find(|&t| item_struct.ident == t.name)
                     {
                         debug!("Found Evenframe struct: {:?}", item_struct.ident);
-                        if let Some(struct_config) = parse_struct_config(&item_struct) {
+                        if let Some(mut struct_config) = parse_struct_config(&item_struct) {
+                            // Check for name collision
+                            if let Some(existing_file) = struct_origins.get(&struct_config.struct_name) {
+                                match collision_strategy {
+                                    CollisionStrategy::Error => {
+                                        return Err(crate::error::EvenframeError::Config(format!(
+                                            "Type name collision: '{}' is defined in both '{}' and '{}'. \
+                                             Rename one of them, or set collision_strategy = \"auto_rename\" \
+                                             in [typesync] config.",
+                                            struct_config.struct_name, existing_file, file_path
+                                        )));
+                                    }
+                                    CollisionStrategy::AutoRename => {
+                                        let stem = Path::new(file_path)
+                                            .file_stem()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("unknown");
+                                        let prefix = stem.to_case(Case::Pascal);
+                                        let old_name = struct_config.struct_name.clone();
+                                        let new_name = format!("{}{}", prefix, old_name);
+                                        warn!(
+                                            "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
+                                            old_name, file_path, new_name, existing_file
+                                        );
+                                        struct_config.struct_name = new_name.clone();
+                                        renames.insert(old_name, new_name);
+                                    }
+                                }
+                            }
+
+                            struct_origins.insert(struct_config.struct_name.clone(), file_path.clone());
                             trace!(
                                 "Inserting struct config {:?}: {:#?}",
                                 &struct_config.struct_name,
@@ -327,7 +368,37 @@ fn process_types(
                 Item::Enum(item_enum) => {
                     if file_types.iter().any(|t| item_enum.ident == t.name) {
                         debug!("Found Evenframe enum: {}", item_enum.ident);
-                        if let Some(tagged_union) = parse_enum_config(&item_enum) {
+                        if let Some(mut tagged_union) = parse_enum_config(&item_enum) {
+                            // Check for name collision
+                            if let Some(existing_file) = enum_origins.get(&tagged_union.enum_name) {
+                                match collision_strategy {
+                                    CollisionStrategy::Error => {
+                                        return Err(crate::error::EvenframeError::Config(format!(
+                                            "Type name collision: '{}' is defined in both '{}' and '{}'. \
+                                             Rename one of them, or set collision_strategy = \"auto_rename\" \
+                                             in [typesync] config.",
+                                            tagged_union.enum_name, existing_file, file_path
+                                        )));
+                                    }
+                                    CollisionStrategy::AutoRename => {
+                                        let stem = Path::new(file_path)
+                                            .file_stem()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("unknown");
+                                        let prefix = stem.to_case(Case::Pascal);
+                                        let old_name = tagged_union.enum_name.clone();
+                                        let new_name = format!("{}{}", prefix, old_name);
+                                        warn!(
+                                            "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
+                                            old_name, file_path, new_name, existing_file
+                                        );
+                                        tagged_union.enum_name = new_name.clone();
+                                        renames.insert(old_name, new_name);
+                                    }
+                                }
+                            }
+
+                            enum_origins.insert(tagged_union.enum_name.clone(), file_path.clone());
                             trace!(
                                 "Inserting enum config {:?}: {:#?}",
                                 &tagged_union.enum_name,
@@ -354,7 +425,54 @@ fn process_types(
         }
     }
 
+    // Propagate renames through field type references
+    if !renames.is_empty() {
+        debug!("Propagating {} type renames through field references", renames.len());
+        for struct_config in struct_configs.values_mut() {
+            for field in &mut struct_config.fields {
+                rename_field_type(&mut field.field_type, &renames);
+            }
+        }
+        for table_config in table_configs.values_mut() {
+            for field in &mut table_config.struct_config.fields {
+                rename_field_type(&mut field.field_type, &renames);
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Recursively updates type references that were renamed due to collisions.
+fn rename_field_type(field_type: &mut FieldType, renames: &HashMap<String, String>) {
+    match field_type {
+        FieldType::Other(name) => {
+            if let Some(new_name) = renames.get(name.as_str()) {
+                *name = new_name.clone();
+            }
+        }
+        FieldType::Option(inner)
+        | FieldType::Vec(inner)
+        | FieldType::RecordLink(inner)
+        | FieldType::OrderedFloat(inner) => {
+            rename_field_type(inner, renames);
+        }
+        FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
+            rename_field_type(k, renames);
+            rename_field_type(v, renames);
+        }
+        FieldType::Tuple(items) => {
+            for item in items {
+                rename_field_type(item, renames);
+            }
+        }
+        FieldType::Struct(fields) => {
+            for (_, ft) in fields {
+                rename_field_type(ft, renames);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {

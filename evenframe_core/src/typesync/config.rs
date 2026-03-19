@@ -37,6 +37,18 @@ pub enum FileNamingConvention {
     Camel,
 }
 
+/// How to handle type name collisions across different source files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollisionStrategy {
+    /// Stop with a diagnostic error naming both files (default).
+    #[default]
+    Error,
+    /// Automatically prefix the colliding type with its source filename in PascalCase.
+    /// e.g. `PaymentMethod` in `invoice.rs` → `InvoicePaymentMethod`.
+    AutoRename,
+}
+
 /// Per-file output configuration (used under `[typesync.output]`).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct OutputConfig {
@@ -95,4 +107,7 @@ pub struct TypesyncConfig {
     /// Per-file output settings.
     #[serde(default)]
     pub output: OutputConfig,
+    /// How to handle type name collisions across different source files.
+    #[serde(default)]
+    pub collision_strategy: CollisionStrategy,
 }

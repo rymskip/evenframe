@@ -1,7 +1,7 @@
 //! Build-time configuration for type generation.
 
 use crate::error::EvenframeError;
-use crate::typesync::config::{ArrayStyle, FileNamingConvention, OutputConfig, OutputMode};
+use crate::typesync::config::{ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,9 @@ pub struct BuildConfig {
 
     /// Per-file output configuration.
     pub output: OutputConfig,
+
+    /// How to handle type name collisions across files.
+    pub collision_strategy: CollisionStrategy,
 }
 
 impl Default for BuildConfig {
@@ -61,6 +64,7 @@ impl Default for BuildConfig {
             protobuf_package: None,
             protobuf_import_validate: false,
             output: OutputConfig::default(),
+            collision_strategy: CollisionStrategy::Error,
         }
     }
 }
@@ -185,6 +189,13 @@ impl BuildConfig {
 
             if let Some(v) = typesync.get("protobuf_import_validate") {
                 config.protobuf_import_validate = v.as_bool().unwrap_or(false);
+            }
+
+            if let Some(strategy_str) = typesync.get("collision_strategy").and_then(|v| v.as_str()) {
+                config.collision_strategy = match strategy_str {
+                    "auto_rename" => CollisionStrategy::AutoRename,
+                    _ => CollisionStrategy::Error,
+                };
             }
 
             if let Some(output_table) = typesync.get("output").and_then(|v| v.as_table()) {
