@@ -183,8 +183,22 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
         .variants
         .iter()
         .map(|variant| {
-            let ann_prefix = if !variant.annotations.is_empty() {
-                format!("/** {} */ ", variant.annotations.join(" "))
+            // For DataStructureRef (tuple) and None (unit) variants, prepend
+            // @variant("Name") so the macroforge type registry preserves the
+            // original Rust variant name — scalar types like `string | number`
+            // would otherwise lose it.  InlineStruct variants already use the
+            // struct name as a TypeRef, so the name is inherently preserved.
+            let mut all_annotations: Vec<String> = Vec::new();
+            match &variant.data {
+                Some(VariantData::InlineStruct(_)) => {}
+                _ => {
+                    all_annotations.push(format!("@variant(\"{}\")", variant.name));
+                }
+            }
+            all_annotations.extend(variant.annotations.iter().cloned());
+
+            let ann_prefix = if !all_annotations.is_empty() {
+                format!("/** {} */ ", all_annotations.join(" "))
             } else {
                 String::new()
             };
