@@ -233,7 +233,10 @@ pub struct MultipleNumberValidators {
     pub bounded_positive: u32,
 
     /// Multiple validators on optional integer
-    #[validators(NumberValidator::NonNegative, NumberValidator::LessThanOrEqualTo(255.0))]
+    #[validators(
+        NumberValidator::NonNegative,
+        NumberValidator::LessThanOrEqualTo(255.0)
+    )]
     pub optional_byte: Option<u32>,
 
     /// Positive + Between on f64

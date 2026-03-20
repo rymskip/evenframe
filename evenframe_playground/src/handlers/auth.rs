@@ -1,9 +1,4 @@
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 use crate::models::Role;
@@ -50,10 +45,10 @@ fn mock_user(id: &str, email: &str, username: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
-    use axum::Router;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -68,7 +63,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/users").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -87,7 +87,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/users").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

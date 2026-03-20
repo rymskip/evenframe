@@ -86,10 +86,16 @@ mod tests {
         let mut pm = create_plugin_manager();
 
         let input_even = make_field_input("active", "Bool", 0);
-        assert_eq!(pm.generate_field_value("hello", &input_even).unwrap(), "true");
+        assert_eq!(
+            pm.generate_field_value("hello", &input_even).unwrap(),
+            "true"
+        );
 
         let input_odd = make_field_input("active", "Bool", 1);
-        assert_eq!(pm.generate_field_value("hello", &input_odd).unwrap(), "false");
+        assert_eq!(
+            pm.generate_field_value("hello", &input_odd).unwrap(),
+            "false"
+        );
     }
 
     #[test]

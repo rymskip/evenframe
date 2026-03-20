@@ -1,6 +1,6 @@
 use super::auth::User;
-use evenframe::types::RecordLink;
 use evenframe::Evenframe;
+use evenframe::types::RecordLink;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Evenframe)]
@@ -77,7 +77,12 @@ pub struct Address {
     pub postal_code: String,
 
     /// Country code - 2-char ISO code
-    #[validators(StringValidator::NonEmpty, StringValidator::MinLength(2), StringValidator::MaxLength(2), StringValidator::Uppercased)]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MinLength(2),
+        StringValidator::MaxLength(2),
+        StringValidator::Uppercased
+    )]
     pub country: String,
 }
 
@@ -86,7 +91,12 @@ pub struct Address {
 pub struct Customer {
     pub id: String,
 
-    #[edge(name = "customer_user", from = "Customer", to = "User", direction = "from")]
+    #[edge(
+        name = "customer_user",
+        from = "Customer",
+        to = "User",
+        direction = "from"
+    )]
     pub user: RecordLink<User>,
 
     pub shipping_address: Option<Address>,
@@ -125,7 +135,12 @@ pub struct CartItem {
 pub struct Order {
     pub id: String,
 
-    #[edge(name = "order_customer", from = "Order", to = "Customer", direction = "from")]
+    #[edge(
+        name = "order_customer",
+        from = "Order",
+        to = "Customer",
+        direction = "from"
+    )]
     pub customer: RecordLink<Customer>,
 
     /// Order items
@@ -164,6 +179,19 @@ pub struct Order {
 
     #[format(DateTime)]
     pub delivered_at: Option<String>,
+}
+
+/// A relation linking a Customer to their Orders with 1:1 mapping.
+/// Tests the OneToOne coordination to ensure every Order gets exactly one edge.
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[relation]
+#[mock_data(n = 200, coordinate = [Coordination::OneToOne("out")])]
+pub struct Purchased {
+    pub id: String,
+    pub r#in: RecordLink<Customer>,
+    pub out: RecordLink<Order>,
+    #[format(DateTime)]
+    pub purchased_at: String,
 }
 
 #[cfg(test)]

@@ -271,6 +271,10 @@ impl Mockmaker<'_> {
                                 self.coordinated_values.insert(target_id, value.clone());
                             }
                         }
+                        Coordination::OneToOne(_) => {
+                            // OneToOne is handled directly in handle_record_id
+                            // at generation time, not through pre-computed values.
+                        }
                         Coordination::InitializeCoherent(coherent_dataset) => {
                             // Collect the fields for this coordination
                             let fields: Vec<StructField> = coordination_pair
@@ -745,6 +749,11 @@ pub enum Coordination {
 
     /// Ensure fields are from same dataset (e.g., matching city/state/zip)
     InitializeCoherent(CoherentDataset),
+
+    /// Map a relation field 1:1 to target table records sequentially.
+    /// Use on relation tables to ensure every target record gets exactly one edge.
+    /// The string is the field name (e.g., "out").
+    OneToOne(String),
 }
 
 #[cfg(feature = "surrealdb")]
@@ -1109,6 +1118,26 @@ impl Coordination {
                             )));
                         }
                     }
+                }
+            }
+
+            Coordination::OneToOne(field_name) => {
+                // Target field must exist and be a RecordLink
+                let target = fields
+                    .iter()
+                    .find(|(id, _)| id.field_name.ends_with(field_name))
+                    .ok_or_else(|| {
+                        EvenframeError::Validation(format!(
+                            "OneToOne: Field '{}' not found in coordination fields",
+                            field_name
+                        ))
+                    })?;
+
+                if !matches!(&target.1.field_type, FieldType::RecordLink(_)) {
+                    return Err(EvenframeError::Validation(format!(
+                        "OneToOne: Field '{}' must be a RecordLink type, got {:?}",
+                        field_name, target.1.field_type
+                    )));
                 }
             }
         }

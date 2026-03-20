@@ -32,8 +32,14 @@ fn test_build_config_default() {
 
     assert!(config.arktype, "ArkType should be enabled by default");
     assert!(!config.effect, "Effect should be disabled by default");
-    assert!(!config.macroforge, "Macroforge should be disabled by default");
-    assert!(!config.flatbuffers, "FlatBuffers should be disabled by default");
+    assert!(
+        !config.macroforge,
+        "Macroforge should be disabled by default"
+    );
+    assert!(
+        !config.flatbuffers,
+        "FlatBuffers should be disabled by default"
+    );
     assert!(!config.protobuf, "Protobuf should be disabled by default");
 }
 
@@ -111,10 +117,7 @@ fn test_load_config_from_toml_path() {
     let toml_path = get_evenframe_toml_path();
 
     if !toml_path.exists() {
-        eprintln!(
-            "Skipping test: evenframe.toml not found at {:?}",
-            toml_path
-        );
+        eprintln!("Skipping test: evenframe.toml not found at {:?}", toml_path);
         return;
     }
 
@@ -136,7 +139,10 @@ fn test_config_not_found_error() {
 fn test_generator_type_default_filenames() {
     assert_eq!(GeneratorType::ArkType.default_filename(), "arktype.ts");
     assert_eq!(GeneratorType::Effect.default_filename(), "bindings.ts");
-    assert_eq!(GeneratorType::Macroforge.default_filename(), "macroforge.ts");
+    assert_eq!(
+        GeneratorType::Macroforge.default_filename(),
+        "macroforge.ts"
+    );
     assert_eq!(GeneratorType::FlatBuffers.default_filename(), "schema.fbs");
     assert_eq!(GeneratorType::Protobuf.default_filename(), "schema.proto");
 }
@@ -163,7 +169,11 @@ fn test_type_generator_generate_arktype() {
     let generator = TypeGenerator::new(config);
     let result = generator.generate_arktype();
 
-    assert!(result.is_ok(), "ArkType generation should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "ArkType generation should succeed: {:?}",
+        result
+    );
 
     let generated = result.unwrap();
     assert_eq!(generated.generator_type, GeneratorType::ArkType);
@@ -194,7 +204,11 @@ fn test_type_generator_generate_effect() {
     let generator = TypeGenerator::new(config);
     let result = generator.generate_effect();
 
-    assert!(result.is_ok(), "Effect generation should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Effect generation should succeed: {:?}",
+        result
+    );
 
     let generated = result.unwrap();
     assert_eq!(generated.generator_type, GeneratorType::Effect);
@@ -547,10 +561,7 @@ fn test_generate_with_invalid_scan_path() {
     match result {
         Ok(report) => {
             // If it succeeds, it should have processed 0 types
-            println!(
-                "Generated {} files from invalid path",
-                report.files.len()
-            );
+            println!("Generated {} files from invalid path", report.files.len());
         }
         Err(e) => {
             println!("Expected error from invalid path: {:?}", e);

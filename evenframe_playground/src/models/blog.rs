@@ -1,6 +1,6 @@
 use super::auth::User;
-use evenframe::types::RecordLink;
 use evenframe::Evenframe;
+use evenframe::types::RecordLink;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
@@ -13,7 +13,11 @@ pub struct Tag {
     pub name: String,
 
     /// URL-safe slug - lowercase, max 100 chars
-    #[validators(StringValidator::NonEmpty, StringValidator::MaxLength(100), StringValidator::Lowercased)]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MaxLength(100),
+        StringValidator::Lowercased
+    )]
     pub slug: String,
 
     /// Optional description - max 500 chars
@@ -66,11 +70,19 @@ pub struct Post {
     pub id: String,
 
     /// Post title - non-empty, max 200 chars
-    #[validators(StringValidator::NonEmpty, StringValidator::MinLength(1), StringValidator::MaxLength(200))]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MinLength(1),
+        StringValidator::MaxLength(200)
+    )]
     pub title: String,
 
     /// URL-safe slug - lowercase, max 250 chars
-    #[validators(StringValidator::NonEmpty, StringValidator::MaxLength(250), StringValidator::Lowercased)]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MaxLength(250),
+        StringValidator::Lowercased
+    )]
     pub slug: String,
 
     /// Post content - non-empty
@@ -117,14 +129,28 @@ pub struct Post {
 pub struct Comment {
     pub id: String,
 
-    #[edge(name = "comment_post", from = "Comment", to = "Post", direction = "from")]
+    #[edge(
+        name = "comment_post",
+        from = "Comment",
+        to = "Post",
+        direction = "from"
+    )]
     pub post: RecordLink<Post>,
 
-    #[edge(name = "comment_author", from = "Comment", to = "Author", direction = "from")]
+    #[edge(
+        name = "comment_author",
+        from = "Comment",
+        to = "Author",
+        direction = "from"
+    )]
     pub author: RecordLink<Author>,
 
     /// Comment content - non-empty, max 5000 chars
-    #[validators(StringValidator::NonEmpty, StringValidator::MinLength(1), StringValidator::MaxLength(5000))]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MinLength(1),
+        StringValidator::MaxLength(5000)
+    )]
     pub content: String,
 
     pub parent_comment_id: Option<String>,

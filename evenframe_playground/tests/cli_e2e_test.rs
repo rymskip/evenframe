@@ -122,7 +122,10 @@ fn test_cli_version() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Should succeed
-    assert!(output.status.success(), "evenframe --version should succeed");
+    assert!(
+        output.status.success(),
+        "evenframe --version should succeed"
+    );
 
     // Should contain version number
     assert!(
@@ -146,10 +149,7 @@ fn test_typesync_help() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "typesync --help should succeed"
-    );
+    assert!(output.status.success(), "typesync --help should succeed");
 
     // Should describe typesync functionality
     assert!(
@@ -169,10 +169,7 @@ fn test_schemasync_help() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "schemasync --help should succeed"
-    );
+    assert!(output.status.success(), "schemasync --help should succeed");
 
     // Should describe schemasync functionality
     assert!(
@@ -192,10 +189,7 @@ fn test_generate_help() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "generate --help should succeed"
-    );
+    assert!(output.status.success(), "generate --help should succeed");
 
     // Should describe full pipeline
     assert!(
@@ -235,10 +229,7 @@ fn test_validate_help() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "validate --help should succeed"
-    );
+    assert!(output.status.success(), "validate --help should succeed");
 
     // Should describe validation
     assert!(
@@ -528,10 +519,7 @@ fn test_invalid_subcommand() {
     let output = run_evenframe(&["invalid-command"]);
 
     // Should fail
-    assert!(
-        !output.status.success(),
-        "Invalid subcommand should fail"
-    );
+    assert!(!output.status.success(), "Invalid subcommand should fail");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Should mention the invalid command or suggest valid ones
@@ -551,10 +539,7 @@ fn test_invalid_flag() {
     let output = run_evenframe(&["--invalid-flag"]);
 
     // Should fail
-    assert!(
-        !output.status.success(),
-        "Invalid flag should fail"
-    );
+    assert!(!output.status.success(), "Invalid flag should fail");
 }
 
 // ============================================================================

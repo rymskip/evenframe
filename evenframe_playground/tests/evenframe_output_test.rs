@@ -394,8 +394,7 @@ fn test_env_example_file() {
 
     assert!(env_example_path.exists(), ".env.example should exist");
 
-    let env_content =
-        fs::read_to_string(&env_example_path).expect("Failed to read .env.example");
+    let env_content = fs::read_to_string(&env_example_path).expect("Failed to read .env.example");
 
     // Check for required environment variables
     let required_vars = vec![
@@ -627,7 +626,8 @@ fn test_url_fields_have_format_and_validators() {
         "Blog URL fields should have both format and validators"
     );
     assert!(
-        ecommerce_content.contains("#[format(Url(") && ecommerce_content.contains("StringValidator::Url"),
+        ecommerce_content.contains("#[format(Url(")
+            && ecommerce_content.contains("StringValidator::Url"),
         "Ecommerce URL fields should have both format and validators"
     );
 }
@@ -658,7 +658,8 @@ fn test_validators_attribute_syntax() {
                 assert!(
                     has_string_validator || has_number_validator || has_array_validator,
                     "validators attribute in {} should contain valid validator types: {}",
-                    file_path, line
+                    file_path,
+                    line
                 );
 
                 // Should end with )]

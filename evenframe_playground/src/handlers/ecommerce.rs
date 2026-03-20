@@ -1,9 +1,4 @@
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 use crate::models::{OrderStatus, ProductCategory};
@@ -13,7 +8,12 @@ pub async fn list_products() -> impl IntoResponse {
     let products = vec![
         mock_product("product:1", "Laptop", ProductCategory::Electronics, 999.99),
         mock_product("product:2", "T-Shirt", ProductCategory::Clothing, 29.99),
-        mock_product("product:3", "Rust Programming Book", ProductCategory::Books, 49.99),
+        mock_product(
+            "product:3",
+            "Rust Programming Book",
+            ProductCategory::Books,
+            49.99,
+        ),
     ];
 
     Json(json!({
@@ -99,10 +99,10 @@ fn mock_order(id: &str, customer_id: &str, total: f64, status: OrderStatus) -> s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
-    use axum::Router;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -119,7 +119,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/products").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/products")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -138,7 +143,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/products").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/products")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -201,7 +211,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/orders").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/orders")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

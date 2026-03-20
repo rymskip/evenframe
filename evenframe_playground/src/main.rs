@@ -1,7 +1,4 @@
-use axum::{
-    Router,
-    routing::get,
-};
+use axum::{Router, routing::get};
 use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -35,7 +32,10 @@ async fn main() {
         .route("/api/posts", get(handlers::blog::list_posts))
         .route("/api/posts/:id", get(handlers::blog::get_post))
         .route("/api/tags", get(handlers::blog::list_tags))
-        .route("/api/posts/:post_id/comments", get(handlers::blog::list_comments));
+        .route(
+            "/api/posts/:post_id/comments",
+            get(handlers::blog::list_comments),
+        );
 
     // Run the server
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));

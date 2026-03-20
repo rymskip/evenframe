@@ -5,8 +5,8 @@
 //! 2. All types are correctly converted to evenframe's internal representation
 //! 3. The parsed types can be used for type generation
 
-use evenframe_core::typesync::protobuf_parser::{parse_protobuf_files, parse_protobuf_source};
 use evenframe_core::types::FieldType;
+use evenframe_core::typesync::protobuf_parser::{parse_protobuf_files, parse_protobuf_source};
 use std::path::PathBuf;
 
 /// Get the path to the generated schema.proto file
@@ -23,10 +23,7 @@ fn test_parse_generated_schema_proto() {
     let schema_path = get_schema_proto_path();
 
     if !schema_path.exists() {
-        eprintln!(
-            "Skipping test: schema.proto not found at {:?}",
-            schema_path
-        );
+        eprintln!("Skipping test: schema.proto not found at {:?}", schema_path);
         return;
     }
 
@@ -47,7 +44,10 @@ fn test_parse_generated_schema_proto() {
         Err(e) => {
             let err_msg = format!("{}", e);
             if err_msg.contains("validate.proto") || err_msg.contains("import") {
-                eprintln!("Skipping test: schema.proto has external imports that aren't available: {}", err_msg);
+                eprintln!(
+                    "Skipping test: schema.proto has external imports that aren't available: {}",
+                    err_msg
+                );
                 return;
             }
             panic!("Failed to parse schema.proto: {:?}", e);
@@ -72,7 +72,10 @@ fn test_schema_proto_contains_expected_types() {
         Err(e) => {
             let err_msg = format!("{}", e);
             if err_msg.contains("validate.proto") || err_msg.contains("import") {
-                eprintln!("Skipping test: schema.proto has external imports that aren't available: {}", err_msg);
+                eprintln!(
+                    "Skipping test: schema.proto has external imports that aren't available: {}",
+                    err_msg
+                );
                 return;
             }
             panic!("Failed to parse schema.proto: {:?}", e);
@@ -167,7 +170,9 @@ fn test_parse_nested_messages() {
     if let Some(field) = address_field {
         let is_address_type = match &field.field_type {
             FieldType::Other(name) => name == "Address",
-            FieldType::Option(inner) => matches!(inner.as_ref(), FieldType::Other(name) if name == "Address"),
+            FieldType::Option(inner) => {
+                matches!(inner.as_ref(), FieldType::Other(name) if name == "Address")
+            }
             _ => false,
         };
         assert!(
@@ -589,8 +594,5 @@ fn test_parse_package_extraction() {
     "#;
 
     let result = parse_protobuf_source("package.proto", source).unwrap();
-    assert_eq!(
-        result.package,
-        Some("com.example.myapp.models".to_string())
-    );
+    assert_eq!(result.package, Some("com.example.myapp.models".to_string()));
 }

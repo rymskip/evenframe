@@ -1,8 +1,8 @@
 //! EXTREME EDGE CASES - The most complex, convoluted validator combinations
 //! Testing every feature Evenframe has to offer in the most challenging ways possible.
 
-use evenframe::types::RecordLink;
 use evenframe::Evenframe;
+use evenframe::types::RecordLink;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -265,7 +265,11 @@ pub struct ComplexIdentifiers {
 
     // Hex identifiers
     #[format(HexString(32))]
-    #[validators(StringValidator::Hex, StringValidator::MinLength(32), StringValidator::MaxLength(32))]
+    #[validators(
+        StringValidator::Hex,
+        StringValidator::MinLength(32),
+        StringValidator::MaxLength(32)
+    )]
     pub hex_id_32: String,
 
     #[format(HexString(16))]
@@ -292,7 +296,11 @@ pub struct ComplexIdentifiers {
 
     // Hash values
     #[format(Hash)]
-    #[validators(StringValidator::Hex, StringValidator::MinLength(64), StringValidator::MaxLength(64))]
+    #[validators(
+        StringValidator::Hex,
+        StringValidator::MinLength(64),
+        StringValidator::MaxLength(64)
+    )]
     pub sha256_hash: String,
 
     #[format(Hash)]
@@ -421,7 +429,11 @@ pub struct PersonalInfoExtremes {
 
     // Names
     #[format(FirstName)]
-    #[validators(StringValidator::Alpha, StringValidator::NonEmpty, StringValidator::MaxLength(50))]
+    #[validators(
+        StringValidator::Alpha,
+        StringValidator::NonEmpty,
+        StringValidator::MaxLength(50)
+    )]
     pub first_name: String,
 
     #[format(LastName)]
@@ -512,7 +524,11 @@ pub struct BusinessExtremes {
     pub product_name: String,
 
     #[format(ProductSku)]
-    #[validators(StringValidator::Alphanumeric, StringValidator::MinLength(6), StringValidator::MaxLength(20))]
+    #[validators(
+        StringValidator::Alphanumeric,
+        StringValidator::MinLength(6),
+        StringValidator::MaxLength(20)
+    )]
     pub sku: String,
 
     #[format(ProductName)]
@@ -541,7 +557,11 @@ pub struct BusinessExtremes {
 
     // Credit card (for testing - obviously don't store real ones!)
     #[format(CreditCardNumber)]
-    #[validators(StringValidator::Digits, StringValidator::MinLength(13), StringValidator::MaxLength(19))]
+    #[validators(
+        StringValidator::Digits,
+        StringValidator::MinLength(13),
+        StringValidator::MaxLength(19)
+    )]
     pub test_card_number: String,
 
     #[format(CreditCardNumber)]
@@ -560,13 +580,21 @@ pub struct ValidatedAddress {
     #[validators(StringValidator::NonEmpty, StringValidator::MaxLength(100))]
     pub city: String,
 
-    #[validators(StringValidator::Uppercased, StringValidator::MinLength(2), StringValidator::MaxLength(3))]
+    #[validators(
+        StringValidator::Uppercased,
+        StringValidator::MinLength(2),
+        StringValidator::MaxLength(3)
+    )]
     pub state_code: String,
 
     #[validators(StringValidator::NonEmpty, StringValidator::MaxLength(20))]
     pub postal_code: String,
 
-    #[validators(StringValidator::Uppercased, StringValidator::MinLength(2), StringValidator::MaxLength(2))]
+    #[validators(
+        StringValidator::Uppercased,
+        StringValidator::MinLength(2),
+        StringValidator::MaxLength(2)
+    )]
     pub country_code: String,
 
     #[validators(NumberValidator::Between(-90.0, 90.0))]
@@ -644,7 +672,11 @@ pub struct EdgeCaseUser {
     #[validators(StringValidator::Email, StringValidator::MaxLength(255))]
     pub email: String,
 
-    #[validators(StringValidator::Alphanumeric, StringValidator::MinLength(3), StringValidator::MaxLength(30))]
+    #[validators(
+        StringValidator::Alphanumeric,
+        StringValidator::MinLength(3),
+        StringValidator::MaxLength(30)
+    )]
     pub username: String,
 
     #[format(DateTime)]
@@ -662,10 +694,19 @@ pub struct EdgeCaseUser {
 pub struct EdgeCasePost {
     pub id: String,
 
-    #[edge(name = "post_author", from = "EdgeCasePost", to = "EdgeCaseUser", direction = "from")]
+    #[edge(
+        name = "post_author",
+        from = "EdgeCasePost",
+        to = "EdgeCaseUser",
+        direction = "from"
+    )]
     pub author: RecordLink<EdgeCaseUser>,
 
-    #[validators(StringValidator::NonEmpty, StringValidator::MinLength(5), StringValidator::MaxLength(200))]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MinLength(5),
+        StringValidator::MaxLength(200)
+    )]
     pub title: String,
 
     #[validators(StringValidator::NonEmpty, StringValidator::MinLength(10))]
@@ -701,13 +742,27 @@ pub struct EdgeCasePost {
 pub struct EdgeCaseComment {
     pub id: String,
 
-    #[edge(name = "comment_post", from = "EdgeCaseComment", to = "EdgeCasePost", direction = "from")]
+    #[edge(
+        name = "comment_post",
+        from = "EdgeCaseComment",
+        to = "EdgeCasePost",
+        direction = "from"
+    )]
     pub post: RecordLink<EdgeCasePost>,
 
-    #[edge(name = "comment_author", from = "EdgeCaseComment", to = "EdgeCaseUser", direction = "from")]
+    #[edge(
+        name = "comment_author",
+        from = "EdgeCaseComment",
+        to = "EdgeCaseUser",
+        direction = "from"
+    )]
     pub author: RecordLink<EdgeCaseUser>,
 
-    #[validators(StringValidator::NonEmpty, StringValidator::MinLength(1), StringValidator::MaxLength(10000))]
+    #[validators(
+        StringValidator::NonEmpty,
+        StringValidator::MinLength(1),
+        StringValidator::MaxLength(10000)
+    )]
     pub content: String,
 
     #[format(DateTime)]
@@ -756,7 +811,12 @@ pub enum PaymentMethod {
 pub struct ComplexPayment {
     pub id: String,
 
-    #[edge(name = "payment_user", from = "ComplexPayment", to = "EdgeCaseUser", direction = "from")]
+    #[edge(
+        name = "payment_user",
+        from = "ComplexPayment",
+        to = "EdgeCaseUser",
+        direction = "from"
+    )]
     pub user: RecordLink<EdgeCaseUser>,
 
     pub status: PaymentStatus,
@@ -766,7 +826,11 @@ pub struct ComplexPayment {
     #[validators(NumberValidator::Positive, NumberValidator::LessThan(1000000.0))]
     pub amount: f64,
 
-    #[validators(StringValidator::Uppercased, StringValidator::MinLength(3), StringValidator::MaxLength(3))]
+    #[validators(
+        StringValidator::Uppercased,
+        StringValidator::MinLength(3),
+        StringValidator::MaxLength(3)
+    )]
     pub currency: String,
 
     #[format(CurrencyAmount)]
@@ -864,10 +928,7 @@ pub struct MaxValidatorStacking {
     pub mega_validated_u32: u32,
 
     /// Optional mega validated u32
-    #[validators(
-        NumberValidator::Positive,
-        NumberValidator::Between(1.0, 100.0)
-    )]
+    #[validators(NumberValidator::Positive, NumberValidator::Between(1.0, 100.0))]
     pub optional_mega_u32: Option<u32>,
 
     /// Mega validated i64
@@ -1049,8 +1110,11 @@ mod tests {
             optional_base64_token: Some("b3B0aW9uYWw=".to_string()),
             version: "1.2.3".to_string(),
             optional_version: Some("2.0.0-beta".to_string()),
-            sha256_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
-            optional_hash: Some("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()),
+            sha256_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .to_string(),
+            optional_hash: Some(
+                "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+            ),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("550e8400"));

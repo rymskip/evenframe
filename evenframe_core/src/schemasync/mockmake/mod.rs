@@ -465,6 +465,7 @@ impl<'a> Mockmaker<'a> {
                             all_fields.push(target_field_name.clone());
                             all_fields
                         }
+                        Coordination::OneToOne(field_name) => vec![field_name.clone()],
                         Coordination::InitializeCoherent(dataset) => match dataset {
                             CoherentDataset::Address {
                                 city,
@@ -542,6 +543,7 @@ impl<'a> Mockmaker<'a> {
                     Coordination::InitializeSequential { .. } => "sequential",
                     Coordination::InitializeSum { .. } => "sum",
                     Coordination::InitializeDerive { .. } => "derive",
+                    Coordination::OneToOne(_) => "one_to_one",
                     Coordination::InitializeCoherent(_) => "coherent",
                 };
 
@@ -581,6 +583,7 @@ impl<'a> Mockmaker<'a> {
                             all_fields.push(target_field_name.clone());
                             all_fields
                         }
+                        Coordination::OneToOne(field_name) => vec![field_name.clone()],
                         Coordination::InitializeCoherent(dataset) => match dataset {
                             CoherentDataset::Address {
                                 city,
@@ -648,6 +651,7 @@ impl<'a> Mockmaker<'a> {
                                     all.push(target_field_name.clone());
                                     all
                                 }
+                                Coordination::OneToOne(f) => vec![f.clone()],
                                 Coordination::InitializeCoherent(d) => match d {
                                     CoherentDataset::Address {
                                         city,

@@ -538,9 +538,7 @@ fn test_multiple_validators_comma_separated() {
         // Find lines with multiple validators
         let multi_validator_lines: Vec<&str> = content
             .lines()
-            .filter(|line| {
-                line.contains("validate:") && line.matches(',').count() > 0
-            })
+            .filter(|line| line.contains("validate:") && line.matches(',').count() > 0)
             .collect();
 
         // User.email should have multiple validators: email, minLength(5), maxLength(255)
@@ -591,10 +589,7 @@ fn test_enum_structure() {
             }
         }
 
-        assert!(
-            enum_count > 0,
-            "Schema should contain at least one enum"
-        );
+        assert!(enum_count > 0, "Schema should contain at least one enum");
     }
 }
 
@@ -626,8 +621,12 @@ fn test_field_semicolons() {
             } else if in_enum && !trimmed.is_empty() && trimmed != "{" && trimmed != "}" {
                 // Enum variants can end with comma or nothing (last variant)
                 assert!(
-                    trimmed.ends_with(',') || trimmed.ends_with('0') || trimmed.ends_with('1')
-                        || trimmed.ends_with('2') || trimmed.ends_with('3') || trimmed.ends_with('4')
+                    trimmed.ends_with(',')
+                        || trimmed.ends_with('0')
+                        || trimmed.ends_with('1')
+                        || trimmed.ends_with('2')
+                        || trimmed.ends_with('3')
+                        || trimmed.ends_with('4')
                         || trimmed.ends_with('5'),
                     "Enum variant should have proper format: {}",
                     trimmed
@@ -676,13 +675,7 @@ fn test_customer_table_in_schema() {
 fn test_all_expected_tables_present() {
     if let Some(content) = read_flatbuffers_schema() {
         let expected_tables = vec![
-            "User",
-            "Session",
-            "Product",
-            "Order",
-            "Customer",
-            "Address",
-            "CartItem",
+            "User", "Session", "Product", "Order", "Customer", "Address", "CartItem",
         ];
 
         for table in expected_tables {

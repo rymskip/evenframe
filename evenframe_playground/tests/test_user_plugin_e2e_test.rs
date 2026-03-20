@@ -44,14 +44,16 @@ mod tests {
     #[test]
     fn test_user_email() {
         let mut pm = create_plugin_manager();
-        let result = pm.generate_field_value("test_user", &make_input("email", "Option(String)", 0));
+        let result =
+            pm.generate_field_value("test_user", &make_input("email", "Option(String)", 0));
         assert_eq!(result.unwrap(), "'test@example.com'");
     }
 
     #[test]
     fn test_user_password() {
         let mut pm = create_plugin_manager();
-        let result = pm.generate_field_value("test_user", &make_input("password", "Option(String)", 0));
+        let result =
+            pm.generate_field_value("test_user", &make_input("password", "Option(String)", 0));
         assert_eq!(result.unwrap(), "'TestPassword123!'");
     }
 
@@ -72,7 +74,8 @@ mod tests {
     #[test]
     fn test_user_role() {
         let mut pm = create_plugin_manager();
-        let result = pm.generate_field_value("test_user", &make_input("role", "Other(UserRole)", 0));
+        let result =
+            pm.generate_field_value("test_user", &make_input("role", "Other(UserRole)", 0));
         assert_eq!(result.unwrap(), "'Administrator'");
     }
 
@@ -88,15 +91,23 @@ mod tests {
     #[test]
     fn test_non_zero_index_falls_back() {
         let mut pm = create_plugin_manager();
-        let result = pm.generate_field_value("test_user", &make_input("email", "Option(String)", 1));
-        assert!(result.is_err(), "Index 1 should return error to trigger fallback");
+        let result =
+            pm.generate_field_value("test_user", &make_input("email", "Option(String)", 1));
+        assert!(
+            result.is_err(),
+            "Index 1 should return error to trigger fallback"
+        );
     }
 
     #[test]
     fn test_unknown_field_falls_back() {
         let mut pm = create_plugin_manager();
         // settings is a complex nested type — plugin skips it, evenframe handles it
-        let result = pm.generate_field_value("test_user", &make_input("settings", "Other(Settings)", 0));
-        assert!(result.is_err(), "Complex fields should fall back to evenframe");
+        let result =
+            pm.generate_field_value("test_user", &make_input("settings", "Other(Settings)", 0));
+        assert!(
+            result.is_err(),
+            "Complex fields should fall back to evenframe"
+        );
     }
 }

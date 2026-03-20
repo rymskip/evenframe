@@ -6,8 +6,10 @@
 //! 3. Validation attributes are properly extracted
 //! 4. The parsed types can be used for type generation
 
-use evenframe_core::typesync::flatbuffers_parser::{parse_flatbuffers_file, parse_flatbuffers_source};
 use evenframe_core::types::FieldType;
+use evenframe_core::typesync::flatbuffers_parser::{
+    parse_flatbuffers_file, parse_flatbuffers_source,
+};
 use std::path::PathBuf;
 
 /// Get the path to the generated schema.fbs file
@@ -24,10 +26,7 @@ fn test_parse_generated_schema_fbs() {
     let schema_path = get_schema_fbs_path();
 
     if !schema_path.exists() {
-        eprintln!(
-            "Skipping test: schema.fbs not found at {:?}",
-            schema_path
-        );
+        eprintln!("Skipping test: schema.fbs not found at {:?}", schema_path);
         return;
     }
 
@@ -41,10 +40,7 @@ fn test_parse_generated_schema_fbs() {
     let parsed = result.unwrap();
 
     // Verify namespace is present
-    assert!(
-        parsed.namespace.is_some(),
-        "Schema should have a namespace"
-    );
+    assert!(parsed.namespace.is_some(), "Schema should have a namespace");
 
     // Verify we have some structs
     assert!(
@@ -312,7 +308,11 @@ fn test_parse_with_validation_metadata() {
     let user = &result.structs["UserWithValidation"];
 
     // Check email field has validators
-    let email_field = user.fields.iter().find(|f| f.field_name == "email").unwrap();
+    let email_field = user
+        .fields
+        .iter()
+        .find(|f| f.field_name == "email")
+        .unwrap();
     assert!(
         !email_field.validators.is_empty(),
         "email field should have validators extracted"
@@ -373,7 +373,10 @@ fn test_parse_comments_only() {
     "#;
 
     let result = parse_flatbuffers_source(source);
-    assert!(result.is_ok(), "Comments-only source should parse successfully");
+    assert!(
+        result.is_ok(),
+        "Comments-only source should parse successfully"
+    );
 }
 
 // ============================================================================

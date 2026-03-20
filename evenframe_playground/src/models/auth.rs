@@ -1,5 +1,5 @@
-use evenframe::types::RecordLink;
 use evenframe::Evenframe;
+use evenframe::types::RecordLink;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Evenframe)]
@@ -17,11 +17,19 @@ pub struct User {
 
     /// Email address - validated as email format, min 5 chars, max 255 chars
     #[format(Email)]
-    #[validators(StringValidator::Email, StringValidator::MinLength(5), StringValidator::MaxLength(255))]
+    #[validators(
+        StringValidator::Email,
+        StringValidator::MinLength(5),
+        StringValidator::MaxLength(255)
+    )]
     pub email: String,
 
     /// Username - alphanumeric, min 3 chars, max 50 chars
-    #[validators(StringValidator::Alphanumeric, StringValidator::MinLength(3), StringValidator::MaxLength(50))]
+    #[validators(
+        StringValidator::Alphanumeric,
+        StringValidator::MinLength(3),
+        StringValidator::MaxLength(50)
+    )]
     pub username: String,
 
     /// Password hash - non-empty
@@ -45,7 +53,12 @@ pub struct User {
 pub struct Session {
     pub id: String,
 
-    #[edge(name = "session_user", from = "Session", to = "User", direction = "from")]
+    #[edge(
+        name = "session_user",
+        from = "Session",
+        to = "User",
+        direction = "from"
+    )]
     pub user: RecordLink<User>,
 
     /// Session token - non-empty, min 32 chars for security

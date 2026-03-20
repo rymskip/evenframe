@@ -567,6 +567,18 @@ impl<'a> FieldValueGenerator<'a> {
         rng: &mut ThreadRng,
     ) -> String {
         if let Some(relation) = &table_config.relation {
+            // Check if this field has a OneToOne coordination (sequential 1:1 mapping)
+            let has_one_to_one = table_config
+                .mock_generation_config
+                .as_ref()
+                .map(|c| {
+                    c.coordination_rules.iter().any(|r| {
+                        matches!(r, crate::schemasync::mockmake::coordinate::Coordination::OneToOne(f) if f == field_name)
+                    })
+                })
+                .unwrap_or(false);
+
+            let id_index = *self.id_index;
             let mut pick_relation_record = |tables: &[String], field_label: &str| -> String {
                 for candidate in tables {
                     if let Some(ids) = self.mockmaker.id_map.get(candidate) {
@@ -575,6 +587,11 @@ impl<'a> FieldValueGenerator<'a> {
                                 "There were no id's for the table {}, field {}",
                                 candidate, field_label
                             );
+                        }
+                        if has_one_to_one {
+                            // Sequential 1:1 mapping: record index → target ID
+                            let idx = id_index % ids.len();
+                            return format!("r'{}'", ids[idx]);
                         }
                         return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
                     }

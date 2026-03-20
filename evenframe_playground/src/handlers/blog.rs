@@ -1,21 +1,29 @@
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 /// List all posts (mock data)
 pub async fn list_posts() -> impl IntoResponse {
     let posts = vec![
-        mock_post("post:1", "Getting Started with Rust", "getting-started-with-rust", true),
-        mock_post("post:2", "Building Web APIs with Axum", "building-web-apis-with-axum", true),
+        mock_post(
+            "post:1",
+            "Getting Started with Rust",
+            "getting-started-with-rust",
+            true,
+        ),
+        mock_post(
+            "post:2",
+            "Building Web APIs with Axum",
+            "building-web-apis-with-axum",
+            true,
+        ),
         mock_post("post:3", "Draft Post", "draft-post", false),
     ];
 
     // Filter to only published posts
-    let published: Vec<_> = posts.into_iter().filter(|p| p["published"] == true).collect();
+    let published: Vec<_> = posts
+        .into_iter()
+        .filter(|p| p["published"] == true)
+        .collect();
 
     Json(json!({
         "data": published,
@@ -26,7 +34,12 @@ pub async fn list_posts() -> impl IntoResponse {
 /// Get a single post by ID or slug (mock data)
 pub async fn get_post(Path(id): Path<String>) -> impl IntoResponse {
     if id == "1" || id == "post:1" || id == "getting-started-with-rust" {
-        let post = mock_post("post:1", "Getting Started with Rust", "getting-started-with-rust", true);
+        let post = mock_post(
+            "post:1",
+            "Getting Started with Rust",
+            "getting-started-with-rust",
+            true,
+        );
         (StatusCode::OK, Json(json!({ "data": post })))
     } else {
         (
@@ -103,10 +116,10 @@ fn mock_comment(id: &str, post_id: &str, author_id: &str, content: &str) -> serd
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
-    use axum::Router;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -123,7 +136,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/posts").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/posts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -143,7 +161,12 @@ mod tests {
         let app = app();
 
         let response = app
-            .oneshot(Request::builder().uri("/posts").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/posts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -152,7 +175,10 @@ mod tests {
 
         let posts = json["data"].as_array().unwrap();
         for post in posts {
-            assert_eq!(post["published"], true, "All returned posts should be published");
+            assert_eq!(
+                post["published"], true,
+                "All returned posts should be published"
+            );
         }
     }
 

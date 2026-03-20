@@ -15,27 +15,15 @@ fn get_playground_dir() -> PathBuf {
 fn expected_table_names() -> Vec<&'static str> {
     vec![
         // Auth tables
-        "user",
-        "session",
-        // Blog tables
-        "tag",
-        "author",
-        "post",
-        "comment",
-        // Ecommerce tables
-        "product",
-        "customer",
-        "order",
+        "user", "session", // Blog tables
+        "tag", "author", "post", "comment", // Ecommerce tables
+        "product", "customer", "order",
     ]
 }
 
 /// Expected enum names (should also become tables or types in SurrealDB)
 fn expected_enum_names() -> Vec<&'static str> {
-    vec![
-        "role",
-        "order_status",
-        "product_category",
-    ]
+    vec!["role", "order_status", "product_category"]
 }
 
 /// Expected edge names based on edge attributes
@@ -342,7 +330,14 @@ fn test_product_category_enum_schema() {
     let ecommerce_content = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
         .expect("Failed to read ecommerce.rs");
 
-    let expected_variants = vec!["Electronics", "Clothing", "Books", "Home", "Sports", "Other"];
+    let expected_variants = vec![
+        "Electronics",
+        "Clothing",
+        "Books",
+        "Home",
+        "Sports",
+        "Other",
+    ];
 
     for variant in &expected_variants {
         assert!(
@@ -411,10 +406,7 @@ fn test_mock_data_counts() {
                     mock_line.trim()
                 );
             } else {
-                panic!(
-                    "{} should have #[mock_data] attribute",
-                    struct_name
-                );
+                panic!("{} should have #[mock_data] attribute", struct_name);
             }
         }
     }

@@ -451,7 +451,10 @@ fn test_protobuf_type_mappings() {
         );
 
         // Boolean types
-        assert!(content.contains(" bool "), "Schema should contain bool types");
+        assert!(
+            content.contains(" bool "),
+            "Schema should contain bool types"
+        );
 
         // Float types (f64 -> double)
         assert!(
@@ -641,7 +644,13 @@ fn test_enum_structure() {
         // The variant name uses UPPER_SNAKE_CASE based on the enum name
         for line in content.lines() {
             if line.trim().starts_with("enum ") {
-                let enum_name = line.trim().strip_prefix("enum ").unwrap().split_whitespace().next().unwrap();
+                let enum_name = line
+                    .trim()
+                    .strip_prefix("enum ")
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap();
                 // Check that there's an UNSPECIFIED = 0 variant somewhere in the enum
                 // The exact format depends on how the enum name is converted to UPPER_SNAKE_CASE
                 assert!(
@@ -667,7 +676,11 @@ fn test_field_numbers() {
                 in_message = true;
             } else if trimmed == "}" {
                 in_message = false;
-            } else if in_message && !trimmed.is_empty() && trimmed != "{" && !trimmed.starts_with("//") {
+            } else if in_message
+                && !trimmed.is_empty()
+                && trimmed != "{"
+                && !trimmed.starts_with("//")
+            {
                 // Field lines should contain " = N;" pattern
                 assert!(
                     trimmed.contains(" = ") && trimmed.contains(';'),
@@ -692,7 +705,11 @@ fn test_field_semicolons() {
                 in_message = true;
             } else if trimmed == "}" {
                 in_message = false;
-            } else if in_message && !trimmed.is_empty() && trimmed != "{" && !trimmed.starts_with("//") {
+            } else if in_message
+                && !trimmed.is_empty()
+                && trimmed != "{"
+                && !trimmed.starts_with("//")
+            {
                 assert!(
                     trimmed.ends_with(';'),
                     "Message field should end with semicolon: {}",
@@ -742,13 +759,7 @@ fn test_customer_message_in_schema() {
 fn test_all_expected_messages_present() {
     if let Some(content) = read_protobuf_schema() {
         let expected_messages = vec![
-            "User",
-            "Session",
-            "Product",
-            "Order",
-            "Customer",
-            "Address",
-            "CartItem",
+            "User", "Session", "Product", "Order", "Customer", "Address", "CartItem",
         ];
 
         for message in expected_messages {

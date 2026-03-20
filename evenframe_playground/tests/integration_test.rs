@@ -84,8 +84,8 @@ fn test_evenframe_attributes() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Check auth models for Evenframe attributes
-    let auth_content =
-        fs::read_to_string(playground_dir.join("src/models/auth.rs")).expect("Failed to read auth.rs");
+    let auth_content = fs::read_to_string(playground_dir.join("src/models/auth.rs"))
+        .expect("Failed to read auth.rs");
 
     // Check for Evenframe derive
     assert!(
@@ -122,8 +122,8 @@ fn test_edge_relationships() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Check blog models for edge relationships
-    let blog_content =
-        fs::read_to_string(playground_dir.join("src/models/blog.rs")).expect("Failed to read blog.rs");
+    let blog_content = fs::read_to_string(playground_dir.join("src/models/blog.rs"))
+        .expect("Failed to read blog.rs");
 
     // Author -> User edge
     assert!(
@@ -156,8 +156,8 @@ fn test_edge_relationships() {
     );
 
     // Check ecommerce models for edge relationships
-    let ecommerce_content =
-        fs::read_to_string(playground_dir.join("src/models/ecommerce.rs")).expect("Failed to read ecommerce.rs");
+    let ecommerce_content = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
+        .expect("Failed to read ecommerce.rs");
 
     // Customer -> User edge
     assert!(
@@ -177,8 +177,8 @@ fn test_edge_relationships() {
 fn test_record_link_types() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let auth_content =
-        fs::read_to_string(playground_dir.join("src/models/auth.rs")).expect("Failed to read auth.rs");
+    let auth_content = fs::read_to_string(playground_dir.join("src/models/auth.rs"))
+        .expect("Failed to read auth.rs");
 
     // Session.user should be RecordLink<User>
     assert!(
@@ -186,8 +186,8 @@ fn test_record_link_types() {
         "Session.user should be RecordLink<User>"
     );
 
-    let blog_content =
-        fs::read_to_string(playground_dir.join("src/models/blog.rs")).expect("Failed to read blog.rs");
+    let blog_content = fs::read_to_string(playground_dir.join("src/models/blog.rs"))
+        .expect("Failed to read blog.rs");
 
     // Author.user should be RecordLink<User>
     assert!(
@@ -213,8 +213,8 @@ fn test_record_link_types() {
 fn test_non_persistable_structs() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let ecommerce_content =
-        fs::read_to_string(playground_dir.join("src/models/ecommerce.rs")).expect("Failed to read ecommerce.rs");
+    let ecommerce_content = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
+        .expect("Failed to read ecommerce.rs");
 
     // Address should not have an id field (non-persistable)
     let address_start = ecommerce_content
@@ -252,19 +252,25 @@ fn test_non_persistable_structs() {
 fn test_enum_definitions() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let auth_content =
-        fs::read_to_string(playground_dir.join("src/models/auth.rs")).expect("Failed to read auth.rs");
+    let auth_content = fs::read_to_string(playground_dir.join("src/models/auth.rs"))
+        .expect("Failed to read auth.rs");
 
     // Role enum variants
-    assert!(auth_content.contains("Admin"), "Role should have Admin variant");
+    assert!(
+        auth_content.contains("Admin"),
+        "Role should have Admin variant"
+    );
     assert!(
         auth_content.contains("Moderator"),
         "Role should have Moderator variant"
     );
-    assert!(auth_content.contains("Guest"), "Role should have Guest variant");
+    assert!(
+        auth_content.contains("Guest"),
+        "Role should have Guest variant"
+    );
 
-    let ecommerce_content =
-        fs::read_to_string(playground_dir.join("src/models/ecommerce.rs")).expect("Failed to read ecommerce.rs");
+    let ecommerce_content = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
+        .expect("Failed to read ecommerce.rs");
 
     // OrderStatus enum variants
     assert!(
@@ -311,8 +317,7 @@ fn test_evenframe_config() {
 
     assert!(config_path.exists(), "evenframe.toml should exist");
 
-    let config_content =
-        fs::read_to_string(&config_path).expect("Failed to read evenframe.toml");
+    let config_content = fs::read_to_string(&config_path).expect("Failed to read evenframe.toml");
 
     // Check for required sections
     assert!(
@@ -423,12 +428,15 @@ fn test_mock_data_values() {
                 let end = line[start..].find(")").unwrap() + start;
                 let n_str = &line[start..end];
 
-                let n: u32 = n_str
-                    .parse()
-                    .unwrap_or_else(|_| panic!("mock_data n value should be valid integer: {}", n_str));
+                let n: u32 = n_str.parse().unwrap_or_else(|_| {
+                    panic!("mock_data n value should be valid integer: {}", n_str)
+                });
 
                 assert!(n > 0, "mock_data n value should be positive");
-                assert!(n <= 1000, "mock_data n value should be reasonable (<= 1000)");
+                assert!(
+                    n <= 1000,
+                    "mock_data n value should be reasonable (<= 1000)"
+                );
             }
         }
     }
