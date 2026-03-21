@@ -1,6 +1,9 @@
 use evenframe_core::{
-    derive::attributes::{parse_annotation_attributes, parse_macroforge_derive_attribute},
-    types::FieldType,
+    derive::attributes::{
+        parse_annotation_attributes, parse_macroforge_derive_attribute,
+        parse_serde_enum_representation,
+    },
+    types::{EnumRepresentation, FieldType},
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -22,6 +25,27 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
         let enum_annotations = match parse_annotation_attributes(&input.attrs) {
             Ok(annotations) => annotations,
             Err(err) => return err.to_compile_error(),
+        };
+
+        // Parse serde enum representation
+        let representation = match parse_serde_enum_representation(&input.attrs) {
+            Ok(repr) => repr,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        let representation_tokens = match &representation {
+            EnumRepresentation::ExternallyTagged => {
+                quote! { EnumRepresentation::ExternallyTagged }
+            }
+            EnumRepresentation::InternallyTagged { tag } => {
+                quote! { EnumRepresentation::InternallyTagged { tag: #tag.to_string() } }
+            }
+            EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                quote! { EnumRepresentation::AdjacentlyTagged { tag: #tag.to_string(), content: #content.to_string() } }
+            }
+            EnumRepresentation::Untagged => {
+                quote! { EnumRepresentation::Untagged }
+            }
         };
 
         let mut variant_tokens = Vec::new();
@@ -155,7 +179,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
 
         quote! {
             const _: () = {
-                use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType};
+                use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation};
                 use ::evenframe::traits::EvenframeTaggedUnion;
 
                 impl EvenframeTaggedUnion for #ident {
@@ -165,6 +189,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                         TaggedUnion {
                             enum_name: #enum_name.to_string(),
                             variants: vec![#(#variant_tokens),*],
+                            representation: #representation_tokens,
                             doccom: None,
                             macroforge_derives: macroforge_derives_val,
                             annotations: enum_annotations_val,

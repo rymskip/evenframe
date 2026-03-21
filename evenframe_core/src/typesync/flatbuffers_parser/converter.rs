@@ -3,7 +3,9 @@
 use super::ast::{
     EnumDef, FbsType, FieldDef, FlatBuffersSchema, ScalarType, StructDef, TableDef, UnionDef,
 };
-use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData};
+use crate::types::{
+    EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData,
+};
 use std::collections::HashMap;
 
 /// Result of parsing and converting a FlatBuffers schema.
@@ -156,6 +158,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
     TaggedUnion {
         enum_name: enum_def.name.clone(),
         variants,
+        representation: EnumRepresentation::default(),
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
@@ -183,6 +186,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
     TaggedUnion {
         enum_name: union_def.name.clone(),
         variants,
+        representation: EnumRepresentation::default(),
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],

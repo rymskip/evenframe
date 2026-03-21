@@ -2,7 +2,7 @@ use crate::{
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::format::Format,
-    types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData},
+    types::{EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -334,16 +334,44 @@ impl<'a> FieldValueGenerator<'a> {
             .choose(rng)
             .expect("Something went wrong selecting a random enum variant, returned None");
         if let Some(ref variant_data) = variant.data {
-            // Generate dummy value for the enum variant's data, if available.
-            let variant_data_field_type = match variant_data {
+            let inner = match variant_data {
                 VariantData::InlineStruct(enum_struct) => {
-                    &FieldType::Other(enum_struct.struct_name.clone())
+                    self.generate_field_value(&FieldType::Other(enum_struct.struct_name.clone()))
                 }
-                VariantData::DataStructureRef(field_type) => field_type,
+                VariantData::DataStructureRef(field_type) => self.generate_field_value(field_type),
             };
-            self.generate_field_value(variant_data_field_type)
+            match &tagged_union.representation {
+                EnumRepresentation::ExternallyTagged => {
+                    format!("{{ {}: {} }}", variant.name, inner)
+                }
+                EnumRepresentation::InternallyTagged { tag } => {
+                    if let VariantData::InlineStruct(_) = variant_data {
+                        let trimmed = inner.trim();
+                        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                            let body = &trimmed[1..trimmed.len() - 1];
+                            format!("{{ {}: '{}', {} }}", tag, variant.name, body.trim())
+                        } else {
+                            format!("{{ {}: '{}' }}", tag, variant.name)
+                        }
+                    } else {
+                        // DataStructureRef — fall back to external
+                        format!("{{ {}: {} }}", variant.name, inner)
+                    }
+                }
+                EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                    format!("{{ {}: '{}', {}: {} }}", tag, variant.name, content, inner)
+                }
+                EnumRepresentation::Untagged => inner,
+            }
         } else {
-            format!("'{}'", variant.name)
+            // Unit variant
+            match &tagged_union.representation {
+                EnumRepresentation::InternallyTagged { tag }
+                | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                    format!("{{ {}: '{}' }}", tag, variant.name)
+                }
+                _ => format!("'{}'", variant.name),
+            }
         }
     }
 

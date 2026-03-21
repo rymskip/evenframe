@@ -530,6 +530,10 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
     let enum_annotations = parse_annotation_attributes(&item_enum.attrs)
         .ok()
         .unwrap_or_default();
+    let representation =
+        crate::derive::attributes::parse_serde_enum_representation(&item_enum.attrs)
+            .ok()
+            .unwrap_or_default();
 
     for variant in &item_enum.variants {
         let variant_name = variant.ident.to_string();
@@ -591,6 +595,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
     Some(TaggedUnion {
         enum_name,
         variants,
+        representation,
         doccom: enum_doccom,
         macroforge_derives: enum_macroforge_derives,
         annotations: enum_annotations,

@@ -3,7 +3,7 @@ use crate::{
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::coordinate::CoordinationId,
     schemasync::mockmake::format::Format,
-    types::{FieldType, StructField, VariantData},
+    types::{EnumRepresentation, FieldType, StructField, VariantData},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -25,11 +25,27 @@ struct Frame<'a> {
 
 enum WorkItem<'a> {
     Generate(Frame<'a>),
-    AssembleVec { count: usize },
-    AssembleTuple { count: usize },
-    AssembleStruct { field_names: Vec<String> },
-    AssembleMap { count: usize },
+    AssembleVec {
+        count: usize,
+    },
+    AssembleTuple {
+        count: usize,
+    },
+    AssembleStruct {
+        field_names: Vec<String>,
+    },
+    AssembleMap {
+        count: usize,
+    },
     AssembleEnum,
+    WrapInVariantKey {
+        variant_name: String,
+    },
+    AssembleTaggedStruct {
+        tag_key: String,
+        tag_value: String,
+        field_names: Vec<String>,
+    },
 }
 
 #[derive(Debug, Builder)]
@@ -446,8 +462,8 @@ impl<'a> FieldValueGenerator<'a> {
                                         .variants
                                         .choose(&mut rng)
                                         .expect("Failed to select a random enum variant");
+                                    let repr = &tagged_union.representation;
                                     if let Some(ref variant_data) = variant.data {
-                                        // This logic is now restructured.
                                         match variant_data {
                                             VariantData::InlineStruct(enum_struct) => {
                                                 let struct_config = self.mockmaker.objects.get(&enum_struct.struct_name).expect("Inline enum struct should have corresponding object definition");
@@ -456,11 +472,53 @@ impl<'a> FieldValueGenerator<'a> {
                                                     .iter()
                                                     .map(|f| f.field_name.clone())
                                                     .collect();
-                                                // Since the value of an enum with data replaces the enum, we just push the struct work items.
-                                                work_stack
-                                                    .push(WorkItem::AssembleStruct { field_names });
 
-                                                // Add current enum type to visited types
+                                                match repr {
+                                                    EnumRepresentation::ExternallyTagged => {
+                                                        work_stack.push(
+                                                            WorkItem::WrapInVariantKey {
+                                                                variant_name: variant.name.clone(),
+                                                            },
+                                                        );
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            field_names,
+                                                        });
+                                                    }
+                                                    EnumRepresentation::InternallyTagged {
+                                                        tag,
+                                                    } => {
+                                                        let mut names_with_tag = vec![tag.clone()];
+                                                        names_with_tag.extend(field_names);
+                                                        work_stack.push(
+                                                            WorkItem::AssembleTaggedStruct {
+                                                                tag_key: tag.clone(),
+                                                                tag_value: variant.name.clone(),
+                                                                field_names: names_with_tag,
+                                                            },
+                                                        );
+                                                    }
+                                                    EnumRepresentation::AdjacentlyTagged {
+                                                        tag,
+                                                        content,
+                                                    } => {
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            field_names: vec![
+                                                                tag.clone(),
+                                                                content.clone(),
+                                                            ],
+                                                        });
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            field_names,
+                                                        });
+                                                        // tag value will be pushed after struct fields
+                                                    }
+                                                    EnumRepresentation::Untagged => {
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            field_names,
+                                                        });
+                                                    }
+                                                }
+
                                                 let mut new_visited = ctx.visited_types.clone();
                                                 new_visited.insert(type_name.clone());
 
@@ -480,9 +538,45 @@ impl<'a> FieldValueGenerator<'a> {
                                                     };
                                                     work_stack.push(WorkItem::Generate(new_ctx));
                                                 }
+
+                                                // For adjacently tagged, push tag value after struct fields (processed first due to LIFO)
+                                                if let EnumRepresentation::AdjacentlyTagged {
+                                                    ..
+                                                } = repr
+                                                {
+                                                    value_stack.push(format!("'{}'", variant.name));
+                                                }
                                             }
                                             VariantData::DataStructureRef(field_type) => {
-                                                work_stack.push(WorkItem::AssembleEnum);
+                                                match repr {
+                                                    EnumRepresentation::ExternallyTagged
+                                                    | EnumRepresentation::InternallyTagged {
+                                                        ..
+                                                    } => {
+                                                        work_stack.push(
+                                                            WorkItem::WrapInVariantKey {
+                                                                variant_name: variant.name.clone(),
+                                                            },
+                                                        );
+                                                    }
+                                                    EnumRepresentation::AdjacentlyTagged {
+                                                        tag,
+                                                        content,
+                                                    } => {
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            field_names: vec![
+                                                                tag.clone(),
+                                                                content.clone(),
+                                                            ],
+                                                        });
+                                                        // Push the tag value directly; inner value comes from Generate
+                                                        value_stack
+                                                            .push(format!("'{}'", variant.name));
+                                                    }
+                                                    EnumRepresentation::Untagged => {
+                                                        work_stack.push(WorkItem::AssembleEnum);
+                                                    }
+                                                }
                                                 work_stack.push(WorkItem::Generate(Frame {
                                                     field_type,
                                                     ..ctx.clone()
@@ -490,7 +584,21 @@ impl<'a> FieldValueGenerator<'a> {
                                             }
                                         }
                                     } else {
-                                        value_stack.push(format!("'{}'", variant.name));
+                                        // Unit variant
+                                        match repr {
+                                            EnumRepresentation::InternallyTagged { tag }
+                                            | EnumRepresentation::AdjacentlyTagged {
+                                                tag, ..
+                                            } => {
+                                                value_stack.push(format!(
+                                                    "{{ {}: '{}' }}",
+                                                    tag, variant.name
+                                                ));
+                                            }
+                                            _ => {
+                                                value_stack.push(format!("'{}'", variant.name));
+                                            }
+                                        }
                                     }
                                 } else {
                                     panic!(
@@ -532,6 +640,29 @@ impl<'a> FieldValueGenerator<'a> {
                 }
                 WorkItem::AssembleEnum { .. } => {
                     // No action needed; the generated value just stays on the stack.
+                }
+                WorkItem::WrapInVariantKey { variant_name } => {
+                    let inner = value_stack.pop().unwrap();
+                    value_stack.push(format!("{{ {}: {} }}", variant_name, inner));
+                }
+                WorkItem::AssembleTaggedStruct {
+                    tag_key,
+                    tag_value,
+                    field_names,
+                } => {
+                    // Like AssembleStruct but the first field is the tag with a known value
+                    let data_count = field_names.len() - 1; // minus the tag field
+                    let data_values: Vec<_> = value_stack
+                        .drain(value_stack.len() - data_count..)
+                        .collect();
+                    let mut assignments: Vec<String> =
+                        vec![format!("{}: '{}'", tag_key, tag_value)];
+                    for (name, value) in
+                        field_names.into_iter().skip(1).zip(data_values.into_iter())
+                    {
+                        assignments.push(format!("{}: {}", name, value));
+                    }
+                    value_stack.push(format!("{{ {} }}", assignments.join(", ")));
                 }
             }
         }

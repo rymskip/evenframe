@@ -2,7 +2,7 @@
 use crate::schemasync::TableConfig;
 #[cfg(feature = "surrealdb")]
 use crate::types::StructField;
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use rand::{rng, seq::IndexedRandom};
 use std::collections::HashMap;
@@ -152,18 +152,57 @@ pub fn field_type_to_default_value(
                     trace!("Chosen variant: {}", chosen_variant.name);
                     // If the variant has data, generate a default for it.
                     if let Some(variant_data) = &chosen_variant.data {
-                        let variant_data_field_type = match variant_data {
-                            VariantData::InlineStruct(enum_struct) => {
-                                &FieldType::Other(enum_struct.struct_name.clone())
+                        let inner_default = match variant_data {
+                            VariantData::InlineStruct(enum_struct) => field_type_to_default_value(
+                                &FieldType::Other(enum_struct.struct_name.clone()),
+                                structs,
+                                enums,
+                            ),
+                            VariantData::DataStructureRef(field_type) => {
+                                field_type_to_default_value(field_type, structs, enums)
                             }
-                            VariantData::DataStructureRef(field_type) => field_type,
                         };
-                        let data_default =
-                            field_type_to_default_value(variant_data_field_type, structs, enums);
-                        return data_default;
+                        return match &enum_schema.representation {
+                            EnumRepresentation::ExternallyTagged => {
+                                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+                            }
+                            EnumRepresentation::InternallyTagged { tag } => {
+                                if let VariantData::InlineStruct(_) = variant_data {
+                                    // Merge tag into the struct — strip outer braces and prepend tag
+                                    let trimmed = inner_default.trim();
+                                    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                                        let inner = &trimmed[1..trimmed.len() - 1];
+                                        format!(
+                                            "{{ {}: '\"{}\"', {} }}",
+                                            tag,
+                                            chosen_variant.name,
+                                            inner.trim()
+                                        )
+                                    } else {
+                                        format!("{{ {}: '\"{}\"' }}", tag, chosen_variant.name)
+                                    }
+                                } else {
+                                    // DataStructureRef — serde doesn't support this, fall back to external
+                                    format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+                                }
+                            }
+                            EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                                format!(
+                                    "{{ {}: '\"{}\"', {}: {} }}",
+                                    tag, chosen_variant.name, content, inner_default
+                                )
+                            }
+                            EnumRepresentation::Untagged => inner_default,
+                        };
                     } else {
-                        // A variant without data
-                        return format!("'\"{}\"", chosen_variant.name);
+                        // A unit variant without data
+                        return match &enum_schema.representation {
+                            EnumRepresentation::InternallyTagged { tag }
+                            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                                format!("{{ {}: '\"{}\"' }}", tag, chosen_variant.name)
+                            }
+                            _ => format!("'\"{}\"", chosen_variant.name),
+                        };
                     }
                 } else {
                     // If no variants, fallback to undefined
@@ -365,24 +404,63 @@ pub fn field_type_to_surql_default(
                 );
                 let chosen_variant = &enum_schema.variants[0];
                 if let Some(variant_data) = &chosen_variant.data {
-                    let variant_data_field_type = match variant_data {
-                        VariantData::InlineStruct(enum_struct) => {
-                            &FieldType::Other(enum_struct.struct_name.clone())
-                        }
-                        VariantData::DataStructureRef(field_type) => field_type,
+                    let inner_default = match variant_data {
+                        VariantData::InlineStruct(enum_struct) => field_type_to_surql_default(
+                            field_name,
+                            table_name,
+                            &FieldType::Other(enum_struct.struct_name.clone()),
+                            enums,
+                            app_structs,
+                            persistable_structs,
+                        ),
+                        VariantData::DataStructureRef(field_type) => field_type_to_surql_default(
+                            field_name,
+                            table_name,
+                            field_type,
+                            enums,
+                            app_structs,
+                            persistable_structs,
+                        ),
                     };
-                    // For enum with data, return the data's default
-                    field_type_to_surql_default(
-                        field_name,
-                        table_name,
-                        variant_data_field_type,
-                        enums,
-                        app_structs,
-                        persistable_structs,
-                    )
+                    match &enum_schema.representation {
+                        EnumRepresentation::ExternallyTagged => {
+                            format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+                        }
+                        EnumRepresentation::InternallyTagged { tag } => {
+                            if let VariantData::InlineStruct(_) = variant_data {
+                                let trimmed = inner_default.trim();
+                                if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                                    let inner = &trimmed[1..trimmed.len() - 1];
+                                    format!(
+                                        "{{ {}: '{}', {} }}",
+                                        tag,
+                                        chosen_variant.name,
+                                        inner.trim()
+                                    )
+                                } else {
+                                    format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+                                }
+                            } else {
+                                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+                            }
+                        }
+                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                            format!(
+                                "{{ {}: '{}', {}: {} }}",
+                                tag, chosen_variant.name, content, inner_default
+                            )
+                        }
+                        EnumRepresentation::Untagged => inner_default,
+                    }
                 } else {
                     // For simple enum variant
-                    format!("'{}'", chosen_variant.name)
+                    match &enum_schema.representation {
+                        EnumRepresentation::InternallyTagged { tag }
+                        | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                            format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+                        }
+                        _ => format!("'{}'", chosen_variant.name),
+                    }
                 }
             }
             // Check if it's a struct
@@ -564,23 +642,68 @@ pub fn field_type_to_surreal_type(
                     .iter()
                     .map(|v| {
                         if let Some(variant_data) = &v.data {
-                            let variant_data_field_type = match variant_data {
+                            let inner_type = match variant_data {
                                 VariantData::InlineStruct(enum_struct) => {
-                                    &FieldType::Other(enum_struct.struct_name.clone())
+                                    let (t, _, _) = field_type_to_surreal_type(
+                                        field_name,
+                                        table_name,
+                                        &FieldType::Other(enum_struct.struct_name.clone()),
+                                        enums,
+                                        app_structs,
+                                        persistable_structs,
+                                    );
+                                    t
                                 }
-                                VariantData::DataStructureRef(field_type) => field_type,
+                                VariantData::DataStructureRef(field_type) => {
+                                    let (t, _, _) = field_type_to_surreal_type(
+                                        field_name,
+                                        table_name,
+                                        field_type,
+                                        enums,
+                                        app_structs,
+                                        persistable_structs,
+                                    );
+                                    t
+                                }
                             };
-                            let (variant_type, _, _) = field_type_to_surreal_type(
-                                field_name,
-                                table_name,
-                                variant_data_field_type,
-                                enums,
-                                app_structs,
-                                persistable_structs,
-                            );
-                            variant_type
+                            match &enum_def.representation {
+                                EnumRepresentation::ExternallyTagged => {
+                                    format!("{{ {}: {} }}", v.name, inner_type)
+                                }
+                                EnumRepresentation::InternallyTagged { tag } => {
+                                    if let VariantData::InlineStruct(_) = variant_data {
+                                        let trimmed = inner_type.trim();
+                                        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                                            let inner = &trimmed[1..trimmed.len() - 1];
+                                            format!(
+                                                "{{ {}: \"{}\", {} }}",
+                                                tag,
+                                                v.name,
+                                                inner.trim()
+                                            )
+                                        } else {
+                                            format!("{{ {}: \"{}\" }}", tag, v.name)
+                                        }
+                                    } else {
+                                        format!("{{ {}: {} }}", v.name, inner_type)
+                                    }
+                                }
+                                EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                                    format!(
+                                        "{{ {}: \"{}\", {}: {} }}",
+                                        tag, v.name, content, inner_type
+                                    )
+                                }
+                                EnumRepresentation::Untagged => inner_type,
+                            }
                         } else {
-                            format!("\"{}\"", v.name)
+                            match &enum_def.representation {
+                                EnumRepresentation::InternallyTagged { tag }
+                                | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                                    format!("{{ {}: \"{}\" }}", tag, v.name)
+                                }
+                                _ => format!("\"{}\"", v.name),
+                            }
                         }
                     })
                     .collect();

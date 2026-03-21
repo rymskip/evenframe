@@ -7,7 +7,7 @@ use crate::{
         Direction, EdgeConfig,
         mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
     },
-    types::StructField,
+    types::{EnumRepresentation, StructField},
 };
 use std::{collections::HashMap, convert::TryFrom};
 
@@ -587,6 +587,60 @@ pub fn parse_annotation_attributes(attrs: &[Attribute]) -> Result<Vec<String>, s
     Ok(annotations)
 }
 
+pub fn parse_serde_enum_representation(
+    attrs: &[Attribute],
+) -> Result<EnumRepresentation, syn::Error> {
+    let mut tag: Option<String> = None;
+    let mut content: Option<String> = None;
+    let mut untagged = false;
+
+    for attr in attrs {
+        if attr.path().is_ident("serde") {
+            let nested: syn::punctuated::Punctuated<Meta, syn::Token![,]> =
+                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+
+            for meta in &nested {
+                match meta {
+                    Meta::NameValue(nv) if nv.path.is_ident("tag") => {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = &nv.value
+                        {
+                            tag = Some(lit.value());
+                        }
+                    }
+                    Meta::NameValue(nv) if nv.path.is_ident("content") => {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = &nv.value
+                        {
+                            content = Some(lit.value());
+                        }
+                    }
+                    Meta::Path(p) if p.is_ident("untagged") => {
+                        untagged = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if untagged {
+        return Ok(EnumRepresentation::Untagged);
+    }
+
+    match (tag, content) {
+        (Some(t), Some(c)) => Ok(EnumRepresentation::AdjacentlyTagged { tag: t, content: c }),
+        (Some(t), None) => Ok(EnumRepresentation::InternallyTagged { tag: t }),
+        (None, Some(_)) => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[serde(content = \"...\")] requires #[serde(tag = \"...\")]",
+        )),
+        (None, None) => Ok(EnumRepresentation::ExternallyTagged),
+    }
+}
+
 pub fn parse_format_attribute(
     attrs: &[Attribute],
 ) -> Result<Option<proc_macro2::TokenStream>, syn::Error> {
@@ -800,5 +854,66 @@ mod tests {
         let attrs: Vec<Attribute> = vec![parse_quote!(#[event("")])];
         let result = parse_event_attributes(&attrs);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_serde_no_attrs_returns_externally_tagged() {
+        let attrs: Vec<Attribute> = vec![];
+        let result = parse_serde_enum_representation(&attrs).unwrap();
+        assert_eq!(result, EnumRepresentation::ExternallyTagged);
+    }
+
+    #[test]
+    fn parse_serde_tag_only_returns_internally_tagged() {
+        let attrs: Vec<Attribute> = vec![parse_quote!(#[serde(tag = "type")])];
+        let result = parse_serde_enum_representation(&attrs).unwrap();
+        assert_eq!(
+            result,
+            EnumRepresentation::InternallyTagged {
+                tag: "type".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_serde_tag_and_content_returns_adjacently_tagged() {
+        let attrs: Vec<Attribute> = vec![parse_quote!(#[serde(tag = "t", content = "c")])];
+        let result = parse_serde_enum_representation(&attrs).unwrap();
+        assert_eq!(
+            result,
+            EnumRepresentation::AdjacentlyTagged {
+                tag: "t".to_string(),
+                content: "c".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_serde_untagged() {
+        let attrs: Vec<Attribute> = vec![parse_quote!(#[serde(untagged)])];
+        let result = parse_serde_enum_representation(&attrs).unwrap();
+        assert_eq!(result, EnumRepresentation::Untagged);
+    }
+
+    #[test]
+    fn parse_serde_content_without_tag_errors() {
+        let attrs: Vec<Attribute> = vec![parse_quote!(#[serde(content = "c")])];
+        let result = parse_serde_enum_representation(&attrs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_serde_ignores_non_serde_attrs() {
+        let attrs: Vec<Attribute> = vec![
+            parse_quote!(#[derive(Debug)]),
+            parse_quote!(#[serde(tag = "kind")]),
+        ];
+        let result = parse_serde_enum_representation(&attrs).unwrap();
+        assert_eq!(
+            result,
+            EnumRepresentation::InternallyTagged {
+                tag: "kind".to_string()
+            }
+        );
     }
 }

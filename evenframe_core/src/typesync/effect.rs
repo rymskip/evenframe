@@ -1,5 +1,5 @@
 use crate::dependency::{RecursionInfo, analyse_recursion, deps_of};
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
@@ -89,15 +89,7 @@ pub fn generate_effect_schema_string(
                     .variants
                     .iter()
                     .map(|v| {
-                        v.data
-                            .as_ref()
-                            .map(|variant_data| match variant_data {
-                                VariantData::InlineStruct(_) => v.name.to_case(Case::Pascal),
-                                VariantData::DataStructureRef(field_type) => {
-                                    to_schema(field_type, &name, &processed)
-                                }
-                            })
-                            .unwrap_or_else(|| format!("Schema.Literal(\"{}\")", v.name))
+                        enum_variant_to_schema(v, &e.representation, &name, &to_schema, &processed)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -218,20 +210,178 @@ fn encoded_alias_for_enum(en: &TaggedUnion) -> String {
     let union = en
         .variants
         .iter()
-        .map(|v| match &v.data {
-            Some(variant_data) => match variant_data {
-                VariantData::InlineStruct(_) => {
-                    // For inline structs, use the variant name + "Encoded"
-                    format!("{}Encoded", v.name.to_case(Case::Pascal))
-                }
-                VariantData::DataStructureRef(field_type) => field_type_to_ts_encoded(field_type),
-            },
-            None => format!("\"{}\"", v.name),
-        })
+        .map(|v| enum_variant_to_encoded(v, &en.representation))
         .collect::<Vec<_>>()
         .join(" | ");
 
     format!("export type {}Encoded = {};\n\n", name, union)
+}
+
+// ----- Representation-Aware Variant Helpers --------------------------------
+
+/// Converts a single enum variant into its Effect Schema representation,
+/// taking the serde `EnumRepresentation` into account.
+fn enum_variant_to_schema<F>(
+    v: &crate::types::Variant,
+    repr: &EnumRepresentation,
+    enum_name: &str,
+    to_schema: &F,
+    processed: &HashSet<String>,
+) -> String
+where
+    F: Fn(&FieldType, &str, &HashSet<String>) -> String,
+{
+    match repr {
+        EnumRepresentation::ExternallyTagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.Struct({{ {}: {} }})",
+                    v.name,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "Schema.Struct({{ {}: {} }})",
+                    v.name,
+                    to_schema(field_type, enum_name, processed)
+                )
+            }
+            None => format!("Schema.Literal(\"{}\")", v.name),
+        },
+        EnumRepresentation::InternallyTagged { tag } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.extend({}, Schema.Struct({{ {}: Schema.Literal(\"{}\") }}))",
+                    v.name.to_case(Case::Pascal),
+                    tag,
+                    v.name
+                )
+            }
+            // InternallyTagged with DataStructureRef falls back to externally-tagged
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "Schema.Struct({{ {}: {} }})",
+                    v.name,
+                    to_schema(field_type, enum_name, processed)
+                )
+            }
+            None => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
+                    tag, v.name
+                )
+            }
+        },
+        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
+                    tag,
+                    v.name,
+                    content,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
+                    tag,
+                    v.name,
+                    content,
+                    to_schema(field_type, enum_name, processed)
+                )
+            }
+            None => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
+                    tag, v.name
+                )
+            }
+        },
+        EnumRepresentation::Untagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => v.name.to_case(Case::Pascal),
+            Some(VariantData::DataStructureRef(field_type)) => {
+                to_schema(field_type, enum_name, processed)
+            }
+            None => format!("Schema.Literal(\"{}\")", v.name),
+        },
+    }
+}
+
+/// Converts a single enum variant into its TypeScript Encoded type representation,
+/// taking the serde `EnumRepresentation` into account.
+fn enum_variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> String {
+    match repr {
+        EnumRepresentation::ExternallyTagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{{ readonly {}: {}Encoded }}",
+                    v.name,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "{{ readonly {}: {} }}",
+                    v.name,
+                    field_type_to_ts_encoded(field_type)
+                )
+            }
+            None => format!("\"{}\"", v.name),
+        },
+        EnumRepresentation::InternallyTagged { tag } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{}Encoded & {{ readonly {}: \"{}\" }}",
+                    v.name.to_case(Case::Pascal),
+                    tag,
+                    v.name
+                )
+            }
+            // InternallyTagged with DataStructureRef falls back to externally-tagged
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "{{ readonly {}: {} }}",
+                    v.name,
+                    field_type_to_ts_encoded(field_type)
+                )
+            }
+            None => {
+                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
+            }
+        },
+        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{{ readonly {}: \"{}\", readonly {}: {}Encoded }}",
+                    tag,
+                    v.name,
+                    content,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(field_type)) => {
+                format!(
+                    "{{ readonly {}: \"{}\", readonly {}: {} }}",
+                    tag,
+                    v.name,
+                    content,
+                    field_type_to_ts_encoded(field_type)
+                )
+            }
+            None => {
+                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
+            }
+        },
+        EnumRepresentation::Untagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!("{}Encoded", v.name.to_case(Case::Pascal))
+            }
+            Some(VariantData::DataStructureRef(field_type)) => field_type_to_ts_encoded(field_type),
+            None => format!("\"{}\"", v.name),
+        },
+    }
 }
 
 // ----- Schema and Type Conversion Logic ------------------------------------
@@ -600,15 +750,7 @@ pub fn generate_effect_schema_for_types(
                     .variants
                     .iter()
                     .map(|v| {
-                        v.data
-                            .as_ref()
-                            .map(|variant_data| match variant_data {
-                                VariantData::InlineStruct(_) => v.name.to_case(Case::Pascal),
-                                VariantData::DataStructureRef(field_type) => {
-                                    to_schema(field_type, &name, &processed)
-                                }
-                            })
-                            .unwrap_or_else(|| format!("Schema.Literal(\"{}\")", v.name))
+                        enum_variant_to_schema(v, &e.representation, &name, &to_schema, &processed)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");

@@ -1,10 +1,105 @@
 use crate::default::field_type_to_default_value;
 use crate::types::StructConfig;
-use crate::types::{FieldType, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, TaggedUnion, Variant, VariantData};
 use crate::typesync::doc_comment::format_jsdoc;
 use convert_case::{Case, Casing};
 use std::collections::HashMap;
 use tracing;
+
+/// Converts a single enum variant into its ArkType representation,
+/// respecting the serde enum representation strategy.
+fn variant_to_arktype(
+    variant: &Variant,
+    representation: &EnumRepresentation,
+    structs: &HashMap<String, StructConfig>,
+    enums: &HashMap<String, TaggedUnion>,
+) -> String {
+    match representation {
+        EnumRepresentation::ExternallyTagged => {
+            if let Some(variant_data) = &variant.data {
+                let inner = match variant_data {
+                    VariantData::InlineStruct(enum_struct) => field_type_to_arktype(
+                        &FieldType::Other(enum_struct.struct_name.clone()),
+                        structs,
+                        enums,
+                    ),
+                    VariantData::DataStructureRef(field_type) => {
+                        field_type_to_arktype(field_type, structs, enums)
+                    }
+                };
+                format!("{{ {}: {} }}", variant.name, inner)
+            } else {
+                format!("['===', '{}']", variant.name)
+            }
+        }
+        EnumRepresentation::InternallyTagged { tag } => {
+            if let Some(variant_data) = &variant.data {
+                match variant_data {
+                    VariantData::InlineStruct(enum_struct) => {
+                        // Merge the tag field into the struct fields
+                        let mut fields_parts: Vec<String> =
+                            vec![format!("{}: ['===', '{}']", tag, variant.name)];
+                        for field in &enum_struct.fields {
+                            let field_name = field.field_name.to_case(Case::Camel);
+                            fields_parts.push(format!(
+                                "{}: {}",
+                                field_name,
+                                field_type_to_arktype(&field.field_type, structs, enums)
+                            ));
+                        }
+                        format!("{{ {} }}", fields_parts.join(", "))
+                    }
+                    VariantData::DataStructureRef(_field_type) => {
+                        // Internally tagged doesn't work well with non-struct data;
+                        // fall back to externally tagged wrapping.
+                        let inner = field_type_to_arktype(_field_type, structs, enums);
+                        format!("{{ {}: {} }}", variant.name, inner)
+                    }
+                }
+            } else {
+                // Unit variant: just the tag field
+                format!("{{ {}: ['===', '{}'] }}", tag, variant.name)
+            }
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            if let Some(variant_data) = &variant.data {
+                let inner = match variant_data {
+                    VariantData::InlineStruct(enum_struct) => field_type_to_arktype(
+                        &FieldType::Other(enum_struct.struct_name.clone()),
+                        structs,
+                        enums,
+                    ),
+                    VariantData::DataStructureRef(field_type) => {
+                        field_type_to_arktype(field_type, structs, enums)
+                    }
+                };
+                format!(
+                    "{{ {}: ['===', '{}'], {}: {} }}",
+                    tag, variant.name, content, inner
+                )
+            } else {
+                // Unit variant: just the tag, no content field
+                format!("{{ {}: ['===', '{}'] }}", tag, variant.name)
+            }
+        }
+        EnumRepresentation::Untagged => {
+            if let Some(variant_data) = &variant.data {
+                match variant_data {
+                    VariantData::InlineStruct(enum_struct) => field_type_to_arktype(
+                        &FieldType::Other(enum_struct.struct_name.clone()),
+                        structs,
+                        enums,
+                    ),
+                    VariantData::DataStructureRef(field_type) => {
+                        field_type_to_arktype(field_type, structs, enums)
+                    }
+                }
+            } else {
+                format!("['===', '{}']", variant.name)
+            }
+        }
+    }
+}
 
 pub fn field_type_to_arktype(
     field_type: &FieldType,
@@ -112,17 +207,7 @@ pub fn field_type_to_arktype(
                     .variants
                     .iter()
                     .map(|variant| {
-                        if let Some(variant_data) = &variant.data {
-                            let variant_data_field_type = match variant_data {
-                                VariantData::InlineStruct(enum_struct) => {
-                                    &FieldType::Other(enum_struct.struct_name.clone())
-                                }
-                                VariantData::DataStructureRef(field_type) => field_type,
-                            };
-                            field_type_to_arktype(variant_data_field_type, structs, enums)
-                        } else {
-                            format!("'{}'", variant.name.to_case(Case::Pascal))
-                        }
+                        variant_to_arktype(variant, &enum_def.representation, structs, enums)
                     })
                     .collect();
                 return variants.join(" | ");
@@ -169,19 +254,9 @@ pub fn generate_arktype_type_string(
         let mut union_ast = String::new();
 
         for (i, variant) in schema_enum.variants.iter().enumerate() {
-            // Convert the variant into either a data type or a literal union piece
-            let item_str = if let Some(variant_data) = &variant.data {
-                let variant_data_field_type = match variant_data {
-                    VariantData::InlineStruct(enum_struct) => {
-                        &FieldType::Other(enum_struct.struct_name.clone())
-                    }
-                    VariantData::DataStructureRef(field_type) => field_type,
-                };
-                field_type_to_arktype(variant_data_field_type, structs, enums)
-            } else {
-                // For simple string variants, e.g. ["===", "Residential"]
-                format!("['===', '{}']", variant.name)
-            };
+            // Convert the variant into either a data type or a literal union piece,
+            // respecting the serde enum representation.
+            let item_str = variant_to_arktype(variant, &schema_enum.representation, structs, enums);
 
             // If this is our first variant, it becomes the entire union so far,
             // otherwise we nest the "union so far" together with the new item.

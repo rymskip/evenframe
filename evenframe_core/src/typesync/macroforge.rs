@@ -3,7 +3,7 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::validator::{
@@ -179,45 +179,24 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
         lines.push(format!("/** {} */", ann));
     }
 
+    // Emit @serde annotation for tagged representations
+    match &enum_def.representation {
+        EnumRepresentation::InternallyTagged { tag } => {
+            lines.push(format!("/** @serde({{ tag: \"{}\" }}) */", tag));
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            lines.push(format!(
+                "/** @serde({{ tag: \"{}\", content: \"{}\" }}) */",
+                tag, content
+            ));
+        }
+        _ => {}
+    }
+
     let variant_parts: Vec<String> = enum_def
         .variants
         .iter()
-        .map(|variant| {
-            // For DataStructureRef (tuple) and None (unit) variants, prepend
-            // @variant("Name") so the macroforge type registry preserves the
-            // original Rust variant name — scalar types like `string | number`
-            // would otherwise lose it.  InlineStruct variants already use the
-            // struct name as a TypeRef, so the name is inherently preserved.
-            let mut all_annotations: Vec<String> = Vec::new();
-            match &variant.data {
-                Some(VariantData::InlineStruct(_)) => {}
-                _ => {
-                    all_annotations.push(format!("@variant(\"{}\")", variant.name));
-                }
-            }
-            all_annotations.extend(variant.annotations.iter().cloned());
-
-            let ann_prefix = if !all_annotations.is_empty() {
-                format!("/** {} */ ", all_annotations.join(" "))
-            } else {
-                String::new()
-            };
-            match &variant.data {
-                Some(VariantData::InlineStruct(s)) => {
-                    format!("{}{}", ann_prefix, s.struct_name.to_case(Case::Pascal))
-                }
-                Some(VariantData::DataStructureRef(ft)) => {
-                    format!(
-                        "{}{}",
-                        ann_prefix,
-                        field_type_to_typescript(ft, array_style).trim()
-                    )
-                }
-                None => {
-                    format!("{}\"{}\"", ann_prefix, variant.name)
-                }
-            }
-        })
+        .map(|variant| render_variant(variant, &enum_def.representation, array_style))
         .collect();
 
     lines.push(format!(
@@ -227,6 +206,151 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
     ));
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Render a single enum variant according to the serde enum representation.
+fn render_variant(
+    variant: &crate::types::Variant,
+    representation: &EnumRepresentation,
+    array_style: ArrayStyle,
+) -> String {
+    // Determine whether to emit @variant annotation.
+    // For Untagged and ExternallyTagged: emit @variant on DataStructureRef and Unit only
+    //   (InlineStruct uses the struct name as a TypeRef, so name is inherently preserved).
+    // For InternallyTagged and AdjacentlyTagged: @serde({ tag }) on the union handles
+    //   variant identification, so no @variant needed on individual variants.
+    let needs_variant_annotation = match representation {
+        EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
+            !matches!(&variant.data, Some(VariantData::InlineStruct(_)))
+        }
+        EnumRepresentation::InternallyTagged { .. }
+        | EnumRepresentation::AdjacentlyTagged { .. } => false,
+    };
+
+    let mut all_annotations: Vec<String> = Vec::new();
+    if needs_variant_annotation {
+        all_annotations.push(format!("@variant(\"{}\")", variant.name));
+    }
+    all_annotations.extend(variant.annotations.iter().cloned());
+
+    let ann_prefix = if !all_annotations.is_empty() {
+        format!("/** {} */ ", all_annotations.join(" "))
+    } else {
+        String::new()
+    };
+
+    let type_str = match representation {
+        EnumRepresentation::ExternallyTagged => {
+            render_variant_externally_tagged(variant, array_style)
+        }
+        EnumRepresentation::InternallyTagged { tag } => {
+            render_variant_internally_tagged(variant, tag, array_style)
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            render_variant_adjacently_tagged(variant, tag, content, array_style)
+        }
+        EnumRepresentation::Untagged => render_variant_untagged(variant, array_style),
+    };
+
+    format!("{}{}", ann_prefix, type_str)
+}
+
+/// ExternallyTagged: `{ VariantName: Type }` for data variants, `"VariantName"` for unit.
+fn render_variant_externally_tagged(
+    variant: &crate::types::Variant,
+    array_style: ArrayStyle,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            format!(
+                "{{ {}: {} }}",
+                variant.name,
+                s.struct_name.to_case(Case::Pascal)
+            )
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            format!(
+                "{{ {}: {} }}",
+                variant.name,
+                field_type_to_typescript(ft, array_style).trim()
+            )
+        }
+        None => format!("\"{}\"", variant.name),
+    }
+}
+
+/// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
+/// InlineStruct fields are inlined: `{ tag: 'VariantName'; field1: Type1; field2: Type2 }`.
+/// Unit variants: `{ tag: 'VariantName' }`.
+/// DataStructureRef falls back to externally-tagged style (serde rejects this combination).
+fn render_variant_internally_tagged(
+    variant: &crate::types::Variant,
+    tag: &str,
+    array_style: ArrayStyle,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            let mut members = vec![format!("{}: '{}'", tag, variant.name)];
+            for field in &s.fields {
+                let field_name = field.field_name.to_case(Case::Camel);
+                let type_str = field_type_to_typescript(&field.field_type, array_style);
+                members.push(format!("{}: {}", field_name, type_str.trim()));
+            }
+            format!("{{ {} }}", members.join("; "))
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            // DataStructureRef cannot merge a tag field into a non-object type,
+            // so fall back to externally-tagged style.
+            format!(
+                "{{ {}: {} }}",
+                variant.name,
+                field_type_to_typescript(ft, array_style).trim()
+            )
+        }
+        None => format!("{{ {}: '{}' }}", tag, variant.name),
+    }
+}
+
+/// AdjacentlyTagged: `{ tag: 'VariantName'; content: Type }` for data variants,
+/// `{ tag: 'VariantName' }` for unit.
+fn render_variant_adjacently_tagged(
+    variant: &crate::types::Variant,
+    tag: &str,
+    content: &str,
+    array_style: ArrayStyle,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            format!(
+                "{{ {}: '{}'; {}: {} }}",
+                tag,
+                variant.name,
+                content,
+                s.struct_name.to_case(Case::Pascal)
+            )
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            format!(
+                "{{ {}: '{}'; {}: {} }}",
+                tag,
+                variant.name,
+                content,
+                field_type_to_typescript(ft, array_style).trim()
+            )
+        }
+        None => format!("{{ {}: '{}' }}", tag, variant.name),
+    }
+}
+
+/// Untagged: bare type reference, no wrapping. Current/original behavior.
+fn render_variant_untagged(variant: &crate::types::Variant, array_style: ArrayStyle) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => s.struct_name.to_case(Case::Pascal),
+        Some(VariantData::DataStructureRef(ft)) => {
+            field_type_to_typescript(ft, array_style).trim().to_string()
+        }
+        None => format!("\"{}\"", variant.name),
+    }
 }
 
 /// Render a complete field block including annotations, @serde, and the field declaration.
@@ -852,7 +976,7 @@ fn escape_for_jsdoc(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{StructField, Variant};
+    use crate::types::{EnumRepresentation, StructField, Variant};
     use ordered_float::OrderedFloat;
 
     #[test]
@@ -1203,6 +1327,7 @@ mod tests {
                         annotations: vec![],
                     },
                 ],
+                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![
                     "Default".to_string(),

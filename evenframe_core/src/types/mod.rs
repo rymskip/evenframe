@@ -17,10 +17,26 @@ use serde_json::Value;
 #[cfg(feature = "surrealdb")]
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum EnumRepresentation {
+    #[default]
+    ExternallyTagged,
+    InternallyTagged {
+        tag: String,
+    },
+    AdjacentlyTagged {
+        tag: String,
+        content: String,
+    },
+    Untagged,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaggedUnion {
     pub enum_name: String,
     pub variants: Vec<Variant>,
+    #[serde(default)]
+    pub representation: EnumRepresentation,
     #[serde(default)]
     pub doccom: Option<String>,
     #[serde(default)]
@@ -178,6 +194,7 @@ impl StructField {
             AssembleTuple { count: usize },
             AssembleStruct { count: usize, names: Vec<String> },
             AssembleEnum { count: usize },
+            WrapInVariantKey { variant_name: String },
             EnterStructScope { name: String },
             LeaveStructScope { name: String },
         }
@@ -190,98 +207,104 @@ impl StructField {
 
                 while let Some(item) = work_stack.pop() {
                     match item {
-                        WorkItem::Process(field_type) => match field_type {
-                            FieldType::String | FieldType::Char => {
-                                value_stack.push(("string".to_string(), false, None))
-                            }
-                            FieldType::Bool => value_stack.push(("bool".to_string(), false, None)),
-                            FieldType::DateTime => {
-                                value_stack.push(("datetime".to_string(), false, None))
-                            }
-                            FieldType::EvenframeDuration => {
-                                value_stack.push(("duration".to_string(), false, None))
-                            }
-                            FieldType::Timezone => {
-                                value_stack.push(("string".to_string(), false, None))
-                            }
-                            FieldType::Decimal => {
-                                value_stack.push(("decimal".to_string(), false, None))
-                            }
-                            FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
-                                value_stack.push(("float".to_string(), false, None))
-                            }
-                            FieldType::I8
-                            | FieldType::I16
-                            | FieldType::I32
-                            | FieldType::I64
-                            | FieldType::I128
-                            | FieldType::Isize
-                            | FieldType::U8
-                            | FieldType::U16
-                            | FieldType::U32
-                            | FieldType::U64
-                            | FieldType::U128
-                            | FieldType::Usize => {
-                                value_stack.push(("int".to_string(), false, None))
-                            }
-                            FieldType::Unit => value_stack.push(("any".to_string(), false, None)),
-                            FieldType::EvenframeRecordId => {
-                                let type_str = if self.field_name == "id" {
-                                    format!("record<{}>", table_name)
-                                } else {
-                                    "record<any>".to_string()
-                                };
-                                value_stack.push((type_str, false, None));
-                            }
-                            FieldType::Option(inner) => {
-                                work_stack.push(WorkItem::AssembleOption);
-                                work_stack.push(WorkItem::Process(inner));
-                            }
-                            FieldType::Vec(inner) => {
-                                work_stack.push(WorkItem::AssembleVec);
-                                work_stack.push(WorkItem::Process(inner));
-                            }
-                            FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => {
-                                work_stack.push(WorkItem::AssembleMap);
-                                work_stack.push(WorkItem::Process(value));
-                            }
-                            FieldType::RecordLink(inner) => {
-                                if let FieldType::Other(type_name) = inner.as_ref() {
-                                    let type_str =
-                                        format!("record<{}>", type_name.to_case(Case::Snake));
+                        WorkItem::Process(field_type) => {
+                            match field_type {
+                                FieldType::String | FieldType::Char => {
+                                    value_stack.push(("string".to_string(), false, None))
+                                }
+                                FieldType::Bool => {
+                                    value_stack.push(("bool".to_string(), false, None))
+                                }
+                                FieldType::DateTime => {
+                                    value_stack.push(("datetime".to_string(), false, None))
+                                }
+                                FieldType::EvenframeDuration => {
+                                    value_stack.push(("duration".to_string(), false, None))
+                                }
+                                FieldType::Timezone => {
+                                    value_stack.push(("string".to_string(), false, None))
+                                }
+                                FieldType::Decimal => {
+                                    value_stack.push(("decimal".to_string(), false, None))
+                                }
+                                FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
+                                    value_stack.push(("float".to_string(), false, None))
+                                }
+                                FieldType::I8
+                                | FieldType::I16
+                                | FieldType::I32
+                                | FieldType::I64
+                                | FieldType::I128
+                                | FieldType::Isize
+                                | FieldType::U8
+                                | FieldType::U16
+                                | FieldType::U32
+                                | FieldType::U64
+                                | FieldType::U128
+                                | FieldType::Usize => {
+                                    value_stack.push(("int".to_string(), false, None))
+                                }
+                                FieldType::Unit => {
+                                    value_stack.push(("any".to_string(), false, None))
+                                }
+                                FieldType::EvenframeRecordId => {
+                                    let type_str = if self.field_name == "id" {
+                                        format!("record<{}>", table_name)
+                                    } else {
+                                        "record<any>".to_string()
+                                    };
                                     value_stack.push((type_str, false, None));
-                                } else {
+                                }
+                                FieldType::Option(inner) => {
+                                    work_stack.push(WorkItem::AssembleOption);
                                     work_stack.push(WorkItem::Process(inner));
                                 }
-                            }
-                            FieldType::Tuple(types) => {
-                                work_stack.push(WorkItem::AssembleTuple { count: types.len() });
-                                for t in types.iter().rev() {
-                                    work_stack.push(WorkItem::Process(t));
+                                FieldType::Vec(inner) => {
+                                    work_stack.push(WorkItem::AssembleVec);
+                                    work_stack.push(WorkItem::Process(inner));
                                 }
-                            }
-                            FieldType::Struct(fields) => {
-                                let names = fields.iter().map(|(name, _)| name.clone()).collect();
-                                work_stack.push(WorkItem::AssembleStruct {
-                                    count: fields.len(),
-                                    names,
-                                });
-                                for (_, ftype) in fields.iter().rev() {
-                                    work_stack.push(WorkItem::Process(ftype));
+                                FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => {
+                                    work_stack.push(WorkItem::AssembleMap);
+                                    work_stack.push(WorkItem::Process(value));
                                 }
-                            }
-                            FieldType::Other(name) => {
-                                if let Some(enum_def) = enums.get(name) {
-                                    let total_variants = enum_def.variants.len();
-                                    work_stack.push(WorkItem::AssembleEnum {
-                                        count: total_variants,
+                                FieldType::RecordLink(inner) => {
+                                    if let FieldType::Other(type_name) = inner.as_ref() {
+                                        let type_str =
+                                            format!("record<{}>", type_name.to_case(Case::Snake));
+                                        value_stack.push((type_str, false, None));
+                                    } else {
+                                        work_stack.push(WorkItem::Process(inner));
+                                    }
+                                }
+                                FieldType::Tuple(types) => {
+                                    work_stack.push(WorkItem::AssembleTuple { count: types.len() });
+                                    for t in types.iter().rev() {
+                                        work_stack.push(WorkItem::Process(t));
+                                    }
+                                }
+                                FieldType::Struct(fields) => {
+                                    let names =
+                                        fields.iter().map(|(name, _)| name.clone()).collect();
+                                    work_stack.push(WorkItem::AssembleStruct {
+                                        count: fields.len(),
+                                        names,
                                     });
+                                    for (_, ftype) in fields.iter().rev() {
+                                        work_stack.push(WorkItem::Process(ftype));
+                                    }
+                                }
+                                FieldType::Other(name) => {
+                                    if let Some(enum_def) = enums.get(name) {
+                                        let total_variants = enum_def.variants.len();
+                                        work_stack.push(WorkItem::AssembleEnum {
+                                            count: total_variants,
+                                        });
 
-                                    for variant in enum_def.variants.iter().rev() {
-                                        if let Some(data) = &variant.data {
-                                            match data {
-                                                VariantData::InlineStruct(s) => {
-                                                    let struct_config = app_structs.get(&s.struct_name)
+                                        for variant in enum_def.variants.iter().rev() {
+                                            if let Some(data) = &variant.data {
+                                                match data {
+                                                    VariantData::InlineStruct(s) => {
+                                                        let struct_config = app_structs.get(&s.struct_name)
                                                         .ok_or_else(|| EvenframeError::FieldDefinition {
                                                             message: format!("Inline enum struct '{}' should have corresponding object definition", s.struct_name),
                                                             work_stack: format!("{:#?}", work_stack),
@@ -289,66 +312,154 @@ impl StructField {
                                                             item: format!("{:#?}", item),
                                                             visited_types: format!("{:#?}", visited_types),
                                                         })?;
-                                                    let names = struct_config
-                                                        .fields
-                                                        .iter()
-                                                        .map(|f| f.field_name.clone())
-                                                        .collect();
-                                                    work_stack.push(WorkItem::AssembleStruct {
-                                                        count: struct_config.fields.len(),
-                                                        names,
-                                                    });
-                                                    for field in struct_config.fields.iter().rev() {
-                                                        work_stack.push(WorkItem::Process(
-                                                            &field.field_type,
+                                                        match &enum_def.representation {
+                                                        EnumRepresentation::ExternallyTagged => {
+                                                            // { VariantName: { fields } }
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
+                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
+                                                            for field in struct_config.fields.iter().rev() {
+                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                            }
+                                                        }
+                                                        EnumRepresentation::InternallyTagged { tag } => {
+                                                            // { tag: "VariantName", field1: type1, ... }
+                                                            let mut names = vec![tag.clone()];
+                                                            names.extend(struct_config.fields.iter().map(|f| f.field_name.clone()));
+                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
+                                                            for field in struct_config.fields.iter().rev() {
+                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                            }
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                        }
+                                                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                                                            // { tag: "VariantName", content: { fields } }
+                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            work_stack.push(WorkItem::AssembleStruct {
+                                                                count: 2,
+                                                                names: vec![tag.clone(), content.clone()],
+                                                            });
+                                                            // content value (inner struct)
+                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
+                                                            for field in struct_config.fields.iter().rev() {
+                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                            }
+                                                            // tag value
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                        }
+                                                        EnumRepresentation::Untagged => {
+                                                            // { fields } (no wrapping)
+                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
+                                                            for field in struct_config.fields.iter().rev() {
+                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                            }
+                                                        }
+                                                    }
+                                                    }
+                                                    VariantData::DataStructureRef(ft) => {
+                                                        match &enum_def.representation {
+                                                        EnumRepresentation::ExternallyTagged => {
+                                                            // { VariantName: value }
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
+                                                            work_stack.push(WorkItem::Process(ft));
+                                                        }
+                                                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+                                                            // { tag: "VariantName", content: value }
+                                                            work_stack.push(WorkItem::AssembleStruct {
+                                                                count: 2,
+                                                                names: vec![tag.clone(), content.clone()],
+                                                            });
+                                                            work_stack.push(WorkItem::Process(ft));
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                        }
+                                                        EnumRepresentation::Untagged => {
+                                                            // value (no wrapping)
+                                                            work_stack.push(WorkItem::Process(ft));
+                                                        }
+                                                        EnumRepresentation::InternallyTagged { .. } => {
+                                                            // serde does not support tuple variants with internal tagging;
+                                                            // fall back to externally tagged
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
+                                                            work_stack.push(WorkItem::Process(ft));
+                                                        }
+                                                    }
+                                                    }
+                                                }
+                                            } else {
+                                                // Unit variant
+                                                match &enum_def.representation {
+                                                    EnumRepresentation::InternallyTagged {
+                                                        tag,
+                                                    } => {
+                                                        // { tag: "VariantName" }
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            count: 1,
+                                                            names: vec![tag.clone()],
+                                                        });
+                                                        work_stack.push(WorkItem::PushString(
+                                                            format!("\"{}\"", variant.name),
+                                                        ));
+                                                    }
+                                                    EnumRepresentation::AdjacentlyTagged {
+                                                        tag,
+                                                        ..
+                                                    } => {
+                                                        // { tag: "VariantName" }
+                                                        work_stack.push(WorkItem::AssembleStruct {
+                                                            count: 1,
+                                                            names: vec![tag.clone()],
+                                                        });
+                                                        work_stack.push(WorkItem::PushString(
+                                                            format!("\"{}\"", variant.name),
+                                                        ));
+                                                    }
+                                                    _ => {
+                                                        // ExternallyTagged / Untagged: "VariantName"
+                                                        work_stack.push(WorkItem::PushString(
+                                                            format!("\"{}\"", variant.name),
                                                         ));
                                                     }
                                                 }
-                                                VariantData::DataStructureRef(ft) => {
-                                                    work_stack.push(WorkItem::Process(ft));
-                                                }
                                             }
-                                        } else {
-                                            work_stack.push(WorkItem::PushString(format!(
-                                                "\"{}\"",
-                                                variant.name
-                                            )));
                                         }
+                                    } else if let Some(app_struct) = app_structs.get(name) {
+                                        if visited_types.contains(name) {
+                                            value_stack.push(("object".to_string(), false, None));
+                                            continue;
+                                        }
+                                        work_stack.push(WorkItem::LeaveStructScope {
+                                            name: name.clone(),
+                                        });
+                                        let names = app_struct
+                                            .fields
+                                            .iter()
+                                            .map(|f| f.field_name.clone())
+                                            .collect();
+                                        work_stack.push(WorkItem::AssembleStruct {
+                                            count: app_struct.fields.len(),
+                                            names,
+                                        });
+                                        for field in app_struct.fields.iter().rev() {
+                                            work_stack.push(WorkItem::Process(&field.field_type));
+                                        }
+                                        work_stack.push(WorkItem::EnterStructScope {
+                                            name: name.clone(),
+                                        });
+                                    } else if persistable_structs
+                                        .contains_key(&name.to_case(Case::Snake))
+                                    {
+                                        value_stack.push((
+                                            format!("record<{}>", name.to_case(Case::Snake)),
+                                            false,
+                                            None,
+                                        ));
+                                    } else {
+                                        value_stack.push((name.clone(), false, None));
                                     }
-                                } else if let Some(app_struct) = app_structs.get(name) {
-                                    if visited_types.contains(name) {
-                                        value_stack.push(("object".to_string(), false, None));
-                                        continue;
-                                    }
-                                    work_stack
-                                        .push(WorkItem::LeaveStructScope { name: name.clone() });
-                                    let names = app_struct
-                                        .fields
-                                        .iter()
-                                        .map(|f| f.field_name.clone())
-                                        .collect();
-                                    work_stack.push(WorkItem::AssembleStruct {
-                                        count: app_struct.fields.len(),
-                                        names,
-                                    });
-                                    for field in app_struct.fields.iter().rev() {
-                                        work_stack.push(WorkItem::Process(&field.field_type));
-                                    }
-                                    work_stack
-                                        .push(WorkItem::EnterStructScope { name: name.clone() });
-                                } else if persistable_structs
-                                    .contains_key(&name.to_case(Case::Snake))
-                                {
-                                    value_stack.push((
-                                        format!("record<{}>", name.to_case(Case::Snake)),
-                                        false,
-                                        None,
-                                    ));
-                                } else {
-                                    value_stack.push((name.clone(), false, None));
                                 }
                             }
-                        },
+                        }
                         WorkItem::PushString(s) => {
                             value_stack.push((s, false, None));
                         }
@@ -446,6 +557,22 @@ impl StructField {
                             }
                             variants.reverse();
                             value_stack.push((variants.join(" | "), false, None));
+                        }
+                        WorkItem::WrapInVariantKey { variant_name } => {
+                            let (inner, _, _) = value_stack.pop().ok_or_else(|| {
+                                EvenframeError::FieldDefinition {
+                                    message: "Stack underflow in WrapInVariantKey".to_string(),
+                                    work_stack: format!("{:#?}", work_stack),
+                                    value_stack: format!("{:#?}", value_stack),
+                                    item: "WrapInVariantKey".to_string(),
+                                    visited_types: format!("{:#?}", visited_types),
+                                }
+                            })?;
+                            value_stack.push((
+                                format!("{{ {}: {} }}", variant_name, inner),
+                                false,
+                                None,
+                            ));
                         }
                         WorkItem::EnterStructScope { name } => {
                             visited_types.insert(name);
@@ -635,6 +762,7 @@ mod tests {
         let tu1 = TaggedUnion {
             enum_name: "Status".to_string(),
             variants: vec![],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -642,6 +770,7 @@ mod tests {
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
             variants: vec![],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -667,6 +796,7 @@ mod tests {
                     annotations: vec![],
                 },
             ],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -685,6 +815,7 @@ mod tests {
                 doccom: None,
                 annotations: vec![],
             }],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -701,6 +832,7 @@ mod tests {
         let tu1 = TaggedUnion {
             enum_name: "A".to_string(),
             variants: vec![],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -708,6 +840,7 @@ mod tests {
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
             variants: vec![],
+            representation: EnumRepresentation::default(),
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],

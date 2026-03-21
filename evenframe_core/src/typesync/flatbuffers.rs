@@ -519,7 +519,7 @@ fn escape_for_fbs(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::StructField;
+    use crate::types::{EnumRepresentation, StructField};
     use ordered_float::OrderedFloat;
 
     #[test]
@@ -754,6 +754,7 @@ mod tests {
                         annotations: vec![],
                     },
                 ],
+                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -841,6 +842,7 @@ mod tests {
                         annotations: vec![],
                     },
                 ],
+                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],

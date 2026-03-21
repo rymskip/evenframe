@@ -644,7 +644,9 @@ pub fn sort_tables_by_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData};
+    use crate::types::{
+        EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData,
+    };
 
     // ==================== RecursionInfo Tests ====================
 
@@ -1131,6 +1133,7 @@ mod tests {
                         annotations: vec![],
                     },
                 ],
+                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -1600,6 +1603,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                 }],
+                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],

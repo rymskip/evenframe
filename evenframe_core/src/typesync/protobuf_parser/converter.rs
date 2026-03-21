@@ -1,6 +1,8 @@
 //! Converts Protocol Buffers descriptors to evenframe internal types.
 
-use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, Variant};
+use crate::types::{
+    EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant,
+};
 use prost_types::{
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet,
     field_descriptor_proto::{Label, Type},
@@ -227,6 +229,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
     TaggedUnion {
         enum_name: enum_type.name().to_string(),
         variants,
+        representation: EnumRepresentation::default(),
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],

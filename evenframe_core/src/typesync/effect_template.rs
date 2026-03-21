@@ -4,7 +4,7 @@
 //! wrapping as much logic as possible into the template DSL.
 
 use crate::dependency::{analyse_recursion, deps_of};
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -91,31 +91,13 @@ pub fn generate_effect_schema_string(
                     {$let variant_count = enum_def.variants.len()}
                     export const @{name} = Schema.Union(
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
-                            {#if let Some(variant_data) = &variant.data}
-                                {#match variant_data}
-                                    {:case VariantData::InlineStruct(_)}
-                                        @{variant.name.to_case(Case::Pascal)}
-                                    {:case VariantData::DataStructureRef(field_type)}
-                                        @{field_type_to_effect_schema(field_type, structs, name, &recursion_info, &processed)}
-                                {/match}
-                            {:else}
-                                Schema.Literal("@{variant.name}")
-                            {/if}
+                            @{variant_to_schema(variant, &enum_def.representation, name, structs, &recursion_info, &processed)}
                             {#if index + 1 != variant_count},{/if}
                         {/for}
                     ).annotations({ identifier: "@{name}" });
                     export type {|@{name}Encoded|} =
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
-                            {#if let Some(variant_data) = &variant.data}
-                                {#match variant_data}
-                                    {:case VariantData::InlineStruct(_)}
-                                        {|@{variant.name.to_case(Case::Pascal)}Encoded|}
-                                    {:case VariantData::DataStructureRef(field_type)}
-                                        @{field_type_to_ts_encoded(field_type)}
-                                {/match}
-                            {:else}
-                                "@{variant.name}"
-                            {/if}
+                            @{variant_to_encoded(variant, &enum_def.representation)}
                             {#if index + 1 != variant_count} | {/if}
                         {/for}
                     ;
@@ -159,6 +141,161 @@ pub fn generate_effect_schema_string(
 enum TypeItem {
     Enum(String, TaggedUnion),
     Struct(String, StructConfig),
+}
+
+/// Converts a single enum variant into its Effect Schema representation,
+/// taking the serde `EnumRepresentation` into account.
+fn variant_to_schema(
+    v: &crate::types::Variant,
+    repr: &EnumRepresentation,
+    enum_name: &str,
+    structs: &HashMap<String, StructConfig>,
+    recursion_info: &crate::dependency::RecursionInfo,
+    processed: &HashSet<String>,
+) -> String {
+    let to_inner = |ft: &FieldType| -> String {
+        field_type_to_effect_schema(ft, structs, enum_name, recursion_info, processed)
+    };
+
+    match repr {
+        EnumRepresentation::ExternallyTagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.Struct({{ {}: {} }})",
+                    v.name,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!("Schema.Struct({{ {}: {} }})", v.name, to_inner(ft))
+            }
+            None => format!("Schema.Literal(\"{}\")", v.name),
+        },
+        EnumRepresentation::InternallyTagged { tag } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.extend({}, Schema.Struct({{ {}: Schema.Literal(\"{}\") }}))",
+                    v.name.to_case(Case::Pascal),
+                    tag,
+                    v.name
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!("Schema.Struct({{ {}: {} }})", v.name, to_inner(ft))
+            }
+            None => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
+                    tag, v.name
+                )
+            }
+        },
+        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
+                    tag,
+                    v.name,
+                    content,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
+                    tag,
+                    v.name,
+                    content,
+                    to_inner(ft)
+                )
+            }
+            None => {
+                format!(
+                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
+                    tag, v.name
+                )
+            }
+        },
+        EnumRepresentation::Untagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => v.name.to_case(Case::Pascal),
+            Some(VariantData::DataStructureRef(ft)) => to_inner(ft),
+            None => format!("Schema.Literal(\"{}\")", v.name),
+        },
+    }
+}
+
+/// Converts a single enum variant into its TypeScript Encoded type representation,
+/// taking the serde `EnumRepresentation` into account.
+fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> String {
+    match repr {
+        EnumRepresentation::ExternallyTagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{{ readonly {}: {}Encoded }}",
+                    v.name,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!(
+                    "{{ readonly {}: {} }}",
+                    v.name,
+                    field_type_to_ts_encoded(ft)
+                )
+            }
+            None => format!("\"{}\"", v.name),
+        },
+        EnumRepresentation::InternallyTagged { tag } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{}Encoded & {{ readonly {}: \"{}\" }}",
+                    v.name.to_case(Case::Pascal),
+                    tag,
+                    v.name
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!(
+                    "{{ readonly {}: {} }}",
+                    v.name,
+                    field_type_to_ts_encoded(ft)
+                )
+            }
+            None => {
+                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
+            }
+        },
+        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!(
+                    "{{ readonly {}: \"{}\", readonly {}: {}Encoded }}",
+                    tag,
+                    v.name,
+                    content,
+                    v.name.to_case(Case::Pascal)
+                )
+            }
+            Some(VariantData::DataStructureRef(ft)) => {
+                format!(
+                    "{{ readonly {}: \"{}\", readonly {}: {} }}",
+                    tag,
+                    v.name,
+                    content,
+                    field_type_to_ts_encoded(ft)
+                )
+            }
+            None => {
+                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
+            }
+        },
+        EnumRepresentation::Untagged => match &v.data {
+            Some(VariantData::InlineStruct(_)) => {
+                format!("{}Encoded", v.name.to_case(Case::Pascal))
+            }
+            Some(VariantData::DataStructureRef(ft)) => field_type_to_ts_encoded(ft),
+            None => format!("\"{}\"", v.name),
+        },
+    }
 }
 
 fn field_type_to_effect_schema(
