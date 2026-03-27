@@ -61,8 +61,8 @@ impl Mockmaker<'_> {
         for i in 0..n {
             let mut field_assignments = Vec::new();
 
-            // Determine the record ID
-            let record_id = if let Some(ids) = self.id_map.get(table_name) {
+            // Determine the record ID (default from id_map)
+            let default_record_id = if let Some(ids) = self.id_map.get(table_name) {
                 if i < ids.len() {
                     ids[i].clone()
                 } else {
@@ -71,6 +71,39 @@ impl Mockmaker<'_> {
             } else {
                 format!("{}:{}", table_name.to_case(Case::Snake), i + 1)
             };
+
+            // Allow plugin to override the record ID
+            #[cfg(feature = "wasm-plugins")]
+            let record_id = {
+                let plugin_name = table_config
+                    .mock_generation_config
+                    .as_ref()
+                    .and_then(|c| c.plugin.as_ref());
+                if let Some(plugin_name) = plugin_name {
+                    if let Some(ref pm_cell) = self.plugin_manager {
+                        let pm = &mut *pm_cell.borrow_mut();
+                        let id_input =
+                            crate::schemasync::mockmake::plugin_types::PluginFieldInput {
+                                table_name: table_name.to_string(),
+                                field_name: "id".to_string(),
+                                field_type: "EvenframeRecordId".to_string(),
+                                record_index: i,
+                                total_records: n,
+                                record_id: default_record_id.clone(),
+                            };
+                        match pm.generate_field_value(plugin_name, &id_input) {
+                            Ok(val) => val,
+                            Err(_) => default_record_id,
+                        }
+                    } else {
+                        default_record_id
+                    }
+                } else {
+                    default_record_id
+                }
+            };
+            #[cfg(not(feature = "wasm-plugins"))]
+            let record_id = default_record_id;
 
             // Then, process remaining fields that weren't coordinated
             for table_field in &table_config.struct_config.fields {
