@@ -281,6 +281,7 @@ fn process_types(
                     {
                         debug!("Found Evenframe struct: {:?}", item_struct.ident);
                         if let Some(mut struct_config) = parse_struct_config(&item_struct) {
+                            struct_config.pipeline = evenframe_type.pipeline;
                             // Check for name collision
                             if let Some(existing_file) =
                                 struct_origins.get(&struct_config.struct_name)
@@ -368,9 +369,12 @@ fn process_types(
                     }
                 }
                 Item::Enum(item_enum) => {
-                    if file_types.iter().any(|t| item_enum.ident == t.name) {
+                    if let Some(evenframe_type) =
+                        file_types.iter().find(|&t| item_enum.ident == t.name)
+                    {
                         debug!("Found Evenframe enum: {}", item_enum.ident);
                         if let Some(mut tagged_union) = parse_enum_config(&item_enum) {
+                            tagged_union.pipeline = evenframe_type.pipeline;
                             // Check for name collision
                             if let Some(existing_file) = enum_origins.get(&tagged_union.enum_name) {
                                 match collision_strategy {
@@ -515,6 +519,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         doccom,
         macroforge_derives,
         annotations,
+        pipeline: crate::types::Pipeline::default(),
     })
 }
 
@@ -580,6 +585,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                     doccom: None,
                     macroforge_derives: variant_macroforge_derives,
                     annotations: vec![],
+                    pipeline: crate::types::Pipeline::default(),
                 }))
             }
         };
@@ -599,6 +605,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         doccom: enum_doccom,
         macroforge_derives: enum_macroforge_derives,
         annotations: enum_annotations,
+        pipeline: crate::types::Pipeline::default(),
     })
 }
 
@@ -662,4 +669,56 @@ pub fn merge_tables_and_objects(
         struct_configs.len()
     );
     struct_configs
+}
+
+/// Filter configs to only types that participate in the typesync pipeline.
+pub fn filter_for_typesync(
+    enums: HashMap<String, TaggedUnion>,
+    tables: HashMap<String, TableConfig>,
+    objects: HashMap<String, StructConfig>,
+) -> (
+    HashMap<String, TaggedUnion>,
+    HashMap<String, TableConfig>,
+    HashMap<String, StructConfig>,
+) {
+    (
+        enums
+            .into_iter()
+            .filter(|(_, v)| v.pipeline.includes_typesync())
+            .collect(),
+        tables
+            .into_iter()
+            .filter(|(_, v)| v.struct_config.pipeline.includes_typesync())
+            .collect(),
+        objects
+            .into_iter()
+            .filter(|(_, v)| v.pipeline.includes_typesync())
+            .collect(),
+    )
+}
+
+/// Filter configs to only types that participate in the schemasync pipeline.
+pub fn filter_for_schemasync(
+    enums: HashMap<String, TaggedUnion>,
+    tables: HashMap<String, TableConfig>,
+    objects: HashMap<String, StructConfig>,
+) -> (
+    HashMap<String, TaggedUnion>,
+    HashMap<String, TableConfig>,
+    HashMap<String, StructConfig>,
+) {
+    (
+        enums
+            .into_iter()
+            .filter(|(_, v)| v.pipeline.includes_schemasync())
+            .collect(),
+        tables
+            .into_iter()
+            .filter(|(_, v)| v.struct_config.pipeline.includes_schemasync())
+            .collect(),
+        objects
+            .into_iter()
+            .filter(|(_, v)| v.pipeline.includes_schemasync())
+            .collect(),
+    )
 }

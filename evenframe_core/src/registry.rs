@@ -1,6 +1,6 @@
 use crate::{
     schemasync::TableConfig,
-    types::{StructConfig, TaggedUnion},
+    types::{Pipeline, StructConfig, TaggedUnion},
 };
 use linkme::distributed_slice;
 use once_cell::sync::Lazy;
@@ -11,6 +11,7 @@ use std::collections::HashMap;
 pub struct TableRegistryEntry {
     pub type_name: &'static str,
     pub table_config_fn: fn() -> TableConfig,
+    pub pipeline: Pipeline,
 }
 
 /// Registry entry for app structs (objects)
@@ -18,6 +19,7 @@ pub struct TableRegistryEntry {
 pub struct ObjectRegistryEntry {
     pub type_name: &'static str,
     pub struct_config_fn: fn() -> StructConfig,
+    pub pipeline: Pipeline,
 }
 
 /// Registry entry for enums (tagged unions)
@@ -25,6 +27,7 @@ pub struct ObjectRegistryEntry {
 pub struct EnumRegistryEntry {
     pub type_name: &'static str,
     pub tagged_union_fn: fn() -> TaggedUnion,
+    pub pipeline: Pipeline,
 }
 
 /// Registry entry for union of tables
@@ -32,6 +35,7 @@ pub struct EnumRegistryEntry {
 pub struct UnionOfTablesRegistryEntry {
     pub type_name: &'static str,
     pub table_names: &'static [&'static str],
+    pub pipeline: Pipeline,
 }
 
 /// Distributed slice that collects table entries from all crates
@@ -289,6 +293,7 @@ mod tests {
         let entry = TableRegistryEntry {
             type_name: "TestType",
             table_config_fn: dummy_config,
+            pipeline: Pipeline::Both,
         };
         let cloned = entry;
         assert_eq!(cloned.type_name, "TestType");
@@ -302,6 +307,7 @@ mod tests {
         let entry = ObjectRegistryEntry {
             type_name: "TestType",
             struct_config_fn: dummy_config,
+            pipeline: Pipeline::Both,
         };
         let cloned = entry;
         assert_eq!(cloned.type_name, "TestType");
@@ -315,6 +321,7 @@ mod tests {
         let entry = EnumRegistryEntry {
             type_name: "TestType",
             tagged_union_fn: dummy_config,
+            pipeline: Pipeline::Both,
         };
         let cloned = entry;
         assert_eq!(cloned.type_name, "TestType");
@@ -326,6 +333,7 @@ mod tests {
         let entry = UnionOfTablesRegistryEntry {
             type_name: "TestUnion",
             table_names: TABLE_NAMES,
+            pipeline: Pipeline::Both,
         };
         let cloned = entry;
         assert_eq!(cloned.type_name, "TestUnion");

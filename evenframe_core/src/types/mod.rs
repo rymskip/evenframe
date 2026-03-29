@@ -17,6 +17,36 @@ use serde_json::Value;
 #[cfg(feature = "surrealdb")]
 use std::collections::{HashMap, HashSet};
 
+/// Which pipeline(s) a type participates in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Pipeline {
+    #[default]
+    Both,
+    Typesync,
+    Schemasync,
+}
+
+impl Pipeline {
+    pub fn includes_typesync(&self) -> bool {
+        matches!(self, Pipeline::Both | Pipeline::Typesync)
+    }
+
+    pub fn includes_schemasync(&self) -> bool {
+        matches!(self, Pipeline::Both | Pipeline::Schemasync)
+    }
+}
+
+impl quote::ToTokens for Pipeline {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let variant_tokens = match self {
+            Pipeline::Both => quote::quote! { ::evenframe::types::Pipeline::Both },
+            Pipeline::Typesync => quote::quote! { ::evenframe::types::Pipeline::Typesync },
+            Pipeline::Schemasync => quote::quote! { ::evenframe::types::Pipeline::Schemasync },
+        };
+        tokens.extend(variant_tokens);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum EnumRepresentation {
     #[default]
@@ -43,6 +73,8 @@ pub struct TaggedUnion {
     pub macroforge_derives: Vec<String>,
     #[serde(default)]
     pub annotations: Vec<String>,
+    #[serde(default)]
+    pub pipeline: Pipeline,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -749,6 +781,8 @@ pub struct StructConfig {
     pub macroforge_derives: Vec<String>,
     #[serde(default)]
     pub annotations: Vec<String>,
+    #[serde(default)]
+    pub pipeline: Pipeline,
 }
 
 #[cfg(test)]
@@ -766,6 +800,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
@@ -774,6 +809,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         assert_eq!(tu1, tu2);
     }
@@ -800,6 +836,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -819,6 +856,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -836,6 +874,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
@@ -844,6 +883,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         set.insert(tu1);
         set.insert(tu2);
@@ -886,6 +926,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         let v = Variant {
             name: "Complex".to_string(),
@@ -915,6 +956,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         });
         assert_ne!(vd1, vd2);
     }
@@ -972,6 +1014,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         assert!(sc.fields.is_empty());
     }
@@ -1012,6 +1055,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -1025,6 +1069,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -1150,6 +1195,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         };
         assert!(sc.struct_name.is_empty());
     }

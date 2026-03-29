@@ -242,6 +242,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: crate::types::Pipeline::default(),
         }
     }
 

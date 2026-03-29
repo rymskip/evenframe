@@ -93,6 +93,7 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
             static #registry_var_name: ::evenframe::registry::UnionOfTablesRegistryEntry = ::evenframe::registry::UnionOfTablesRegistryEntry {
                 type_name: #union_name,
                 table_names: &[#(#table_names_static),*],
+                pipeline: ::evenframe::types::Pipeline::Both,
             };
         };
 

@@ -82,6 +82,7 @@ fn convert_table(table: &TableDef) -> StructConfig {
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     }
 }
 
@@ -95,6 +96,7 @@ fn convert_struct(struct_def: &StructDef) -> StructConfig {
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     }
 }
 
@@ -162,6 +164,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     }
 }
 
@@ -190,6 +193,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     }
 }
 

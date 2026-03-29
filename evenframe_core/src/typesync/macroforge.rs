@@ -1208,6 +1208,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1305,6 +1306,7 @@ mod tests {
                 annotations: vec![
                     "@overview({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
                 ],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1335,6 +1337,7 @@ mod tests {
                     "Deserialize".to_string(),
                 ],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1391,6 +1394,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1440,6 +1444,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1466,6 +1471,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1499,6 +1505,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1525,6 +1532,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1549,6 +1557,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec!["Serialize".to_string(), "Deserialize".to_string()],
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
+                pipeline: crate::types::Pipeline::default(),
             },
         );
 

@@ -1,6 +1,6 @@
 //! Type generation for build-time usage.
 
-use super::{BuildConfig, build_all_configs, merge_tables_and_objects};
+use super::{BuildConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects};
 use crate::error::EvenframeError;
 use crate::types::{StructConfig, TaggedUnion};
 #[cfg(feature = "flatbuffers")]
@@ -97,6 +97,22 @@ impl TypeGenerator {
         Self { config }
     }
 
+    /// Builds configs filtered to typesync-eligible types.
+    fn build_typesync_configs(
+        &self,
+    ) -> Result<
+        (
+            HashMap<String, TaggedUnion>,
+            HashMap<String, StructConfig>,
+        ),
+        EvenframeError,
+    > {
+        let (enums, tables, objects) = build_all_configs(&self.config)?;
+        let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
+        let structs = merge_tables_and_objects(&tables, &objects);
+        Ok((enums, structs))
+    }
+
     /// Generates all enabled type outputs.
     pub fn generate_all(&self) -> Result<GenerationReport, EvenframeError> {
         info!("Starting type generation");
@@ -104,6 +120,7 @@ impl TypeGenerator {
 
         // Build configs from the workspace
         let (enums, tables, objects) = build_all_configs(&self.config)?;
+        let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
 
         report.enums_processed = enums.len();
         report.tables_processed = tables.len();
@@ -160,54 +177,39 @@ impl TypeGenerator {
 
     /// Generates only ArkType types.
     pub fn generate_arktype(&self) -> Result<GeneratedFile, EvenframeError> {
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
-        let structs = merge_tables_and_objects(&tables, &objects);
-
+        let (enums, structs) = self.build_typesync_configs()?;
         fs::create_dir_all(&self.config.output_path)?;
-
         self.generate_arktype_internal(&structs, &enums)
     }
 
     /// Generates only Effect-TS schemas.
     pub fn generate_effect(&self) -> Result<GeneratedFile, EvenframeError> {
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
-        let structs = merge_tables_and_objects(&tables, &objects);
-
+        let (enums, structs) = self.build_typesync_configs()?;
         fs::create_dir_all(&self.config.output_path)?;
-
         self.generate_effect_internal(&structs, &enums)
     }
 
     /// Generates only Macroforge types.
     #[cfg(feature = "macroforge")]
     pub fn generate_macroforge(&self) -> Result<GeneratedFile, EvenframeError> {
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
-        let structs = merge_tables_and_objects(&tables, &objects);
-
+        let (enums, structs) = self.build_typesync_configs()?;
         fs::create_dir_all(&self.config.output_path)?;
-
         self.generate_macroforge_internal(&structs, &enums)
     }
 
     /// Generates only FlatBuffers schema.
     #[cfg(feature = "flatbuffers")]
     pub fn generate_flatbuffers(&self) -> Result<GeneratedFile, EvenframeError> {
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
-        let structs = merge_tables_and_objects(&tables, &objects);
-
+        let (enums, structs) = self.build_typesync_configs()?;
         fs::create_dir_all(&self.config.output_path)?;
-
         self.generate_flatbuffers_internal(&structs, &enums)
     }
 
     /// Generates only Protocol Buffers schema.
     #[cfg(feature = "protobuf")]
     pub fn generate_protobuf(&self) -> Result<GeneratedFile, EvenframeError> {
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
-        let structs = merge_tables_and_objects(&tables, &objects);
-
+        let (enums, structs) = self.build_typesync_configs()?;
         fs::create_dir_all(&self.config.output_path)?;
-
         self.generate_protobuf_internal(&structs, &enums)
     }
 

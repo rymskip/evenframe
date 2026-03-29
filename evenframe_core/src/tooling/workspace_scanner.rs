@@ -23,6 +23,8 @@ pub struct EvenframeType {
     pub kind: TypeKind,
     /// Whether this struct has an `id` field (makes it a table).
     pub has_id_field: bool,
+    /// Which pipeline(s) this type participates in.
+    pub pipeline: crate::types::Pipeline,
 }
 
 impl EvenframeType {
@@ -276,13 +278,15 @@ impl WorkspaceScanner {
                 _ => continue,
             };
 
-            if has_evenframe_derive(&attrs) || self.has_apply_alias(&attrs) {
+            let pipeline = detect_pipeline(&attrs);
+            if pipeline.is_some() || self.has_apply_alias(&attrs) {
+                let pipeline = pipeline.unwrap_or(crate::types::Pipeline::Both);
                 let name = ident.to_string();
                 let has_id_field = fields.is_some_and(|f| has_id_field(&f));
 
                 debug!(
-                    "Found Evenframe {:?} '{}' in module '{}'",
-                    kind, name, module_path
+                    "Found Evenframe {:?} '{}' in module '{}' (pipeline: {:?})",
+                    kind, name, module_path, pipeline
                 );
 
                 types.push(EvenframeType {
@@ -291,6 +295,7 @@ impl WorkspaceScanner {
                     file_path: path.to_string_lossy().to_string(),
                     kind,
                     has_id_field,
+                    pipeline,
                 });
             }
         }
@@ -313,17 +318,41 @@ impl WorkspaceScanner {
     }
 }
 
-/// Checks for `#[derive(..., Evenframe, ...)]`.
-fn has_evenframe_derive(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if attr.path().is_ident("derive")
-            && let Meta::List(meta_list) = &attr.meta
-        {
-            return meta_list.tokens.to_string().contains("Evenframe");
-        }
+/// Detects which derive macro is present and returns the corresponding Pipeline.
+/// Returns None if no relevant derive is found.
+fn detect_pipeline(attrs: &[Attribute]) -> Option<crate::types::Pipeline> {
+    use crate::types::Pipeline;
 
-        false
-    })
+    let mut has_typesync = false;
+    let mut has_schemasync = false;
+    let mut has_evenframe = false;
+
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            if let Meta::List(meta_list) = &attr.meta {
+                let tokens_str = meta_list.tokens.to_string();
+                if tokens_str.contains("Typesync") {
+                    has_typesync = true;
+                }
+                if tokens_str.contains("Schemasync") {
+                    has_schemasync = true;
+                }
+                if tokens_str.contains("Evenframe") {
+                    has_evenframe = true;
+                }
+            }
+        }
+    }
+
+    if has_evenframe || (has_typesync && has_schemasync) {
+        Some(Pipeline::Both)
+    } else if has_typesync {
+        Some(Pipeline::Typesync)
+    } else if has_schemasync {
+        Some(Pipeline::Schemasync)
+    } else {
+        None
+    }
 }
 
 /// Checks if a struct has a field named `id`.
@@ -390,6 +419,7 @@ mod tests {
             file_path: "/path/to/file.rs".to_string(),
             kind: TypeKind::Struct,
             has_id_field: true,
+            pipeline: crate::types::Pipeline::Both,
         };
 
         assert_eq!(ef_type.name, "User");
@@ -407,6 +437,7 @@ mod tests {
             file_path: "/path/to/file.rs".to_string(),
             kind: TypeKind::Struct,
             has_id_field: true,
+            pipeline: crate::types::Pipeline::Both,
         };
 
         assert_eq!(ef_type.qualified_name(), "my_crate::models::User");
@@ -420,6 +451,7 @@ mod tests {
             file_path: "/path/to/file.rs".to_string(),
             kind: TypeKind::Struct,
             has_id_field: true,
+            pipeline: crate::types::Pipeline::Both,
         };
 
         assert_eq!(format!("{}", ef_type), "my_crate::models::User");
@@ -433,6 +465,7 @@ mod tests {
             file_path: "/orders.rs".to_string(),
             kind: TypeKind::Struct,
             has_id_field: false,
+            pipeline: crate::types::Pipeline::Both,
         };
 
         let cloned = ef_type.clone();
@@ -451,6 +484,7 @@ mod tests {
             file_path: "/test.rs".to_string(),
             kind: TypeKind::Enum,
             has_id_field: false,
+            pipeline: crate::types::Pipeline::Both,
         };
 
         let debug_str = format!("{:?}", ef_type);
@@ -494,10 +528,10 @@ mod tests {
         assert!(scanner.apply_aliases.contains(&"Macro3".to_string()));
     }
 
-    // ==================== has_evenframe_derive Tests ====================
+    // ==================== detect_pipeline Tests ====================
 
     #[test]
-    fn test_has_evenframe_derive_with_derive_evenframe() {
+    fn test_detect_pipeline_with_derive_evenframe() {
         let code = r#"
             #[derive(Debug, Clone, Evenframe)]
             struct TestStruct {
@@ -507,12 +541,12 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(has_evenframe_derive(&s.attrs));
+            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
         }
     }
 
     #[test]
-    fn test_has_evenframe_derive_without_evenframe() {
+    fn test_detect_pipeline_without_evenframe() {
         let code = r#"
             #[derive(Debug, Clone)]
             struct TestStruct {
@@ -522,12 +556,12 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(!has_evenframe_derive(&s.attrs));
+            assert_eq!(detect_pipeline(&s.attrs), None);
         }
     }
 
     #[test]
-    fn test_has_evenframe_derive_with_no_derive_attr() {
+    fn test_detect_pipeline_with_no_derive_attr() {
         let code = r#"
             struct TestStruct {
                 id: String,
@@ -536,12 +570,12 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(!has_evenframe_derive(&s.attrs));
+            assert_eq!(detect_pipeline(&s.attrs), None);
         }
     }
 
     #[test]
-    fn test_has_evenframe_derive_only_evenframe() {
+    fn test_detect_pipeline_only_evenframe() {
         let code = r#"
             #[derive(Evenframe)]
             struct TestStruct {
@@ -551,7 +585,52 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(has_evenframe_derive(&s.attrs));
+            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
+        }
+    }
+
+    #[test]
+    fn test_detect_pipeline_typesync_only() {
+        let code = r#"
+            #[derive(Typesync)]
+            struct TestStruct {
+                id: String,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let syn::Item::Struct(s) = &file.items[0] {
+            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Typesync));
+        }
+    }
+
+    #[test]
+    fn test_detect_pipeline_schemasync_only() {
+        let code = r#"
+            #[derive(Schemasync)]
+            struct TestStruct {
+                id: String,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let syn::Item::Struct(s) = &file.items[0] {
+            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Schemasync));
+        }
+    }
+
+    #[test]
+    fn test_detect_pipeline_both_typesync_and_schemasync() {
+        let code = r#"
+            #[derive(Typesync, Schemasync)]
+            struct TestStruct {
+                id: String,
+            }
+        "#;
+
+        let file = syn::parse_file(code).unwrap();
+        if let syn::Item::Struct(s) = &file.items[0] {
+            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
         }
     }
 
@@ -643,6 +722,7 @@ mod tests {
             file_path: "/path.rs".to_string(),
             kind: TypeKind::Struct,
             has_id_field: true,
+            pipeline: crate::types::Pipeline::Both,
         }];
 
         let modules = get_unique_modules(&types);
@@ -659,6 +739,7 @@ mod tests {
                 file_path: "/path1.rs".to_string(),
                 kind: TypeKind::Struct,
                 has_id_field: true,
+                pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
                 name: "Order".to_string(),
@@ -666,6 +747,7 @@ mod tests {
                 file_path: "/path2.rs".to_string(),
                 kind: TypeKind::Struct,
                 has_id_field: true,
+                pipeline: crate::types::Pipeline::Both,
             },
         ];
 
@@ -683,6 +765,7 @@ mod tests {
                 file_path: "/path1.rs".to_string(),
                 kind: TypeKind::Struct,
                 has_id_field: true,
+                pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
                 name: "Order".to_string(),
@@ -690,6 +773,7 @@ mod tests {
                 file_path: "/path2.rs".to_string(),
                 kind: TypeKind::Struct,
                 has_id_field: true,
+                pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
                 name: "Status".to_string(),
@@ -697,6 +781,7 @@ mod tests {
                 file_path: "/path3.rs".to_string(),
                 kind: TypeKind::Enum,
                 has_id_field: false,
+                pipeline: crate::types::Pipeline::Both,
             },
         ];
 

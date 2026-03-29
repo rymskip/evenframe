@@ -4,7 +4,7 @@ pub use evenframe_core::{config, error, registry, traits, types, validator, wrap
 #[cfg(feature = "schemasync")]
 pub use evenframe_core::schemasync;
 
-pub use evenframe_derive::{Evenframe, EvenframeUnion};
+pub use evenframe_derive::{Evenframe, EvenframeUnion, Schemasync, Typesync};
 pub use linkme;
 
 pub mod prelude {

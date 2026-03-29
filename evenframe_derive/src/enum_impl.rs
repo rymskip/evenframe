@@ -1,3 +1,4 @@
+use crate::PipelineKind;
 use evenframe_core::{
     derive::attributes::{
         parse_annotation_attributes, parse_macroforge_derive_attribute,
@@ -9,7 +10,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
-pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
+pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenStream {
     let ident = input.ident.clone();
 
     if let Data::Enum(ref data_enum) = input.data {
@@ -47,6 +48,8 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                 quote! { EnumRepresentation::Untagged }
             }
         };
+
+        let pipeline_tokens = pipeline.to_tokens();
 
         let mut variant_tokens = Vec::new();
 
@@ -97,6 +100,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                             })
                             .collect();
 
+                        let pipeline_tokens_inner = pipeline.to_tokens();
                         quote! {
                             Some(VariantData::InlineStruct(StructConfig {
                                 struct_name: format!("{}_{}", #enum_name, #variant_name),
@@ -105,6 +109,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                                 doccom: None,
                                 macroforge_derives: vec![],
                                 annotations: vec![],
+                                pipeline: #pipeline_tokens_inner,
                             }))
                         }
                     }
@@ -135,6 +140,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                         })
                         .collect();
 
+                    let pipeline_tokens_inner = pipeline.to_tokens();
                     quote! {
                         Some(VariantData::InlineStruct(StructConfig {
                             struct_name: format!("{}_{}", #enum_name, #variant_name),
@@ -143,6 +149,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                             doccom: None,
                             macroforge_derives: vec![],
                             annotations: vec![],
+                            pipeline: #pipeline_tokens_inner,
                         }))
                     }
                 }
@@ -174,12 +181,13 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
             static #registry_var_name: ::evenframe::registry::EnumRegistryEntry = ::evenframe::registry::EnumRegistryEntry {
                 type_name: #enum_name,
                 tagged_union_fn: || #ident::variants(),
+                pipeline: #pipeline_tokens,
             };
         };
 
         quote! {
             const _: () = {
-                use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation};
+                use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation, Pipeline};
                 use ::evenframe::traits::EvenframeTaggedUnion;
 
                 impl EvenframeTaggedUnion for #ident {
@@ -193,6 +201,7 @@ pub fn generate_enum_impl(input: DeriveInput) -> TokenStream {
                             doccom: None,
                             macroforge_derives: macroforge_derives_val,
                             annotations: enum_annotations_val,
+                            pipeline: #pipeline_tokens,
                         }
                     }
                 }

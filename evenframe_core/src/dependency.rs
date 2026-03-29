@@ -553,7 +553,7 @@ pub fn sort_tables_by_dependencies(
         }
         Err(_) => {
             // If there's still a cycle (shouldn't happen with SCC), fall back to arbitrary order
-            tracing::warn!("Cycle detected in SCC condensation graph, using arbitrary order");
+            tracing::info!("Cycle detected in SCC condensation graph, using arbitrary order");
             evenframe_log!(
                 "Warning: Cycle detected in SCC condensation graph",
                 "results.log",
@@ -583,7 +583,7 @@ pub fn sort_tables_by_dependencies(
 
         // Log SCC info if it contains multiple tables
         if scc_tables.len() > 1 {
-            tracing::warn!(
+            tracing::info!(
                 tables = ?scc_tables,
                 "Circular dependency detected among tables"
             );
@@ -645,7 +645,8 @@ pub fn sort_tables_by_dependencies(
 mod tests {
     use super::*;
     use crate::types::{
-        EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData,
+        EnumRepresentation, FieldType, Pipeline, StructConfig, StructField, TaggedUnion, Variant,
+        VariantData,
     };
 
     // ==================== RecursionInfo Tests ====================
@@ -927,6 +928,7 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
+            pipeline: Pipeline::default(),
         }
     }
 
@@ -1137,6 +1139,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1607,6 +1610,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 

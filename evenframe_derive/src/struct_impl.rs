@@ -1,4 +1,7 @@
-use crate::{deserialization_impl::generate_custom_deserialize, imports::generate_struct_imports};
+use crate::{
+    PipelineKind, deserialization_impl::generate_custom_deserialize,
+    imports::generate_struct_imports,
+};
 use evenframe_core::{
     derive::{
         attributes::{
@@ -16,7 +19,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, LitStr};
 
-pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
+pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenStream {
     let ident = input.ident.clone();
 
     // Get centralized imports for struct implementations
@@ -351,6 +354,8 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
             quote! { vec![#(#struct_annotations.to_string()),*] }
         };
 
+        let pipeline_tokens = pipeline.to_tokens();
+
         let evenframe_persistable_struct_impl = {
             quote! {
                 impl EvenframePersistableStruct for #ident {
@@ -364,6 +369,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                                 doccom: None,
                                 macroforge_derives: #macroforge_derives_tokens,
                                 annotations: #struct_annotations_tokens,
+                                pipeline: #pipeline_tokens,
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,
@@ -404,6 +410,7 @@ pub fn generate_struct_impl(input: DeriveInput) -> TokenStream {
                 static #registry_var_name: ::evenframe::registry::TableRegistryEntry = ::evenframe::registry::TableRegistryEntry {
                     type_name: #struct_name,
                     table_config_fn: || #ident::static_table_config(),
+                    pipeline: #pipeline_tokens,
                 };
             };
 

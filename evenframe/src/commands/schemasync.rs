@@ -9,9 +9,10 @@ use tracing::{debug, error, info};
 pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
     info!("Starting schema synchronization");
 
-    // Build all configs
+    // Build all configs and filter to schemasync-eligible types
     let build_config = config_builders::BuildConfig::from_toml()?;
     let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
+    let (enums, tables, objects) = config_builders::filter_for_schemasync(enums, tables, objects);
 
     info!(
         "Found {} enums, {} tables, {} objects",

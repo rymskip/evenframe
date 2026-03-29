@@ -86,6 +86,7 @@ fn convert_message(message: &DescriptorProto, prefix: &str, result: &mut Protobu
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     };
 
     result.structs.insert(name.clone(), struct_config);
@@ -233,6 +234,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
+        pipeline: crate::types::Pipeline::default(),
     }
 }
 

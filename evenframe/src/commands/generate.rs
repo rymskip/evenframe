@@ -59,7 +59,9 @@ pub async fn run(_cli: &Cli, args: GenerateArgs) -> Result<()> {
 
     // SchemaSync phase
     if !args.skip_schemasync {
-        run_schemasync(&config, &enums, &tables, &objects, args.no_mocks).await?;
+        let (ss_enums, ss_tables, ss_objects) =
+            config_builders::filter_for_schemasync(enums, tables, objects);
+        run_schemasync(&config, &ss_enums, &ss_tables, &ss_objects, args.no_mocks).await?;
     } else {
         debug!("Skipping schemasync phase");
     }
