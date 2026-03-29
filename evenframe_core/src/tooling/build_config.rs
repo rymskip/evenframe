@@ -1,9 +1,11 @@
 //! Build-time configuration for type generation.
 
+use crate::config::ForeignTypeConfig;
 use crate::error::EvenframeError;
 use crate::typesync::config::{
     ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode,
 };
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,6 +51,9 @@ pub struct BuildConfig {
 
     /// How to handle type name collisions across files.
     pub collision_strategy: CollisionStrategy,
+
+    /// Foreign type configurations, keyed by canonical type name.
+    pub foreign_types: HashMap<String, ForeignTypeConfig>,
 }
 
 impl Default for BuildConfig {
@@ -67,6 +72,7 @@ impl Default for BuildConfig {
             protobuf_import_validate: false,
             output: OutputConfig::default(),
             collision_strategy: CollisionStrategy::Error,
+            foreign_types: HashMap::new(),
         }
     }
 }
@@ -136,13 +142,20 @@ impl BuildConfig {
         let mut config = Self::default();
 
         // Parse [general] section
-        if let Some(general) = value.get("general").and_then(|v| v.as_table())
-            && let Some(aliases) = general.get("apply_aliases").and_then(|v| v.as_array())
-        {
-            config.apply_aliases = aliases
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+        if let Some(general) = value.get("general").and_then(|v| v.as_table()) {
+            if let Some(aliases) = general.get("apply_aliases").and_then(|v| v.as_array()) {
+                config.apply_aliases = aliases
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+
+            // Parse [general.foreign_types]
+            if let Some(ft_value) = general.get("foreign_types") {
+                if let Ok(ft) = ft_value.clone().try_into::<HashMap<String, ForeignTypeConfig>>() {
+                    config.foreign_types = ft;
+                }
+            }
         }
 
         // Derive project root: for .evenframe/config.toml go up one more level
@@ -365,6 +378,12 @@ impl BuildConfigBuilder {
     /// Sets the TypeScript array syntax style.
     pub fn array_style(mut self, style: ArrayStyle) -> Self {
         self.config.output.array_style = style;
+        self
+    }
+
+    /// Sets foreign type configurations.
+    pub fn foreign_types(mut self, foreign_types: HashMap<String, ForeignTypeConfig>) -> Self {
+        self.config.foreign_types = foreign_types;
         self
     }
 

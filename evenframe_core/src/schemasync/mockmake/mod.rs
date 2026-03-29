@@ -46,6 +46,7 @@ pub struct Mockmaker<'a> {
     enums: &'a HashMap<String, TaggedUnion>,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     pub comparator: Option<SurrealdbComparator<'a>>,
+    pub(super) registry: &'a crate::types::ForeignTypeRegistry,
 
     // Runtime state
     pub(super) id_map: HashMap<String, Vec<String>>,
@@ -65,6 +66,7 @@ impl<'a> Mockmaker<'a> {
         objects: &'a HashMap<String, StructConfig>,
         enums: &'a HashMap<String, TaggedUnion>,
         schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
+        registry: &'a crate::types::ForeignTypeRegistry,
     ) -> Self {
         Self {
             db,
@@ -73,6 +75,7 @@ impl<'a> Mockmaker<'a> {
             enums,
             schemasync_config,
             comparator: Some(SurrealdbComparator::new(db, schemasync_config)),
+            registry,
             id_map: HashMap::new(),
             record_diffs: HashMap::new(),
             filtered_tables: HashMap::new(),

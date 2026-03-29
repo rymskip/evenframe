@@ -13,6 +13,7 @@ fn variant_to_arktype(
     representation: &EnumRepresentation,
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     match representation {
         EnumRepresentation::ExternallyTagged => {
@@ -22,9 +23,10 @@ fn variant_to_arktype(
                         &FieldType::Other(enum_struct.struct_name.clone()),
                         structs,
                         enums,
+                        registry,
                     ),
                     VariantData::DataStructureRef(field_type) => {
-                        field_type_to_arktype(field_type, structs, enums)
+                        field_type_to_arktype(field_type, structs, enums, registry)
                     }
                 };
                 format!("{{ {}: {} }}", variant.name, inner)
@@ -44,7 +46,7 @@ fn variant_to_arktype(
                             fields_parts.push(format!(
                                 "{}: {}",
                                 field_name,
-                                field_type_to_arktype(&field.field_type, structs, enums)
+                                field_type_to_arktype(&field.field_type, structs, enums, registry)
                             ));
                         }
                         format!("{{ {} }}", fields_parts.join(", "))
@@ -52,7 +54,7 @@ fn variant_to_arktype(
                     VariantData::DataStructureRef(_field_type) => {
                         // Internally tagged doesn't work well with non-struct data;
                         // fall back to externally tagged wrapping.
-                        let inner = field_type_to_arktype(_field_type, structs, enums);
+                        let inner = field_type_to_arktype(_field_type, structs, enums, registry);
                         format!("{{ {}: {} }}", variant.name, inner)
                     }
                 }
@@ -68,9 +70,10 @@ fn variant_to_arktype(
                         &FieldType::Other(enum_struct.struct_name.clone()),
                         structs,
                         enums,
+                        registry,
                     ),
                     VariantData::DataStructureRef(field_type) => {
-                        field_type_to_arktype(field_type, structs, enums)
+                        field_type_to_arktype(field_type, structs, enums, registry)
                     }
                 };
                 format!(
@@ -89,9 +92,10 @@ fn variant_to_arktype(
                         &FieldType::Other(enum_struct.struct_name.clone()),
                         structs,
                         enums,
+                        registry,
                     ),
                     VariantData::DataStructureRef(field_type) => {
-                        field_type_to_arktype(field_type, structs, enums)
+                        field_type_to_arktype(field_type, structs, enums, registry)
                     }
                 }
             } else {
@@ -105,6 +109,7 @@ pub fn field_type_to_arktype(
     field_type: &FieldType,
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::trace!(field_type = ?field_type, "Converting field type to Arktype");
     match field_type {
@@ -112,8 +117,6 @@ pub fn field_type_to_arktype(
         FieldType::Char => "'string'".to_string(),
         FieldType::Bool => "'boolean'".to_string(),
         FieldType::Unit => "'null'".to_string(),
-        FieldType::Decimal => "'number'".to_string(),
-        FieldType::OrderedFloat(_inner) => "'number'".to_string(), // OrderedFloat is treated as number
         FieldType::F32 | FieldType::F64 => "'number'".to_string(),
         FieldType::I8
         | FieldType::I16
@@ -127,15 +130,11 @@ pub fn field_type_to_arktype(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize => "'number'".to_string(),
-        FieldType::EvenframeRecordId => r#""string""#.to_string(),
-        FieldType::DateTime => "'string'".to_string(),
-        FieldType::EvenframeDuration => "'number'".to_string(), // nanoseconds
-        FieldType::Timezone => "'string'".to_string(),          // IANA timezone string
 
         FieldType::Tuple(types) => {
             let types_str = types
                 .iter()
-                .map(|t| field_type_to_arktype(t, structs, enums))
+                .map(|t| field_type_to_arktype(t, structs, enums, registry))
                 .collect::<Vec<String>>()
                 .join(", ");
             format!("[{}]", types_str)
@@ -148,7 +147,7 @@ pub fn field_type_to_arktype(
                     format!(
                         "{}: {}",
                         name,
-                        field_type_to_arktype(field_type, structs, enums)
+                        field_type_to_arktype(field_type, structs, enums, registry)
                     )
                 })
                 .collect::<Vec<String>>()
@@ -159,35 +158,42 @@ pub fn field_type_to_arktype(
         FieldType::Option(inner) => {
             format!(
                 "[[{}, '|', 'undefined'], '|', 'null']",
-                field_type_to_arktype(inner, structs, enums)
+                field_type_to_arktype(inner, structs, enums, registry)
             )
         }
 
         FieldType::Vec(inner) => {
-            format!("[{}, '[]']", field_type_to_arktype(inner, structs, enums))
+            format!("[{}, '[]']", field_type_to_arktype(inner, structs, enums, registry))
         }
 
         FieldType::HashMap(key, value) => {
             format!(
                 "'Record<{}, {}>'",
-                field_type_to_arktype(key, structs, enums).replace('\'', ""),
-                field_type_to_arktype(value, structs, enums).replace('\'', "")
+                field_type_to_arktype(key, structs, enums, registry).replace('\'', ""),
+                field_type_to_arktype(value, structs, enums, registry).replace('\'', "")
             )
         }
         FieldType::BTreeMap(key, value) => {
             format!(
                 "'Record<{}, {}>'",
-                field_type_to_arktype(key, structs, enums).replace('\'', ""),
-                field_type_to_arktype(value, structs, enums).replace('\'', "")
+                field_type_to_arktype(key, structs, enums, registry).replace('\'', ""),
+                field_type_to_arktype(value, structs, enums, registry).replace('\'', "")
             )
         }
 
         FieldType::RecordLink(inner) => format!(
             r#"[{}, "|",  "string"]"#,
-            field_type_to_arktype(inner, structs, enums)
+            field_type_to_arktype(inner, structs, enums, registry)
         ),
 
         FieldType::Other(type_name) => {
+            // Check foreign type registry first
+            if let Some(ftc) = registry.lookup(type_name) {
+                if !ftc.arktype.is_empty() {
+                    return ftc.arktype.clone();
+                }
+            }
+
             // Try to find a matching struct
             for struct_config in structs.values() {
                 if struct_config.struct_name == *type_name {
@@ -207,7 +213,7 @@ pub fn field_type_to_arktype(
                     .variants
                     .iter()
                     .map(|variant| {
-                        variant_to_arktype(variant, &enum_def.representation, structs, enums)
+                        variant_to_arktype(variant, &enum_def.representation, structs, enums, registry)
                     })
                     .collect();
                 return variants.join(" | ");
@@ -223,6 +229,7 @@ pub fn generate_arktype_type_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     print_types: bool,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -256,7 +263,7 @@ pub fn generate_arktype_type_string(
         for (i, variant) in schema_enum.variants.iter().enumerate() {
             // Convert the variant into either a data type or a literal union piece,
             // respecting the serde enum representation.
-            let item_str = variant_to_arktype(variant, &schema_enum.representation, structs, enums);
+            let item_str = variant_to_arktype(variant, &schema_enum.representation, structs, enums, registry);
 
             // If this is our first variant, it becomes the entire union so far,
             // otherwise we nest the "union so far" together with the new item.
@@ -306,12 +313,12 @@ pub fn generate_arktype_type_string(
             scope_output.push_str(&format!(
                 "  {}: {}",
                 field_name,
-                field_type_to_arktype(&field.field_type, structs, enums)
+                field_type_to_arktype(&field.field_type, structs, enums, registry)
             ));
             defaults_output.push_str(&format!(
                 "{}: {}",
                 field_name,
-                field_type_to_default_value(&field.field_type, structs, enums)
+                field_type_to_default_value(&field.field_type, structs, enums, registry)
             ));
             // Add a comma if it's not the last field
             if Some(field) != struct_config.fields.last() {

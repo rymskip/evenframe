@@ -1237,26 +1237,6 @@ impl<'a> Merger<'a> {
             | FieldType::I128
             | FieldType::Isize => json!(rand::random::<i32>() % 100),
             FieldType::F32 | FieldType::F64 => json!(rand::random::<f64>() * 100.0),
-            FieldType::DateTime => json!(chrono::Utc::now().to_rfc3339()),
-            FieldType::EvenframeDuration => {
-                // Generate random duration in nanoseconds (0 to 1 day)
-                json!(rand::random::<i64>() % 86_400_000_000_000i64)
-            }
-            FieldType::Timezone => {
-                // Generate random IANA timezone string
-                let timezones = [
-                    "UTC",
-                    "America/New_York",
-                    "America/Los_Angeles",
-                    "Europe/London",
-                    "Europe/Paris",
-                    "Asia/Tokyo",
-                    "Asia/Shanghai",
-                    "Australia/Sydney",
-                ];
-                let index = (rand::random::<f64>() * timezones.len() as f64) as usize;
-                json!(timezones[index.min(timezones.len() - 1)])
-            }
             FieldType::Option(inner) => {
                 if rand::random::<bool>() {
                     let inner_field = crate::types::StructField {

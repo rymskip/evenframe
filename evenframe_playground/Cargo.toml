@@ -14,7 +14,7 @@ wasm-plugins = ["evenframe_core/wasm-plugins"]
 
 [dependencies]
 # Evenframe dependencies
-evenframe = { path = "../evenframe", features = ["cli"] }
+evenframe = { path = "../evenframe", features = ["schemasync"] }
 evenframe_derive = { path = "../evenframe_derive" }
 evenframe_core = { path = "../evenframe_core" }
 

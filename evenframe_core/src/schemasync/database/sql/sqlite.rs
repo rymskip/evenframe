@@ -7,7 +7,7 @@ use tracing::info;
 
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::{EdgeConfig, TableConfig};
-use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
+use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion};
 
 use super::{
     JoinTableConfig, SchemaInspector, SqliteSchemaInspector, SqliteTypeMapper,
@@ -23,7 +23,7 @@ use crate::schemasync::database::{
 pub struct SqliteProvider {
     pool: Option<SqlitePool>,
     config: Option<DatabaseConfig>,
-    type_mapper: SqliteTypeMapper,
+    registry: ForeignTypeRegistry,
 }
 
 impl SqliteProvider {
@@ -31,8 +31,22 @@ impl SqliteProvider {
         Self {
             pool: None,
             config: None,
-            type_mapper: SqliteTypeMapper,
+            registry: ForeignTypeRegistry::default(),
         }
+    }
+
+    /// Create a new SQLite provider with a foreign type registry
+    pub fn with_registry(registry: ForeignTypeRegistry) -> Self {
+        Self {
+            pool: None,
+            config: None,
+            registry,
+        }
+    }
+
+    /// Get the type mapper
+    fn type_mapper(&self) -> SqliteTypeMapper<'_> {
+        SqliteTypeMapper::new(&self.registry)
     }
 }
 
@@ -210,7 +224,7 @@ impl DatabaseProvider for SqliteProvider {
             if field.field_name == "id" {
                 continue;
             }
-            let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
+            let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
             if sql_type.is_empty() {
                 continue;
             }
@@ -237,7 +251,7 @@ impl DatabaseProvider for SqliteProvider {
         _objects: &HashMap<String, StructConfig>,
         _enums: &HashMap<String, TaggedUnion>,
     ) -> String {
-        let sql_type = self.type_mapper.field_type_to_native(&field.field_type);
+        let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
         format!(
             "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {};",
             table_name, field.field_name, sql_type
@@ -245,11 +259,11 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     fn map_field_type(&self, field_type: &FieldType) -> String {
-        self.type_mapper.field_type_to_native(field_type)
+        self.type_mapper().field_type_to_native(field_type)
     }
 
     fn format_value(&self, field_type: &FieldType, value: &serde_json::Value) -> String {
-        self.type_mapper.format_value(field_type, value)
+        self.type_mapper().format_value(field_type, value)
     }
 
     fn generate_relationship_table(&self, edge: &EdgeConfig) -> Vec<String> {

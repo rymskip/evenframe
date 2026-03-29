@@ -86,10 +86,13 @@ pub struct Schemasync<'a> {
     tables: Option<&'a HashMap<String, TableConfig>>,
     objects: Option<&'a HashMap<String, StructConfig>>,
     enums: Option<&'a HashMap<String, TaggedUnion>>,
+    registry: Option<&'a crate::types::ForeignTypeRegistry>,
 
     // Internal state - initialized automatically
     db: Option<Surreal<Client>>,
     schemasync_config: Option<crate::schemasync::config::SchemasyncConfig>,
+    /// Owned registry built from config during initialization (used when no external registry is provided)
+    owned_registry: Option<crate::types::ForeignTypeRegistry>,
 }
 
 #[cfg(feature = "surrealdb")]
@@ -101,8 +104,10 @@ impl<'a> Schemasync<'a> {
             tables: None,
             objects: None,
             enums: None,
+            registry: None,
             db: None,
             schemasync_config: None,
+            owned_registry: None,
         }
     }
 
@@ -125,6 +130,12 @@ impl<'a> Schemasync<'a> {
         debug!("Configuring Schemasync with {} enums", enums.len());
         trace!("Enum names: {:?}", enums.keys().collect::<Vec<_>>());
         self.enums = Some(enums);
+        self
+    }
+
+    pub fn with_registry(mut self, registry: &'a crate::types::ForeignTypeRegistry) -> Self {
+        debug!("Configuring Schemasync with ForeignTypeRegistry");
+        self.registry = Some(registry);
         self
     }
 
@@ -173,6 +184,12 @@ impl<'a> Schemasync<'a> {
         );
 
         self.db = Some(db);
+        // Build a ForeignTypeRegistry from config if no external registry was provided
+        if self.registry.is_none() {
+            let registry = crate::types::ForeignTypeRegistry::from_config(&config.general.foreign_types);
+            debug!("Built ForeignTypeRegistry from EvenframeConfig foreign_types");
+            self.owned_registry = Some(registry);
+        }
         self.schemasync_config = Some(config.schemasync);
         debug!("Schemasync initialization completed successfully");
 
@@ -201,6 +218,11 @@ impl<'a> Schemasync<'a> {
         let enums = self
             .enums
             .ok_or_else(|| EvenframeError::config("Enums not provided"))?;
+        let default_registry = crate::types::ForeignTypeRegistry::default();
+        let registry = self
+            .registry
+            .or(self.owned_registry.as_ref())
+            .unwrap_or(&default_registry);
         let config = self
             .schemasync_config
             .take()
@@ -244,6 +266,7 @@ impl<'a> Schemasync<'a> {
                     objects,
                     enums,
                     config.mock_gen_config.full_refresh_mode,
+                    registry,
                 ),
             );
         }
@@ -260,7 +283,14 @@ impl<'a> Schemasync<'a> {
         );
         // Create Mockmaker instance (which contains Comparator)
         info!("Creating Mockmaker instance for data generation and comparison");
-        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config);
+        let mut mockmaker = Mockmaker::new(
+            &db,
+            tables,
+            objects,
+            enums,
+            &config,
+            registry,
+        );
         debug!("Mockmaker instance created successfully");
 
         // Run initial ID generation and comparator setup

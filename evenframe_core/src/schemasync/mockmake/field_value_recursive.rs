@@ -2,7 +2,7 @@ use crate::{
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::format::Format,
-    types::{EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData},
+    types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, VariantData},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -18,6 +18,7 @@ pub struct FieldValueGenerator<'a> {
     field: &'a StructField,
     id_index: &'a usize,
     coordinated_values: &'a HashMap<String, String>,
+    registry: &'a ForeignTypeRegistry,
 }
 
 impl<'a> FieldValueGenerator<'a> {
@@ -44,8 +45,7 @@ impl<'a> FieldValueGenerator<'a> {
             }
             FieldType::Bool => format!("{}", rng.random_bool(0.5)),
             FieldType::Unit => "NONE".to_string(),
-            FieldType::Decimal => format!("{:.3}dec", rng.random_range(0.0..100.0)),
-            FieldType::F32 | FieldType::F64 | FieldType::OrderedFloat(_) => {
+            FieldType::F32 | FieldType::F64 => {
                 format!("{:.2}f", rng.random_range(0.0..100.0))
             }
             // Combine signed integer types
@@ -65,30 +65,6 @@ impl<'a> FieldValueGenerator<'a> {
             | FieldType::U128
             | FieldType::Usize => format!("{}", rng.random_range(0..100)),
 
-            FieldType::DateTime => format!("d'{}'", chrono::Utc::now().to_rfc3339()),
-
-            FieldType::EvenframeDuration => {
-                // Generate random duration in nanoseconds (0 to 1 day in nanos)
-                let nanos = rng.random_range(0..86_400_000_000_000i64); // 0 to 24 hours
-                format!("duration::from_nanos({})", nanos)
-            }
-            FieldType::Timezone => {
-                #[cfg(feature = "mockmake")]
-                {
-                    let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
-                    format!("'{}'", tz.name())
-                }
-                #[cfg(not(feature = "mockmake"))]
-                {
-                    let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
-                    format!("'{}'", timezones[rng.random_range(0..timezones.len())])
-                }
-            }
-            FieldType::EvenframeRecordId => self.handle_record_id(
-                &self.field.field_name,
-                &self.table_config.table_name,
-                &mut rng,
-            ),
             // For an Option, randomly decide whether to generate a value or use NULL.
             FieldType::Option(inner_type) => self.handle_option(inner_type, &mut rng),
             // For a vector, generate a dummy array with a couple of elements.
@@ -244,10 +220,18 @@ impl<'a> FieldValueGenerator<'a> {
                 // Check if we have a coordinated value for this nested field
                 let value = if let Some(coord_value) = nested_coordinated_values.get(fname) {
                     // Use the coordinated value
-                    match ftype {
-                        FieldType::DateTime => format!("d'{}'", coord_value),
-                        FieldType::String => format!("'{}'", coord_value),
-                        _ => coord_value.clone(),
+                    let is_datetime = if let FieldType::Other(name) = ftype {
+                        self.registry.lookup(name)
+                            .is_some_and(|ftc| ftc.mock_strategy == "datetime")
+                    } else {
+                        false
+                    };
+                    if is_datetime {
+                        format!("d'{}'", coord_value)
+                    } else if matches!(ftype, FieldType::String) {
+                        format!("'{}'", coord_value)
+                    } else {
+                        coord_value.clone()
                     }
                 } else {
                     self.generate_field_value(ftype)
@@ -283,6 +267,43 @@ impl<'a> FieldValueGenerator<'a> {
     }
 
     fn handle_other(&self, type_name: &String, rng: &mut ThreadRng) -> String {
+        // Check if this is a foreign type with a mock strategy
+        if let Some(ftc) = self.registry.lookup(type_name) {
+            match ftc.mock_strategy.as_str() {
+                "datetime" => return format!("d'{}'", chrono::Utc::now().to_rfc3339()),
+                "duration" => {
+                    return format!(
+                        "duration::from_nanos({})",
+                        rng.random_range(0..86_400_000_000_000i64)
+                    );
+                }
+                "timezone" => {
+                    #[cfg(feature = "mockmake")]
+                    {
+                        let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
+                        return format!("'{}'", tz.name());
+                    }
+                    #[cfg(not(feature = "mockmake"))]
+                    {
+                        let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+                        return format!("'{}'", timezones[rng.random_range(0..timezones.len())]);
+                    }
+                }
+                "decimal" => return format!("{:.3}dec", rng.random_range(0.0..100.0)),
+                "float" => return format!("{:.2}f", rng.random_range(0.0..100.0)),
+                "record_id" => {
+                    return self.handle_record_id(
+                        &self.field.field_name,
+                        &self.table_config.table_name,
+                        rng,
+                    );
+                }
+                _ => {
+                    // Fall through to existing Other logic
+                }
+            }
+        }
+
         let snake_case_name = type_name.to_case(Case::Snake);
         // First try to find by matching table-struct name
         if let Some((table_name, _)) = self
@@ -384,6 +405,7 @@ impl<'a> FieldValueGenerator<'a> {
                 .id_index(self.id_index)
                 .mockmaker(self.mockmaker)
                 .table_config(self.table_config)
+                .registry(self.registry)
                 .build()
                 .run();
 

@@ -138,6 +138,7 @@ impl Mockmaker<'_> {
                         .id_index(&i)
                         .mockmaker(self)
                         .table_config(table_config)
+                        .registry(self.registry)
                         .build()
                         .run();
 

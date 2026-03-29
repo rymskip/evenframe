@@ -3,9 +3,8 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
-use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
-use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
+use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -19,7 +18,7 @@ pub fn generate_macroforge_type_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     _print_types: bool,
-    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -63,15 +62,11 @@ pub fn generate_macroforge_type_string(
     let all_type_names: Vec<String> = unique_structs
         .iter()
         .map(|s| s.struct_name.to_case(Case::Pascal))
-        .chain(
-            unique_enums
-                .iter()
-                .map(|e| e.enum_name.to_case(Case::Pascal)),
-        )
+        .chain(unique_enums.iter().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
 
     let mut result = String::new();
-    let extra_imports = compute_extra_imports(&all_type_names, structs, enums);
+    let extra_imports = compute_extra_imports(&all_type_names, structs, enums, registry);
     if !extra_imports.is_empty() {
         result.push_str(&extra_imports.join("\n"));
         result.push_str("\n\n");
@@ -79,10 +74,10 @@ pub fn generate_macroforge_type_string(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &unique_structs {
-        parts.push(generate_struct_block(struct_config, array_style));
+        parts.push(generate_struct_block(struct_config, registry));
     }
     for enum_def in &unique_enums {
-        parts.push(generate_enum_block(enum_def, array_style));
+        parts.push(generate_enum_block(enum_def, registry));
     }
 
     result.push_str(&parts.join("\n"));
@@ -98,7 +93,7 @@ pub fn generate_macroforge_for_types(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
-    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
 
@@ -135,16 +130,16 @@ pub fn generate_macroforge_for_types(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &filtered_structs {
-        parts.push(generate_struct_block(struct_config, array_style));
+        parts.push(generate_struct_block(struct_config, registry));
     }
     for enum_def in &filtered_enums {
-        parts.push(generate_enum_block(enum_def, array_style));
+        parts.push(generate_enum_block(enum_def, registry));
     }
     parts.join("\n")
 }
 
 /// Generate a single struct's TypeScript interface block.
-fn generate_struct_block(struct_config: &StructConfig, array_style: ArrayStyle) -> String {
+fn generate_struct_block(struct_config: &StructConfig, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let derive_line = format_derive_line(&struct_config.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
@@ -158,7 +153,7 @@ fn generate_struct_block(struct_config: &StructConfig, array_style: ArrayStyle) 
     }
     lines.push(format!("export interface {} {{", name));
     for field in &struct_config.fields {
-        lines.push(render_field_block(field, array_style));
+        lines.push(render_field_block(field, registry));
     }
     lines.push("}".to_string());
     lines.push(String::new());
@@ -166,7 +161,7 @@ fn generate_struct_block(struct_config: &StructConfig, array_style: ArrayStyle) 
 }
 
 /// Generate a single enum's TypeScript type block.
-fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> String {
+fn generate_enum_block(enum_def: &TaggedUnion, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
     let derive_line = format_derive_line(&enum_def.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
@@ -179,24 +174,27 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
         lines.push(format!("/** {} */", ann));
     }
 
-    // Emit @serde annotation for tagged representations
-    match &enum_def.representation {
-        EnumRepresentation::InternallyTagged { tag } => {
-            lines.push(format!("/** @serde({{ tag: \"{}\" }}) */", tag));
-        }
-        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            lines.push(format!(
-                "/** @serde({{ tag: \"{}\", content: \"{}\" }}) */",
-                tag, content
-            ));
-        }
-        _ => {}
-    }
-
     let variant_parts: Vec<String> = enum_def
         .variants
         .iter()
-        .map(|variant| render_variant(variant, &enum_def.representation, array_style))
+        .map(|variant| {
+            let ann_prefix = if !variant.annotations.is_empty() {
+                format!("/** {} */ ", variant.annotations.join(" "))
+            } else {
+                String::new()
+            };
+            match &variant.data {
+                Some(VariantData::InlineStruct(s)) => {
+                    format!("{}{}", ann_prefix, s.struct_name.to_case(Case::Pascal))
+                }
+                Some(VariantData::DataStructureRef(ft)) => {
+                    format!("{}{}", ann_prefix, field_type_to_typescript(ft, registry).trim())
+                }
+                None => {
+                    format!("{}\"{}\"", ann_prefix, variant.name)
+                }
+            }
+        })
         .collect();
 
     lines.push(format!(
@@ -208,154 +206,9 @@ fn generate_enum_block(enum_def: &TaggedUnion, array_style: ArrayStyle) -> Strin
     lines.join("\n")
 }
 
-/// Render a single enum variant according to the serde enum representation.
-fn render_variant(
-    variant: &crate::types::Variant,
-    representation: &EnumRepresentation,
-    array_style: ArrayStyle,
-) -> String {
-    // Determine whether to emit @variant annotation.
-    // For Untagged and ExternallyTagged: emit @variant on DataStructureRef and Unit only
-    //   (InlineStruct uses the struct name as a TypeRef, so name is inherently preserved).
-    // For InternallyTagged and AdjacentlyTagged: @serde({ tag }) on the union handles
-    //   variant identification, so no @variant needed on individual variants.
-    let needs_variant_annotation = match representation {
-        EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-            !matches!(&variant.data, Some(VariantData::InlineStruct(_)))
-        }
-        EnumRepresentation::InternallyTagged { .. }
-        | EnumRepresentation::AdjacentlyTagged { .. } => false,
-    };
-
-    let mut all_annotations: Vec<String> = Vec::new();
-    if needs_variant_annotation {
-        all_annotations.push(format!("@variant(\"{}\")", variant.name));
-    }
-    all_annotations.extend(variant.annotations.iter().cloned());
-
-    let ann_prefix = if !all_annotations.is_empty() {
-        format!("/** {} */ ", all_annotations.join(" "))
-    } else {
-        String::new()
-    };
-
-    let type_str = match representation {
-        EnumRepresentation::ExternallyTagged => {
-            render_variant_externally_tagged(variant, array_style)
-        }
-        EnumRepresentation::InternallyTagged { tag } => {
-            render_variant_internally_tagged(variant, tag, array_style)
-        }
-        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            render_variant_adjacently_tagged(variant, tag, content, array_style)
-        }
-        EnumRepresentation::Untagged => render_variant_untagged(variant, array_style),
-    };
-
-    format!("{}{}", ann_prefix, type_str)
-}
-
-/// ExternallyTagged: `{ VariantName: Type }` for data variants, `"VariantName"` for unit.
-fn render_variant_externally_tagged(
-    variant: &crate::types::Variant,
-    array_style: ArrayStyle,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            format!(
-                "{{ {}: {} }}",
-                variant.name,
-                s.struct_name.to_case(Case::Pascal)
-            )
-        }
-        Some(VariantData::DataStructureRef(ft)) => {
-            format!(
-                "{{ {}: {} }}",
-                variant.name,
-                field_type_to_typescript(ft, array_style).trim()
-            )
-        }
-        None => format!("\"{}\"", variant.name),
-    }
-}
-
-/// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
-/// InlineStruct fields are inlined: `{ tag: 'VariantName'; field1: Type1; field2: Type2 }`.
-/// Unit variants: `{ tag: 'VariantName' }`.
-/// DataStructureRef falls back to externally-tagged style (serde rejects this combination).
-fn render_variant_internally_tagged(
-    variant: &crate::types::Variant,
-    tag: &str,
-    array_style: ArrayStyle,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            let mut members = vec![format!("{}: '{}'", tag, variant.name)];
-            for field in &s.fields {
-                let field_name = field.field_name.to_case(Case::Camel);
-                let type_str = field_type_to_typescript(&field.field_type, array_style);
-                members.push(format!("{}: {}", field_name, type_str.trim()));
-            }
-            format!("{{ {} }}", members.join("; "))
-        }
-        Some(VariantData::DataStructureRef(ft)) => {
-            // DataStructureRef cannot merge a tag field into a non-object type,
-            // so fall back to externally-tagged style.
-            format!(
-                "{{ {}: {} }}",
-                variant.name,
-                field_type_to_typescript(ft, array_style).trim()
-            )
-        }
-        None => format!("{{ {}: '{}' }}", tag, variant.name),
-    }
-}
-
-/// AdjacentlyTagged: `{ tag: 'VariantName'; content: Type }` for data variants,
-/// `{ tag: 'VariantName' }` for unit.
-fn render_variant_adjacently_tagged(
-    variant: &crate::types::Variant,
-    tag: &str,
-    content: &str,
-    array_style: ArrayStyle,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            format!(
-                "{{ {}: '{}'; {}: {} }}",
-                tag,
-                variant.name,
-                content,
-                s.struct_name.to_case(Case::Pascal)
-            )
-        }
-        Some(VariantData::DataStructureRef(ft)) => {
-            format!(
-                "{{ {}: '{}'; {}: {} }}",
-                tag,
-                variant.name,
-                content,
-                field_type_to_typescript(ft, array_style).trim()
-            )
-        }
-        None => format!("{{ {}: '{}' }}", tag, variant.name),
-    }
-}
-
-/// Untagged: bare type reference, no wrapping. Current/original behavior.
-fn render_variant_untagged(variant: &crate::types::Variant, array_style: ArrayStyle) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => s.struct_name.to_case(Case::Pascal),
-        Some(VariantData::DataStructureRef(ft)) => {
-            field_type_to_typescript(ft, array_style).trim().to_string()
-        }
-        None => format!("\"{}\"", variant.name),
-    }
-}
-
 /// Render a complete field block including annotations, @serde, and the field declaration.
 /// This handles both inline @serde (for RecordLink fields) and separate-line @serde.
-fn render_field_block(field: &crate::types::StructField, array_style: ArrayStyle) -> String {
+fn render_field_block(field: &crate::types::StructField, registry: &crate::types::ForeignTypeRegistry) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     // 1. Field annotations (each on its own line)
@@ -365,7 +218,7 @@ fn render_field_block(field: &crate::types::StructField, array_style: ArrayStyle
 
     // 2. Compute validators and serde annotation
     let validators_str = collect_validators_for_field(&field.validators, &field.field_type);
-    let (serde_annotation, is_inline) = build_serde_annotation(&validators_str, &field.field_type);
+    let (serde_annotation, is_inline) = build_serde_annotation(&validators_str, &field.field_type, registry);
 
     // 3. Legacy doccom handling (for backwards compatibility)
     if let Some(ref dc) = field.doccom {
@@ -388,9 +241,9 @@ fn render_field_block(field: &crate::types::StructField, array_style: ArrayStyle
     // 5. Field declaration line
     let field_name = field.field_name.to_case(Case::Camel);
     let type_str = if is_inline && !serde_annotation.is_empty() {
-        render_field_type(&field.field_type, &serde_annotation, true, array_style)
+        render_field_type(&field.field_type, &serde_annotation, true, registry)
     } else {
-        field_type_to_typescript(&field.field_type, array_style)
+        field_type_to_typescript(&field.field_type, registry)
     };
 
     lines.push(format!("  {}: {};", field_name, type_str.trim()));
@@ -409,7 +262,15 @@ fn format_derive_line(derives: &[String]) -> String {
 }
 
 /// Convert a FieldType to its TypeScript representation.
-fn field_type_to_typescript(field_type: &FieldType, array_style: ArrayStyle) -> String {
+fn field_type_to_typescript(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+    // Check for foreign type in Other variant before using ts_template
+    if let FieldType::Other(type_name) = field_type {
+        if let Some(ftc) = registry.lookup(type_name) {
+            if !ftc.macroforge.is_empty() {
+                return format!(" {}", ftc.macroforge);
+            }
+        }
+    }
     ts_template! {
         {#match field_type}
             {:case FieldType::String | FieldType::Char}
@@ -418,34 +279,24 @@ fn field_type_to_typescript(field_type: &FieldType, array_style: ArrayStyle) -> 
                 boolean
             {:case FieldType::Unit}
                 null
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 number
-            {:case FieldType::Decimal}
-                BigDecimal.BigDecimal
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 number
             {:case FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 | FieldType::U128 | FieldType::Usize}
                 number
-            {:case FieldType::EvenframeRecordId}
-                string
-            {:case FieldType::DateTime}
-                DateTime.Utc
-            {:case FieldType::EvenframeDuration}
-                Duration.Duration
-            {:case FieldType::Timezone}
-                string
             {:case FieldType::Option(inner)}
-                @{wrap_union_type(inner, array_style)} | null
+                @{wrap_union_type(inner, registry)} | null
             {:case FieldType::Vec(inner)}
-                @{format_array(inner, array_style)}
+                @{wrap_union_type(inner, registry)}[]
             {:case FieldType::Tuple(items)}
-                [@{items.iter().map(|i| field_type_to_typescript(i, array_style)).collect::<Vec<_>>().join(", ")}]
+                [@{items.iter().map(|ft| field_type_to_typescript(ft, registry)).collect::<Vec<_>>().join(", ")}]
             {:case FieldType::Struct(fields)}
-                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, array_style))).collect::<Vec<_>>().join("; ")} }
+                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, registry))).collect::<Vec<_>>().join("; ")} }
             {:case FieldType::RecordLink(inner)}
-                RecordLink<@{field_type_to_typescript(inner, array_style).trim()}>
+                RecordLink<@{field_type_to_typescript(inner, registry).trim()}>
             {:case FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value)}
-                { [key: @{field_type_to_typescript(key, array_style)}]: @{field_type_to_typescript(value, array_style)} }
+                { [key: @{field_type_to_typescript(key, registry)}]: @{field_type_to_typescript(value, registry)} }
             {:case FieldType::Other(type_name)}
                 @{type_name.to_case(Case::Pascal)}
         {/match}
@@ -454,26 +305,12 @@ fn field_type_to_typescript(field_type: &FieldType, array_style: ArrayStyle) -> 
     .to_string()
 }
 
-/// Format a Vec type as either `Type[]` (shorthand) or `Array<Type>` (generic).
-fn format_array(inner: &FieldType, array_style: ArrayStyle) -> String {
-    match array_style {
-        ArrayStyle::Shorthand => format!("{}[]", wrap_union_type(inner, array_style)),
-        ArrayStyle::Generic => {
-            format!(
-                "Array<{}>",
-                field_type_to_typescript(inner, array_style).trim()
-            )
-        }
-    }
-}
-
 /// Render a field type for use as an inner type in Vec/Option.
-/// Wraps union types (Option) in parentheses for correct `Type[]` semantics.
-/// Not needed for generic `Array<Type>` syntax since the angle brackets handle grouping.
-fn wrap_union_type(ft: &FieldType, array_style: ArrayStyle) -> String {
-    let rendered = field_type_to_typescript(ft, array_style);
+/// Wraps union types (RecordLink, Option) in parentheses for correct TypeScript semantics.
+fn wrap_union_type(ft: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+    let rendered = field_type_to_typescript(ft, registry);
     let trimmed = rendered.trim();
-    if matches!(ft, FieldType::Option(_)) && array_style == ArrayStyle::Shorthand {
+    if matches!(ft, FieldType::Option(_)) {
         format!("({})", trimmed)
     } else {
         trimmed.to_string()
@@ -504,30 +341,33 @@ fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType
 
 /// Compute `@serde({ format: "..." })` annotation for field types that need it.
 /// Returns None if no format annotation is needed.
-fn collect_serde_format(field_type: &FieldType) -> Option<String> {
-    match field_type {
-        FieldType::Decimal => Some("/** @serde({ format: \"decimal\" }) */".to_string()),
-        _ => None,
+fn collect_serde_format(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> Option<String> {
+    if let FieldType::Other(name) = field_type {
+        if let Some(ftc) = registry.lookup(name) {
+            if !ftc.serde_format.is_empty() {
+                return Some(format!("/** @serde({{ format: \"{}\" }}) */", ftc.serde_format));
+            }
+        }
     }
+    None
 }
 
 /// Build the full serde annotation string for a field.
 /// Combines validate and format annotations as needed.
 /// Returns the annotation line (or empty string), and a boolean indicating
 /// whether the serde should be rendered inline (for RecordLink fields).
-fn build_serde_annotation(validators_str: &str, field_type: &FieldType) -> (String, bool) {
-    let format_ann = collect_serde_format(field_type);
+fn build_serde_annotation(
+    validators_str: &str,
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> (String, bool) {
+    let format_ann = collect_serde_format(field_type, registry);
     let is_record_link = matches!(field_type, FieldType::RecordLink(_));
 
-    if !validators_str.is_empty()
-        && let Some(format_line) = format_ann
-    {
+    if !validators_str.is_empty() && let Some(format_line) = format_ann {
         // Both validate and format — render as separate lines (validate first)
         let validate_line = format!("/** @serde({{ validate: [{}] }}) */", validators_str);
-        (
-            format!("{}\n{}", validate_line, format_line),
-            is_record_link,
-        )
+        (format!("{}\n{}", validate_line, format_line), is_record_link)
     } else if !validators_str.is_empty() {
         (
             format!("/** @serde({{ validate: [{}] }}) */", validators_str),
@@ -541,23 +381,18 @@ fn build_serde_annotation(validators_str: &str, field_type: &FieldType) -> (Stri
 }
 
 /// Render the field type, with optional inline @serde for RecordLink fields.
-fn render_field_type(
-    field_type: &FieldType,
-    serde_annotation: &str,
-    inline: bool,
-    array_style: ArrayStyle,
-) -> String {
+fn render_field_type(field_type: &FieldType, serde_annotation: &str, inline: bool, registry: &crate::types::ForeignTypeRegistry) -> String {
     if inline && !serde_annotation.is_empty() {
         // For RecordLink, render @serde inline: /** @serde(...) */ RecordLink<Type>
         if let FieldType::RecordLink(inner) = field_type {
             return format!(
                 "{} RecordLink<{}>",
                 serde_annotation,
-                field_type_to_typescript(inner, array_style).trim()
+                field_type_to_typescript(inner, registry).trim()
             );
         }
     }
-    field_type_to_typescript(field_type, array_style)
+    field_type_to_typescript(field_type, registry)
 }
 
 /// Compute the `/** import macro {...} from "@dealdraft/macros"; */` line
@@ -617,17 +452,14 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
     match ft {
         FieldType::Option(inner)
         | FieldType::Vec(inner)
-        | FieldType::RecordLink(inner)
-        | FieldType::OrderedFloat(inner) => field_type_contains(inner, predicate),
+        | FieldType::RecordLink(inner) => field_type_contains(inner, predicate),
         FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
             field_type_contains(k, predicate) || field_type_contains(v, predicate)
         }
-        FieldType::Tuple(items) => items
-            .iter()
-            .any(|item| field_type_contains(item, predicate)),
-        FieldType::Struct(fields) => fields
-            .iter()
-            .any(|(_, ft)| field_type_contains(ft, predicate)),
+        FieldType::Tuple(items) => items.iter().any(|item| field_type_contains(item, predicate)),
+        FieldType::Struct(fields) => {
+            fields.iter().any(|(_, ft)| field_type_contains(ft, predicate))
+        }
         _ => false,
     }
 }
@@ -638,27 +470,48 @@ pub fn compute_extra_imports(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> Vec<String> {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
-    let mut needs_datetime = false;
-    let mut needs_bigdecimal = false;
-    let mut needs_duration = false;
     let mut needs_record_link = false;
+    let mut foreign_imports: HashSet<String> = HashSet::new();
+
+    fn collect_foreign_imports_recursive(ft: &FieldType, registry: &crate::types::ForeignTypeRegistry, fi: &mut HashSet<String>) {
+        if let FieldType::Other(name) = ft {
+            if let Some(ftc) = registry.lookup(name) {
+                if !ftc.macroforge_import.is_empty() {
+                    fi.insert(ftc.macroforge_import.clone());
+                }
+            }
+        }
+        match ft {
+            FieldType::Option(inner)
+            | FieldType::Vec(inner)
+            | FieldType::RecordLink(inner) => collect_foreign_imports_recursive(inner, registry, fi),
+            FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
+                collect_foreign_imports_recursive(k, registry, fi);
+                collect_foreign_imports_recursive(v, registry, fi);
+            }
+            FieldType::Tuple(items) => {
+                for item in items {
+                    collect_foreign_imports_recursive(item, registry, fi);
+                }
+            }
+            FieldType::Struct(fields) => {
+                for (_, inner_ft) in fields {
+                    collect_foreign_imports_recursive(inner_ft, registry, fi);
+                }
+            }
+            _ => {}
+        }
+    }
 
     let check_field_type =
-        |ft: &FieldType, dt: &mut bool, bd: &mut bool, dur: &mut bool, rl: &mut bool| {
-            if field_type_contains(ft, &|f| matches!(f, FieldType::DateTime)) {
-                *dt = true;
-            }
-            if field_type_contains(ft, &|f| matches!(f, FieldType::Decimal)) {
-                *bd = true;
-            }
-            if field_type_contains(ft, &|f| matches!(f, FieldType::EvenframeDuration)) {
-                *dur = true;
-            }
+        |ft: &FieldType, rl: &mut bool, fi: &mut HashSet<String>| {
             if field_type_contains(ft, &|f| matches!(f, FieldType::RecordLink(_))) {
                 *rl = true;
             }
+            collect_foreign_imports_recursive(ft, registry, fi);
         };
 
     for s in structs.values() {
@@ -666,10 +519,8 @@ pub fn compute_extra_imports(
             for field in &s.fields {
                 check_field_type(
                     &field.field_type,
-                    &mut needs_datetime,
-                    &mut needs_bigdecimal,
-                    &mut needs_duration,
                     &mut needs_record_link,
+                    &mut foreign_imports,
                 );
             }
         }
@@ -680,17 +531,20 @@ pub fn compute_extra_imports(
             for variant in &e.variants {
                 if let Some(data) = &variant.data {
                     match data {
-                        // InlineStruct variants are rendered as just the struct name
-                        // in the union type — their fields are checked separately via
-                        // the structs.values() loop above when the struct is a primary type.
-                        VariantData::InlineStruct(_) => {}
+                        VariantData::InlineStruct(s) => {
+                            for field in &s.fields {
+                                check_field_type(
+                                    &field.field_type,
+                                    &mut needs_record_link,
+                                    &mut foreign_imports,
+                                );
+                            }
+                        }
                         VariantData::DataStructureRef(ft) => {
                             check_field_type(
                                 ft,
-                                &mut needs_datetime,
-                                &mut needs_bigdecimal,
-                                &mut needs_duration,
                                 &mut needs_record_link,
+                                &mut foreign_imports,
                             );
                         }
                     }
@@ -701,22 +555,13 @@ pub fn compute_extra_imports(
 
     let mut lines: Vec<String> = Vec::new();
 
-    // Effect imports
-    let mut effect_imports: Vec<&str> = Vec::new();
-    if needs_bigdecimal {
-        effect_imports.push("BigDecimal");
-    }
-    if needs_datetime {
-        effect_imports.push("DateTime");
-    }
-    if needs_duration {
-        effect_imports.push("Duration");
-    }
-    if !effect_imports.is_empty() {
-        lines.push(format!(
-            "import type {{ {} }} from 'effect';",
-            effect_imports.join(", ")
-        ));
+    // Foreign type imports from effect library
+    if !foreign_imports.is_empty() {
+        let mut sorted_imports: Vec<String> = foreign_imports.into_iter().collect();
+        sorted_imports.sort();
+        for import_name in sorted_imports {
+            lines.push(format!("import type {{ {} }} from 'effect';", import_name));
+        }
     }
 
     // RecordLink from local index
@@ -973,10 +818,11 @@ fn escape_for_jsdoc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EnumRepresentation, StructField, Variant};
+    use crate::types::{StructField, Variant};
     use ordered_float::OrderedFloat;
 
     #[test]
@@ -1065,56 +911,23 @@ mod tests {
 
     #[test]
     fn test_field_type_to_typescript() {
-        let s = ArrayStyle::Shorthand;
+        let registry = crate::types::ForeignTypeRegistry::default();
         // ts_template! adds whitespace, so we trim for comparison
-        assert!(field_type_to_typescript(&FieldType::String, s).trim() == "string");
-        assert!(field_type_to_typescript(&FieldType::Bool, s).trim() == "boolean");
-        assert!(field_type_to_typescript(&FieldType::I32, s).trim() == "number");
-        assert!(field_type_to_typescript(&FieldType::F64, s).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::String, &registry).trim() == "string");
+        assert!(field_type_to_typescript(&FieldType::Bool, &registry).trim() == "boolean");
+        assert!(field_type_to_typescript(&FieldType::I32, &registry).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::F64, &registry).trim() == "number");
         assert!(
-            field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), s)
+            field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), &registry)
                 .contains("string")
-                && field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), s)
+                && field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), &registry)
                     .contains("null")
         );
-        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), s);
+        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), &registry);
         assert!(vec_output.contains("number") && vec_output.contains("[]"));
         assert!(
-            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), s)
+            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), &registry)
                 .contains("UserProfile")
-        );
-    }
-
-    #[test]
-    fn test_field_type_to_typescript_generic_array_style() {
-        let g = ArrayStyle::Generic;
-        // Vec<i32> → Array<number>
-        let vec_output = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), g);
-        assert!(
-            vec_output.contains("Array<number>"),
-            "Expected Array<number>, got: {}",
-            vec_output.trim()
-        );
-        assert!(
-            !vec_output.contains("[]"),
-            "Generic style should not contain [], got: {}",
-            vec_output.trim()
-        );
-        // Vec<Option<String>> → Array<string | null>
-        let vec_opt = field_type_to_typescript(
-            &FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
-            g,
-        );
-        assert!(
-            vec_opt.contains("Array<") && vec_opt.contains("string") && vec_opt.contains("null"),
-            "Expected Array<string | null>, got: {}",
-            vec_opt.trim()
-        );
-        // No parentheses wrapping needed in generic style
-        assert!(
-            !vec_opt.contains("("),
-            "Generic style should not wrap in parens, got: {}",
-            vec_opt.trim()
         );
     }
 
@@ -1208,22 +1021,17 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let output =
-            generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, &registry);
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
         // String fields now get nonEmpty by default
         assert!(output.contains("@serde({ validate: [\"nonEmpty\", \"email\"] })"));
-        assert!(
-            output.contains(
-                "@serde({ validate: [\"nonEmpty\", \"minLength(8)\", \"maxLength(50)\"] })"
-            )
-        );
+        assert!(output.contains("@serde({ validate: [\"nonEmpty\", \"minLength(8)\", \"maxLength(50)\"] })"));
         // Number fields don't get nonEmpty
         assert!(output.contains("@serde({ validate: [\"int\", \"between(18, 120)\"] })"));
         assert!(output.contains("email: string"));
@@ -1253,10 +1061,7 @@ mod tests {
         .to_string();
 
         println!("Raw comment output: {:?}", raw_comment_output);
-        println!(
-            "Interpolated comment output: {:?}",
-            interpolated_comment_output
-        );
+        println!("Interpolated comment output: {:?}", interpolated_comment_output);
 
         // Raw comments are converted to Rust doc syntax (with spaces: "# [doc = ...")
         assert!(
@@ -1306,7 +1111,6 @@ mod tests {
                 annotations: vec![
                     "@overview({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
                 ],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
@@ -1329,7 +1133,6 @@ mod tests {
                         annotations: vec![],
                     },
                 ],
-                representation: EnumRepresentation::default(),
                 doccom: None,
                 macroforge_derives: vec![
                     "Default".to_string(),
@@ -1337,11 +1140,11 @@ mod tests {
                     "Deserialize".to_string(),
                 ],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let output = generate_macroforge_type_string(&structs, &enums, true, ArrayStyle::Shorthand);
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let output = generate_macroforge_type_string(&structs, &enums, true, &registry);
 
         // Struct: custom derives
         assert!(
@@ -1351,8 +1154,7 @@ mod tests {
         );
         // Struct: type-level annotation
         assert!(
-            output
-                .contains("/** @overview({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
+            output.contains("/** @overview({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
             "Should contain struct-level annotation. Output:\n{}",
             output
         );
@@ -1394,12 +1196,11 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let output =
-            generate_macroforge_type_string(&structs, &HashMap::new(), true, ArrayStyle::Shorthand);
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, &registry);
         assert!(
             output.contains("/** @derive(Deserialize) */"),
             "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",
@@ -1407,29 +1208,54 @@ mod tests {
         );
     }
 
+    fn make_datetime_registry() -> crate::types::ForeignTypeRegistry {
+        use crate::config::ForeignTypeConfig;
+        let mut foreign_types = HashMap::new();
+        foreign_types.insert(
+            "DateTime".to_string(),
+            ForeignTypeConfig {
+                rust_type_names: vec!["DateTime".to_string()],
+                macroforge: "DateTime.Utc".to_string(),
+                macroforge_import: "DateTime".to_string(),
+                ..Default::default()
+            },
+        );
+        foreign_types.insert(
+            "Decimal".to_string(),
+            ForeignTypeConfig {
+                rust_type_names: vec!["Decimal".to_string()],
+                macroforge: "BigDecimal.BigDecimal".to_string(),
+                macroforge_import: "BigDecimal".to_string(),
+                ..Default::default()
+            },
+        );
+        crate::types::ForeignTypeRegistry::from_config(&foreign_types)
+    }
+
     #[test]
     fn test_datetime_maps_to_datetime_utc() {
-        let s = ArrayStyle::Shorthand;
-        assert!(field_type_to_typescript(&FieldType::DateTime, s).contains("DateTime.Utc"));
+        let registry = make_datetime_registry();
+        assert!(field_type_to_typescript(&FieldType::Other("DateTime".to_string()), &registry).contains("DateTime.Utc"));
         // Option<DateTime> should produce DateTime.Utc | null
-        let opt_dt = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::DateTime)), s);
+        let opt_dt = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::Other("DateTime".to_string()))), &registry);
         assert!(opt_dt.contains("DateTime.Utc") && opt_dt.contains("null"));
         // Vec<DateTime> should produce DateTime.Utc[]
-        let vec_dt = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::DateTime)), s);
+        let vec_dt = field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::Other("DateTime".to_string()))), &registry);
         assert!(vec_dt.contains("DateTime.Utc") && vec_dt.contains("[]"));
     }
 
     #[test]
     fn test_decimal_maps_to_bigdecimal() {
-        let s = ArrayStyle::Shorthand;
-        assert!(field_type_to_typescript(&FieldType::Decimal, s).contains("BigDecimal.BigDecimal"));
+        let registry = make_datetime_registry();
+        assert!(field_type_to_typescript(&FieldType::Other("Decimal".to_string()), &registry).contains("BigDecimal.BigDecimal"));
         // Option<Decimal> should produce BigDecimal.BigDecimal | null
-        let opt_dec = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::Decimal)), s);
+        let opt_dec = field_type_to_typescript(&FieldType::Option(Box::new(FieldType::Other("Decimal".to_string()))), &registry);
         assert!(opt_dec.contains("BigDecimal.BigDecimal") && opt_dec.contains("null"));
     }
 
     #[test]
     fn test_compute_extra_imports_datetime() {
+        let registry = make_datetime_registry();
         let mut structs = HashMap::new();
         structs.insert(
             "event".to_string(),
@@ -1437,18 +1263,17 @@ mod tests {
                 struct_name: "event".to_string(),
                 fields: vec![StructField {
                     field_name: "starts_at".to_string(),
-                    field_type: FieldType::DateTime,
+                    field_type: FieldType::Other("DateTime".to_string()),
                     ..Default::default()
                 }],
                 validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let imports = compute_extra_imports(&["Event".to_string()], &structs, &HashMap::new());
+        let imports = compute_extra_imports(&["Event".to_string()], &structs, &HashMap::new(), &registry);
         assert_eq!(
             imports,
             vec!["import type { DateTime } from 'effect';".to_string()]
@@ -1457,6 +1282,7 @@ mod tests {
 
     #[test]
     fn test_compute_extra_imports_decimal() {
+        let registry = make_datetime_registry();
         let mut structs = HashMap::new();
         structs.insert(
             "payment".to_string(),
@@ -1464,18 +1290,17 @@ mod tests {
                 struct_name: "payment".to_string(),
                 fields: vec![StructField {
                     field_name: "amount".to_string(),
-                    field_type: FieldType::Decimal,
+                    field_type: FieldType::Other("Decimal".to_string()),
                     ..Default::default()
                 }],
                 validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let imports = compute_extra_imports(&["Payment".to_string()], &structs, &HashMap::new());
+        let imports = compute_extra_imports(&["Payment".to_string()], &structs, &HashMap::new(), &registry);
         assert_eq!(
             imports,
             vec!["import type { BigDecimal } from 'effect';".to_string()]
@@ -1484,6 +1309,7 @@ mod tests {
 
     #[test]
     fn test_compute_extra_imports_both() {
+        let registry = make_datetime_registry();
         let mut structs = HashMap::new();
         structs.insert(
             "order".to_string(),
@@ -1492,12 +1318,12 @@ mod tests {
                 fields: vec![
                     StructField {
                         field_name: "amount".to_string(),
-                        field_type: FieldType::Decimal,
+                        field_type: FieldType::Other("Decimal".to_string()),
                         ..Default::default()
                     },
                     StructField {
                         field_name: "created_at".to_string(),
-                        field_type: FieldType::DateTime,
+                        field_type: FieldType::Other("DateTime".to_string()),
                         ..Default::default()
                     },
                 ],
@@ -1505,19 +1331,22 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let imports = compute_extra_imports(&["Order".to_string()], &structs, &HashMap::new());
+        let imports = compute_extra_imports(&["Order".to_string()], &structs, &HashMap::new(), &registry);
         assert_eq!(
             imports,
-            vec!["import type { BigDecimal, DateTime } from 'effect';".to_string()]
+            vec![
+                "import type { BigDecimal } from 'effect';".to_string(),
+                "import type { DateTime } from 'effect';".to_string(),
+            ]
         );
     }
 
     #[test]
     fn test_compute_extra_imports_none_needed() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         let mut structs = HashMap::new();
         structs.insert(
             "user".to_string(),
@@ -1532,11 +1361,10 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
-        let imports = compute_extra_imports(&["User".to_string()], &structs, &HashMap::new());
+        let imports = compute_extra_imports(&["User".to_string()], &structs, &HashMap::new(), &registry);
         assert!(imports.is_empty());
     }
 
@@ -1557,15 +1385,15 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec!["Serialize".to_string(), "Deserialize".to_string()],
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
-                pipeline: crate::types::Pipeline::default(),
             },
         );
 
+        let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_for_types(
             &["Order".to_string()],
             &structs,
             &HashMap::new(),
-            ArrayStyle::Shorthand,
+            &registry,
         );
 
         assert!(

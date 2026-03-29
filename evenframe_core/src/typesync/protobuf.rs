@@ -27,6 +27,7 @@ pub fn generate_protobuf_schema_string(
     enums: &HashMap<String, TaggedUnion>,
     package: Option<&str>,
     import_validate: bool,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -81,13 +82,13 @@ pub fn generate_protobuf_schema_string(
 
     // Generate enums first (they may be referenced by messages)
     for enum_def in &unique_enums {
-        output.push_str(&generate_enum(enum_def));
+        output.push_str(&generate_enum(enum_def, registry));
         output.push('\n');
     }
 
     // Generate messages
     for struct_config in &unique_structs {
-        output.push_str(&generate_message(struct_config, import_validate));
+        output.push_str(&generate_message(struct_config, import_validate, registry));
         output.push('\n');
     }
 
@@ -100,7 +101,7 @@ pub fn generate_protobuf_schema_string(
 
 /// Generate a Protocol Buffers enum from a TaggedUnion.
 /// Proto3 enums require the first value to be 0 (UNSPECIFIED).
-fn generate_enum(enum_def: &TaggedUnion) -> String {
+fn generate_enum(enum_def: &TaggedUnion, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -121,7 +122,7 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
             if let Some(data) = &variant.data {
                 let type_name = match data {
                     VariantData::InlineStruct(s) => s.struct_name.to_case(Case::Pascal),
-                    VariantData::DataStructureRef(ft) => field_type_to_protobuf(ft),
+                    VariantData::DataStructureRef(ft) => field_type_to_protobuf(ft, registry),
                 };
                 output.push_str(&format!(
                     "        {} {} = {};\n",
@@ -155,7 +156,7 @@ fn generate_enum(enum_def: &TaggedUnion) -> String {
 }
 
 /// Generate a Protocol Buffers message from a StructConfig.
-fn generate_message(struct_config: &StructConfig, include_validators: bool) -> String {
+fn generate_message(struct_config: &StructConfig, include_validators: bool, registry: &crate::types::ForeignTypeRegistry) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -174,7 +175,7 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool) -> S
 
         let field_number = index + 1;
         let field_name = field.field_name.to_case(Case::Snake);
-        let (field_prefix, field_type) = field_type_to_protobuf_with_prefix(&field.field_type);
+        let (field_prefix, field_type) = field_type_to_protobuf_with_prefix(&field.field_type, registry);
 
         output.push_str(&format!(
             "    {}{} {} = {}",
@@ -183,7 +184,7 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool) -> S
 
         // Add validation options if there are validators and we're including them
         if include_validators {
-            let validators_str = collect_validators_for_field(&field.validators, &field.field_type);
+            let validators_str = collect_validators_for_field(&field.validators, &field.field_type, registry);
             if !validators_str.is_empty() {
                 output.push_str(&format!(" [{}]", validators_str));
             }
@@ -198,22 +199,22 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool) -> S
 
 /// Convert a FieldType to its Protocol Buffers type representation with optional prefix.
 /// Returns (prefix, type) where prefix is "repeated " for arrays or "optional " for options.
-fn field_type_to_protobuf_with_prefix(field_type: &FieldType) -> (String, String) {
+fn field_type_to_protobuf_with_prefix(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> (String, String) {
     match field_type {
         FieldType::Option(inner) => {
-            let (_, inner_type) = field_type_to_protobuf_with_prefix(inner);
+            let (_, inner_type) = field_type_to_protobuf_with_prefix(inner, registry);
             ("optional ".to_string(), inner_type)
         }
         FieldType::Vec(inner) => {
-            let (_, inner_type) = field_type_to_protobuf_with_prefix(inner);
+            let (_, inner_type) = field_type_to_protobuf_with_prefix(inner, registry);
             ("repeated ".to_string(), inner_type)
         }
-        _ => ("".to_string(), field_type_to_protobuf(field_type)),
+        _ => ("".to_string(), field_type_to_protobuf(field_type, registry)),
     }
 }
 
 /// Convert a FieldType to its Protocol Buffers type representation.
-fn field_type_to_protobuf(field_type: &FieldType) -> String {
+fn field_type_to_protobuf(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "bool".to_string(),
@@ -228,21 +229,14 @@ fn field_type_to_protobuf(field_type: &FieldType) -> String {
         FieldType::U64 => "uint64".to_string(),
         FieldType::U128 => "string".to_string(), // No native 128-bit support
         FieldType::Usize => "uint64".to_string(),
-        FieldType::EvenframeRecordId => "string".to_string(),
-        FieldType::DateTime => "string".to_string(), // ISO 8601 string or google.protobuf.Timestamp
-        FieldType::EvenframeDuration => "int64".to_string(), // Nanoseconds or google.protobuf.Duration
-        FieldType::Timezone => "string".to_string(),
-        FieldType::Decimal => "string".to_string(), // Arbitrary precision as string
-        FieldType::OrderedFloat(inner) => field_type_to_protobuf(inner),
-
         FieldType::Option(inner) => {
             // For nested options, just return the inner type
-            field_type_to_protobuf(inner)
+            field_type_to_protobuf(inner, registry)
         }
 
         FieldType::Vec(inner) => {
             // For nested vecs, just return the inner type
-            field_type_to_protobuf(inner)
+            field_type_to_protobuf(inner, registry)
         }
 
         FieldType::Tuple(types) => {
@@ -261,8 +255,8 @@ fn field_type_to_protobuf(field_type: &FieldType) -> String {
             // Proto3 supports maps natively
             format!(
                 "map<{}, {}>",
-                field_type_to_protobuf(key),
-                field_type_to_protobuf(value)
+                field_type_to_protobuf(key, registry),
+                field_type_to_protobuf(value, registry)
             )
         }
 
@@ -271,16 +265,24 @@ fn field_type_to_protobuf(field_type: &FieldType) -> String {
             if let FieldType::Other(type_name) = inner.as_ref() {
                 type_name.to_case(Case::Pascal)
             } else {
-                field_type_to_protobuf(inner)
+                field_type_to_protobuf(inner, registry)
             }
         }
 
-        FieldType::Other(type_name) => type_name.to_case(Case::Pascal),
+        FieldType::Other(type_name) => {
+            // Check foreign type registry first
+            if let Some(ftc) = registry.lookup(type_name) {
+                if !ftc.protobuf.is_empty() {
+                    return ftc.protobuf.clone();
+                }
+            }
+            type_name.to_case(Case::Pascal)
+        }
     }
 }
 
 /// Collect validators and format them as protoc-gen-validate style options.
-fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType) -> String {
+fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
     let rules: Vec<String> = validators
         .iter()
         .filter_map(|v| validator_to_protobuf_rule(v, field_type))
@@ -291,30 +293,36 @@ fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType
     }
 
     // Determine the rule type based on the field type
-    let rule_type = get_validate_rule_type(field_type);
+    let rule_type = get_validate_rule_type(field_type, registry);
 
     // Combine all rules into a single validate option
     format!("(validate.rules).{} = {{{}}}", rule_type, rules.join(", "))
 }
 
 /// Get the validate rule type name for a given field type.
-fn get_validate_rule_type(field_type: &FieldType) -> &'static str {
+fn get_validate_rule_type(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
     match field_type {
-        FieldType::String | FieldType::Char => "string",
-        FieldType::Bool => "bool",
-        FieldType::F32 => "float",
-        FieldType::F64 => "double",
-        FieldType::I8 | FieldType::I16 | FieldType::I32 => "int32",
-        FieldType::I64 | FieldType::Isize => "int64",
-        FieldType::U8 | FieldType::U16 | FieldType::U32 => "uint32",
-        FieldType::U64 | FieldType::Usize => "uint64",
-        FieldType::Vec(_) => "repeated",
-        FieldType::Option(inner) => get_validate_rule_type(inner),
-        FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => "map",
-        FieldType::DateTime | FieldType::EvenframeRecordId | FieldType::Timezone => "string",
-        FieldType::EvenframeDuration => "int64",
-        FieldType::Decimal | FieldType::I128 | FieldType::U128 => "string",
-        _ => "message",
+        FieldType::String | FieldType::Char => "string".to_string(),
+        FieldType::Bool => "bool".to_string(),
+        FieldType::F32 => "float".to_string(),
+        FieldType::F64 => "double".to_string(),
+        FieldType::I8 | FieldType::I16 | FieldType::I32 => "int32".to_string(),
+        FieldType::I64 | FieldType::Isize => "int64".to_string(),
+        FieldType::U8 | FieldType::U16 | FieldType::U32 => "uint32".to_string(),
+        FieldType::U64 | FieldType::Usize => "uint64".to_string(),
+        FieldType::Vec(_) => "repeated".to_string(),
+        FieldType::Option(inner) => get_validate_rule_type(inner, registry),
+        FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => "map".to_string(),
+        FieldType::I128 | FieldType::U128 => "string".to_string(),
+        FieldType::Other(name) => {
+            if let Some(ftc) = registry.lookup(name) {
+                if !ftc.protobuf_wire_type.is_empty() {
+                    return ftc.protobuf_wire_type.clone();
+                }
+            }
+            "message".to_string()
+        }
+        _ => "message".to_string(),
     }
 }
 
@@ -635,66 +643,72 @@ mod tests {
 
     #[test]
     fn test_field_type_to_protobuf() {
-        assert_eq!(field_type_to_protobuf(&FieldType::String), "string");
-        assert_eq!(field_type_to_protobuf(&FieldType::Bool), "bool");
-        assert_eq!(field_type_to_protobuf(&FieldType::I8), "int32");
-        assert_eq!(field_type_to_protobuf(&FieldType::I16), "int32");
-        assert_eq!(field_type_to_protobuf(&FieldType::I32), "int32");
-        assert_eq!(field_type_to_protobuf(&FieldType::I64), "int64");
-        assert_eq!(field_type_to_protobuf(&FieldType::U8), "uint32");
-        assert_eq!(field_type_to_protobuf(&FieldType::U16), "uint32");
-        assert_eq!(field_type_to_protobuf(&FieldType::U32), "uint32");
-        assert_eq!(field_type_to_protobuf(&FieldType::U64), "uint64");
-        assert_eq!(field_type_to_protobuf(&FieldType::F32), "float");
-        assert_eq!(field_type_to_protobuf(&FieldType::F64), "double");
+        let registry = crate::types::ForeignTypeRegistry::default();
+        assert_eq!(field_type_to_protobuf(&FieldType::String, &registry), "string");
+        assert_eq!(field_type_to_protobuf(&FieldType::Bool, &registry), "bool");
+        assert_eq!(field_type_to_protobuf(&FieldType::I8, &registry), "int32");
+        assert_eq!(field_type_to_protobuf(&FieldType::I16, &registry), "int32");
+        assert_eq!(field_type_to_protobuf(&FieldType::I32, &registry), "int32");
+        assert_eq!(field_type_to_protobuf(&FieldType::I64, &registry), "int64");
+        assert_eq!(field_type_to_protobuf(&FieldType::U8, &registry), "uint32");
+        assert_eq!(field_type_to_protobuf(&FieldType::U16, &registry), "uint32");
+        assert_eq!(field_type_to_protobuf(&FieldType::U32, &registry), "uint32");
+        assert_eq!(field_type_to_protobuf(&FieldType::U64, &registry), "uint64");
+        assert_eq!(field_type_to_protobuf(&FieldType::F32, &registry), "float");
+        assert_eq!(field_type_to_protobuf(&FieldType::F64, &registry), "double");
     }
 
     #[test]
     fn test_field_type_vec_to_protobuf() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         let (prefix, type_name) =
-            field_type_to_protobuf_with_prefix(&FieldType::Vec(Box::new(FieldType::String)));
+            field_type_to_protobuf_with_prefix(&FieldType::Vec(Box::new(FieldType::String)), &registry);
         assert_eq!(prefix, "repeated ");
         assert_eq!(type_name, "string");
     }
 
     #[test]
     fn test_field_type_option_to_protobuf() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         let (prefix, type_name) =
-            field_type_to_protobuf_with_prefix(&FieldType::Option(Box::new(FieldType::String)));
+            field_type_to_protobuf_with_prefix(&FieldType::Option(Box::new(FieldType::String)), &registry);
         assert_eq!(prefix, "optional ");
         assert_eq!(type_name, "string");
     }
 
     #[test]
     fn test_field_type_map_to_protobuf() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         assert_eq!(
             field_type_to_protobuf(&FieldType::HashMap(
                 Box::new(FieldType::String),
                 Box::new(FieldType::I32)
-            )),
+            ), &registry),
             "map<string, int32>"
         );
     }
 
     #[test]
     fn test_field_type_other_to_protobuf() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         assert_eq!(
-            field_type_to_protobuf(&FieldType::Other("UserProfile".to_string())),
+            field_type_to_protobuf(&FieldType::Other("UserProfile".to_string()), &registry),
             "UserProfile"
         );
         assert_eq!(
-            field_type_to_protobuf(&FieldType::Other("user_profile".to_string())),
+            field_type_to_protobuf(&FieldType::Other("user_profile".to_string()), &registry),
             "UserProfile"
         );
     }
 
     #[test]
     fn test_collect_validators_for_field() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         let validators = vec![
             Validator::StringValidator(StringValidator::Email),
             Validator::StringValidator(StringValidator::MinLength(5)),
         ];
-        let result = collect_validators_for_field(&validators, &FieldType::String);
+        let result = collect_validators_for_field(&validators, &FieldType::String, &registry);
         assert!(result.contains("email: true"));
         assert!(result.contains("min_len: 5"));
         assert!(result.starts_with("(validate.rules).string = {"));
@@ -702,8 +716,9 @@ mod tests {
 
     #[test]
     fn test_collect_validators_empty() {
+        let registry = crate::types::ForeignTypeRegistry::default();
         let validators: Vec<Validator> = vec![];
-        let result = collect_validators_for_field(&validators, &FieldType::String);
+        let result = collect_validators_for_field(&validators, &FieldType::String, &registry);
         assert_eq!(result, "");
     }
 
@@ -739,7 +754,7 @@ mod tests {
             },
         );
 
-        let output = generate_protobuf_schema_string(&structs, &HashMap::new(), None, true);
+        let output = generate_protobuf_schema_string(&structs, &HashMap::new(), None, true, &crate::types::ForeignTypeRegistry::default());
 
         assert!(output.contains("syntax = \"proto3\";"));
         assert!(output.contains("message User"));
@@ -756,13 +771,15 @@ mod tests {
             &HashMap::new(),
             Some("com.example.app"),
             false,
+            &crate::types::ForeignTypeRegistry::default(),
         );
         assert!(output.contains("package com.example.app;"));
     }
 
     #[test]
     fn test_generate_message_with_import() {
-        let output = generate_protobuf_schema_string(&HashMap::new(), &HashMap::new(), None, true);
+        let output =
+            generate_protobuf_schema_string(&HashMap::new(), &HashMap::new(), None, true, &crate::types::ForeignTypeRegistry::default());
         assert!(output.contains("import \"validate/validate.proto\";"));
     }
 
@@ -803,7 +820,7 @@ mod tests {
             },
         );
 
-        let output = generate_protobuf_schema_string(&HashMap::new(), &enums, None, false);
+        let output = generate_protobuf_schema_string(&HashMap::new(), &enums, None, false, &crate::types::ForeignTypeRegistry::default());
 
         assert!(output.contains("enum Status"));
         assert!(output.contains("STATUS_UNSPECIFIED = 0;"));
@@ -892,7 +909,7 @@ mod tests {
         );
 
         let output =
-            generate_protobuf_schema_string(&structs, &enums, Some("com.example.users"), true);
+            generate_protobuf_schema_string(&structs, &enums, Some("com.example.users"), true, &crate::types::ForeignTypeRegistry::default());
 
         // Check syntax and package
         assert!(output.contains("syntax = \"proto3\";"));
@@ -923,13 +940,14 @@ mod tests {
 
     #[test]
     fn test_get_validate_rule_type() {
-        assert_eq!(get_validate_rule_type(&FieldType::String), "string");
-        assert_eq!(get_validate_rule_type(&FieldType::I32), "int32");
-        assert_eq!(get_validate_rule_type(&FieldType::I64), "int64");
-        assert_eq!(get_validate_rule_type(&FieldType::U32), "uint32");
-        assert_eq!(get_validate_rule_type(&FieldType::F64), "double");
+        let registry = crate::types::ForeignTypeRegistry::default();
+        assert_eq!(get_validate_rule_type(&FieldType::String, &registry), "string");
+        assert_eq!(get_validate_rule_type(&FieldType::I32, &registry), "int32");
+        assert_eq!(get_validate_rule_type(&FieldType::I64, &registry), "int64");
+        assert_eq!(get_validate_rule_type(&FieldType::U32, &registry), "uint32");
+        assert_eq!(get_validate_rule_type(&FieldType::F64, &registry), "double");
         assert_eq!(
-            get_validate_rule_type(&FieldType::Vec(Box::new(FieldType::String))),
+            get_validate_rule_type(&FieldType::Vec(Box::new(FieldType::String)), &registry),
             "repeated"
         );
     }

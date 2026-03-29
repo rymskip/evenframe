@@ -3,12 +3,20 @@
 //! Implementations of the TypeMapper trait for SQL databases.
 
 use crate::schemasync::database::TypeMapper;
-use crate::types::FieldType;
+use crate::types::{FieldType, ForeignTypeRegistry};
 
 /// PostgreSQL type mapper
-pub struct PostgresTypeMapper;
+pub struct PostgresTypeMapper<'a> {
+    registry: &'a ForeignTypeRegistry,
+}
 
-impl TypeMapper for PostgresTypeMapper {
+impl<'a> PostgresTypeMapper<'a> {
+    pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
+        Self { registry }
+    }
+}
+
+impl<'a> TypeMapper for PostgresTypeMapper<'a> {
     fn field_type_to_native(&self, field_type: &FieldType) -> String {
         match field_type {
             FieldType::String => "TEXT".to_string(),
@@ -28,12 +36,6 @@ impl TypeMapper for PostgresTypeMapper {
             FieldType::Usize => "BIGINT".to_string(),
             FieldType::F32 => "REAL".to_string(),
             FieldType::F64 => "DOUBLE PRECISION".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
-            FieldType::Decimal => "NUMERIC".to_string(),
-            FieldType::DateTime => "TIMESTAMPTZ".to_string(),
-            FieldType::EvenframeDuration => "INTERVAL".to_string(),
-            FieldType::Timezone => "TEXT".to_string(),
-            FieldType::EvenframeRecordId => "UUID".to_string(),
             FieldType::Unit => "".to_string(), // Skip
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(inner) => {
@@ -49,7 +51,13 @@ impl TypeMapper for PostgresTypeMapper {
             FieldType::HashMap(_, _) => "JSONB".to_string(),
             FieldType::BTreeMap(_, _) => "JSONB".to_string(),
             FieldType::RecordLink(_) => "UUID".to_string(), // Foreign key
-            FieldType::Other(name) => format!("/* {} */ TEXT", name),
+            FieldType::Other(name) => {
+                if let Some(ftc) = self.registry.lookup(name) {
+                    ftc.postgres.clone()
+                } else {
+                    format!("/* {} */ TEXT", name)
+                }
+            }
         }
     }
 
@@ -65,26 +73,6 @@ impl TypeMapper for PostgresTypeMapper {
                 "FALSE"
             }
             .to_string(),
-            FieldType::DateTime => {
-                if let Some(s) = value.as_str() {
-                    format!("'{}'::TIMESTAMPTZ", s)
-                } else {
-                    "NOW()".to_string()
-                }
-            }
-            FieldType::EvenframeDuration => {
-                if let Some(nanos) = value.as_i64() {
-                    // Convert nanoseconds to interval
-                    let secs = nanos / 1_000_000_000;
-                    let nanos_remaining = nanos % 1_000_000_000;
-                    format!(
-                        "INTERVAL '{} seconds {} nanoseconds'",
-                        secs, nanos_remaining
-                    )
-                } else {
-                    "INTERVAL '0 seconds'".to_string()
-                }
-            }
             FieldType::Vec(_)
             | FieldType::Tuple(_)
             | FieldType::Struct(_)
@@ -172,9 +160,17 @@ impl TypeMapper for PostgresTypeMapper {
 }
 
 /// MySQL type mapper
-pub struct MysqlTypeMapper;
+pub struct MysqlTypeMapper<'a> {
+    registry: &'a ForeignTypeRegistry,
+}
 
-impl TypeMapper for MysqlTypeMapper {
+impl<'a> MysqlTypeMapper<'a> {
+    pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
+        Self { registry }
+    }
+}
+
+impl<'a> TypeMapper for MysqlTypeMapper<'a> {
     fn field_type_to_native(&self, field_type: &FieldType) -> String {
         match field_type {
             FieldType::String => "TEXT".to_string(),
@@ -194,12 +190,6 @@ impl TypeMapper for MysqlTypeMapper {
             FieldType::Usize => "BIGINT UNSIGNED".to_string(),
             FieldType::F32 => "FLOAT".to_string(),
             FieldType::F64 => "DOUBLE".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
-            FieldType::Decimal => "DECIMAL(65,30)".to_string(),
-            FieldType::DateTime => "DATETIME(6)".to_string(),
-            FieldType::EvenframeDuration => "BIGINT".to_string(), // Store as nanoseconds
-            FieldType::Timezone => "VARCHAR(64)".to_string(),
-            FieldType::EvenframeRecordId => "VARCHAR(255)".to_string(),
             FieldType::Unit => "".to_string(),
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(_) => "JSON".to_string(),
@@ -208,7 +198,13 @@ impl TypeMapper for MysqlTypeMapper {
             FieldType::HashMap(_, _) => "JSON".to_string(),
             FieldType::BTreeMap(_, _) => "JSON".to_string(),
             FieldType::RecordLink(_) => "VARCHAR(255)".to_string(),
-            FieldType::Other(name) => format!("/* {} */ TEXT", name),
+            FieldType::Other(name) => {
+                if let Some(ftc) = self.registry.lookup(name) {
+                    ftc.mysql.clone()
+                } else {
+                    format!("/* {} */ TEXT", name)
+                }
+            }
         }
     }
 
@@ -224,14 +220,6 @@ impl TypeMapper for MysqlTypeMapper {
                 "0"
             }
             .to_string(),
-            FieldType::DateTime => {
-                if let Some(s) = value.as_str() {
-                    format!("'{}'", s)
-                } else {
-                    "NOW()".to_string()
-                }
-            }
-            FieldType::EvenframeDuration => value.as_i64().unwrap_or(0).to_string(),
             FieldType::Vec(_)
             | FieldType::Tuple(_)
             | FieldType::Struct(_)
@@ -305,9 +293,17 @@ impl TypeMapper for MysqlTypeMapper {
 }
 
 /// SQLite type mapper
-pub struct SqliteTypeMapper;
+pub struct SqliteTypeMapper<'a> {
+    registry: &'a ForeignTypeRegistry,
+}
 
-impl TypeMapper for SqliteTypeMapper {
+impl<'a> SqliteTypeMapper<'a> {
+    pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
+        Self { registry }
+    }
+}
+
+impl<'a> TypeMapper for SqliteTypeMapper<'a> {
     fn field_type_to_native(&self, field_type: &FieldType) -> String {
         // SQLite has dynamic typing with type affinities
         match field_type {
@@ -325,12 +321,6 @@ impl TypeMapper for SqliteTypeMapper {
             | FieldType::Usize => "INTEGER".to_string(),
             FieldType::I128 | FieldType::U128 => "TEXT".to_string(), // Too large for INTEGER
             FieldType::F32 | FieldType::F64 => "REAL".to_string(),
-            FieldType::OrderedFloat(inner) => self.field_type_to_native(inner),
-            FieldType::Decimal => "TEXT".to_string(), // Store as string for precision
-            FieldType::DateTime => "TEXT".to_string(), // ISO 8601 format
-            FieldType::EvenframeDuration => "INTEGER".to_string(), // Nanoseconds
-            FieldType::Timezone => "TEXT".to_string(),
-            FieldType::EvenframeRecordId => "TEXT".to_string(),
             FieldType::Unit => "".to_string(),
             FieldType::Option(inner) => self.field_type_to_native(inner),
             FieldType::Vec(_) => "TEXT".to_string(), // JSON string
@@ -339,7 +329,13 @@ impl TypeMapper for SqliteTypeMapper {
             FieldType::HashMap(_, _) => "TEXT".to_string(),
             FieldType::BTreeMap(_, _) => "TEXT".to_string(),
             FieldType::RecordLink(_) => "TEXT".to_string(),
-            FieldType::Other(_) => "TEXT".to_string(),
+            FieldType::Other(name) => {
+                if let Some(ftc) = self.registry.lookup(name) {
+                    ftc.sqlite.clone()
+                } else {
+                    "TEXT".to_string()
+                }
+            }
         }
     }
 
@@ -355,14 +351,6 @@ impl TypeMapper for SqliteTypeMapper {
                 "0"
             }
             .to_string(),
-            FieldType::DateTime => {
-                if let Some(s) = value.as_str() {
-                    format!("'{}'", s)
-                } else {
-                    "datetime('now')".to_string()
-                }
-            }
-            FieldType::EvenframeDuration => value.as_i64().unwrap_or(0).to_string(),
             FieldType::Vec(_)
             | FieldType::Tuple(_)
             | FieldType::Struct(_)
@@ -452,6 +440,5 @@ fn is_primitive(field_type: &FieldType) -> bool {
             | FieldType::U64
             | FieldType::F32
             | FieldType::F64
-            | FieldType::Decimal
     )
 }

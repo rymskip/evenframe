@@ -4,7 +4,7 @@
 //! wrapping as much logic as possible into the template DSL.
 
 use crate::dependency::{analyse_recursion, deps_of};
-use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -20,6 +20,7 @@ pub fn generate_effect_schema_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     _print_types: bool,
+    registry: &ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -91,13 +92,13 @@ pub fn generate_effect_schema_string(
                     {$let variant_count = enum_def.variants.len()}
                     export const @{name} = Schema.Union(
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
-                            @{variant_to_schema(variant, &enum_def.representation, name, structs, &recursion_info, &processed)}
+                            @{variant_to_schema(variant, &enum_def.representation, name, structs, &recursion_info, &processed, registry)}
                             {#if index + 1 != variant_count},{/if}
                         {/for}
                     ).annotations({ identifier: "@{name}" });
                     export type {|@{name}Encoded|} =
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
-                            @{variant_to_encoded(variant, &enum_def.representation)}
+                            @{variant_to_encoded(variant, &enum_def.representation, registry)}
                             {#if index + 1 != variant_count} | {/if}
                         {/for}
                     ;
@@ -108,7 +109,7 @@ pub fn generate_effect_schema_string(
                     {$let field_count = struct_config.fields.len()}
                     export class @{name} extends Schema.Class<@{name}>("@{name}")({
                         {#for (index, field) in struct_config.fields.iter().enumerate()}
-                            {$let schema = field_type_to_effect_schema(&field.field_type, structs, name, &recursion_info, &processed)}
+                            {$let schema = field_type_to_effect_schema(&field.field_type, structs, name, &recursion_info, &processed, registry)}
                             {$let schema_validated = apply_validators_to_schema(schema, &field.validators, &field.field_name)}
                             {#if matches!(field.field_type, FieldType::Option(_))}
                                 @{field.field_name.to_case(Case::Camel)}: @{schema_validated}
@@ -121,7 +122,7 @@ pub fn generate_effect_schema_string(
 
                     export interface {|@{name}Encoded|} {
                         {#for field in &struct_config.fields}
-                            readonly @{field.field_name.to_case(Case::Camel)}: @{field_type_to_ts_encoded(&field.field_type)};
+                            readonly @{field.field_name.to_case(Case::Camel)}: @{field_type_to_ts_encoded(&field.field_type, registry)};
                         {/for}
                     }
                     export type {|@{name}Type|} = typeof @{name}.Type;
@@ -152,9 +153,10 @@ fn variant_to_schema(
     structs: &HashMap<String, StructConfig>,
     recursion_info: &crate::dependency::RecursionInfo,
     processed: &HashSet<String>,
+    registry: &ForeignTypeRegistry,
 ) -> String {
     let to_inner = |ft: &FieldType| -> String {
-        field_type_to_effect_schema(ft, structs, enum_name, recursion_info, processed)
+        field_type_to_effect_schema(ft, structs, enum_name, recursion_info, processed, registry)
     };
 
     match repr {
@@ -226,7 +228,7 @@ fn variant_to_schema(
 
 /// Converts a single enum variant into its TypeScript Encoded type representation,
 /// taking the serde `EnumRepresentation` into account.
-fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> String {
+fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation, registry: &ForeignTypeRegistry) -> String {
     match repr {
         EnumRepresentation::ExternallyTagged => match &v.data {
             Some(VariantData::InlineStruct(_)) => {
@@ -240,7 +242,7 @@ fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> S
                 format!(
                     "{{ readonly {}: {} }}",
                     v.name,
-                    field_type_to_ts_encoded(ft)
+                    field_type_to_ts_encoded(ft, registry)
                 )
             }
             None => format!("\"{}\"", v.name),
@@ -258,7 +260,7 @@ fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> S
                 format!(
                     "{{ readonly {}: {} }}",
                     v.name,
-                    field_type_to_ts_encoded(ft)
+                    field_type_to_ts_encoded(ft, registry)
                 )
             }
             None => {
@@ -281,7 +283,7 @@ fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> S
                     tag,
                     v.name,
                     content,
-                    field_type_to_ts_encoded(ft)
+                    field_type_to_ts_encoded(ft, registry)
                 )
             }
             None => {
@@ -292,7 +294,7 @@ fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation) -> S
             Some(VariantData::InlineStruct(_)) => {
                 format!("{}Encoded", v.name.to_case(Case::Pascal))
             }
-            Some(VariantData::DataStructureRef(ft)) => field_type_to_ts_encoded(ft),
+            Some(VariantData::DataStructureRef(ft)) => field_type_to_ts_encoded(ft, registry),
             None => format!("\"{}\"", v.name),
         },
     }
@@ -304,10 +306,20 @@ fn field_type_to_effect_schema(
     current_type: &str,
     recursion_info: &crate::dependency::RecursionInfo,
     processed: &HashSet<String>,
+    registry: &ForeignTypeRegistry,
 ) -> String {
     let recurse = |inner_type: &FieldType| {
-        field_type_to_effect_schema(inner_type, structs, current_type, recursion_info, processed)
+        field_type_to_effect_schema(inner_type, structs, current_type, recursion_info, processed, registry)
     };
+
+    // Check for foreign type in Other variant before using ts_template
+    if let FieldType::Other(type_name) = field_type {
+        if let Some(ftc) = registry.lookup(type_name) {
+            if !ftc.effect_schema.is_empty() {
+                return ftc.effect_schema.clone();
+            }
+        }
+    }
 
     ts_template! {
         {#match field_type}
@@ -319,22 +331,12 @@ fn field_type_to_effect_schema(
                 Schema.Boolean
             {:case FieldType::Unit}
                 Schema.Null
-            {:case FieldType::Decimal}
-                Schema.NumberFromString
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 Schema.Number
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 Schema.Number
             {:case FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 | FieldType::U128 | FieldType::Usize}
                 Schema.Number
-            {:case FieldType::EvenframeRecordId}
-                Schema.String
-            {:case FieldType::DateTime}
-                Schema.DateTimeUtc
-            {:case FieldType::EvenframeDuration}
-                Schema.Duration
-            {:case FieldType::Timezone}
-                Schema.TimeZoneNamed
             {:case FieldType::Option(inner_type)}
                 Schema.OptionFromNullishOr(@{recurse(inner_type)}, null)
             {:case FieldType::Vec(inner_type)}
@@ -370,44 +372,51 @@ fn field_type_to_effect_schema(
     }.source().to_string()
 }
 
-fn field_type_to_ts_encoded(field_type: &FieldType) -> String {
+fn field_type_to_ts_encoded(field_type: &FieldType, registry: &ForeignTypeRegistry) -> String {
+    // Check for foreign type in Other variant before using ts_template
+    if let FieldType::Other(type_name) = field_type {
+        if let Some(ftc) = registry.lookup(type_name) {
+            if !ftc.effect_encoded.is_empty() {
+                return ftc.effect_encoded.clone();
+            }
+        }
+    }
+
     ts_template! {
         {#match field_type}
-            {:case FieldType::String | FieldType::Char | FieldType::EvenframeRecordId | FieldType::Timezone | FieldType::DateTime | FieldType::Decimal}
+            {:case FieldType::String | FieldType::Char}
                 string
             {:case FieldType::Bool}
                 boolean
-            {:case FieldType::EvenframeDuration}
-                Schema.DurationEncoded | readonly [seconds: number, nanos: number]
             {:case FieldType::Unit}
                 null
-            {:case FieldType::OrderedFloat(_) | FieldType::F32 | FieldType::F64}
+            {:case FieldType::F32 | FieldType::F64}
                 number
             {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
                 number
             {:case FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 | FieldType::U128 | FieldType::Usize}
                 number
             {:case FieldType::Option(inner_type)}
-                @{field_type_to_ts_encoded(inner_type)} | null | undefined
+                @{field_type_to_ts_encoded(inner_type, registry)} | null | undefined
             {:case FieldType::Vec(inner_type)}
-                ReadonlyArray<@{field_type_to_ts_encoded(inner_type)}>
+                ReadonlyArray<@{field_type_to_ts_encoded(inner_type, registry)}>
             {:case FieldType::Tuple(tuple_items)}
                readonly [
                     {#for item in tuple_items}
-                        @{field_type_to_ts_encoded(item)},
+                        @{field_type_to_ts_encoded(item, registry)},
                     {/for}
                     ]
 
             {:case FieldType::Struct(struct_fields)}
                 {
                     {#for (field_name, inner_type) in struct_fields}
-                        readonly @{field_name}: @{field_type_to_ts_encoded(inner_type)};
+                        readonly @{field_name}: @{field_type_to_ts_encoded(inner_type, registry)};
                     {/for}
                 }
             {:case FieldType::HashMap(key_type, val_type) | FieldType::BTreeMap(key_type, val_type)}
-                Record<@{field_type_to_ts_encoded(key_type)}, @{field_type_to_ts_encoded(val_type)}>
+                Record<@{field_type_to_ts_encoded(key_type, registry)}, @{field_type_to_ts_encoded(val_type, registry)}>
             {:case FieldType::RecordLink(inner_type)}
-                string | @{field_type_to_ts_encoded(inner_type)}
+                string | @{field_type_to_ts_encoded(inner_type, registry)}
             {:case FieldType::Other(type_name)}
                 {|@{type_name.to_case(Case::Pascal)}Encoded|}
         {/match}
@@ -666,7 +675,8 @@ mod tests {
         );
 
         let enums = HashMap::new();
-        let output = generate_effect_schema_string(&structs, &enums, true);
+        let registry = ForeignTypeRegistry::default();
+        let output = generate_effect_schema_string(&structs, &enums, true, &registry);
 
         assert!(output.contains("export class User"));
         assert!(output.contains("Schema.Class"));

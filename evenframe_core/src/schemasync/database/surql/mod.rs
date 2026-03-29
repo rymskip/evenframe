@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::{EdgeConfig, TableConfig};
-use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
+use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion};
 
 use self::define::generate_define_statements;
 use self::value::to_surreal_string;
@@ -45,8 +45,8 @@ pub struct SurrealdbProvider {
     client: Option<Surreal<Client>>,
     /// Connection configuration
     config: Option<DatabaseConfig>,
-    /// Type mapper for SurrealDB
-    type_mapper: SurrealdbTypeMapper,
+    /// Foreign type registry for type mapping
+    registry: ForeignTypeRegistry,
 }
 
 impl SurrealdbProvider {
@@ -55,8 +55,22 @@ impl SurrealdbProvider {
         Self {
             client: None,
             config: None,
-            type_mapper: SurrealdbTypeMapper,
+            registry: ForeignTypeRegistry::default(),
         }
+    }
+
+    /// Create a new SurrealDB provider instance with a foreign type registry
+    pub fn with_registry(registry: ForeignTypeRegistry) -> Self {
+        Self {
+            client: None,
+            config: None,
+            registry,
+        }
+    }
+
+    /// Get the type mapper
+    fn type_mapper(&self) -> SurrealdbTypeMapper<'_> {
+        SurrealdbTypeMapper::new(&self.registry)
     }
 
     /// Get a reference to the underlying SurrealDB client.
@@ -401,8 +415,15 @@ impl DatabaseProvider for SurrealdbProvider {
         enums: &HashMap<String, TaggedUnion>,
     ) -> String {
         // Use existing generate_define_statements function
+        let default_registry = crate::types::ForeignTypeRegistry::default();
         generate_define_statements(
-            table_name, config, all_tables, objects, enums, false, // full_refresh_mode
+            table_name,
+            config,
+            all_tables,
+            objects,
+            enums,
+            false, // full_refresh_mode
+            &default_registry,
         )
     }
 
@@ -414,7 +435,7 @@ impl DatabaseProvider for SurrealdbProvider {
         _enums: &HashMap<String, TaggedUnion>,
     ) -> String {
         // Generate a DEFINE FIELD statement
-        let field_type = self.map_field_type(&field.field_type);
+        let field_type = self.type_mapper().field_type_to_surql(&field.field_type);
         format!(
             "DEFINE FIELD {} ON TABLE {} TYPE {};",
             field.field_name, table_name, field_type
@@ -422,11 +443,11 @@ impl DatabaseProvider for SurrealdbProvider {
     }
 
     fn map_field_type(&self, field_type: &FieldType) -> String {
-        self.type_mapper.field_type_to_surql(field_type)
+        self.type_mapper().field_type_to_surql(field_type)
     }
 
     fn format_value(&self, field_type: &FieldType, value: &serde_json::Value) -> String {
-        to_surreal_string(field_type, value)
+        to_surreal_string(field_type, value, &self.registry)
     }
 
     fn generate_relationship_table(&self, edge: &EdgeConfig) -> Vec<String> {

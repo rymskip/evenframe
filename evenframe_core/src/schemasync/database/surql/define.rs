@@ -12,6 +12,7 @@ pub fn generate_define_statements(
     server_only: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     full_refresh_mode: bool,
+    registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     info!(
         "Generating define statements for table {table_name}, full_refresh_mode: {full_refresh_mode}"
@@ -79,6 +80,7 @@ pub fn generate_define_statements(
                     server_only.clone(),
                     query_details.clone(),
                     &table_name.to_string(),
+                    registry,
                 ) {
                     Ok(statement) => output.push_str(&statement),
                     Err(e) => {
@@ -181,6 +183,7 @@ mod tests {
             &server_only,
             &enums,
             false,
+            &crate::types::ForeignTypeRegistry::default(),
         );
 
         assert!(statements.contains("DEFINE EVENT user_change ON TABLE user"));
@@ -224,6 +227,7 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
                 &"user".to_string(),
+                &crate::types::ForeignTypeRegistry::default(),
             )
             .unwrap();
 
@@ -272,6 +276,7 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
                 &"user".to_string(),
+                &crate::types::ForeignTypeRegistry::default(),
             )
             .unwrap();
 
@@ -316,6 +321,7 @@ mod tests {
                 HashMap::new(),
                 HashMap::new(),
                 &"user".to_string(),
+                &crate::types::ForeignTypeRegistry::default(),
             )
             .unwrap();
 
@@ -411,6 +417,7 @@ mod tests {
             &server_only,
             &enums,
             false,
+            &crate::types::ForeignTypeRegistry::default(),
         );
 
         // Should contain unique index for email but not for name

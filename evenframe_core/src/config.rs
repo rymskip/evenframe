@@ -1,11 +1,92 @@
 use crate::error::{EvenframeError, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 use toml;
 use tracing::{debug, error, info, trace, warn};
+
+/// Configuration for a single foreign (external crate) type.
+/// Defines how a Rust type from an external crate maps to each database
+/// and TypeScript target.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ForeignTypeConfig {
+    /// Source crate name (for documentation/provenance)
+    #[serde(default, rename = "crate")]
+    pub crate_name: String,
+
+    /// Rust type names that map to this foreign type
+    /// e.g., ["DateTime", "chrono::DateTime"]
+    #[serde(default)]
+    pub rust_type_names: Vec<String>,
+
+    /// If true, generic params like <Utc> are ignored during parsing
+    #[serde(default)]
+    pub ignore_generic_params: bool,
+
+    // --- Database schema mappings ---
+    #[serde(default)]
+    pub surrealdb: String,
+    #[serde(default)]
+    pub postgres: String,
+    #[serde(default)]
+    pub mysql: String,
+    #[serde(default)]
+    pub sqlite: String,
+
+    /// SurrealDB format when field is `id`, e.g. "record<{table_name}>"
+    #[serde(default)]
+    pub surrealdb_id_format: Option<String>,
+    /// SurrealDB format when field is NOT `id`, e.g. "record<any>"
+    #[serde(default)]
+    pub surrealdb_non_id_format: Option<String>,
+
+    // --- TypeSync mappings ---
+    #[serde(default)]
+    pub arktype: String,
+    #[serde(default)]
+    pub effect_schema: String,
+    /// The "encoded" representation for Effect TS type declarations
+    #[serde(default)]
+    pub effect_encoded: String,
+    #[serde(default)]
+    pub macroforge: String,
+    #[serde(default)]
+    pub flatbuffers: String,
+    #[serde(default)]
+    pub protobuf: String,
+    /// The wire type for protobuf validation rules
+    #[serde(default)]
+    pub protobuf_wire_type: String,
+
+    // --- Default values ---
+    #[serde(default)]
+    pub default_value_ts: String,
+    #[serde(default)]
+    pub default_value_surql: String,
+
+    // --- SurrealQL value conversion strategy ---
+    /// One of: "quoted_string", "datetime", "duration_from_nanos",
+    ///         "decimal_number", "record_id", "passthrough"
+    #[serde(default)]
+    pub surql_value_format: String,
+
+    // --- Mock data generation strategy ---
+    /// One of: "datetime", "duration", "timezone", "decimal", "record_id", "string"
+    #[serde(default)]
+    pub mock_strategy: String,
+
+    // --- Import resolution ---
+    /// Macroforge import name (e.g., "DateTime", "BigDecimal"), empty = no import
+    #[serde(default)]
+    pub macroforge_import: String,
+    /// Effect library import name, empty = no import
+    #[serde(default)]
+    pub effect_import: String,
+
+    // --- Serde format annotation ---
+    /// If set, generates `@serde({ format: "..." })` in macroforge output
+    #[serde(default)]
+    pub serde_format: String,
+}
 
 /// Source of truth for type definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -56,6 +137,11 @@ pub struct GeneralConfig {
     /// Defaults to `.env` in the project root directory.
     #[serde(default)]
     pub env_path: Option<String>,
+
+    /// Foreign type configurations, keyed by canonical type name.
+    /// Defines how external Rust types map to database schemas and TypeScript types.
+    #[serde(default)]
+    pub foreign_types: HashMap<String, ForeignTypeConfig>,
 }
 
 /// Unified configuration for Evenframe operations
@@ -365,6 +451,7 @@ mod tests {
             apply_aliases: vec!["Test".to_string()],
             source: SourceConfig::default(),
             env_path: None,
+            ..Default::default()
         };
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("apply_aliases"));
