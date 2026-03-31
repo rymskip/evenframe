@@ -186,7 +186,8 @@ impl<'a> Schemasync<'a> {
         self.db = Some(db);
         // Build a ForeignTypeRegistry from config if no external registry was provided
         if self.registry.is_none() {
-            let registry = crate::types::ForeignTypeRegistry::from_config(&config.general.foreign_types);
+            let registry =
+                crate::types::ForeignTypeRegistry::from_config(&config.general.foreign_types);
             debug!("Built ForeignTypeRegistry from EvenframeConfig foreign_types");
             self.owned_registry = Some(registry);
         }
@@ -283,14 +284,7 @@ impl<'a> Schemasync<'a> {
         );
         // Create Mockmaker instance (which contains Comparator)
         info!("Creating Mockmaker instance for data generation and comparison");
-        let mut mockmaker = Mockmaker::new(
-            &db,
-            tables,
-            objects,
-            enums,
-            &config,
-            registry,
-        );
+        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
         debug!("Mockmaker instance created successfully");
 
         // Run initial ID generation and comparator setup

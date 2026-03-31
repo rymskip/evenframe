@@ -67,7 +67,6 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let file_naming = config.typesync.output.file_naming;
     let file_extension = &config.typesync.output.file_extension;
 
-
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
         match cmd {
@@ -89,7 +88,9 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}bindings.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => generate_effect(&structs, &enums, &output_path, &registry)?,
+                    OutputMode::Single => {
+                        generate_effect(&structs, &enums, &output_path, &registry)?
+                    }
                     OutputMode::PerFile => generate_effect_per_file(
                         &structs,
                         &enums,
@@ -130,7 +131,13 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                 let namespace = fbs_args
                     .namespace
                     .or(config.typesync.flatbuffers_namespace.clone());
-                generate_flatbuffers(&structs, &enums, &output_path, namespace.as_deref(), &registry)?;
+                generate_flatbuffers(
+                    &structs,
+                    &enums,
+                    &output_path,
+                    namespace.as_deref(),
+                    &registry,
+                )?;
             }
             TypesyncCommands::Protobuf(proto_args) => {
                 let output_path = proto_args
@@ -457,7 +464,8 @@ fn generate_protobuf(
     registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating Protocol Buffers schema to {}", output_path);
-    let content = generate_protobuf_schema_string(structs, enums, package, import_validate, registry);
+    let content =
+        generate_protobuf_schema_string(structs, enums, package, import_validate, registry);
     std::fs::write(output_path, content)?;
     debug!("Protocol Buffers schema written successfully");
     Ok(())

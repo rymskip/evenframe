@@ -879,7 +879,8 @@ impl Coordination {
                         | CoordinateIncrement::Hours(_)
                         | CoordinateIncrement::Minutes(_) => match &field.field_type {
                             FieldType::Other(name) if is_datetime_like(name) => {}
-                            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) => {}
+                            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) =>
+                                {}
                             _ => {
                                 return Err(EvenframeError::Validation(format!(
                                     "InitializeSequential with time increment: Field '{}' must be DateTime type, got {:?}",
@@ -1272,7 +1273,8 @@ fn validate_datetime_field(
 
         match &field.1.field_type {
             FieldType::Other(name) if is_datetime_like(name) => {}
-            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) => {}
+            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) =>
+                {}
             _ => {
                 return Err(EvenframeError::Validation(format!(
                     "Coherent dataset field '{}' must be DateTime type, got {:?}",

@@ -124,7 +124,10 @@ fn generate_enum(enum_def: &TaggedUnion, registry: &crate::types::ForeignTypeReg
 }
 
 /// Generate a FlatBuffers table from a StructConfig.
-fn generate_table(struct_config: &StructConfig, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn generate_table(
+    struct_config: &StructConfig,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -160,7 +163,10 @@ fn generate_table(struct_config: &StructConfig, registry: &crate::types::Foreign
 }
 
 /// Convert a FieldType to its FlatBuffers type representation.
-fn field_type_to_flatbuffers(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn field_type_to_flatbuffers(
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "bool".to_string(),
@@ -615,18 +621,51 @@ mod tests {
     #[test]
     fn test_field_type_to_flatbuffers() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        assert_eq!(field_type_to_flatbuffers(&FieldType::String, &registry), "string");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::Bool, &registry), "bool");
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::String, &registry),
+            "string"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::Bool, &registry),
+            "bool"
+        );
         assert_eq!(field_type_to_flatbuffers(&FieldType::I8, &registry), "int8");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I16, &registry), "int16");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I32, &registry), "int32");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::I64, &registry), "int64");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U8, &registry), "uint8");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U16, &registry), "uint16");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U32, &registry), "uint32");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::U64, &registry), "uint64");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::F32, &registry), "float");
-        assert_eq!(field_type_to_flatbuffers(&FieldType::F64, &registry), "double");
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::I16, &registry),
+            "int16"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::I32, &registry),
+            "int32"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::I64, &registry),
+            "int64"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::U8, &registry),
+            "uint8"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::U16, &registry),
+            "uint16"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::U32, &registry),
+            "uint32"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::U64, &registry),
+            "uint64"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::F32, &registry),
+            "float"
+        );
+        assert_eq!(
+            field_type_to_flatbuffers(&FieldType::F64, &registry),
+            "double"
+        );
     }
 
     #[test]
@@ -715,7 +754,12 @@ mod tests {
             },
         );
 
-        let output = generate_flatbuffers_schema_string(&structs, &HashMap::new(), None, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_flatbuffers_schema_string(
+            &structs,
+            &HashMap::new(),
+            None,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         assert!(output.contains("table User"));
         assert!(output.contains("email: string (validate: \"email\")"));
@@ -770,7 +814,12 @@ mod tests {
             },
         );
 
-        let output = generate_flatbuffers_schema_string(&HashMap::new(), &enums, None, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_flatbuffers_schema_string(
+            &HashMap::new(),
+            &enums,
+            None,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         assert!(output.contains("enum Status : byte"));
         assert!(output.contains("Active = 0"));
@@ -860,8 +909,12 @@ mod tests {
             },
         );
 
-        let output =
-            generate_flatbuffers_schema_string(&structs, &enums, Some("com.example.users"), &crate::types::ForeignTypeRegistry::default());
+        let output = generate_flatbuffers_schema_string(
+            &structs,
+            &enums,
+            Some("com.example.users"),
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         // Check namespace
         assert!(output.contains("namespace com.example.users;"));

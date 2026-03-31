@@ -459,9 +459,7 @@ fn rename_field_type(field_type: &mut FieldType, renames: &HashMap<String, Strin
                 *name = new_name.clone();
             }
         }
-        FieldType::Option(inner)
-        | FieldType::Vec(inner)
-        | FieldType::RecordLink(inner) => {
+        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
             rename_field_type(inner, renames);
         }
         FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {

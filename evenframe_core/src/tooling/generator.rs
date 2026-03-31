@@ -100,13 +100,7 @@ impl TypeGenerator {
     /// Builds configs filtered to typesync-eligible types.
     fn build_typesync_configs(
         &self,
-    ) -> Result<
-        (
-            HashMap<String, TaggedUnion>,
-            HashMap<String, StructConfig>,
-        ),
-        EvenframeError,
-    > {
+    ) -> Result<(HashMap<String, TaggedUnion>, HashMap<String, StructConfig>), EvenframeError> {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
         let structs = merge_tables_and_objects(&tables, &objects);

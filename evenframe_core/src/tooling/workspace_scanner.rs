@@ -541,7 +541,10 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
+            assert_eq!(
+                detect_pipeline(&s.attrs),
+                Some(crate::types::Pipeline::Both)
+            );
         }
     }
 
@@ -585,7 +588,10 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
+            assert_eq!(
+                detect_pipeline(&s.attrs),
+                Some(crate::types::Pipeline::Both)
+            );
         }
     }
 
@@ -600,7 +606,10 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Typesync));
+            assert_eq!(
+                detect_pipeline(&s.attrs),
+                Some(crate::types::Pipeline::Typesync)
+            );
         }
     }
 
@@ -615,7 +624,10 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Schemasync));
+            assert_eq!(
+                detect_pipeline(&s.attrs),
+                Some(crate::types::Pipeline::Schemasync)
+            );
         }
     }
 
@@ -630,7 +642,10 @@ mod tests {
 
         let file = syn::parse_file(code).unwrap();
         if let syn::Item::Struct(s) = &file.items[0] {
-            assert_eq!(detect_pipeline(&s.attrs), Some(crate::types::Pipeline::Both));
+            assert_eq!(
+                detect_pipeline(&s.attrs),
+                Some(crate::types::Pipeline::Both)
+            );
         }
     }
 

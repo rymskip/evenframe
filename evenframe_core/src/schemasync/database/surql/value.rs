@@ -5,7 +5,11 @@ use serde_json::Value;
 /// syntax, guided by a FieldType.  Strings get single quotes in SurrealDB,
 /// numeric/bool remain unquoted, arrays get bracketed, etc. This function
 /// includes the special logic for EvenframeRecordId (no quotes).
-pub fn to_surreal_string(field_type: &FieldType, value: &Value, registry: &ForeignTypeRegistry) -> String {
+pub fn to_surreal_string(
+    field_type: &FieldType,
+    value: &Value,
+    registry: &ForeignTypeRegistry,
+) -> String {
     match field_type {
         FieldType::String | FieldType::Char => {
             let s = value.as_str().unwrap_or_default();

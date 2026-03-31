@@ -156,7 +156,11 @@ fn generate_enum(enum_def: &TaggedUnion, registry: &crate::types::ForeignTypeReg
 }
 
 /// Generate a Protocol Buffers message from a StructConfig.
-fn generate_message(struct_config: &StructConfig, include_validators: bool, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn generate_message(
+    struct_config: &StructConfig,
+    include_validators: bool,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let mut output = String::new();
 
@@ -175,7 +179,8 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool, regi
 
         let field_number = index + 1;
         let field_name = field.field_name.to_case(Case::Snake);
-        let (field_prefix, field_type) = field_type_to_protobuf_with_prefix(&field.field_type, registry);
+        let (field_prefix, field_type) =
+            field_type_to_protobuf_with_prefix(&field.field_type, registry);
 
         output.push_str(&format!(
             "    {}{} {} = {}",
@@ -184,7 +189,8 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool, regi
 
         // Add validation options if there are validators and we're including them
         if include_validators {
-            let validators_str = collect_validators_for_field(&field.validators, &field.field_type, registry);
+            let validators_str =
+                collect_validators_for_field(&field.validators, &field.field_type, registry);
             if !validators_str.is_empty() {
                 output.push_str(&format!(" [{}]", validators_str));
             }
@@ -199,7 +205,10 @@ fn generate_message(struct_config: &StructConfig, include_validators: bool, regi
 
 /// Convert a FieldType to its Protocol Buffers type representation with optional prefix.
 /// Returns (prefix, type) where prefix is "repeated " for arrays or "optional " for options.
-fn field_type_to_protobuf_with_prefix(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> (String, String) {
+fn field_type_to_protobuf_with_prefix(
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> (String, String) {
     match field_type {
         FieldType::Option(inner) => {
             let (_, inner_type) = field_type_to_protobuf_with_prefix(inner, registry);
@@ -214,7 +223,10 @@ fn field_type_to_protobuf_with_prefix(field_type: &FieldType, registry: &crate::
 }
 
 /// Convert a FieldType to its Protocol Buffers type representation.
-fn field_type_to_protobuf(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn field_type_to_protobuf(
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "bool".to_string(),
@@ -282,7 +294,11 @@ fn field_type_to_protobuf(field_type: &FieldType, registry: &crate::types::Forei
 }
 
 /// Collect validators and format them as protoc-gen-validate style options.
-fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn collect_validators_for_field(
+    validators: &[Validator],
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     let rules: Vec<String> = validators
         .iter()
         .filter_map(|v| validator_to_protobuf_rule(v, field_type))
@@ -300,7 +316,10 @@ fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType
 }
 
 /// Get the validate rule type name for a given field type.
-fn get_validate_rule_type(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn get_validate_rule_type(
+    field_type: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "bool".to_string(),
@@ -644,7 +663,10 @@ mod tests {
     #[test]
     fn test_field_type_to_protobuf() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        assert_eq!(field_type_to_protobuf(&FieldType::String, &registry), "string");
+        assert_eq!(
+            field_type_to_protobuf(&FieldType::String, &registry),
+            "string"
+        );
         assert_eq!(field_type_to_protobuf(&FieldType::Bool, &registry), "bool");
         assert_eq!(field_type_to_protobuf(&FieldType::I8, &registry), "int32");
         assert_eq!(field_type_to_protobuf(&FieldType::I16, &registry), "int32");
@@ -661,8 +683,10 @@ mod tests {
     #[test]
     fn test_field_type_vec_to_protobuf() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        let (prefix, type_name) =
-            field_type_to_protobuf_with_prefix(&FieldType::Vec(Box::new(FieldType::String)), &registry);
+        let (prefix, type_name) = field_type_to_protobuf_with_prefix(
+            &FieldType::Vec(Box::new(FieldType::String)),
+            &registry,
+        );
         assert_eq!(prefix, "repeated ");
         assert_eq!(type_name, "string");
     }
@@ -670,8 +694,10 @@ mod tests {
     #[test]
     fn test_field_type_option_to_protobuf() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        let (prefix, type_name) =
-            field_type_to_protobuf_with_prefix(&FieldType::Option(Box::new(FieldType::String)), &registry);
+        let (prefix, type_name) = field_type_to_protobuf_with_prefix(
+            &FieldType::Option(Box::new(FieldType::String)),
+            &registry,
+        );
         assert_eq!(prefix, "optional ");
         assert_eq!(type_name, "string");
     }
@@ -680,10 +706,10 @@ mod tests {
     fn test_field_type_map_to_protobuf() {
         let registry = crate::types::ForeignTypeRegistry::default();
         assert_eq!(
-            field_type_to_protobuf(&FieldType::HashMap(
-                Box::new(FieldType::String),
-                Box::new(FieldType::I32)
-            ), &registry),
+            field_type_to_protobuf(
+                &FieldType::HashMap(Box::new(FieldType::String), Box::new(FieldType::I32)),
+                &registry
+            ),
             "map<string, int32>"
         );
     }
@@ -754,7 +780,13 @@ mod tests {
             },
         );
 
-        let output = generate_protobuf_schema_string(&structs, &HashMap::new(), None, true, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_protobuf_schema_string(
+            &structs,
+            &HashMap::new(),
+            None,
+            true,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         assert!(output.contains("syntax = \"proto3\";"));
         assert!(output.contains("message User"));
@@ -778,8 +810,13 @@ mod tests {
 
     #[test]
     fn test_generate_message_with_import() {
-        let output =
-            generate_protobuf_schema_string(&HashMap::new(), &HashMap::new(), None, true, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_protobuf_schema_string(
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            true,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
         assert!(output.contains("import \"validate/validate.proto\";"));
     }
 
@@ -820,7 +857,13 @@ mod tests {
             },
         );
 
-        let output = generate_protobuf_schema_string(&HashMap::new(), &enums, None, false, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_protobuf_schema_string(
+            &HashMap::new(),
+            &enums,
+            None,
+            false,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         assert!(output.contains("enum Status"));
         assert!(output.contains("STATUS_UNSPECIFIED = 0;"));
@@ -908,8 +951,13 @@ mod tests {
             },
         );
 
-        let output =
-            generate_protobuf_schema_string(&structs, &enums, Some("com.example.users"), true, &crate::types::ForeignTypeRegistry::default());
+        let output = generate_protobuf_schema_string(
+            &structs,
+            &enums,
+            Some("com.example.users"),
+            true,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
 
         // Check syntax and package
         assert!(output.contains("syntax = \"proto3\";"));
@@ -941,7 +989,10 @@ mod tests {
     #[test]
     fn test_get_validate_rule_type() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        assert_eq!(get_validate_rule_type(&FieldType::String, &registry), "string");
+        assert_eq!(
+            get_validate_rule_type(&FieldType::String, &registry),
+            "string"
+        );
         assert_eq!(get_validate_rule_type(&FieldType::I32, &registry), "int32");
         assert_eq!(get_validate_rule_type(&FieldType::I64, &registry), "int64");
         assert_eq!(get_validate_rule_type(&FieldType::U32, &registry), "uint32");

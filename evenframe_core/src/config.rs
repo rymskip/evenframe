@@ -1,6 +1,10 @@
 use crate::error::{EvenframeError, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
 use toml;
 use tracing::{debug, error, info, trace, warn};
 

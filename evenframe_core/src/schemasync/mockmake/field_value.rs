@@ -363,7 +363,10 @@ impl<'a> FieldValueGenerator<'a> {
                                 if let Some(ftc) = self.registry.lookup(type_name) {
                                     match ftc.mock_strategy.as_str() {
                                         "datetime" => {
-                                            value_stack.push(format!("d'{}'", chrono::Utc::now().to_rfc3339()));
+                                            value_stack.push(format!(
+                                                "d'{}'",
+                                                chrono::Utc::now().to_rfc3339()
+                                            ));
                                             continue;
                                         }
                                         "duration" => {
@@ -376,22 +379,37 @@ impl<'a> FieldValueGenerator<'a> {
                                         "timezone" => {
                                             #[cfg(feature = "mockmake")]
                                             {
-                                                let tz = &TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())];
+                                                let tz = &TZ_VARIANTS
+                                                    [rng.random_range(0..TZ_VARIANTS.len())];
                                                 value_stack.push(format!("'{}'", tz.name()));
                                             }
                                             #[cfg(not(feature = "mockmake"))]
                                             {
-                                                let timezones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
-                                                value_stack.push(format!("'{}'", timezones[rng.random_range(0..timezones.len())]));
+                                                let timezones = [
+                                                    "UTC",
+                                                    "America/New_York",
+                                                    "Europe/London",
+                                                    "Asia/Tokyo",
+                                                ];
+                                                value_stack.push(format!(
+                                                    "'{}'",
+                                                    timezones[rng.random_range(0..timezones.len())]
+                                                ));
                                             }
                                             continue;
                                         }
                                         "decimal" => {
-                                            value_stack.push(format!("{:.3}dec", rng.random_range(0.0..100.0)));
+                                            value_stack.push(format!(
+                                                "{:.3}dec",
+                                                rng.random_range(0.0..100.0)
+                                            ));
                                             continue;
                                         }
                                         "float" => {
-                                            value_stack.push(format!("{:.2}f", rng.random_range(0.0..100.0)));
+                                            value_stack.push(format!(
+                                                "{:.2}f",
+                                                rng.random_range(0.0..100.0)
+                                            ));
                                             continue;
                                         }
                                         "record_id" => {

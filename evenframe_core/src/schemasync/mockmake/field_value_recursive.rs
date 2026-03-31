@@ -2,7 +2,10 @@ use crate::{
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::format::Format,
-    types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, VariantData},
+    types::{
+        EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion,
+        VariantData,
+    },
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -221,7 +224,8 @@ impl<'a> FieldValueGenerator<'a> {
                 let value = if let Some(coord_value) = nested_coordinated_values.get(fname) {
                     // Use the coordinated value
                     let is_datetime = if let FieldType::Other(name) = ftype {
-                        self.registry.lookup(name)
+                        self.registry
+                            .lookup(name)
                             .is_some_and(|ftc| ftc.mock_strategy == "datetime")
                     } else {
                         false

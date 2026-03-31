@@ -186,7 +186,10 @@ pub fn generate_effect_schema_string(
 // ----- Encoded Type Generation Helpers -------------------------------------
 
 /// Generates an `...Encoded` TypeScript interface for a given struct.
-fn encoded_interface_for_struct(struct_config: &StructConfig, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn encoded_interface_for_struct(
+    struct_config: &StructConfig,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let body = struct_config
         .fields
@@ -205,7 +208,10 @@ fn encoded_interface_for_struct(struct_config: &StructConfig, registry: &crate::
 }
 
 /// Generates an `...Encoded` TypeScript type alias for a given enum/union.
-fn encoded_alias_for_enum(en: &TaggedUnion, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn encoded_alias_for_enum(
+    en: &TaggedUnion,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     tracing::trace!(enum_name = %en.enum_name, "Creating encoded alias for enum");
     let name = en.enum_name.to_case(Case::Pascal);
     let union = en
@@ -312,7 +318,11 @@ where
 
 /// Converts a single enum variant into its TypeScript Encoded type representation,
 /// taking the serde `EnumRepresentation` into account.
-fn enum_variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn enum_variant_to_encoded(
+    v: &crate::types::Variant,
+    repr: &EnumRepresentation,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     match repr {
         EnumRepresentation::ExternallyTagged => match &v.data {
             Some(VariantData::InlineStruct(_)) => {
@@ -379,7 +389,9 @@ fn enum_variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation,
             Some(VariantData::InlineStruct(_)) => {
                 format!("{}Encoded", v.name.to_case(Case::Pascal))
             }
-            Some(VariantData::DataStructureRef(field_type)) => field_type_to_ts_encoded(field_type, registry),
+            Some(VariantData::DataStructureRef(field_type)) => {
+                field_type_to_ts_encoded(field_type, registry)
+            }
             None => format!("\"{}\"", v.name),
         },
     }
@@ -552,7 +564,10 @@ fn field_type_to_effect_schema(
 }
 
 /// Converts a `FieldType` into its corresponding raw TypeScript type for the `...Encoded` interface.
-fn field_type_to_ts_encoded(ft: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
+fn field_type_to_ts_encoded(
+    ft: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
     enum WorkItem<'a> {
         Generate(&'a FieldType),
         AssembleOption,
@@ -573,8 +588,7 @@ fn field_type_to_ts_encoded(ft: &FieldType, registry: &crate::types::ForeignType
             WorkItem::Generate(ft) => {
                 match ft {
                     // Primitives
-                    FieldType::String
-                    | FieldType::Char => value_stack.push("string".to_string()),
+                    FieldType::String | FieldType::Char => value_stack.push("string".to_string()),
                     FieldType::Bool => value_stack.push("boolean".to_string()),
                     FieldType::Unit => value_stack.push("null".to_string()),
                     FieldType::F32

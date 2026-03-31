@@ -206,7 +206,12 @@ pub fn field_type_to_default_value(
                         format!(
                             "{}: {}",
                             table_field.field_name.to_case(Case::Camel),
-                            field_type_to_default_value(&table_field.field_type, structs, enums, registry)
+                            field_type_to_default_value(
+                                &table_field.field_type,
+                                structs,
+                                enums,
+                                registry
+                            )
                         )
                     })
                     .collect::<Vec<_>>()

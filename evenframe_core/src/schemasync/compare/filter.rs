@@ -294,9 +294,7 @@ fn resolve_path(
     let mut current_type = field_type;
     loop {
         match current_type {
-            FieldType::Option(inner)
-            | FieldType::Vec(inner)
-            | FieldType::RecordLink(inner) => {
+            FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
                 current_type = inner;
             }
             // For maps, we assume traversal into the value type.

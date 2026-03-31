@@ -152,7 +152,10 @@ impl BuildConfig {
 
             // Parse [general.foreign_types]
             if let Some(ft_value) = general.get("foreign_types") {
-                if let Ok(ft) = ft_value.clone().try_into::<HashMap<String, ForeignTypeConfig>>() {
+                if let Ok(ft) = ft_value
+                    .clone()
+                    .try_into::<HashMap<String, ForeignTypeConfig>>()
+                {
                     config.foreign_types = ft;
                 }
             }

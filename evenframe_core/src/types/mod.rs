@@ -2,7 +2,6 @@ mod field_type;
 pub mod foreign_type_registry;
 
 pub use crate::types::field_type::FieldType;
-pub use foreign_type_registry::ForeignTypeRegistry;
 #[cfg(feature = "surrealdb")]
 use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
 };
 #[cfg(feature = "surrealdb")]
 use convert_case::{Case, Casing};
+pub use foreign_type_registry::ForeignTypeRegistry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 #[cfg(feature = "surrealdb")]
@@ -312,11 +312,13 @@ impl StructField {
                                     // Check foreign type registry first
                                     if let Some(ftc) = registry.lookup(name) {
                                         let type_str = if self.field_name == "id" {
-                                            ftc.surrealdb_id_format.as_ref()
+                                            ftc.surrealdb_id_format
+                                                .as_ref()
                                                 .map(|fmt| fmt.replace("{table_name}", table_name))
                                                 .unwrap_or_else(|| ftc.surrealdb.clone())
                                         } else {
-                                            ftc.surrealdb_non_id_format.as_ref()
+                                            ftc.surrealdb_non_id_format
+                                                .as_ref()
                                                 .cloned()
                                                 .unwrap_or_else(|| ftc.surrealdb.clone())
                                         };

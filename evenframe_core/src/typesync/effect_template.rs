@@ -4,7 +4,9 @@
 //! wrapping as much logic as possible into the template DSL.
 
 use crate::dependency::{analyse_recursion, deps_of};
-use crate::types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData};
+use crate::types::{
+    EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData,
+};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -228,7 +230,11 @@ fn variant_to_schema(
 
 /// Converts a single enum variant into its TypeScript Encoded type representation,
 /// taking the serde `EnumRepresentation` into account.
-fn variant_to_encoded(v: &crate::types::Variant, repr: &EnumRepresentation, registry: &ForeignTypeRegistry) -> String {
+fn variant_to_encoded(
+    v: &crate::types::Variant,
+    repr: &EnumRepresentation,
+    registry: &ForeignTypeRegistry,
+) -> String {
     match repr {
         EnumRepresentation::ExternallyTagged => match &v.data {
             Some(VariantData::InlineStruct(_)) => {
@@ -309,7 +315,14 @@ fn field_type_to_effect_schema(
     registry: &ForeignTypeRegistry,
 ) -> String {
     let recurse = |inner_type: &FieldType| {
-        field_type_to_effect_schema(inner_type, structs, current_type, recursion_info, processed, registry)
+        field_type_to_effect_schema(
+            inner_type,
+            structs,
+            current_type,
+            recursion_info,
+            processed,
+            registry,
+        )
     };
 
     // Check for foreign type in Other variant before using ts_template

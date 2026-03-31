@@ -163,7 +163,10 @@ pub fn field_type_to_arktype(
         }
 
         FieldType::Vec(inner) => {
-            format!("[{}, '[]']", field_type_to_arktype(inner, structs, enums, registry))
+            format!(
+                "[{}, '[]']",
+                field_type_to_arktype(inner, structs, enums, registry)
+            )
         }
 
         FieldType::HashMap(key, value) => {
@@ -213,7 +216,13 @@ pub fn field_type_to_arktype(
                     .variants
                     .iter()
                     .map(|variant| {
-                        variant_to_arktype(variant, &enum_def.representation, structs, enums, registry)
+                        variant_to_arktype(
+                            variant,
+                            &enum_def.representation,
+                            structs,
+                            enums,
+                            registry,
+                        )
                     })
                     .collect();
                 return variants.join(" | ");
@@ -263,7 +272,13 @@ pub fn generate_arktype_type_string(
         for (i, variant) in schema_enum.variants.iter().enumerate() {
             // Convert the variant into either a data type or a literal union piece,
             // respecting the serde enum representation.
-            let item_str = variant_to_arktype(variant, &schema_enum.representation, structs, enums, registry);
+            let item_str = variant_to_arktype(
+                variant,
+                &schema_enum.representation,
+                structs,
+                enums,
+                registry,
+            );
 
             // If this is our first variant, it becomes the entire union so far,
             // otherwise we nest the "union so far" together with the new item.
