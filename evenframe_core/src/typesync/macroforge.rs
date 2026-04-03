@@ -859,7 +859,7 @@ fn escape_for_jsdoc(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{StructField, Variant};
+    use crate::types::{EnumRepresentation, Pipeline, StructField, Variant};
     use ordered_float::OrderedFloat;
 
     #[test]
@@ -1062,6 +1062,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1159,6 +1160,7 @@ mod tests {
                 annotations: vec![
                     "@overview({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
                 ],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1188,6 +1190,8 @@ mod tests {
                     "Deserialize".to_string(),
                 ],
                 annotations: vec![],
+                representation: EnumRepresentation::default(),
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1245,6 +1249,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1334,6 +1339,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1362,6 +1368,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1401,6 +1408,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1432,6 +1440,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
+                pipeline: Pipeline::default(),
             },
         );
 
@@ -1457,6 +1466,7 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec!["Serialize".to_string(), "Deserialize".to_string()],
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
+                pipeline: Pipeline::default(),
             },
         );
 

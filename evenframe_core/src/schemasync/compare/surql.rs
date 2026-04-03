@@ -6,7 +6,8 @@
 
 use super::SchemaChanges;
 use super::types::{
-    AccessDefinition, FieldDefinition, ObjectType, SchemaDefinition, SchemaType, TableDefinition,
+    AccessDefinition, FieldDefinition, IndexDefinition, ObjectType, SchemaDefinition, SchemaType,
+    TableDefinition,
 };
 use crate::{
     EvenframeError, Result, evenframe_log,
@@ -434,6 +435,7 @@ impl<'a> SchemaImporter<'a> {
         let mut current_fields: HashMap<String, FieldDefinition> = HashMap::new();
         let mut current_wildcard_fields: HashMap<String, FieldDefinition> = HashMap::new();
         let mut table_events: HashMap<String, Vec<String>> = HashMap::new();
+        let mut table_indexes: HashMap<String, Vec<IndexDefinition>> = HashMap::new();
 
         for statement in statements {
             let trimmed = statement.trim();
@@ -454,7 +456,7 @@ impl<'a> SchemaImporter<'a> {
                         fields: current_fields.clone(),
                         array_wildcard_fields: current_wildcard_fields.clone(),
                         permissions: None,
-                        indexes: Vec::new(),
+                        indexes: table_indexes.remove(&table_name).unwrap_or_default(),
                         events: table_events.remove(&table_name).unwrap_or_default(),
                     };
                     tables.insert(table_name, table_def);
@@ -495,8 +497,13 @@ impl<'a> SchemaImporter<'a> {
                 }
             }
             // Parse DEFINE INDEX statements
-            else if trimmed.starts_with("DEFINE INDEX") {
-                // TODO: Parse index definitions
+            else if trimmed.starts_with("DEFINE INDEX")
+                && let Some((table_name, index_def)) = Self::parse_index_definition(trimmed)
+            {
+                table_indexes
+                    .entry(table_name)
+                    .or_default()
+                    .push(index_def);
             }
         }
 
@@ -514,7 +521,7 @@ impl<'a> SchemaImporter<'a> {
                 fields: current_fields,
                 array_wildcard_fields: current_wildcard_fields,
                 permissions: None,
-                indexes: Vec::new(),
+                indexes: table_indexes.remove(&table_name).unwrap_or_default(),
                 events: table_events.remove(&table_name).unwrap_or_default(),
             };
             tables.insert(table_name, table_def);
@@ -1093,6 +1100,92 @@ impl<'a> SchemaImporter<'a> {
             .to_string();
 
         Some((table_name, statement.trim().to_string()))
+    }
+
+    /// Parse a DEFINE INDEX statement into (table_name, IndexDefinition)
+    ///
+    /// Format: `DEFINE INDEX [OVERWRITE | IF NOT EXISTS] <name> ON [TABLE] <table> FIELDS|COLUMNS <col1>, <col2> [UNIQUE];`
+    fn parse_index_definition(statement: &str) -> Option<(String, IndexDefinition)> {
+        if !statement.starts_with("DEFINE INDEX") {
+            return None;
+        }
+
+        let uppercase = statement.to_uppercase();
+
+        // Extract index name: skip "DEFINE INDEX", then optional OVERWRITE / IF NOT EXISTS
+        let after_define = statement["DEFINE INDEX".len()..].trim();
+        let (name_and_rest, _) = if after_define.to_uppercase().starts_with("OVERWRITE") {
+            let rest = after_define["OVERWRITE".len()..].trim();
+            (rest, true)
+        } else if after_define.to_uppercase().starts_with("IF NOT EXISTS") {
+            let rest = after_define["IF NOT EXISTS".len()..].trim();
+            (rest, true)
+        } else {
+            (after_define, false)
+        };
+
+        let index_name = name_and_rest
+            .split_whitespace()
+            .next()?
+            .trim_matches('`')
+            .to_string();
+
+        // Extract table name after "ON TABLE" or "ON"
+        let on_pos = uppercase.find(" ON ")?;
+        let after_on = statement[on_pos + 4..].trim();
+        let after_on_upper = after_on.to_uppercase();
+        let table_part = if after_on_upper.starts_with("TABLE ") {
+            after_on["TABLE ".len()..].trim()
+        } else {
+            after_on
+        };
+        let table_name = table_part
+            .split_whitespace()
+            .next()?
+            .trim_matches('`')
+            .trim_end_matches(';')
+            .to_string();
+
+        // Extract columns after "FIELDS" or "COLUMNS"
+        let columns_keyword_pos = uppercase
+            .find(" FIELDS ")
+            .or_else(|| uppercase.find(" COLUMNS "))?;
+        let keyword_len = if uppercase[columns_keyword_pos..].starts_with(" FIELDS ") {
+            " FIELDS ".len()
+        } else {
+            " COLUMNS ".len()
+        };
+        let after_columns = statement[columns_keyword_pos + keyword_len..].trim();
+
+        // Columns end at UNIQUE, SEARCH, COMMENT, or semicolon
+        let columns_end = after_columns
+            .to_uppercase()
+            .find(" UNIQUE")
+            .or_else(|| after_columns.to_uppercase().find(" SEARCH"))
+            .or_else(|| after_columns.to_uppercase().find(" COMMENT"))
+            .unwrap_or(after_columns.len());
+        let columns_str = after_columns[..columns_end].trim().trim_end_matches(';');
+
+        let columns: Vec<String> = columns_str
+            .split(',')
+            .map(|c| c.trim().trim_matches('`').to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+
+        if columns.is_empty() {
+            return None;
+        }
+
+        let unique = uppercase.contains(" UNIQUE");
+
+        Some((
+            table_name,
+            IndexDefinition {
+                name: index_name,
+                columns,
+                unique,
+            },
+        ))
     }
 
     /// Parse a DEFINE ACCESS statement

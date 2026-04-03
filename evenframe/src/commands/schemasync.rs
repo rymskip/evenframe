@@ -1,6 +1,6 @@
 //! Schemasync command - synchronizes database schema.
 
-use crate::cli::{Cli, SchemasyncArgs, SchemasyncCommands};
+use crate::cli::{Cli, DiffFormat, SchemasyncArgs, SchemasyncCommands};
 use crate::config_builders;
 use evenframe_core::{error::Result, schemasync::Schemasync};
 use tracing::{debug, error, info};
@@ -24,29 +24,95 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
     // Handle subcommands
     if let Some(cmd) = args.command {
         match cmd {
-            SchemasyncCommands::Diff(_diff_args) => {
-                info!("Running schema diff (dry-run)...");
-                // TODO: Implement diff functionality
-                info!("Schema diff not yet implemented");
+            SchemasyncCommands::Diff(diff_args) => {
+                info!("Running schema diff...");
+
+                let schemasync = Schemasync::new()
+                    .with_tables(&tables)
+                    .with_objects(&objects)
+                    .with_enums(&enums);
+
+                let changes = schemasync.diff().await?;
+
+                match diff_args.format {
+                    DiffFormat::Pretty => {
+                        println!("{}", changes.summary());
+                        for tc in &changes.modified_tables {
+                            for field in &tc.new_fields {
+                                println!("  + {}.{}", tc.table_name, field);
+                            }
+                            for field in &tc.removed_fields {
+                                println!("  - {}.{}", tc.table_name, field);
+                            }
+                            for fc in &tc.modified_fields {
+                                println!(
+                                    "  ~ {}.{}: {} -> {}",
+                                    tc.table_name, fc.field_name, fc.old_type, fc.new_type
+                                );
+                            }
+                        }
+                    }
+                    DiffFormat::Json => {
+                        let json = serde_json::to_string_pretty(&changes).map_err(|e| {
+                            evenframe_core::error::EvenframeError::config(format!(
+                                "Failed to serialize changes to JSON: {e}"
+                            ))
+                        })?;
+                        println!("{json}");
+                    }
+                    DiffFormat::Plain => {
+                        println!("{}", changes.summary());
+                    }
+                }
             }
             SchemasyncCommands::Apply(apply_args) => {
                 if apply_args.dry_run {
                     info!("Dry run mode - showing what would be applied...");
-                    // TODO: Implement dry run
+
+                    let schemasync = Schemasync::new()
+                        .with_tables(&tables)
+                        .with_objects(&objects)
+                        .with_enums(&enums);
+
+                    let changes = schemasync.diff().await?;
+                    println!("{}", changes.summary());
                     return Ok(());
                 }
 
                 if !apply_args.yes {
-                    // TODO: Add confirmation prompt
-                    info!("Use --yes to skip confirmation");
+                    use std::io::{self, Write};
+                    print!("Apply schema changes to the database? [y/N] ");
+                    io::stdout().flush().map_err(|e| {
+                        evenframe_core::error::EvenframeError::config(format!(
+                            "Failed to flush stdout: {e}"
+                        ))
+                    })?;
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input).map_err(|e| {
+                        evenframe_core::error::EvenframeError::config(format!(
+                            "Failed to read confirmation input: {e}"
+                        ))
+                    })?;
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        info!("Aborted by user");
+                        return Ok(());
+                    }
                 }
 
                 run_schemasync(&enums, &tables, &objects).await?;
             }
-            SchemasyncCommands::Mock(_mock_args) => {
+            SchemasyncCommands::Mock(mock_args) => {
                 info!("Generating mock data only...");
-                // TODO: Implement mock-only generation
-                info!("Mock-only generation not yet implemented");
+
+                let schemasync = Schemasync::new()
+                    .with_tables(&tables)
+                    .with_objects(&objects)
+                    .with_enums(&enums);
+
+                schemasync
+                    .mock_only(mock_args.count, mock_args.tables)
+                    .await?;
+                info!("Mock data generation completed");
             }
         }
         return Ok(());

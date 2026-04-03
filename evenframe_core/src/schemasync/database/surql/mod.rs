@@ -226,8 +226,10 @@ impl DatabaseProvider for SurrealdbProvider {
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to get table info: {e}")))?;
 
-        // Parse response - for now return None if table doesn't exist
-        // TODO: Parse the INFO response into TableInfo struct
+        // This method is not currently used — the schema comparison pipeline uses
+        // export-based parsing (SchemaImporter::import_schema_only) instead of
+        // per-table INFO queries. Reserved for future use (e.g., per-table
+        // introspection or SQL provider parity).
         let _ = response;
         Ok(None)
     }

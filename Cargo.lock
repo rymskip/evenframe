@@ -1708,6 +1708,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "regex",
+ "serde_json",
  "syn 2.0.106",
  "tempfile",
  "tokio",

@@ -94,8 +94,5 @@ fn validate_types() -> Result<(usize, usize, usize)> {
 }
 
 async fn check_database() -> Result<()> {
-    // TODO: Implement database connectivity check
-    // This would connect to SurrealDB and verify the connection works
-    info!("    (Database connectivity check not yet implemented)");
-    Ok(())
+    evenframe_core::schemasync::check_database_connectivity().await
 }

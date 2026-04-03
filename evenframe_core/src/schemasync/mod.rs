@@ -95,6 +95,53 @@ pub struct Schemasync<'a> {
     owned_registry: Option<crate::types::ForeignTypeRegistry>,
 }
 
+/// Check database connectivity by loading config, connecting, authenticating,
+/// and selecting the configured namespace/database.
+#[cfg(feature = "surrealdb")]
+pub async fn check_database_connectivity() -> Result<()> {
+    let config = EvenframeConfig::new()?;
+
+    info!(
+        "Connecting to SurrealDB at {}...",
+        config.schemasync.database.url
+    );
+    let db = Surreal::new::<Http>(&config.schemasync.database.url)
+        .await
+        .map_err(|e| {
+            EvenframeError::database(format!(
+                "Failed to connect to SurrealDB at {}: {e}",
+                config.schemasync.database.url
+            ))
+        })?;
+    info!("    Connection: OK");
+
+    let username = std::env::var("SURREALDB_USER")
+        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_USER".to_string()))?;
+    let password = std::env::var("SURREALDB_PASSWORD")
+        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
+
+    db.signin(Root { username, password }).await.map_err(|e| {
+        EvenframeError::database(format!("Failed to authenticate: {e}"))
+    })?;
+    info!("    Authentication: OK");
+
+    db.use_ns(&config.schemasync.database.namespace)
+        .use_db(&config.schemasync.database.database)
+        .await
+        .map_err(|e| {
+            EvenframeError::database(format!(
+                "Failed to select namespace '{}' / database '{}': {e}",
+                config.schemasync.database.namespace, config.schemasync.database.database
+            ))
+        })?;
+    info!(
+        "    Namespace '{}' / Database '{}': OK",
+        config.schemasync.database.namespace, config.schemasync.database.database
+    );
+
+    Ok(())
+}
+
 #[cfg(feature = "surrealdb")]
 impl<'a> Schemasync<'a> {
     /// Create a new empty Schemasync instance
@@ -197,14 +244,17 @@ impl<'a> Schemasync<'a> {
         Ok(())
     }
 
-    /// Run the complete schemasync pipeline
-    pub async fn run(mut self) -> Result<()> {
-        info!("Starting Schemasync pipeline execution");
-
-        // Initialize database and config first
-        self.initialize().await?;
-
-        // Validate that all required fields are set
+    /// Validate that all required fields are set and return them.
+    #[allow(clippy::type_complexity)]
+    fn validate(
+        &mut self,
+    ) -> Result<(
+        Surreal<Client>,
+        &'a HashMap<String, TableConfig>,
+        &'a HashMap<String, StructConfig>,
+        &'a HashMap<String, TaggedUnion>,
+        crate::schemasync::config::SchemasyncConfig,
+    )> {
         debug!("Validating required fields for Schemasync pipeline");
         let db = self
             .db
@@ -219,11 +269,6 @@ impl<'a> Schemasync<'a> {
         let enums = self
             .enums
             .ok_or_else(|| EvenframeError::config("Enums not provided"))?;
-        let default_registry = crate::types::ForeignTypeRegistry::default();
-        let registry = self
-            .registry
-            .or(self.owned_registry.as_ref())
-            .unwrap_or(&default_registry);
         let config = self
             .schemasync_config
             .take()
@@ -242,19 +287,20 @@ impl<'a> Schemasync<'a> {
             enums.len()
         );
 
-        evenframe_log!("", "all_statements.surql");
-        evenframe_log!("", "results.log");
-        evenframe_log!("", "all_define_statements.surql");
-        debug!("Initialized logging files");
+        Ok((db, tables, objects, enums, config))
+    }
 
-        debug!("Generating table and field definition statements");
+    /// Generate define statements for all tables.
+    fn generate_all_define_statements<'b>(
+        tables: &'b HashMap<String, TableConfig>,
+        objects: &HashMap<String, StructConfig>,
+        enums: &HashMap<String, TaggedUnion>,
+        full_refresh_mode: bool,
+        registry: &crate::types::ForeignTypeRegistry,
+    ) -> (HashMap<&'b String, String>, String) {
         debug!(
-            "Defining tables with full_refresh_mode: {}",
-            config.mock_gen_config.full_refresh_mode
-        );
-        trace!(
-            "Table definitions for: {:?}",
-            tables.keys().collect::<Vec<_>>()
+            "Generating table and field definition statements (full_refresh_mode: {})",
+            full_refresh_mode
         );
         let mut define_statements: HashMap<&String, String> = HashMap::new();
         for (table_name, table) in tables {
@@ -266,7 +312,7 @@ impl<'a> Schemasync<'a> {
                     tables,
                     objects,
                     enums,
-                    config.mock_gen_config.full_refresh_mode,
+                    full_refresh_mode,
                     registry,
                 ),
             );
@@ -277,11 +323,139 @@ impl<'a> Schemasync<'a> {
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .join(" ");
+
+        (define_statements, define_statements_string)
+    }
+
+    /// Run the comparison pipeline and return schema changes without applying them.
+    pub async fn diff(mut self) -> Result<SchemaChanges> {
+        info!("Starting schema diff");
+        self.initialize().await?;
+
+        let (db, tables, objects, enums, config) = self.validate()?;
+        let default_registry = crate::types::ForeignTypeRegistry::default();
+        let registry = self
+            .registry
+            .or(self.owned_registry.as_ref())
+            .unwrap_or(&default_registry);
+
+        let (_, define_statements_string) = Self::generate_all_define_statements(
+            tables,
+            objects,
+            enums,
+            config.mock_gen_config.full_refresh_mode,
+            registry,
+        );
+
+        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
+        mockmaker.generate_ids().await?;
+
+        if let Some(ref mut comparator) = mockmaker.comparator {
+            comparator.run(&define_statements_string).await?;
+        }
+
+        let schema_changes = mockmaker
+            .comparator
+            .as_ref()
+            .and_then(|c| c.get_schema_changes())
+            .cloned()
+            .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
+
+        info!("Schema diff completed");
+        Ok(schema_changes)
+    }
+
+    /// Connect to the database and generate mock data without applying schema changes.
+    pub async fn mock_only(
+        mut self,
+        count_override: Option<usize>,
+        table_filter: Option<Vec<String>>,
+    ) -> Result<()> {
+        info!("Starting mock-only generation");
+        self.initialize().await?;
+
+        let (db, tables, objects, enums, mut config) = self.validate()?;
+        let default_registry = crate::types::ForeignTypeRegistry::default();
+        let registry = self
+            .registry
+            .or(self.owned_registry.as_ref())
+            .unwrap_or(&default_registry);
+
+        if let Some(count) = count_override {
+            config.mock_gen_config.default_record_count = count;
+        }
+
+        // Apply table filter if specified
+        let owned_filtered: HashMap<String, TableConfig>;
+        let effective_tables: &HashMap<String, TableConfig> =
+            if let Some(ref filter) = table_filter {
+                owned_filtered = tables
+                    .iter()
+                    .filter(|(name, _)| filter.contains(name))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                if owned_filtered.is_empty() {
+                    return Err(EvenframeError::config(
+                        "No tables match the specified filter",
+                    ));
+                }
+                &owned_filtered
+            } else {
+                tables
+            };
+
+        let (_, define_statements_string) = Self::generate_all_define_statements(
+            effective_tables,
+            objects,
+            enums,
+            config.mock_gen_config.full_refresh_mode,
+            registry,
+        );
+
+        let mut mockmaker =
+            Mockmaker::new(&db, effective_tables, objects, enums, &config, registry);
+        mockmaker.generate_ids().await?;
+
+        if let Some(ref mut comparator) = mockmaker.comparator {
+            comparator.run(&define_statements_string).await?;
+        }
+
+        mockmaker.filter_changes().await?;
+        mockmaker.generate_mock_data().await?;
+
+        info!("Mock-only generation completed successfully");
+        Ok(())
+    }
+
+    /// Run the complete schemasync pipeline
+    pub async fn run(mut self) -> Result<()> {
+        info!("Starting Schemasync pipeline execution");
+        self.initialize().await?;
+
+        let (db, tables, objects, enums, config) = self.validate()?;
+        let default_registry = crate::types::ForeignTypeRegistry::default();
+        let registry = self
+            .registry
+            .or(self.owned_registry.as_ref())
+            .unwrap_or(&default_registry);
+
+        let (define_statements, define_statements_string) = Self::generate_all_define_statements(
+            tables,
+            objects,
+            enums,
+            config.mock_gen_config.full_refresh_mode,
+            registry,
+        );
+
+        evenframe_log!("", "all_statements.surql");
+        evenframe_log!("", "results.log");
+        evenframe_log!("", "all_define_statements.surql");
         evenframe_log!(
             &define_statements_string,
             "all_define_statements.surql",
             true
         );
+
         // Create Mockmaker instance (which contains Comparator)
         info!("Creating Mockmaker instance for data generation and comparison");
         let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);

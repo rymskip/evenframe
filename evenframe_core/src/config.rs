@@ -211,16 +211,9 @@ impl EvenframeConfig {
         // Load .env file from configured or default path
         Self::load_env_file(&config);
 
-        // Process environment variable substitutions for all database-related fields
-        // TODO: This should find all environment variable references in the config, not just these hardcoded ones
+        // Process environment variable substitutions for all string fields in the config
         debug!("Substituting environment variables in configuration");
-        config.schemasync.database.url =
-            Self::substitute_env_vars(&config.schemasync.database.url)?;
-        config.schemasync.database.namespace =
-            Self::substitute_env_vars(&config.schemasync.database.namespace)?;
-        config.schemasync.database.database =
-            Self::substitute_env_vars(&config.schemasync.database.database)?;
-        config.typesync.output_path = Self::substitute_env_vars(&config.typesync.output_path)?;
+        Self::substitute_all_env_vars(&mut config)?;
 
         // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
@@ -369,6 +362,36 @@ impl EvenframeConfig {
 
         Self::substitute_env_vars(&content)
     }
+    /// Substitute environment variables across all string fields in the config.
+    ///
+    /// Serializes the config to TOML, applies env var substitution to the entire
+    /// string, then deserializes back. Fields marked `#[serde(skip)]` (like
+    /// `config_file_path` and `resolved`) are preserved across the round-trip.
+    fn substitute_all_env_vars(config: &mut EvenframeConfig) -> Result<()> {
+        let config_file_path = config.config_file_path.clone();
+        let resolved = config.schemasync.database.resolved.clone();
+
+        let toml_string = toml::to_string(&config).map_err(|e| {
+            EvenframeError::config(format!(
+                "Failed to serialize config for env var substitution: {e}"
+            ))
+        })?;
+
+        let substituted = Self::substitute_env_vars(&toml_string)?;
+
+        let mut new_config: EvenframeConfig = toml::from_str(&substituted).map_err(|e| {
+            EvenframeError::config(format!(
+                "Failed to re-parse config after env var substitution: {e}"
+            ))
+        })?;
+
+        new_config.config_file_path = config_file_path;
+        new_config.schemasync.database.resolved = resolved;
+
+        *config = new_config;
+        Ok(())
+    }
+
     /// Substitute environment variables in config strings
     /// Supports ${VAR_NAME:-default} syntax
     pub fn substitute_env_vars(value: &str) -> Result<String> {

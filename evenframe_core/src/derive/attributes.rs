@@ -176,8 +176,11 @@ pub fn parse_mock_data_attribute(
                     // Parse overrides from config if specified
                     let table_level_override: Option<HashMap<StructField, Format>> =
                         if let Some(override_name) = overrides_name {
-                            // TODO: Load format overrides from configuration based on override_name
-                            // For now, return None - this would be loaded from a config file
+                            // Loading format overrides from config is not currently supported.
+                            // This code runs inside a proc macro (compile time), so it cannot
+                            // access runtime config. Compile-time file reading is possible but
+                            // fragile (cargo doesn't track TOML changes as dependencies).
+                            // For now, specify format overrides inline via field-level attributes.
                             debug!(
                                 "Override '{}' specified but override loading not yet implemented",
                                 override_name
