@@ -120,9 +120,9 @@ pub async fn check_database_connectivity() -> Result<()> {
     let password = std::env::var("SURREALDB_PASSWORD")
         .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
 
-    db.signin(Root { username, password }).await.map_err(|e| {
-        EvenframeError::database(format!("Failed to authenticate: {e}"))
-    })?;
+    db.signin(Root { username, password })
+        .await
+        .map_err(|e| EvenframeError::database(format!("Failed to authenticate: {e}")))?;
     info!("    Authentication: OK");
 
     db.use_ns(&config.schemasync.database.namespace)
@@ -387,22 +387,22 @@ impl<'a> Schemasync<'a> {
 
         // Apply table filter if specified
         let owned_filtered: HashMap<String, TableConfig>;
-        let effective_tables: &HashMap<String, TableConfig> =
-            if let Some(ref filter) = table_filter {
-                owned_filtered = tables
-                    .iter()
-                    .filter(|(name, _)| filter.contains(name))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                if owned_filtered.is_empty() {
-                    return Err(EvenframeError::config(
-                        "No tables match the specified filter",
-                    ));
-                }
-                &owned_filtered
-            } else {
-                tables
-            };
+        let effective_tables: &HashMap<String, TableConfig> = if let Some(ref filter) = table_filter
+        {
+            owned_filtered = tables
+                .iter()
+                .filter(|(name, _)| filter.contains(name))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if owned_filtered.is_empty() {
+                return Err(EvenframeError::config(
+                    "No tables match the specified filter",
+                ));
+            }
+            &owned_filtered
+        } else {
+            tables
+        };
 
         let (_, define_statements_string) = Self::generate_all_define_statements(
             effective_tables,

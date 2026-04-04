@@ -77,6 +77,8 @@ pub struct TaggedUnion {
     pub annotations: Vec<String>,
     #[serde(default)]
     pub pipeline: Pipeline,
+    #[serde(default)]
+    pub rust_derives: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -781,6 +783,8 @@ pub struct StructConfig {
     pub annotations: Vec<String>,
     #[serde(default)]
     pub pipeline: Pipeline,
+    #[serde(default)]
+    pub rust_derives: Vec<String>,
 }
 
 #[cfg(test)]

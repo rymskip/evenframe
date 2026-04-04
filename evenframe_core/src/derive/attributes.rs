@@ -559,6 +559,31 @@ pub fn parse_macroforge_derive_attribute(attrs: &[Attribute]) -> Result<Vec<Stri
     Ok(Vec::new())
 }
 
+/// Extract all derive names from `#[derive(...)]` attributes.
+///
+/// Returns identifiers like `["Serialize", "Clone", "Debug", "Evenframe"]`.
+pub fn parse_rust_derives(attrs: &[Attribute]) -> Vec<String> {
+    let mut derives = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            if let Meta::List(meta_list) = &attr.meta {
+                // Parse the token stream as comma-separated paths
+                let result: Result<syn::punctuated::Punctuated<syn::Path, syn::Token![,]>, _> =
+                    meta_list.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
+                if let Ok(paths) = result {
+                    for path in paths {
+                        // Use the last segment (e.g., "Serialize" from "serde::Serialize")
+                        if let Some(segment) = path.segments.last() {
+                            derives.push(segment.ident.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    derives
+}
+
 pub fn parse_annotation_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
     let mut annotations = Vec::new();
 

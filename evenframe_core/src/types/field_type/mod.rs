@@ -330,6 +330,55 @@ impl FieldType {
     }
 }
 
+impl FieldType {
+    /// Returns a human-readable canonical name using Rust-like syntax.
+    ///
+    /// Examples: `"String"`, `"Decimal"`, `"Option<DateTime>"`, `"Vec<i32>"`, `"HashMap<String, i64>"`
+    pub fn canonical_name(&self) -> String {
+        match self {
+            FieldType::String => "String".to_string(),
+            FieldType::Char => "char".to_string(),
+            FieldType::Bool => "bool".to_string(),
+            FieldType::Unit => "()".to_string(),
+            FieldType::F32 => "f32".to_string(),
+            FieldType::F64 => "f64".to_string(),
+            FieldType::I8 => "i8".to_string(),
+            FieldType::I16 => "i16".to_string(),
+            FieldType::I32 => "i32".to_string(),
+            FieldType::I64 => "i64".to_string(),
+            FieldType::I128 => "i128".to_string(),
+            FieldType::Isize => "isize".to_string(),
+            FieldType::U8 => "u8".to_string(),
+            FieldType::U16 => "u16".to_string(),
+            FieldType::U32 => "u32".to_string(),
+            FieldType::U64 => "u64".to_string(),
+            FieldType::U128 => "u128".to_string(),
+            FieldType::Usize => "usize".to_string(),
+            FieldType::Tuple(types) => {
+                let inner: Vec<String> = types.iter().map(|t| t.canonical_name()).collect();
+                format!("({})", inner.join(", "))
+            }
+            FieldType::Struct(fields) => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .map(|(name, ft)| format!("{}: {}", name, ft.canonical_name()))
+                    .collect();
+                format!("{{ {} }}", inner.join(", "))
+            }
+            FieldType::Option(inner) => format!("Option<{}>", inner.canonical_name()),
+            FieldType::Vec(inner) => format!("Vec<{}>", inner.canonical_name()),
+            FieldType::HashMap(k, v) => {
+                format!("HashMap<{}, {}>", k.canonical_name(), v.canonical_name())
+            }
+            FieldType::BTreeMap(k, v) => {
+                format!("BTreeMap<{}, {}>", k.canonical_name(), v.canonical_name())
+            }
+            FieldType::RecordLink(inner) => format!("RecordLink<{}>", inner.canonical_name()),
+            FieldType::Other(name) => name.clone(),
+        }
+    }
+}
+
 impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

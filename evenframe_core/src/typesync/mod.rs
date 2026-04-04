@@ -5,6 +5,10 @@ pub mod doc_comment;
 pub mod effect;
 pub mod file_grouping;
 pub mod import_resolver;
+pub mod plugin_types;
+
+#[cfg(feature = "wasm-plugins")]
+pub mod plugin;
 
 // Feature-gated parsers
 #[cfg(feature = "flatbuffers")]

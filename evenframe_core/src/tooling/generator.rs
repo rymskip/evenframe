@@ -7,6 +7,8 @@ use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use crate::typesync::flatbuffers::generate_flatbuffers_schema_string;
 #[cfg(feature = "macroforge")]
 use crate::typesync::macroforge::generate_macroforge_type_string;
+#[cfg(feature = "wasm-plugins")]
+use crate::typesync::plugin_types::TypeOverrides;
 #[cfg(feature = "protobuf")]
 use crate::typesync::protobuf::generate_protobuf_schema_string;
 use crate::typesync::{
@@ -135,31 +137,84 @@ impl TypeGenerator {
         // Ensure output directory exists
         fs::create_dir_all(&self.config.output_path)?;
 
+        // Initialize type-transform plugin manager (if any plugins configured)
+        #[cfg(feature = "wasm-plugins")]
+        let mut plugin_manager = if !self.config.type_plugins.is_empty() {
+            let project_root = self.config.scan_path.clone();
+            match crate::typesync::plugin::TypePluginManager::new(
+                &self.config.type_plugins,
+                &project_root,
+            ) {
+                Ok(pm) => Some(pm),
+                Err(e) => {
+                    tracing::error!("Failed to initialize type-transform plugins: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Helper: compute overrides for a given generator
+        #[cfg(feature = "wasm-plugins")]
+        let compute_overrides = |pm: &mut Option<crate::typesync::plugin::TypePluginManager>,
+                                 structs: &HashMap<String, StructConfig>,
+                                 enums: &HashMap<String, TaggedUnion>,
+                                 generator: &str|
+         -> TypeOverrides {
+            let Some(pm) = pm.as_mut() else {
+                return TypeOverrides::default();
+            };
+            let mut overrides = TypeOverrides::default();
+            for (_, sc) in structs {
+                let input = build_type_plugin_input_struct(sc, generator);
+                let o = pm.compute_overrides(&input);
+                merge_overrides(&mut overrides, o);
+            }
+            for (_, tu) in enums {
+                let input = build_type_plugin_input_enum(tu, generator);
+                let o = pm.compute_overrides(&input);
+                merge_overrides(&mut overrides, o);
+            }
+            overrides
+        };
+
         // Generate each enabled type
         if self.config.arktype {
+            #[cfg(feature = "wasm-plugins")]
+            let _overrides = compute_overrides(&mut plugin_manager, &structs, &enums, "arktype");
             let file = self.generate_arktype_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         if self.config.effect {
+            #[cfg(feature = "wasm-plugins")]
+            let _overrides = compute_overrides(&mut plugin_manager, &structs, &enums, "effect");
             let file = self.generate_effect_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "macroforge")]
         if self.config.macroforge {
+            #[cfg(feature = "wasm-plugins")]
+            let _overrides = compute_overrides(&mut plugin_manager, &structs, &enums, "macroforge");
             let file = self.generate_macroforge_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "flatbuffers")]
         if self.config.flatbuffers {
+            #[cfg(feature = "wasm-plugins")]
+            let _overrides =
+                compute_overrides(&mut plugin_manager, &structs, &enums, "flatbuffers");
             let file = self.generate_flatbuffers_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
 
         #[cfg(feature = "protobuf")]
         if self.config.protobuf {
+            #[cfg(feature = "wasm-plugins")]
+            let _overrides = compute_overrides(&mut plugin_manager, &structs, &enums, "protobuf");
             let file = self.generate_protobuf_internal(&structs, &enums, &registry)?;
             report.add_file(file);
         }
@@ -370,4 +425,82 @@ impl TypeGenerator {
             generator_type: GeneratorType::Protobuf,
         })
     }
+}
+
+/// Build a `TypePluginInput` from a `StructConfig`.
+#[cfg(feature = "wasm-plugins")]
+fn build_type_plugin_input_struct(
+    sc: &StructConfig,
+    generator: &str,
+) -> crate::typesync::plugin_types::TypePluginInput {
+    use crate::typesync::plugin_types::{TypeKind, TypePluginFieldInfo, TypePluginInput};
+
+    TypePluginInput {
+        type_name: sc.struct_name.clone(),
+        kind: TypeKind::Struct,
+        rust_derives: sc.rust_derives.clone(),
+        annotations: sc.annotations.clone(),
+        pipeline: format!("{:?}", sc.pipeline),
+        generator: generator.to_string(),
+        fields: sc
+            .fields
+            .iter()
+            .map(|f| TypePluginFieldInfo {
+                field_name: f.field_name.clone(),
+                field_type: f.field_type.canonical_name(),
+                annotations: f.annotations.clone(),
+                validators: f.validators.iter().map(|v| format!("{:?}", v)).collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Build a `TypePluginInput` from a `TaggedUnion`.
+#[cfg(feature = "wasm-plugins")]
+fn build_type_plugin_input_enum(
+    tu: &TaggedUnion,
+    generator: &str,
+) -> crate::typesync::plugin_types::TypePluginInput {
+    use crate::typesync::plugin_types::{TypeKind, TypePluginFieldInfo, TypePluginInput};
+
+    TypePluginInput {
+        type_name: tu.enum_name.clone(),
+        kind: TypeKind::Enum,
+        rust_derives: tu.rust_derives.clone(),
+        annotations: tu.annotations.clone(),
+        pipeline: format!("{:?}", tu.pipeline),
+        generator: generator.to_string(),
+        fields: tu
+            .variants
+            .iter()
+            .map(|v| TypePluginFieldInfo {
+                field_name: v.name.clone(),
+                field_type: match &v.data {
+                    Some(d) => format!("{:?}", d),
+                    None => "Unit".to_string(),
+                },
+                annotations: v.annotations.clone(),
+                validators: vec![],
+            })
+            .collect(),
+    }
+}
+
+/// Merge one `TypeOverrides` into another (accumulating).
+#[cfg(feature = "wasm-plugins")]
+fn merge_overrides(
+    target: &mut crate::typesync::plugin_types::TypeOverrides,
+    source: crate::typesync::plugin_types::TypeOverrides,
+) {
+    target.field_types.extend(source.field_types);
+    for (k, v) in source.skip_fields {
+        target.skip_fields.entry(k).or_default().extend(v);
+    }
+    target.extra_imports.extend(source.extra_imports);
+    for (k, v) in source.field_annotations {
+        target.field_annotations.entry(k).or_default().extend(v);
+    }
+    target
+        .type_name_overrides
+        .extend(source.type_name_overrides);
 }

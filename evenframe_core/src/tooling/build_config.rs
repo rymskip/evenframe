@@ -54,6 +54,9 @@ pub struct BuildConfig {
 
     /// Foreign type configurations, keyed by canonical type name.
     pub foreign_types: HashMap<String, ForeignTypeConfig>,
+
+    /// Type-transform WASM plugin configurations.
+    pub type_plugins: HashMap<String, crate::config::TypePluginConfig>,
 }
 
 impl Default for BuildConfig {
@@ -73,6 +76,7 @@ impl Default for BuildConfig {
             output: OutputConfig::default(),
             collision_strategy: CollisionStrategy::Error,
             foreign_types: HashMap::new(),
+            type_plugins: HashMap::new(),
         }
     }
 }
@@ -157,6 +161,16 @@ impl BuildConfig {
                     .try_into::<HashMap<String, ForeignTypeConfig>>()
                 {
                     config.foreign_types = ft;
+                }
+            }
+
+            // Parse [general.plugins]
+            if let Some(plugins_value) = general.get("plugins") {
+                if let Ok(plugins) = plugins_value
+                    .clone()
+                    .try_into::<HashMap<String, crate::config::TypePluginConfig>>()
+                {
+                    config.type_plugins = plugins;
                 }
             }
         }

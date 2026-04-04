@@ -500,10 +500,7 @@ impl<'a> SchemaImporter<'a> {
             else if trimmed.starts_with("DEFINE INDEX")
                 && let Some((table_name, index_def)) = Self::parse_index_definition(trimmed)
             {
-                table_indexes
-                    .entry(table_name)
-                    .or_default()
-                    .push(index_def);
+                table_indexes.entry(table_name).or_default().push(index_def);
             }
         }
 

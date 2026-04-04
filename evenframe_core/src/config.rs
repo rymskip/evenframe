@@ -146,6 +146,19 @@ pub struct GeneralConfig {
     /// Defines how external Rust types map to database schemas and TypeScript types.
     #[serde(default)]
     pub foreign_types: HashMap<String, ForeignTypeConfig>,
+
+    /// Type-transform WASM plugins, keyed by plugin name.
+    /// These plugins receive full struct/enum context and can conditionally modify
+    /// type generation output (overrides, skips, imports, etc.).
+    #[serde(default)]
+    pub plugins: HashMap<String, TypePluginConfig>,
+}
+
+/// Configuration for a type-transform WASM plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TypePluginConfig {
+    /// Path to the `.wasm` file, relative to the project root.
+    pub path: String,
 }
 
 /// Unified configuration for Evenframe operations

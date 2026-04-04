@@ -7,7 +7,8 @@ use crate::{
         attributes::{
             parse_annotation_attributes, parse_doccom_attribute, parse_event_attributes,
             parse_format_attribute_bin, parse_macroforge_derive_attribute,
-            parse_mock_data_attribute, parse_relation_attribute, parse_table_validators,
+            parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
+            parse_table_validators,
         },
         validator_parser::parse_field_validators_as_enums,
     },
@@ -505,6 +506,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
     let annotations = parse_annotation_attributes(&item_struct.attrs)
         .ok()
         .unwrap_or_default();
+    let rust_derives = parse_rust_derives(&item_struct.attrs);
 
     Some(StructConfig {
         struct_name,
@@ -517,6 +519,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         macroforge_derives,
         annotations,
         pipeline: crate::types::Pipeline::default(),
+        rust_derives,
     })
 }
 
@@ -536,6 +539,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         crate::derive::attributes::parse_serde_enum_representation(&item_enum.attrs)
             .ok()
             .unwrap_or_default();
+    let enum_rust_derives = parse_rust_derives(&item_enum.attrs);
 
     for variant in &item_enum.variants {
         let variant_name = variant.ident.to_string();
@@ -583,6 +587,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                     macroforge_derives: variant_macroforge_derives,
                     annotations: vec![],
                     pipeline: crate::types::Pipeline::default(),
+                    rust_derives: vec![],
                 }))
             }
         };
@@ -603,6 +608,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         macroforge_derives: enum_macroforge_derives,
         annotations: enum_annotations,
         pipeline: crate::types::Pipeline::default(),
+        rust_derives: enum_rust_derives,
     })
 }
 

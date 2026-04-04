@@ -7,7 +7,7 @@ use evenframe_core::{
         attributes::{
             parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
             parse_macroforge_derive_attribute, parse_mock_data_attribute, parse_mockmake_attribute,
-            parse_relation_attribute,
+            parse_relation_attribute, parse_rust_derives,
         },
         validator_parser::parse_field_validators,
     },
@@ -117,6 +117,9 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             Ok(annotations) => annotations,
             Err(err) => return err.to_compile_error(),
         };
+
+        // Parse all Rust derives (#[derive(Serialize, Clone, ...)])
+        let rust_derives = parse_rust_derives(&input.attrs);
 
         // Check if an "id" field exists.
         // Structs with an "id" field are treated as persistable entities (database tables).
@@ -354,6 +357,12 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             quote! { vec![#(#struct_annotations.to_string()),*] }
         };
 
+        let rust_derives_tokens = if rust_derives.is_empty() {
+            quote! { vec![] }
+        } else {
+            quote! { vec![#(#rust_derives.to_string()),*] }
+        };
+
         let pipeline_tokens = pipeline.to_tokens();
 
         let evenframe_persistable_struct_impl = {
@@ -370,6 +379,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                                 macroforge_derives: #macroforge_derives_tokens,
                                 annotations: #struct_annotations_tokens,
                                 pipeline: #pipeline_tokens,
+                                rust_derives: #rust_derives_tokens,
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,

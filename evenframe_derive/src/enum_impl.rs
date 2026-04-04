@@ -1,7 +1,7 @@
 use crate::PipelineKind;
 use evenframe_core::{
     derive::attributes::{
-        parse_annotation_attributes, parse_macroforge_derive_attribute,
+        parse_annotation_attributes, parse_macroforge_derive_attribute, parse_rust_derives,
         parse_serde_enum_representation,
     },
     types::{EnumRepresentation, FieldType},
@@ -27,6 +27,9 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             Ok(annotations) => annotations,
             Err(err) => return err.to_compile_error(),
         };
+
+        // Parse all Rust derives
+        let rust_derives = parse_rust_derives(&input.attrs);
 
         // Parse serde enum representation
         let representation = match parse_serde_enum_representation(&input.attrs) {
@@ -110,6 +113,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 macroforge_derives: vec![],
                                 annotations: vec![],
                                 pipeline: #pipeline_tokens_inner,
+                                rust_derives: vec![],
                             }))
                         }
                     }
@@ -150,6 +154,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             macroforge_derives: vec![],
                             annotations: vec![],
                             pipeline: #pipeline_tokens_inner,
+                            rust_derives: vec![],
                         }))
                     }
                 }
@@ -194,6 +199,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     fn variants() -> TaggedUnion {
                         let macroforge_derives_val: Vec<String> = vec![#(#macroforge_derives.to_string()),*];
                         let enum_annotations_val: Vec<String> = vec![#(#enum_annotations.to_string()),*];
+                        let rust_derives_val: Vec<String> = vec![#(#rust_derives.to_string()),*];
                         TaggedUnion {
                             enum_name: #enum_name.to_string(),
                             variants: vec![#(#variant_tokens),*],
@@ -202,6 +208,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             macroforge_derives: macroforge_derives_val,
                             annotations: enum_annotations_val,
                             pipeline: #pipeline_tokens,
+                            rust_derives: rust_derives_val,
                         }
                     }
                 }
