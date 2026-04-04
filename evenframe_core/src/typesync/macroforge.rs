@@ -1063,6 +1063,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1161,6 +1162,7 @@ mod tests {
                     "@overview({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
                 ],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1192,6 +1194,7 @@ mod tests {
                 annotations: vec![],
                 representation: EnumRepresentation::default(),
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1250,6 +1253,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1340,6 +1344,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1369,6 +1374,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1409,6 +1415,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1441,6 +1448,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -1467,6 +1475,7 @@ mod tests {
                 macroforge_derives: vec!["Serialize".to_string(), "Deserialize".to_string()],
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
                 pipeline: Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 

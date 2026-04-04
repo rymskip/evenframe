@@ -803,6 +803,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
@@ -812,6 +813,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         assert_eq!(tu1, tu2);
     }
@@ -839,6 +841,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -859,6 +862,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -877,6 +881,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
@@ -886,6 +891,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         set.insert(tu1);
         set.insert(tu2);
@@ -929,6 +935,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         let v = Variant {
             name: "Complex".to_string(),
@@ -959,6 +966,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         });
         assert_ne!(vd1, vd2);
     }
@@ -1017,6 +1025,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         assert!(sc.fields.is_empty());
     }
@@ -1058,6 +1067,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -1072,6 +1082,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -1198,6 +1209,7 @@ mod tests {
             macroforge_derives: vec![],
             annotations: vec![],
             pipeline: Pipeline::default(),
+            rust_derives: vec![],
         };
         assert!(sc.struct_name.is_empty());
     }

@@ -777,6 +777,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -854,6 +855,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -921,6 +923,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
@@ -948,6 +951,7 @@ mod tests {
                 macroforge_derives: vec![],
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
+                rust_derives: vec![],
             },
         );
 
