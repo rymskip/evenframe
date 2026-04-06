@@ -191,10 +191,10 @@ pub fn field_type_to_arktype(
 
         FieldType::Other(type_name) => {
             // Check foreign type registry first
-            if let Some(ftc) = registry.lookup(type_name) {
-                if !ftc.arktype.is_empty() {
-                    return ftc.arktype.clone();
-                }
+            if let Some(ftc) = registry.lookup(type_name)
+                && !ftc.arktype.is_empty()
+            {
+                return ftc.arktype.clone();
             }
 
             // Try to find a matching struct

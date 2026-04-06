@@ -328,18 +328,18 @@ fn detect_pipeline(attrs: &[Attribute]) -> Option<crate::types::Pipeline> {
     let mut has_evenframe = false;
 
     for attr in attrs {
-        if attr.path().is_ident("derive") {
-            if let Meta::List(meta_list) = &attr.meta {
-                let tokens_str = meta_list.tokens.to_string();
-                if tokens_str.contains("Typesync") {
-                    has_typesync = true;
-                }
-                if tokens_str.contains("Schemasync") {
-                    has_schemasync = true;
-                }
-                if tokens_str.contains("Evenframe") {
-                    has_evenframe = true;
-                }
+        if attr.path().is_ident("derive")
+            && let Meta::List(meta_list) = &attr.meta
+        {
+            let tokens_str = meta_list.tokens.to_string();
+            if tokens_str.contains("Typesync") {
+                has_typesync = true;
+            }
+            if tokens_str.contains("Schemasync") {
+                has_schemasync = true;
+            }
+            if tokens_str.contains("Evenframe") {
+                has_evenframe = true;
             }
         }
     }

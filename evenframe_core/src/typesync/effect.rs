@@ -483,12 +483,11 @@ fn field_type_to_effect_schema(
                 }
                 FieldType::Other(name) => {
                     // Check foreign type registry first
-                    if let Some(ftc) = registry.lookup(name) {
-                        if !ftc.effect_schema.is_empty() {
+                    if let Some(ftc) = registry.lookup(name)
+                        && !ftc.effect_schema.is_empty() {
                             value_stack.push(ftc.effect_schema.clone());
                             continue;
                         }
-                    }
 
                     let pascal = name.to_case(Case::Pascal);
                     let wrap_id = format!("{}Ref", pascal);
@@ -642,11 +641,11 @@ fn field_type_to_ts_encoded(
                     // User-defined types
                     FieldType::Other(name) => {
                         // Check foreign type registry first
-                        if let Some(ftc) = registry.lookup(name) {
-                            if !ftc.effect_encoded.is_empty() {
-                                value_stack.push(ftc.effect_encoded.clone());
-                                continue;
-                            }
+                        if let Some(ftc) = registry.lookup(name)
+                            && !ftc.effect_encoded.is_empty()
+                        {
+                            value_stack.push(ftc.effect_encoded.clone());
+                            continue;
                         }
                         value_stack.push(format!("{}Encoded", name.to_case(Case::Pascal)))
                     }
