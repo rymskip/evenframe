@@ -140,13 +140,24 @@ pub fn deps_of(
         tracing::trace!(enum_name = %e.enum_name, variant_count = e.variants.len(), "Walking enum variants for dependencies");
         for v in &e.variants {
             if let Some(variant_data) = &v.data {
-                let variant_data_field_type = match variant_data {
+                match variant_data {
                     VariantData::InlineStruct(enum_struct) => {
-                        &FieldType::Other(enum_struct.struct_name.clone())
+                        // Collect the struct name itself as a dependency
+                        collect_refs(
+                            &FieldType::Other(enum_struct.struct_name.clone()),
+                            &known,
+                            &mut acc,
+                        );
+                        // Also walk the inline struct's fields to collect
+                        // transitive type refs (e.g., `eventType: EntityEventType`)
+                        for f in &enum_struct.fields {
+                            collect_refs(&f.field_type, &known, &mut acc);
+                        }
                     }
-                    VariantData::DataStructureRef(field_type) => field_type,
-                };
-                collect_refs(variant_data_field_type, &known, &mut acc);
+                    VariantData::DataStructureRef(field_type) => {
+                        collect_refs(field_type, &known, &mut acc);
+                    }
+                }
             }
         }
     }
@@ -737,6 +748,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         }
     }
 
@@ -930,6 +942,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         }
     }
 
@@ -1128,12 +1141,14 @@ mod tests {
                         ))),
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -1142,6 +1157,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1607,6 +1623,7 @@ mod tests {
                     ))),
                     doccom: None,
                     annotations: vec![],
+                    output_override: None,
                 }],
                 representation: EnumRepresentation::default(),
                 doccom: None,
@@ -1614,6 +1631,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
