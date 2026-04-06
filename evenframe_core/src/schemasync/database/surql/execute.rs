@@ -1,7 +1,7 @@
 use crate::evenframe_log;
 use serde_json::Value;
 use surrealdb::IndexedResults;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
 pub struct QueryValidationError {
@@ -121,7 +121,9 @@ pub async fn validate_surql_response(
     }
 }
 
-/// Executes a query and validates the response, panicking on any errors
+/// Executes a query and validates the response, panicking on any errors.
+/// If the request fails with 413 Payload Too Large, falls back to writing
+/// a `.surql` file and importing it via `surreal import`.
 pub async fn execute_and_validate<C>(
     db: &surrealdb::Surreal<C>,
     statements: &str,
@@ -133,6 +135,20 @@ where
 {
     info!(operation_type = %operation_type, table_name = %table_name, statement_length = statements.len(), "Executing and validating statements");
     trace!("Statements: {}", statements);
+
+    // SurrealDB's HTTP RPC has a ~1MB payload limit. For large statements,
+    // skip the RPC path entirely and import via the CLI.
+    const RPC_SIZE_LIMIT: usize = 800_000; // 800KB threshold (conservative)
+    if statements.len() > RPC_SIZE_LIMIT {
+        info!(
+            operation_type = %operation_type,
+            table_name = %table_name,
+            size = statements.len(),
+            "Statement exceeds RPC size limit, using surreal import"
+        );
+        return import_via_cli(statements, operation_type, table_name).await;
+    }
+
     debug!("Sending query to database");
     let response = db.query(statements).await.map_err(|e| {
         error!(operation_type = %operation_type, table_name = %table_name, error = %e, "Database query failed");
@@ -204,4 +220,79 @@ where
             );
         }
     }
+}
+
+/// Fallback: write statements to a temp `.surql` file and import via `surreal import` CLI.
+/// Used when the HTTP RPC body exceeds SurrealDB's payload limit (413).
+async fn import_via_cli(
+    statements: &str,
+    operation_type: &str,
+    table_name: &str,
+) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let config = crate::config::EvenframeConfig::new()?;
+
+    let url = &config.schemasync.database.url;
+    let namespace = &config.schemasync.database.namespace;
+    let database = &config.schemasync.database.database;
+    let username = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
+    let password = std::env::var("SURREALDB_PASSWORD").unwrap_or_else(|_| "root".to_string());
+
+    // Ensure the endpoint has the http:// scheme for the CLI
+    let endpoint = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("http://{url}")
+    };
+
+    let mut tmp = tempfile::NamedTempFile::with_suffix(".surql")?;
+    tmp.write_all(b"OPTION IMPORT;\n")?;
+    tmp.write_all(statements.as_bytes())?;
+    tmp.flush()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    debug!(
+        operation_type = %operation_type,
+        table_name = %table_name,
+        file = %tmp_path.display(),
+        size = statements.len(),
+        "Importing via surreal CLI"
+    );
+
+    let output = std::process::Command::new("surreal")
+        .arg("import")
+        .arg("--endpoint")
+        .arg(&endpoint)
+        .arg("--namespace")
+        .arg(namespace)
+        .arg("--database")
+        .arg(database)
+        .arg("--username")
+        .arg(&username)
+        .arg("--password")
+        .arg(&password)
+        .arg(&tmp_path)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!(
+            operation_type = %operation_type,
+            table_name = %table_name,
+            "surreal import failed: {stderr}"
+        );
+        return Err(format!(
+            "surreal import failed for {operation_type} on {table_name}: {stderr}"
+        )
+        .into());
+    }
+
+    warn!(
+        operation_type = %operation_type,
+        table_name = %table_name,
+        "Executed via surreal import (payload was too large for RPC)"
+    );
+
+    Ok(vec![])
 }
