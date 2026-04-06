@@ -151,6 +151,7 @@ mod tests {
             annotations: vec![],
             pipeline: crate::types::Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         }
     }
 

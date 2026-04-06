@@ -1,10 +1,10 @@
-//! Test type-transform plugin: overrides Decimal fields to BigDecimal.BigDecimal
+//! Test output-rule plugin: overrides Decimal fields to BigDecimal.BigDecimal
 //! when the struct derives Serialize.
 
-use evenframe_plugin::{TypePluginOutput, define_type_plugin};
+use evenframe_plugin::{OutputRulePluginOutput, define_type_plugin};
 
 define_type_plugin!(|ctx: &TypeContext| {
-    let mut output = TypePluginOutput::default();
+    let mut output = OutputRulePluginOutput::default();
 
     // Only apply when the struct derives Serialize
     if ctx.rust_derives.iter().any(|d| d == "Serialize") {

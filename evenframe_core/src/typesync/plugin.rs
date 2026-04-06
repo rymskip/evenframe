@@ -1,7 +1,4 @@
-//! WASM plugin manager for type-transform plugins.
-//!
-//! Type-transform plugins receive full struct/enum context and return
-//! modifications (type overrides, skipped fields, extra imports, etc.).
+//! WASM plugin manager for output rule plugins.
 
 use crate::error::EvenframeError;
 use std::collections::HashMap;
@@ -9,9 +6,8 @@ use std::path::Path;
 use tracing::{debug, info, warn};
 use wasmtime::*;
 
-use super::plugin_types::{TypeOverrides, TypePluginInput, TypePluginOutput};
+use super::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
 
-/// A loaded and instantiated WASM type-transform plugin.
 struct LoadedPlugin {
     store: Store<()>,
     instance: Instance,
@@ -84,7 +80,6 @@ impl LoadedPlugin {
             )));
         }
         let output_bytes = mem_data[out_start..out_end].to_vec();
-
         let _ = self.dealloc(out_ptr, out_len);
 
         String::from_utf8(output_bytes)
@@ -92,25 +87,23 @@ impl LoadedPlugin {
     }
 }
 
-/// Manages WASM type-transform plugin loading and invocation.
-pub struct TypePluginManager {
+pub struct OutputRulePluginManager {
     _engine: Engine,
     plugin_names: Vec<String>,
     plugins: HashMap<String, LoadedPlugin>,
 }
 
-impl std::fmt::Debug for TypePluginManager {
+impl std::fmt::Debug for OutputRulePluginManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TypePluginManager")
+        f.debug_struct("OutputRulePluginManager")
             .field("plugins", &self.plugin_names)
             .finish()
     }
 }
 
-impl TypePluginManager {
-    /// Load all configured type-transform plugins.
+impl OutputRulePluginManager {
     pub fn new(
-        plugin_configs: &HashMap<String, crate::config::TypePluginConfig>,
+        plugin_configs: &HashMap<String, crate::config::OutputRulePluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
         let engine = Engine::default();
@@ -121,21 +114,21 @@ impl TypePluginManager {
             let wasm_path = project_root.join(&config.path);
             if !wasm_path.exists() {
                 return Err(EvenframeError::plugin(format!(
-                    "Type plugin '{}': WASM file not found at {}",
+                    "Output rule plugin '{}': WASM file not found at {}",
                     name,
                     wasm_path.display()
                 )));
             }
 
             info!(
-                "Loading type-transform plugin '{}' from {}",
+                "Loading output-rule plugin '{}' from {}",
                 name,
                 wasm_path.display()
             );
 
             let module = Module::from_file(&engine, &wasm_path).map_err(|e| {
                 EvenframeError::plugin(format!(
-                    "Type plugin '{}': failed to compile WASM: {}",
+                    "Output rule plugin '{}': failed to compile WASM: {}",
                     name, e
                 ))
             })?;
@@ -144,45 +137,28 @@ impl TypePluginManager {
             let linker = Linker::new(&engine);
             let instance = linker.instantiate(&mut store, &module).map_err(|e| {
                 EvenframeError::plugin(format!(
-                    "Type plugin '{}': failed to instantiate: {}",
+                    "Output rule plugin '{}': failed to instantiate: {}",
                     name, e
                 ))
             })?;
 
             let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
-                EvenframeError::plugin(format!("Type plugin '{}': missing 'memory' export", name))
+                EvenframeError::plugin(format!(
+                    "Output rule plugin '{}': missing 'memory' export",
+                    name
+                ))
             })?;
 
-            // Verify alloc/dealloc
-            instance
-                .get_typed_func::<i32, i32>(&mut store, "alloc")
-                .map_err(|_| {
-                    EvenframeError::plugin(format!(
-                        "Type plugin '{}': missing 'alloc' export",
-                        name
-                    ))
-                })?;
-            instance
-                .get_typed_func::<(i32, i32), ()>(&mut store, "dealloc")
-                .map_err(|_| {
-                    EvenframeError::plugin(format!(
-                        "Type plugin '{}': missing 'dealloc' export",
-                        name
-                    ))
-                })?;
-
-            // Verify transform_type export
             instance
                 .get_typed_func::<(i32, i32), i64>(&mut store, "transform_type")
                 .map_err(|_| {
                     EvenframeError::plugin(format!(
-                        "Type plugin '{}': missing 'transform_type' export",
+                        "Output rule plugin '{}': missing 'transform_type' export",
                         name
                     ))
                 })?;
 
-            debug!("Type plugin '{}' loaded successfully", name);
-
+            debug!("Output rule plugin '{}' loaded successfully", name);
             plugin_names.push(name.clone());
             plugins.insert(
                 name.clone(),
@@ -194,7 +170,7 @@ impl TypePluginManager {
             );
         }
 
-        info!("Loaded {} type-transform plugin(s)", plugins.len());
+        info!("Loaded {} output-rule plugin(s)", plugins.len());
         Ok(Self {
             _engine: engine,
             plugin_names,
@@ -202,14 +178,13 @@ impl TypePluginManager {
         })
     }
 
-    /// Call a single plugin's transform_type function.
     pub fn transform_type(
         &mut self,
         plugin_name: &str,
-        input: &TypePluginInput,
-    ) -> Result<TypePluginOutput, EvenframeError> {
+        input: &OutputRulePluginInput,
+    ) -> Result<OutputRulePluginOutput, EvenframeError> {
         let plugin = self.plugins.get_mut(plugin_name).ok_or_else(|| {
-            EvenframeError::plugin(format!("Type plugin '{}' not found", plugin_name))
+            EvenframeError::plugin(format!("Output rule plugin '{}' not found", plugin_name))
         })?;
 
         let input_json = serde_json::to_vec(input)
@@ -217,75 +192,20 @@ impl TypePluginManager {
 
         let output_str = plugin.call_plugin_fn("transform_type", &input_json)?;
 
-        let output: TypePluginOutput = serde_json::from_str(&output_str).map_err(|e| {
+        let output: OutputRulePluginOutput = serde_json::from_str(&output_str).map_err(|e| {
             EvenframeError::plugin(format!(
-                "Type plugin '{}' returned invalid JSON: {} (raw: {})",
+                "Output rule plugin '{}' returned invalid JSON: {} (raw: {})",
                 plugin_name, e, output_str
             ))
         })?;
 
         if let Some(ref err) = output.error {
-            warn!("Type plugin '{}' error: {}", plugin_name, err);
+            warn!("Output rule plugin '{}' error: {}", plugin_name, err);
         }
 
         Ok(output)
     }
 
-    /// Run all plugins for a given type and generator, collecting overrides.
-    ///
-    /// Plugins execute in config order. Last plugin wins for conflicting overrides.
-    pub fn compute_overrides(&mut self, input: &TypePluginInput) -> TypeOverrides {
-        let mut overrides = TypeOverrides::default();
-        let type_name = &input.type_name;
-
-        for plugin_name in self.plugin_names.clone() {
-            match self.transform_type(&plugin_name, input) {
-                Ok(output) => {
-                    if output.error.is_some() {
-                        continue; // Skip plugins that report errors
-                    }
-
-                    for (field, ty) in output.field_type_overrides {
-                        overrides.field_types.insert((type_name.clone(), field), ty);
-                    }
-
-                    if !output.skip_fields.is_empty() {
-                        overrides
-                            .skip_fields
-                            .entry(type_name.clone())
-                            .or_default()
-                            .extend(output.skip_fields);
-                    }
-
-                    overrides.extra_imports.extend(output.extra_imports);
-
-                    for (field, annotations) in output.field_annotations {
-                        overrides
-                            .field_annotations
-                            .entry((type_name.clone(), field))
-                            .or_default()
-                            .extend(annotations);
-                    }
-
-                    if let Some(name_override) = output.type_name_override {
-                        overrides
-                            .type_name_overrides
-                            .insert(type_name.clone(), name_override);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "Type plugin '{}' failed for type '{}': {}",
-                        plugin_name, type_name, e
-                    );
-                }
-            }
-        }
-
-        overrides
-    }
-
-    /// Returns the ordered list of plugin names.
     pub fn plugin_names(&self) -> &[String] {
         &self.plugin_names
     }

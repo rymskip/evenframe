@@ -286,6 +286,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     annotations: #field_annotations_tokens,
                     unique: #is_unique,
                     mock_plugin: #mock_plugin_tokens,
+                    output_override: None,
                 }
             });
 
@@ -380,6 +381,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                                 annotations: #struct_annotations_tokens,
                                 pipeline: #pipeline_tokens,
                                 rust_derives: #rust_derives_tokens,
+                                output_override: None,
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,

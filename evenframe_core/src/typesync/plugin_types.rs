@@ -1,4 +1,4 @@
-//! Serde types for type-transform WASM plugin communication.
+//! Serde types for output rule WASM plugin communication.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,75 +10,99 @@ pub enum TypeKind {
     Enum,
 }
 
-/// Full type context sent to a type-transform plugin.
-///
-/// One call per struct/enum per generator. The plugin inspects the context
-/// and returns modifications (type overrides, skipped fields, extra imports, etc.).
+/// Full type context sent to an output rule plugin.
 #[derive(Debug, Clone, Serialize)]
-pub struct TypePluginInput {
-    /// The Rust type name (e.g., "User", "OrderStatus").
+pub struct OutputRulePluginInput {
     pub type_name: String,
-    /// Whether this is a struct or enum.
     pub kind: TypeKind,
-    /// All Rust derives on the type (e.g., ["Serialize", "Clone", "Debug"]).
     pub rust_derives: Vec<String>,
-    /// Custom annotations from `#[annotation("...")]`.
     pub annotations: Vec<String>,
-    /// Which pipeline this type participates in ("Both", "Typesync", "Schemasync").
     pub pipeline: String,
-    /// The generator being invoked ("macroforge", "arktype", "effect", "surrealdb", etc.).
     pub generator: String,
-    /// All fields on the type with their metadata.
-    pub fields: Vec<TypePluginFieldInfo>,
+    pub fields: Vec<OutputRulePluginFieldInfo>,
+    #[serde(default)]
+    pub table_name: String,
+    #[serde(default)]
+    pub is_relation: bool,
+    #[serde(default)]
+    pub has_explicit_permissions: bool,
+    #[serde(default)]
+    pub has_explicit_events: bool,
+    #[serde(default)]
+    pub has_explicit_mock_data: bool,
+    #[serde(default)]
+    pub existing_macroforge_derives: Vec<String>,
 }
 
 /// Field metadata included in the plugin input.
 #[derive(Debug, Clone, Serialize)]
-pub struct TypePluginFieldInfo {
-    /// The Rust field name (e.g., "email", "created_at").
+pub struct OutputRulePluginFieldInfo {
     pub field_name: String,
-    /// Canonical type name (e.g., "Decimal", "Option<DateTime>", "Vec<String>").
     pub field_type: String,
-    /// Field-level annotations.
     pub annotations: Vec<String>,
-    /// Field-level validators as strings.
     pub validators: Vec<String>,
+    #[serde(default)]
+    pub is_optional: bool,
+    #[serde(default)]
+    pub record_link_target: Option<String>,
+    #[serde(default)]
+    pub vec_inner_type: Option<String>,
+    #[serde(default)]
+    pub has_explicit_format: bool,
+    #[serde(default)]
+    pub existing_format: Option<String>,
+    #[serde(default)]
+    pub has_explicit_define: bool,
 }
 
-/// Plugin response — modifications to apply to the generated output.
+/// Type-level override from a rule plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TypePluginOutput {
-    /// Per-field type overrides: field_name -> replacement type string for this generator.
+pub struct TypeOverride {
+    /// Macroforge derives for typesync (e.g. ["Default", "Serialize", "Deserialize", "Gigaform", "Overview"])
     #[serde(default)]
-    pub field_type_overrides: HashMap<String, String>,
-    /// Fields to skip entirely in generation.
+    pub macroforge_derives: Vec<String>,
+    /// Annotations for typesync (e.g. ["@overview({ dataName: \"order\", ... })"])
     #[serde(default)]
-    pub skip_fields: Vec<String>,
-    /// Extra import lines to add to the generated file.
+    pub annotations: Vec<String>,
+    /// Table permissions for schemasync.
     #[serde(default)]
-    pub extra_imports: Vec<String>,
-    /// Extra annotations/decorators per field: field_name -> Vec of annotation strings.
+    pub permissions: Option<PermissionsOverride>,
+    /// Event definitions for schemasync.
     #[serde(default)]
-    pub field_annotations: HashMap<String, Vec<String>>,
-    /// If set, override the generated type name.
+    pub events: Vec<EventOverride>,
+}
+
+/// Field-level override from a rule plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FieldOverride {
+    /// Annotations for typesync (e.g. ["@textController({ label: \"Name\" })"])
     #[serde(default)]
-    pub type_name_override: Option<String>,
-    /// Error message — if set, this plugin's output is skipped with a warning.
+    pub annotations: Vec<String>,
+}
+
+/// Permissions for schemasync DEFINE TABLE.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionsOverride {
+    pub select: String,
+    pub create: String,
+    pub update: String,
+    pub delete: String,
+}
+
+/// Event definition for schemasync.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EventOverride {
+    pub name: String,
+    pub statement: String,
+}
+
+/// Plugin response — type-level and field-level overrides.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OutputRulePluginOutput {
+    #[serde(default)]
+    pub type_override: TypeOverride,
+    #[serde(default)]
+    pub field_overrides: HashMap<String, FieldOverride>,
     #[serde(default)]
     pub error: Option<String>,
-}
-
-/// Accumulated overrides from all type plugins for a single generator.
-#[derive(Debug, Clone, Default)]
-pub struct TypeOverrides {
-    /// (type_name, field_name) -> override type string.
-    pub field_types: HashMap<(String, String), String>,
-    /// type_name -> fields to skip.
-    pub skip_fields: HashMap<String, Vec<String>>,
-    /// Extra import lines to add.
-    pub extra_imports: Vec<String>,
-    /// (type_name, field_name) -> extra annotations.
-    pub field_annotations: HashMap<(String, String), Vec<String>>,
-    /// type_name -> overridden output name.
-    pub type_name_overrides: HashMap<String, String>,
 }

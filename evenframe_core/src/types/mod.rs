@@ -79,6 +79,8 @@ pub struct TaggedUnion {
     pub pipeline: Pipeline,
     #[serde(default)]
     pub rust_derives: Vec<String>,
+    #[serde(default)]
+    pub output_override: Option<Box<Self>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -140,6 +142,8 @@ pub struct Variant {
     pub doccom: Option<String>,
     #[serde(default)]
     pub annotations: Vec<String>,
+    #[serde(default)]
+    pub output_override: Option<Box<Self>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -166,6 +170,8 @@ pub struct StructField {
     /// Name of the WASM plugin to use for mock data generation (if any).
     #[serde(default)]
     pub mock_plugin: Option<String>,
+    #[serde(default)]
+    pub output_override: Option<Box<Self>>,
 }
 
 impl StructField {
@@ -182,6 +188,7 @@ impl StructField {
             annotations: Vec::new(),
             unique: false,
             mock_plugin: None,
+            output_override: None,
         }
     }
 
@@ -198,6 +205,7 @@ impl StructField {
             annotations: Vec::new(),
             unique: false,
             mock_plugin: None,
+            output_override: None,
         }
     }
     #[cfg(feature = "surrealdb")]
@@ -785,6 +793,8 @@ pub struct StructConfig {
     pub pipeline: Pipeline,
     #[serde(default)]
     pub rust_derives: Vec<String>,
+    #[serde(default)]
+    pub output_override: Option<Box<Self>>,
 }
 
 #[cfg(test)]
@@ -804,6 +814,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
@@ -814,6 +825,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         assert_eq!(tu1, tu2);
     }
@@ -828,12 +840,14 @@ mod tests {
                     data: None,
                     doccom: None,
                     annotations: vec![],
+                    output_override: None,
                 },
                 Variant {
                     name: "Inactive".to_string(),
                     data: None,
                     doccom: None,
                     annotations: vec![],
+                    output_override: None,
                 },
             ],
             representation: EnumRepresentation::default(),
@@ -842,6 +856,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -856,6 +871,7 @@ mod tests {
                 data: None,
                 doccom: None,
                 annotations: vec![],
+                output_override: None,
             }],
             representation: EnumRepresentation::default(),
             doccom: None,
@@ -863,6 +879,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -882,6 +899,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
@@ -892,6 +910,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         set.insert(tu1);
         set.insert(tu2);
@@ -907,6 +926,7 @@ mod tests {
             data: None,
             doccom: None,
             annotations: vec![],
+            output_override: None,
         };
         assert!(v.data.is_none());
     }
@@ -918,6 +938,7 @@ mod tests {
             data: Some(VariantData::DataStructureRef(FieldType::String)),
             doccom: None,
             annotations: vec![],
+            output_override: None,
         };
         assert!(matches!(
             v.data,
@@ -936,12 +957,14 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         let v = Variant {
             name: "Complex".to_string(),
             data: Some(VariantData::InlineStruct(struct_config)),
             doccom: None,
             annotations: vec![],
+            output_override: None,
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }
@@ -967,6 +990,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         });
         assert_ne!(vd1, vd2);
     }
@@ -1008,6 +1032,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -1026,6 +1051,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         assert!(sc.fields.is_empty());
     }
@@ -1047,6 +1073,7 @@ mod tests {
                     annotations: vec![],
                     unique: false,
                     mock_plugin: None,
+                    output_override: None,
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -1060,6 +1087,7 @@ mod tests {
                     annotations: vec![],
                     unique: false,
                     mock_plugin: None,
+                    output_override: None,
                 },
             ],
             validators: vec![],
@@ -1068,6 +1096,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -1083,6 +1112,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -1210,6 +1240,7 @@ mod tests {
             annotations: vec![],
             pipeline: Pipeline::default(),
             rust_derives: vec![],
+            output_override: None,
         };
         assert!(sc.struct_name.is_empty());
     }
@@ -1238,6 +1269,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         };
         assert_eq!(field.validators.len(), 1);
     }

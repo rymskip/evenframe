@@ -84,6 +84,7 @@ fn convert_table(table: &TableDef) -> StructConfig {
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn convert_struct(struct_def: &StructDef) -> StructConfig {
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     }
 }
 
@@ -115,6 +117,7 @@ fn convert_field(field: &FieldDef) -> StructField {
         annotations: vec![],
         unique: false,
         mock_plugin: None,
+        output_override: None,
     }
 }
 
@@ -156,6 +159,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
             data: None, // FlatBuffers enums don't have associated data
             doccom: None,
             annotations: vec![],
+            output_override: None,
         })
         .collect();
 
@@ -168,6 +172,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     }
 }
 
@@ -185,6 +190,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                 ))),
                 doccom: None,
                 annotations: vec![],
+                output_override: None,
             }
         })
         .collect();
@@ -198,6 +204,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     }
 }
 

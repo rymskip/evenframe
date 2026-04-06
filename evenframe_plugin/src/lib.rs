@@ -1,33 +1,24 @@
 //! Helper crate for writing evenframe WASM plugins.
 //!
 //! Supports two plugin types:
-//! - **Field plugins** (`define_field_plugin!`): Generate mock data for individual fields.
-//! - **Type plugins** (`define_type_plugin!`): Conditionally modify type generation output.
+//! - **Mock data plugins** (`define_mock_data_plugin!`): Generate mock data for individual fields.
+//! - **Output rule plugins** (`define_output_rule_plugin!`): Provide convention-based annotations,
+//!   permissions, events, derives, and field-level rules for structs.
 //!
 //! Eliminates all WASM boilerplate (alloc, dealloc, JSON serialization,
 //! pointer packing) so you only write your generation logic.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use evenframe_plugin::{define_field_plugin, FieldContext};
-//!
-//! define_field_plugin!(|ctx: &FieldContext| {
-//!     if ctx.record_index != 0 { return None; }
-//!     match ctx.field_name.as_str() {
-//!         "email" => Some("'test@example.com'"),
-//!         "password" => Some("'TestPassword123!'"),
-//!         _ => None, // fall back to evenframe's default generation
-//!     }
-//! });
-//! ```
 
 #[doc(hidden)]
 pub use serde_json;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-/// Context passed to field-level plugin functions.
+// ============================================================
+// Mock data plugin types and macro
+// ============================================================
+
+/// Context passed to mock data plugin functions.
 #[derive(Debug, Deserialize)]
 pub struct FieldContext {
     pub table_name: String,
@@ -45,15 +36,15 @@ pub struct __FieldOutput {
     pub error: Option<String>,
 }
 
-/// Define a field-level mockmake WASM plugin.
+/// Define a mock data WASM plugin for field-level value generation.
 ///
-/// Takes a closure `|ctx: &FieldContext| -> Option<&str>` (or `Option<String>`).
+/// Takes a closure `|ctx: &FieldContext| -> Option<&str>`.
 /// Return `Some("value")` to override a field, or `None` to let evenframe
 /// generate the value normally.
 ///
 /// Generates all required WASM exports: `alloc`, `dealloc`, `generate_field`, `memory`.
 #[macro_export]
-macro_rules! define_field_plugin {
+macro_rules! define_mock_data_plugin {
     (|$ctx:ident : &FieldContext| $body:expr) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn alloc(size: i32) -> i32 {
@@ -104,77 +95,131 @@ macro_rules! define_field_plugin {
 }
 
 // ============================================================
-// Type-transform plugin types and macro
+// Output rule plugin types and macro
 // ============================================================
 
-/// Context passed to type-transform plugin functions.
-#[derive(Debug, Deserialize)]
+/// Context passed to output rule plugin functions.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TypeContext {
     pub type_name: String,
+    /// "Struct" or "Enum" (matches evenframe's TypeKind serialization).
     pub kind: String,
     pub rust_derives: Vec<String>,
+    /// Annotations already explicitly defined on the struct.
     pub annotations: Vec<String>,
+    /// Which pipeline: "Both", "Typesync", "Schemasync".
     pub pipeline: String,
+    /// The generator being invoked ("macroforge", "arktype", "effect", "surrealdb", etc.).
     pub generator: String,
     pub fields: Vec<TypeFieldInfo>,
+    /// The snake_case table name (e.g., "order"). Empty for non-table types.
+    #[serde(default)]
+    pub table_name: String,
+    /// Whether this is a relation/edge table.
+    #[serde(default)]
+    pub is_relation: bool,
+    /// Whether `#[permissions(...)]` is explicitly defined.
+    #[serde(default)]
+    pub has_explicit_permissions: bool,
+    /// Whether `#[event(...)]` is explicitly defined.
+    #[serde(default)]
+    pub has_explicit_events: bool,
+    /// Whether `#[mock_data(...)]` is explicitly defined.
+    #[serde(default)]
+    pub has_explicit_mock_data: bool,
+    /// Macroforge derives already explicitly defined.
+    #[serde(default)]
+    pub existing_macroforge_derives: Vec<String>,
 }
 
-/// Field metadata in type-transform plugin input.
-#[derive(Debug, Deserialize)]
+/// Field metadata in output rule plugin input.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TypeFieldInfo {
     pub field_name: String,
+    /// Canonical type string (e.g., "String", "Option<DateTime<Utc>>", "RecordLink<Site>").
     pub field_type: String,
     pub annotations: Vec<String>,
     pub validators: Vec<String>,
+    #[serde(default)]
+    pub is_optional: bool,
+    /// If field is `RecordLink<T>`, the inner type name (e.g., "Site").
+    #[serde(default)]
+    pub record_link_target: Option<String>,
+    /// If field is `Vec<T>`, the inner type name.
+    #[serde(default)]
+    pub vec_inner_type: Option<String>,
+    #[serde(default)]
+    pub has_explicit_format: bool,
+    #[serde(default)]
+    pub existing_format: Option<String>,
+    #[serde(default)]
+    pub has_explicit_define: bool,
 }
 
-/// Output from a type-transform plugin.
-#[derive(Serialize, Default)]
-pub struct TypePluginOutput {
+/// Type-level override from a rule plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TypeOverride {
+    /// Macroforge derives for typesync.
     #[serde(default)]
-    pub field_type_overrides: std::collections::HashMap<String, String>,
+    pub macroforge_derives: Vec<String>,
+    /// Annotations for typesync.
     #[serde(default)]
-    pub skip_fields: Vec<String>,
-    #[serde(default)]
-    pub extra_imports: Vec<String>,
-    #[serde(default)]
-    pub field_annotations: std::collections::HashMap<String, Vec<String>>,
+    pub annotations: Vec<String>,
+    /// Table permissions for schemasync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub type_name_override: Option<String>,
+    pub permissions: Option<PermissionsOverride>,
+    /// Event definitions for schemasync.
+    #[serde(default)]
+    pub events: Vec<EventOverride>,
+}
+
+/// Field-level override from a rule plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FieldOverride {
+    /// Annotations for typesync.
+    #[serde(default)]
+    pub annotations: Vec<String>,
+}
+
+/// Permissions for schemasync DEFINE TABLE.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionsOverride {
+    pub select: String,
+    pub create: String,
+    pub update: String,
+    pub delete: String,
+}
+
+/// Event definition for schemasync.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EventOverride {
+    pub name: String,
+    pub statement: String,
+}
+
+/// Output from an output rule plugin.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct OutputRulePluginOutput {
+    /// Type-level overrides.
+    #[serde(default)]
+    pub type_override: TypeOverride,
+    /// Per-field overrides: field_name -> FieldOverride.
+    #[serde(default)]
+    pub field_overrides: HashMap<String, FieldOverride>,
+    /// Error message — if set, this plugin's output is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// Define a type-transform WASM plugin.
+/// Define an output rule WASM plugin.
 ///
-/// Takes a closure `|ctx: &TypeContext| -> TypePluginOutput`.
-/// Inspect the struct/enum context (derives, field types, annotations) and
-/// return modifications (type overrides, skipped fields, extra imports).
+/// Takes a closure `|ctx: &TypeContext| -> OutputRulePluginOutput`.
+/// Inspect the struct/enum context and return convention-based defaults for
+/// permissions, events, derives, annotations, and field-level rules.
 ///
 /// Generates all required WASM exports: `alloc`, `dealloc`, `transform_type`, `memory`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use evenframe_plugin::{define_type_plugin, TypeContext, TypePluginOutput};
-///
-/// define_type_plugin!(|ctx: &TypeContext| {
-///     let mut output = TypePluginOutput::default();
-///     if ctx.rust_derives.contains(&"Serialize".to_string()) {
-///         for field in &ctx.fields {
-///             if field.field_type == "Decimal" {
-///                 output.field_type_overrides.insert(
-///                     field.field_name.clone(),
-///                     "BigDecimal.BigDecimal".to_string(),
-///                 );
-///             }
-///         }
-///     }
-///     output
-/// });
-/// ```
 #[macro_export]
-macro_rules! define_type_plugin {
+macro_rules! define_output_rule_plugin {
     (|$ctx:ident : &TypeContext| $body:expr) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn alloc(size: i32) -> i32 {
@@ -196,10 +241,10 @@ macro_rules! define_type_plugin {
             let output = match $crate::serde_json::from_slice::<$crate::TypeContext>(input_bytes) {
                 Ok($ctx) => {
                     let $ctx = &$ctx;
-                    let result: $crate::TypePluginOutput = (|| $body)();
+                    let result: $crate::OutputRulePluginOutput = (|| $body)();
                     result
                 }
-                Err(e) => $crate::TypePluginOutput {
+                Err(e) => $crate::OutputRulePluginOutput {
                     error: Some(format!("parse error: {}", e)),
                     ..Default::default()
                 },
@@ -213,4 +258,234 @@ macro_rules! define_type_plugin {
             ((out_ptr as i64) << 32) | (bytes.len() as i64)
         }
     };
+}
+
+// ============================================================
+// Testing utilities
+// ============================================================
+
+/// Builder for constructing `TypeContext` in tests.
+pub struct TypeContextBuilder {
+    ctx: TypeContext,
+}
+
+impl TypeContextBuilder {
+    /// Create a table struct context with the given name (has table_name set).
+    pub fn handler(name: &str) -> Self {
+        Self {
+            ctx: TypeContext {
+                type_name: name.to_string(),
+                kind: "Struct".to_string(),
+                rust_derives: vec![],
+                annotations: vec![],
+                pipeline: "Both".to_string(),
+                generator: String::new(),
+                fields: vec![],
+                table_name: to_snake(name),
+                is_relation: false,
+                has_explicit_permissions: false,
+                has_explicit_events: false,
+                has_explicit_mock_data: false,
+                existing_macroforge_derives: vec![],
+            },
+        }
+    }
+
+    /// Create a non-table struct context (no table_name).
+    pub fn standard(name: &str) -> Self {
+        let mut b = Self::handler(name);
+        b.ctx.table_name = String::new();
+        b
+    }
+
+    /// Create an enum context.
+    pub fn tagged_union(name: &str) -> Self {
+        let mut b = Self::handler(name);
+        b.ctx.kind = "Enum".to_string();
+        b.ctx.table_name = String::new();
+        b
+    }
+
+    /// Add a field.
+    pub fn field(mut self, name: &str, field_type: &str) -> Self {
+        self.ctx.fields.push(TypeFieldInfo {
+            field_name: name.to_string(),
+            field_type: field_type.to_string(),
+            annotations: vec![],
+            validators: vec![],
+            is_optional: field_type.starts_with("Option"),
+            record_link_target: extract_record_link_target(field_type),
+            vec_inner_type: extract_vec_inner(field_type),
+            has_explicit_format: false,
+            existing_format: None,
+            has_explicit_define: false,
+        });
+        self
+    }
+
+    /// Add a field with an existing annotation.
+    pub fn field_with_annotation(mut self, name: &str, field_type: &str, annotation: &str) -> Self {
+        self.ctx.fields.push(TypeFieldInfo {
+            field_name: name.to_string(),
+            field_type: field_type.to_string(),
+            annotations: vec![annotation.to_string()],
+            validators: vec![],
+            is_optional: field_type.starts_with("Option"),
+            record_link_target: extract_record_link_target(field_type),
+            vec_inner_type: extract_vec_inner(field_type),
+            has_explicit_format: false,
+            existing_format: None,
+            has_explicit_define: false,
+        });
+        self
+    }
+
+    pub fn with_explicit_permissions(mut self) -> Self {
+        self.ctx.has_explicit_permissions = true;
+        self
+    }
+
+    pub fn with_explicit_events(mut self) -> Self {
+        self.ctx.has_explicit_events = true;
+        self
+    }
+
+    pub fn with_explicit_mock_data(mut self) -> Self {
+        self.ctx.has_explicit_mock_data = true;
+        self
+    }
+
+    pub fn with_macroforge_derives(mut self, derives: &[&str]) -> Self {
+        self.ctx.existing_macroforge_derives = derives.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    pub fn build(self) -> TypeContext {
+        self.ctx
+    }
+}
+
+/// Run a rule plugin function with full validation.
+///
+/// 1. Validates the TypeContext matches evenframe's conventions (kind values, etc.)
+/// 2. JSON roundtrips input and output (simulates WASM IPC)
+/// 3. Validates the output overrides are well-formed
+///
+/// Panics with clear messages if anything is wrong.
+pub fn test_plugin(
+    plugin_fn: impl Fn(&TypeContext) -> OutputRulePluginOutput,
+    ctx: TypeContext,
+) -> OutputRulePluginOutput {
+    // Validate kind matches evenframe's TypeKind enum
+    assert!(
+        ctx.kind == "Struct" || ctx.kind == "Enum",
+        "TypeContext.kind must be \"Struct\" or \"Enum\" (evenframe's TypeKind values), got \"{}\".\n\
+         Note: application-specific aliases like \"handler\", \"standard\", \"tagged_union\" are NOT \
+         what evenframe sends. Use table_name.is_empty() to distinguish tables from nested structs.",
+        ctx.kind
+    );
+
+    // Validate table_name consistency
+    if ctx.kind == "Enum" {
+        assert!(
+            ctx.table_name.is_empty(),
+            "Enums should not have a table_name, got \"{}\"",
+            ctx.table_name
+        );
+    }
+
+    // JSON roundtrip input (simulates WASM IPC)
+    let json = serde_json::to_vec(&ctx)
+        .expect("Failed to serialize TypeContext — builder produced invalid data");
+    let ctx: TypeContext = serde_json::from_slice(&json)
+        .expect("Failed to deserialize TypeContext — serialization roundtrip failed");
+
+    let output = plugin_fn(&ctx);
+
+    // JSON roundtrip output (simulates WASM IPC)
+    let json = serde_json::to_vec(&output).expect("Failed to serialize OutputRulePluginOutput");
+    let output: OutputRulePluginOutput = serde_json::from_slice(&json)
+        .expect("Failed to deserialize OutputRulePluginOutput — roundtrip failed");
+
+    // Validate output overrides are well-formed
+    for (field_name, ov) in &output.field_overrides {
+        assert!(
+            !ov.annotations.is_empty(),
+            "field_overrides[\"{}\"].annotations is empty — don't add an override with no annotations",
+            field_name
+        );
+    }
+
+    output
+}
+
+/// Print a summary of what the plugin produced.
+pub fn print_plugin_output(type_name: &str, output: &OutputRulePluginOutput) {
+    println!("=== Output for '{}' ===", type_name);
+    if !output.type_override.macroforge_derives.is_empty() {
+        println!(
+            "  macroforge_derives: {:?}",
+            output.type_override.macroforge_derives
+        );
+    }
+    if !output.type_override.annotations.is_empty() {
+        println!("  annotations: {:?}", output.type_override.annotations);
+    }
+    if let Some(ref perms) = output.type_override.permissions {
+        println!(
+            "  permissions: select={}, create={}, update={}, delete={}",
+            perms.select, perms.create, perms.update, perms.delete
+        );
+    }
+    for event in &output.type_override.events {
+        println!(
+            "  event '{}': {}",
+            event.name,
+            &event.statement[..event.statement.len().min(80)]
+        );
+    }
+    for (field, ov) in &output.field_overrides {
+        println!("  field '{}' annotations: {:?}", field, ov.annotations);
+    }
+    if let Some(ref err) = output.error {
+        println!("  ERROR: {}", err);
+    }
+    println!();
+}
+
+fn to_snake(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(c.to_ascii_lowercase());
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+fn extract_record_link_target(t: &str) -> Option<String> {
+    let s = t.strip_prefix("Option<").unwrap_or(t);
+    if let Some(rest) = s.strip_prefix("RecordLink<") {
+        rest.strip_suffix('>')
+            .or_else(|| rest.strip_suffix(">>"))
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_vec_inner(t: &str) -> Option<String> {
+    let s = t.strip_prefix("Option<").unwrap_or(t);
+    if let Some(rest) = s.strip_prefix("Vec<") {
+        rest.strip_suffix('>')
+            .or_else(|| rest.strip_suffix(">>"))
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
 }

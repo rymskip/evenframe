@@ -3,7 +3,8 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
@@ -18,6 +19,7 @@ pub fn generate_macroforge_type_string(
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
     _print_types: bool,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
@@ -78,10 +80,10 @@ pub fn generate_macroforge_type_string(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &unique_structs {
-        parts.push(generate_struct_block(struct_config, registry));
+        parts.push(generate_struct_block(struct_config, array_style, registry));
     }
     for enum_def in &unique_enums {
-        parts.push(generate_enum_block(enum_def, registry));
+        parts.push(generate_enum_block(enum_def, array_style, registry));
     }
 
     result.push_str(&parts.join("\n"));
@@ -97,6 +99,7 @@ pub fn generate_macroforge_for_types(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
     enums: &HashMap<String, TaggedUnion>,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
@@ -134,10 +137,10 @@ pub fn generate_macroforge_for_types(
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &filtered_structs {
-        parts.push(generate_struct_block(struct_config, registry));
+        parts.push(generate_struct_block(struct_config, array_style, registry));
     }
     for enum_def in &filtered_enums {
-        parts.push(generate_enum_block(enum_def, registry));
+        parts.push(generate_enum_block(enum_def, array_style, registry));
     }
     parts.join("\n")
 }
@@ -145,22 +148,28 @@ pub fn generate_macroforge_for_types(
 /// Generate a single struct's TypeScript interface block.
 fn generate_struct_block(
     struct_config: &StructConfig,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let name = struct_config.struct_name.to_case(Case::Pascal);
-    let derive_line = format_derive_line(&struct_config.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
 
-    if let Some(ref desc) = struct_config.doccom {
+    // Use the override config if provided, otherwise use the original
+    let effective = struct_config
+        .output_override
+        .as_deref()
+        .unwrap_or(struct_config);
+    let derive_line = format_derive_line(&effective.macroforge_derives);
+    if let Some(ref desc) = effective.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &struct_config.annotations {
+    for ann in &effective.annotations {
         lines.push(format!("/** {} */", ann));
     }
     lines.push(format!("export interface {} {{", name));
     for field in &struct_config.fields {
-        lines.push(render_field_block(field, registry));
+        lines.push(render_field_block(field, array_style, registry));
     }
     lines.push("}".to_string());
     lines.push(String::new());
@@ -170,45 +179,41 @@ fn generate_struct_block(
 /// Generate a single enum's TypeScript type block.
 fn generate_enum_block(
     enum_def: &TaggedUnion,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let name = enum_def.enum_name.to_case(Case::Pascal);
-    let derive_line = format_derive_line(&enum_def.macroforge_derives);
     let mut lines: Vec<String> = Vec::new();
 
-    if let Some(ref desc) = enum_def.doccom {
+    let effective = enum_def.output_override.as_deref().unwrap_or(enum_def);
+    let derive_line = format_derive_line(&effective.macroforge_derives);
+    if let Some(ref desc) = effective.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &enum_def.annotations {
+    for ann in &effective.annotations {
         lines.push(format!("/** {} */", ann));
+    }
+
+    // Emit @serde annotation for tagged representations so the macroforge
+    // type registry knows how to parse/stringify these unions at runtime.
+    match &enum_def.representation {
+        EnumRepresentation::InternallyTagged { tag } => {
+            lines.push(format!("/** @serde({{ tag: \"{}\" }}) */", tag));
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            lines.push(format!(
+                "/** @serde({{ tag: \"{}\", content: \"{}\" }}) */",
+                tag, content
+            ));
+        }
+        _ => {}
     }
 
     let variant_parts: Vec<String> = enum_def
         .variants
         .iter()
-        .map(|variant| {
-            let ann_prefix = if !variant.annotations.is_empty() {
-                format!("/** {} */ ", variant.annotations.join(" "))
-            } else {
-                String::new()
-            };
-            match &variant.data {
-                Some(VariantData::InlineStruct(s)) => {
-                    format!("{}{}", ann_prefix, s.struct_name.to_case(Case::Pascal))
-                }
-                Some(VariantData::DataStructureRef(ft)) => {
-                    format!(
-                        "{}{}",
-                        ann_prefix,
-                        field_type_to_typescript(ft, registry).trim()
-                    )
-                }
-                None => {
-                    format!("{}\"{}\"", ann_prefix, variant.name)
-                }
-            }
-        })
+        .map(|variant| render_variant(variant, &enum_def.representation, array_style, registry))
         .collect();
 
     lines.push(format!(
@@ -220,16 +225,174 @@ fn generate_enum_block(
     lines.join("\n")
 }
 
+/// Render a single enum variant according to the serde enum representation.
+fn render_variant(
+    variant: &crate::types::Variant,
+    representation: &EnumRepresentation,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    // Determine whether to emit @variant annotation.
+    // For Untagged and ExternallyTagged: emit @variant on DataStructureRef and Unit only
+    //   (InlineStruct uses the struct name as a TypeRef, so name is inherently preserved).
+    // For InternallyTagged and AdjacentlyTagged: @serde({ tag }) on the union handles
+    //   variant identification, so no @variant needed on individual variants.
+    let needs_variant_annotation = match representation {
+        EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
+            !matches!(&variant.data, Some(VariantData::InlineStruct(_)))
+        }
+        EnumRepresentation::InternallyTagged { .. }
+        | EnumRepresentation::AdjacentlyTagged { .. } => false,
+    };
+
+    let mut all_annotations: Vec<String> = Vec::new();
+    if needs_variant_annotation {
+        all_annotations.push(format!("@variant(\"{}\")", variant.name));
+    }
+    all_annotations.extend(variant.annotations.iter().cloned());
+
+    let ann_prefix = if !all_annotations.is_empty() {
+        format!("/** {} */ ", all_annotations.join(" "))
+    } else {
+        String::new()
+    };
+
+    let type_str = match representation {
+        EnumRepresentation::ExternallyTagged => {
+            render_variant_externally_tagged(variant, array_style, registry)
+        }
+        EnumRepresentation::InternallyTagged { tag } => {
+            render_variant_internally_tagged(variant, tag, array_style, registry)
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            render_variant_adjacently_tagged(variant, tag, content, array_style, registry)
+        }
+        EnumRepresentation::Untagged => render_variant_untagged(variant, array_style, registry),
+    };
+
+    format!("{}{}", ann_prefix, type_str)
+}
+
+/// ExternallyTagged: `{ VariantName: Type }` for data variants, `"VariantName"` for unit.
+fn render_variant_externally_tagged(
+    variant: &crate::types::Variant,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            format!(
+                "{{ {}: {} }}",
+                variant.name,
+                s.struct_name.to_case(Case::Pascal)
+            )
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            format!(
+                "{{ {}: {} }}",
+                variant.name,
+                field_type_to_typescript(ft, array_style, registry).trim()
+            )
+        }
+        None => format!("\"{}\"", variant.name),
+    }
+}
+
+/// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
+/// InlineStruct fields are inlined: `{ tag: 'VariantName'; field1: Type1; field2: Type2 }`.
+/// DataStructureRef (newtype variants): `{ tag: 'VariantName' } & TypeRef` intersection.
+/// Unit variants: `{ tag: 'VariantName' }`.
+fn render_variant_internally_tagged(
+    variant: &crate::types::Variant,
+    tag: &str,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            let mut members = vec![format!("{}: '{}'", tag, variant.name)];
+            for field in &s.fields {
+                let field_name = field.field_name.to_case(Case::Camel);
+                let type_str = field_type_to_typescript(&field.field_type, array_style, registry);
+                members.push(format!("{}: {}", field_name, type_str.trim()));
+            }
+            format!("{{ {} }}", members.join("; "))
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            // Serde flattens newtype variants wrapping structs when internally tagged.
+            // Use an intersection type: `{ tag: 'VariantName' } & TypeRef`
+            format!(
+                "{{ {}: '{}' }} & {}",
+                tag,
+                variant.name,
+                field_type_to_typescript(ft, array_style, registry).trim()
+            )
+        }
+        None => format!("{{ {}: '{}' }}", tag, variant.name),
+    }
+}
+
+/// AdjacentlyTagged: `{ tag: 'VariantName'; content: Type }` for data variants,
+/// `{ tag: 'VariantName' }` for unit.
+fn render_variant_adjacently_tagged(
+    variant: &crate::types::Variant,
+    tag: &str,
+    content: &str,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => {
+            format!(
+                "{{ {}: '{}'; {}: {} }}",
+                tag,
+                variant.name,
+                content,
+                s.struct_name.to_case(Case::Pascal)
+            )
+        }
+        Some(VariantData::DataStructureRef(ft)) => {
+            format!(
+                "{{ {}: '{}'; {}: {} }}",
+                tag,
+                variant.name,
+                content,
+                field_type_to_typescript(ft, array_style, registry).trim()
+            )
+        }
+        None => format!("{{ {}: '{}' }}", tag, variant.name),
+    }
+}
+
+/// Untagged: bare type reference, no wrapping.
+fn render_variant_untagged(
+    variant: &crate::types::Variant,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    match &variant.data {
+        Some(VariantData::InlineStruct(s)) => s.struct_name.to_case(Case::Pascal),
+        Some(VariantData::DataStructureRef(ft)) => {
+            field_type_to_typescript(ft, array_style, registry)
+                .trim()
+                .to_string()
+        }
+        None => format!("\"{}\"", variant.name),
+    }
+}
+
 /// Render a complete field block including annotations, @serde, and the field declaration.
 /// This handles both inline @serde (for RecordLink fields) and separate-line @serde.
 fn render_field_block(
     field: &crate::types::StructField,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
 
-    // 1. Field annotations (each on its own line)
-    for ann in &field.annotations {
+    // 1. Field annotations — use override if present, otherwise original
+    let effective = field.output_override.as_deref().unwrap_or(field);
+    for ann in &effective.annotations {
         lines.push(format!("  /** {} */", ann));
     }
 
@@ -259,9 +422,15 @@ fn render_field_block(
     // 5. Field declaration line
     let field_name = field.field_name.to_case(Case::Camel);
     let type_str = if is_inline && !serde_annotation.is_empty() {
-        render_field_type(&field.field_type, &serde_annotation, true, registry)
+        render_field_type(
+            &field.field_type,
+            &serde_annotation,
+            true,
+            array_style,
+            registry,
+        )
     } else {
-        field_type_to_typescript(&field.field_type, registry)
+        field_type_to_typescript(&field.field_type, array_style, registry)
     };
 
     lines.push(format!("  {}: {};", field_name, type_str.trim()));
@@ -282,15 +451,15 @@ fn format_derive_line(derives: &[String]) -> String {
 /// Convert a FieldType to its TypeScript representation.
 fn field_type_to_typescript(
     field_type: &FieldType,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     // Check for foreign type in Other variant before using ts_template
-    if let FieldType::Other(type_name) = field_type {
-        if let Some(ftc) = registry.lookup(type_name) {
-            if !ftc.macroforge.is_empty() {
-                return format!(" {}", ftc.macroforge);
-            }
-        }
+    if let FieldType::Other(type_name) = field_type
+        && let Some(ftc) = registry.lookup(type_name)
+        && !ftc.macroforge.is_empty()
+    {
+        return format!(" {}", ftc.macroforge);
     }
     ts_template! {
         {#match field_type}
@@ -307,17 +476,17 @@ fn field_type_to_typescript(
             {:case FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 | FieldType::U128 | FieldType::Usize}
                 number
             {:case FieldType::Option(inner)}
-                @{wrap_union_type(inner, registry)} | null
+                @{wrap_union_type(inner, array_style, registry)} | null
             {:case FieldType::Vec(inner)}
-                @{wrap_union_type(inner, registry)}[]
+                @{format_array(inner, array_style, registry)}
             {:case FieldType::Tuple(items)}
-                [@{items.iter().map(|ft| field_type_to_typescript(ft, registry)).collect::<Vec<_>>().join(", ")}]
+                [@{items.iter().map(|ft| field_type_to_typescript(ft, array_style, registry)).collect::<Vec<_>>().join(", ")}]
             {:case FieldType::Struct(fields)}
-                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, registry))).collect::<Vec<_>>().join("; ")} }
+                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, array_style, registry))).collect::<Vec<_>>().join("; ")} }
             {:case FieldType::RecordLink(inner)}
-                RecordLink<@{field_type_to_typescript(inner, registry).trim()}>
+                RecordLink<@{field_type_to_typescript(inner, array_style, registry).trim()}>
             {:case FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value)}
-                { [key: @{field_type_to_typescript(key, registry)}]: @{field_type_to_typescript(value, registry)} }
+                { [key: @{field_type_to_typescript(key, array_style, registry)}]: @{field_type_to_typescript(value, array_style, registry)} }
             {:case FieldType::Other(type_name)}
                 @{type_name.to_case(Case::Pascal)}
         {/match}
@@ -326,12 +495,37 @@ fn field_type_to_typescript(
     .to_string()
 }
 
-/// Render a field type for use as an inner type in Vec/Option.
-/// Wraps union types (RecordLink, Option) in parentheses for correct TypeScript semantics.
-fn wrap_union_type(ft: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> String {
-    let rendered = field_type_to_typescript(ft, registry);
+/// Format a Vec type as either `Type[]` (shorthand) or `Array<Type>` (generic).
+fn format_array(
+    inner: &FieldType,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    match array_style {
+        ArrayStyle::Shorthand => {
+            format!("{}[]", wrap_union_type(inner, array_style, registry))
+        }
+        ArrayStyle::Generic => {
+            format!(
+                "Array<{}>",
+                field_type_to_typescript(inner, array_style, registry).trim()
+            )
+        }
+    }
+}
+
+/// Render a field type for use as an inner type in Option (and, for the
+/// shorthand array style, for Vec as well).
+/// Wraps Option in parentheses for correct `Type[]` semantics; not needed
+/// for generic `Array<Type>` syntax since the angle brackets handle grouping.
+fn wrap_union_type(
+    ft: &FieldType,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    let rendered = field_type_to_typescript(ft, array_style, registry);
     let trimmed = rendered.trim();
-    if matches!(ft, FieldType::Option(_)) {
+    if matches!(ft, FieldType::Option(_)) && array_style == ArrayStyle::Shorthand {
         format!("({})", trimmed)
     } else {
         trimmed.to_string()
@@ -366,15 +560,14 @@ fn collect_serde_format(
     field_type: &FieldType,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Option<String> {
-    if let FieldType::Other(name) = field_type {
-        if let Some(ftc) = registry.lookup(name) {
-            if !ftc.serde_format.is_empty() {
-                return Some(format!(
-                    "/** @serde({{ format: \"{}\" }}) */",
-                    ftc.serde_format
-                ));
-            }
-        }
+    if let FieldType::Other(name) = field_type
+        && let Some(ftc) = registry.lookup(name)
+        && !ftc.serde_format.is_empty()
+    {
+        return Some(format!(
+            "/** @serde({{ format: \"{}\" }}) */",
+            ftc.serde_format
+        ));
     }
     None
 }
@@ -417,6 +610,7 @@ fn render_field_type(
     field_type: &FieldType,
     serde_annotation: &str,
     inline: bool,
+    array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     if inline && !serde_annotation.is_empty() {
@@ -425,11 +619,11 @@ fn render_field_type(
             return format!(
                 "{} RecordLink<{}>",
                 serde_annotation,
-                field_type_to_typescript(inner, registry).trim()
+                field_type_to_typescript(inner, array_style, registry).trim()
             );
         }
     }
-    field_type_to_typescript(field_type, registry)
+    field_type_to_typescript(field_type, array_style, registry)
 }
 
 /// Compute the `/** import macro {...} from "@dealdraft/macros"; */` line
@@ -452,7 +646,9 @@ pub fn compute_macro_import_line(
     for s in structs.values() {
         let name = s.struct_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            for d in &s.macroforge_derives {
+            let effective = s.output_override.as_deref().unwrap_or(s);
+            let derives = effective.macroforge_derives.clone();
+            for d in &derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -463,7 +659,9 @@ pub fn compute_macro_import_line(
     for e in enums.values() {
         let name = e.enum_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            for d in &e.macroforge_derives {
+            let effective = e.output_override.as_deref().unwrap_or(e);
+            let derives = effective.macroforge_derives.clone();
+            for d in &derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -520,12 +718,11 @@ pub fn compute_extra_imports(
         registry: &crate::types::ForeignTypeRegistry,
         fi: &mut HashSet<String>,
     ) {
-        if let FieldType::Other(name) = ft {
-            if let Some(ftc) = registry.lookup(name) {
-                if !ftc.macroforge_import.is_empty() {
-                    fi.insert(ftc.macroforge_import.clone());
-                }
-            }
+        if let FieldType::Other(name) = ft
+            && let Some(ftc) = registry.lookup(name)
+            && !ftc.macroforge_import.is_empty()
+        {
+            fi.insert(ftc.macroforge_import.clone());
         }
         match ft {
             FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
@@ -856,6 +1053,9 @@ fn escape_for_jsdoc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Extract derive names from a typesync override string.
+/// Parses `/** @derive(Default, Serialize, Deserialize, Gigaform, Overview) */`
+/// and returns `["Default", "Serialize", "Deserialize", "Gigaform", "Overview"]`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -949,26 +1149,62 @@ mod tests {
     #[test]
     fn test_field_type_to_typescript() {
         let registry = crate::types::ForeignTypeRegistry::default();
+        let s = ArrayStyle::Shorthand;
         // ts_template! adds whitespace, so we trim for comparison
-        assert!(field_type_to_typescript(&FieldType::String, &registry).trim() == "string");
-        assert!(field_type_to_typescript(&FieldType::Bool, &registry).trim() == "boolean");
-        assert!(field_type_to_typescript(&FieldType::I32, &registry).trim() == "number");
-        assert!(field_type_to_typescript(&FieldType::F64, &registry).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::String, s, &registry).trim() == "string");
+        assert!(field_type_to_typescript(&FieldType::Bool, s, &registry).trim() == "boolean");
+        assert!(field_type_to_typescript(&FieldType::I32, s, &registry).trim() == "number");
+        assert!(field_type_to_typescript(&FieldType::F64, s, &registry).trim() == "number");
         assert!(
-            field_type_to_typescript(&FieldType::Option(Box::new(FieldType::String)), &registry)
-                .contains("string")
+            field_type_to_typescript(
+                &FieldType::Option(Box::new(FieldType::String)),
+                s,
+                &registry
+            )
+            .contains("string")
                 && field_type_to_typescript(
                     &FieldType::Option(Box::new(FieldType::String)),
+                    s,
                     &registry
                 )
                 .contains("null")
         );
         let vec_output =
-            field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), &registry);
+            field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), s, &registry);
         assert!(vec_output.contains("number") && vec_output.contains("[]"));
         assert!(
-            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), &registry)
+            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), s, &registry)
                 .contains("UserProfile")
+        );
+    }
+
+    #[test]
+    fn test_field_type_to_typescript_generic_array_style() {
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let g = ArrayStyle::Generic;
+        // Vec<i32> → Array<number>
+        let vec_output =
+            field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), g, &registry);
+        assert!(
+            vec_output.contains("Array<number>"),
+            "Expected Array<number>, got: {}",
+            vec_output.trim()
+        );
+        assert!(
+            !vec_output.contains("[]"),
+            "Generic style should not contain [], got: {}",
+            vec_output.trim()
+        );
+        // Vec<Option<String>> → Array<string | null>
+        let vec_opt = field_type_to_typescript(
+            &FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
+            g,
+            &registry,
+        );
+        assert!(
+            vec_opt.contains("Array<") && vec_opt.contains("string") && vec_opt.contains("null"),
+            "Expected Array<string | null>, got: {}",
+            vec_opt.trim()
         );
     }
 
@@ -1064,11 +1300,18 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, &registry);
+        let output = generate_macroforge_type_string(
+            &structs,
+            &HashMap::new(),
+            true,
+            ArrayStyle::default(),
+            &registry,
+        );
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
@@ -1163,6 +1406,7 @@ mod tests {
                 ],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1177,12 +1421,14 @@ mod tests {
                         data: None,
                         doccom: None,
                         annotations: vec!["@default".to_string()],
+                        output_override: None,
                     },
                     Variant {
                         name: "OnDeck".to_string(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                 ],
                 doccom: None,
@@ -1195,11 +1441,18 @@ mod tests {
                 representation: EnumRepresentation::default(),
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
-        let output = generate_macroforge_type_string(&structs, &enums, true, &registry);
+        let output = generate_macroforge_type_string(
+            &structs,
+            &enums,
+            true,
+            ArrayStyle::default(),
+            &registry,
+        );
 
         // Struct: custom derives
         assert!(
@@ -1254,11 +1507,18 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
-        let output = generate_macroforge_type_string(&structs, &HashMap::new(), true, &registry);
+        let output = generate_macroforge_type_string(
+            &structs,
+            &HashMap::new(),
+            true,
+            ArrayStyle::default(),
+            &registry,
+        );
         assert!(
             output.contains("/** @derive(Deserialize) */"),
             "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",
@@ -1293,19 +1553,22 @@ mod tests {
     #[test]
     fn test_datetime_maps_to_datetime_utc() {
         let registry = make_datetime_registry();
+        let s = ArrayStyle::Shorthand;
         assert!(
-            field_type_to_typescript(&FieldType::Other("DateTime".to_string()), &registry)
+            field_type_to_typescript(&FieldType::Other("DateTime".to_string()), s, &registry)
                 .contains("DateTime.Utc")
         );
         // Option<DateTime> should produce DateTime.Utc | null
         let opt_dt = field_type_to_typescript(
             &FieldType::Option(Box::new(FieldType::Other("DateTime".to_string()))),
+            s,
             &registry,
         );
         assert!(opt_dt.contains("DateTime.Utc") && opt_dt.contains("null"));
         // Vec<DateTime> should produce DateTime.Utc[]
         let vec_dt = field_type_to_typescript(
             &FieldType::Vec(Box::new(FieldType::Other("DateTime".to_string()))),
+            s,
             &registry,
         );
         assert!(vec_dt.contains("DateTime.Utc") && vec_dt.contains("[]"));
@@ -1314,13 +1577,15 @@ mod tests {
     #[test]
     fn test_decimal_maps_to_bigdecimal() {
         let registry = make_datetime_registry();
+        let s = ArrayStyle::Shorthand;
         assert!(
-            field_type_to_typescript(&FieldType::Other("Decimal".to_string()), &registry)
+            field_type_to_typescript(&FieldType::Other("Decimal".to_string()), s, &registry)
                 .contains("BigDecimal.BigDecimal")
         );
         // Option<Decimal> should produce BigDecimal.BigDecimal | null
         let opt_dec = field_type_to_typescript(
             &FieldType::Option(Box::new(FieldType::Other("Decimal".to_string()))),
+            s,
             &registry,
         );
         assert!(opt_dec.contains("BigDecimal.BigDecimal") && opt_dec.contains("null"));
@@ -1345,6 +1610,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1375,6 +1641,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1416,6 +1683,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1449,6 +1717,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1476,6 +1745,7 @@ mod tests {
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -1484,6 +1754,7 @@ mod tests {
             &["Order".to_string()],
             &structs,
             &HashMap::new(),
+            ArrayStyle::default(),
             &registry,
         );
 

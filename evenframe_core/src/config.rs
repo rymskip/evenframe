@@ -151,12 +151,12 @@ pub struct GeneralConfig {
     /// These plugins receive full struct/enum context and can conditionally modify
     /// type generation output (overrides, skips, imports, etc.).
     #[serde(default)]
-    pub plugins: HashMap<String, TypePluginConfig>,
+    pub output_rule_plugins: HashMap<String, OutputRulePluginConfig>,
 }
 
-/// Configuration for a type-transform WASM plugin.
+/// Configuration for a output-rule WASM plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TypePluginConfig {
+pub struct OutputRulePluginConfig {
     /// Path to the `.wasm` file, relative to the project root.
     pub path: String,
 }

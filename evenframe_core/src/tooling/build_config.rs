@@ -56,7 +56,7 @@ pub struct BuildConfig {
     pub foreign_types: HashMap<String, ForeignTypeConfig>,
 
     /// Type-transform WASM plugin configurations.
-    pub type_plugins: HashMap<String, crate::config::TypePluginConfig>,
+    pub output_rule_plugins: HashMap<String, crate::config::OutputRulePluginConfig>,
 }
 
 impl Default for BuildConfig {
@@ -76,7 +76,7 @@ impl Default for BuildConfig {
             output: OutputConfig::default(),
             collision_strategy: CollisionStrategy::Error,
             foreign_types: HashMap::new(),
-            type_plugins: HashMap::new(),
+            output_rule_plugins: HashMap::new(),
         }
     }
 }
@@ -146,33 +146,15 @@ impl BuildConfig {
         let mut config = Self::default();
 
         // Parse [general] section
-        if let Some(general) = value.get("general").and_then(|v| v.as_table()) {
-            if let Some(aliases) = general.get("apply_aliases").and_then(|v| v.as_array()) {
-                config.apply_aliases = aliases
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-            }
+        if let Some(general) = value.get("general") {
+            let general_config: crate::config::GeneralConfig =
+                general.clone().try_into().map_err(|e| {
+                    EvenframeError::config_error(format!("Failed to parse [general]: {e}"))
+                })?;
 
-            // Parse [general.foreign_types]
-            if let Some(ft_value) = general.get("foreign_types") {
-                if let Ok(ft) = ft_value
-                    .clone()
-                    .try_into::<HashMap<String, ForeignTypeConfig>>()
-                {
-                    config.foreign_types = ft;
-                }
-            }
-
-            // Parse [general.plugins]
-            if let Some(plugins_value) = general.get("plugins") {
-                if let Ok(plugins) = plugins_value
-                    .clone()
-                    .try_into::<HashMap<String, crate::config::TypePluginConfig>>()
-                {
-                    config.type_plugins = plugins;
-                }
-            }
+            config.apply_aliases = general_config.apply_aliases;
+            config.foreign_types = general_config.foreign_types;
+            config.output_rule_plugins = general_config.output_rule_plugins;
         }
 
         // Derive project root: for .evenframe/config.toml go up one more level

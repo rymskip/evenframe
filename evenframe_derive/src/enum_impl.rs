@@ -98,6 +98,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                         annotations: vec![],
                                         unique: false,
                                         mock_plugin: None,
+                                        output_override: None,
                                     }
                                 }
                             })
@@ -139,6 +140,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                     annotations: vec![],
                                     unique: false,
                                     mock_plugin: None,
+                                    output_override: None,
                                 }
                             }
                         })
@@ -155,6 +157,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             annotations: vec![],
                             pipeline: #pipeline_tokens_inner,
                             rust_derives: vec![],
+                            output_override: None,
                         }))
                     }
                 }
@@ -172,6 +175,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     data: #variant_data,
                     doccom: None,
                     annotations: #variant_annotations_tokens,
+                    output_override: None,
                 }
             });
         }
@@ -209,6 +213,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             annotations: enum_annotations_val,
                             pipeline: #pipeline_tokens,
                             rust_derives: rust_derives_val,
+                            output_override: None,
                         }
                     }
                 }

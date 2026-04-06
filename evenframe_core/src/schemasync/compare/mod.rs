@@ -1251,6 +1251,7 @@ impl<'a> Merger<'a> {
                         annotations: vec![],
                         unique: false,
                         mock_plugin: None,
+                        output_override: None,
                     };
                     Self::generate_field_value(&inner_field, _table_config)
                 } else {

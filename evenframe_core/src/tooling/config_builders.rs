@@ -65,6 +65,27 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
 
     resolve_relation_endpoints(&mut table_configs, &enum_configs);
 
+    // Apply output rule plugins to enrich configs with convention-based defaults
+    #[cfg(feature = "wasm-plugins")]
+    {
+        info!(
+            "Output rule plugins configured: {}",
+            config.output_rule_plugins.len()
+        );
+        for (name, cfg) in &config.output_rule_plugins {
+            debug!("  Output rule plugin '{}' -> {}", name, cfg.path);
+        }
+    }
+    #[cfg(feature = "wasm-plugins")]
+    if !config.output_rule_plugins.is_empty() {
+        apply_rule_plugins(
+            config,
+            &mut table_configs,
+            &mut struct_configs,
+            &mut enum_configs,
+        );
+    }
+
     Ok((enum_configs, table_configs, struct_configs))
 }
 
@@ -520,6 +541,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         annotations,
         pipeline: crate::types::Pipeline::default(),
         rust_derives,
+        output_override: None,
     })
 }
 
@@ -588,6 +610,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                     annotations: vec![],
                     pipeline: crate::types::Pipeline::default(),
                     rust_derives: vec![],
+                    output_override: None,
                 }))
             }
         };
@@ -597,6 +620,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
             data,
             doccom: variant_doccom,
             annotations: variant_annotations,
+            output_override: None,
         });
     }
 
@@ -609,6 +633,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         annotations: enum_annotations,
         pipeline: crate::types::Pipeline::default(),
         rust_derives: enum_rust_derives,
+        output_override: None,
     })
 }
 
@@ -645,6 +670,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             annotations,
             unique: false,
             mock_plugin: None,
+            output_override: None,
         });
     }
     struct_fields
@@ -724,4 +750,303 @@ pub fn filter_for_schemasync(
             .filter(|(_, v)| v.pipeline.includes_schemasync())
             .collect(),
     )
+}
+
+// ============================================================
+// Rule plugin application
+// ============================================================
+
+/// Apply output rule plugins to set output overrides on configs.
+///
+/// For each table/struct/enum, calls the plugin and sets the `output_override`
+/// field directly. The typesync and schemasync generators check this field
+/// before computing output — if set, they use the override string directly.
+#[cfg(feature = "wasm-plugins")]
+#[cfg(feature = "wasm-plugins")]
+fn apply_rule_plugins(
+    config: &BuildConfig,
+    table_configs: &mut HashMap<String, TableConfig>,
+    struct_configs: &mut HashMap<String, StructConfig>,
+    enum_configs: &mut HashMap<String, TaggedUnion>,
+) {
+    use crate::typesync::plugin::OutputRulePluginManager;
+    use crate::typesync::plugin_types::TypeKind;
+
+    let mut pm = match OutputRulePluginManager::new(&config.output_rule_plugins, &config.scan_path)
+    {
+        Ok(pm) => pm,
+        Err(e) => {
+            warn!("Failed to load output rule plugins: {}", e);
+            return;
+        }
+    };
+
+    // Process table configs (handler structs)
+    let table_names: Vec<String> = table_configs.keys().cloned().collect();
+    info!(
+        "Applying output rule plugins to {} tables",
+        table_names.len()
+    );
+    for table_name in &table_names {
+        let tc = &table_configs[table_name];
+        let input = build_plugin_input(
+            &tc.struct_config,
+            TypeKind::Struct,
+            &tc.table_name,
+            tc.relation.is_some(),
+        );
+
+        for plugin_name in pm.plugin_names().to_vec() {
+            match pm.transform_type(&plugin_name, &input) {
+                Ok(plugin_output) => {
+                    if plugin_output.error.is_some() {
+                        continue;
+                    }
+                    let tc = table_configs.get_mut(table_name).unwrap();
+                    let to = &plugin_output.type_override;
+                    if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
+                        let mut ov = tc.struct_config.clone();
+                        ov.output_override = None;
+                        if !to.macroforge_derives.is_empty() {
+                            ov.macroforge_derives = to.macroforge_derives.clone();
+                        }
+                        if !to.annotations.is_empty() {
+                            for ann in &to.annotations {
+                                if !ov.annotations.contains(ann) {
+                                    ov.annotations.push(ann.clone());
+                                }
+                            }
+                        }
+                        tc.struct_config.output_override = Some(Box::new(ov));
+                    }
+                    if let Some(ref perms) = to.permissions {
+                        tc.permissions = Some(crate::schemasync::PermissionsConfig {
+                            all_permissions: None,
+                            select_permissions: Some(perms.select.clone()),
+                            create_permissions: Some(perms.create.clone()),
+                            update_permissions: Some(perms.update.clone()),
+                            delete_permissions: Some(perms.delete.clone()),
+                        });
+                    }
+                    for event in &to.events {
+                        tc.events.push(crate::schemasync::EventConfig {
+                            statement: event.statement.clone(),
+                        });
+                    }
+                    for (field_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(field) = tc
+                            .struct_config
+                            .fields
+                            .iter_mut()
+                            .find(|f| &f.field_name == field_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            let mut ov = field.clone();
+                            ov.output_override = None;
+                            ov.annotations = field_override.annotations.clone();
+                            field.output_override = Some(Box::new(ov));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Output rule plugin '{}' failed for table '{}': {}",
+                        plugin_name, table_name, e
+                    );
+                }
+            }
+        }
+    }
+
+    // Process non-table struct configs
+    let struct_names: Vec<String> = struct_configs.keys().cloned().collect();
+    info!(
+        "Applying output rule plugins to {} structs",
+        struct_names.len()
+    );
+    for struct_name in &struct_names {
+        let sc = &struct_configs[struct_name];
+        let input = build_plugin_input(sc, TypeKind::Struct, "", false);
+
+        for plugin_name in pm.plugin_names().to_vec() {
+            match pm.transform_type(&plugin_name, &input) {
+                Ok(plugin_output) => {
+                    if plugin_output.error.is_some() {
+                        continue;
+                    }
+                    let sc = struct_configs.get_mut(struct_name).unwrap();
+                    let to = &plugin_output.type_override;
+                    if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
+                        let mut ov = sc.clone();
+                        ov.output_override = None;
+                        if !to.macroforge_derives.is_empty() {
+                            ov.macroforge_derives = to.macroforge_derives.clone();
+                        }
+                        if !to.annotations.is_empty() {
+                            for ann in &to.annotations {
+                                if !ov.annotations.contains(ann) {
+                                    ov.annotations.push(ann.clone());
+                                }
+                            }
+                        }
+                        sc.output_override = Some(Box::new(ov));
+                    }
+                    for (field_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(field) =
+                            sc.fields.iter_mut().find(|f| &f.field_name == field_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            let mut ov = field.clone();
+                            ov.output_override = None;
+                            ov.annotations = field_override.annotations.clone();
+                            field.output_override = Some(Box::new(ov));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Output rule plugin '{}' failed for struct '{}': {}",
+                        plugin_name, struct_name, e
+                    );
+                }
+            }
+        }
+    }
+
+    // Process enum configs
+    let enum_names: Vec<String> = enum_configs.keys().cloned().collect();
+    info!("Applying output rule plugins to {} enums", enum_names.len());
+    for enum_name in &enum_names {
+        let ec = &enum_configs[enum_name];
+        let input = build_plugin_input_enum(ec);
+
+        for plugin_name in pm.plugin_names().to_vec() {
+            match pm.transform_type(&plugin_name, &input) {
+                Ok(plugin_output) => {
+                    if plugin_output.error.is_some() {
+                        continue;
+                    }
+                    let ec = enum_configs.get_mut(enum_name).unwrap();
+                    let to = &plugin_output.type_override;
+                    if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
+                        let mut ov = ec.clone();
+                        ov.output_override = None;
+                        if !to.macroforge_derives.is_empty() {
+                            ov.macroforge_derives = to.macroforge_derives.clone();
+                        }
+                        if !to.annotations.is_empty() {
+                            for ann in &to.annotations {
+                                if !ov.annotations.contains(ann) {
+                                    ov.annotations.push(ann.clone());
+                                }
+                            }
+                        }
+                        ec.output_override = Some(Box::new(ov));
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Output rule plugin '{}' failed for enum '{}': {}",
+                        plugin_name, enum_name, e
+                    );
+                }
+            }
+        }
+    }
+
+    info!("Output rule plugins applied to all configs");
+}
+
+#[cfg(feature = "wasm-plugins")]
+fn build_plugin_input(
+    sc: &StructConfig,
+    kind: crate::typesync::plugin_types::TypeKind,
+    table_name: &str,
+    is_relation: bool,
+) -> crate::typesync::plugin_types::OutputRulePluginInput {
+    use crate::typesync::plugin_types::{OutputRulePluginFieldInfo, OutputRulePluginInput};
+
+    OutputRulePluginInput {
+        type_name: sc.struct_name.clone(),
+        kind,
+        rust_derives: sc.rust_derives.clone(),
+        annotations: sc.annotations.clone(),
+        pipeline: format!("{:?}", sc.pipeline),
+        generator: String::new(),
+        fields: sc
+            .fields
+            .iter()
+            .map(|f| OutputRulePluginFieldInfo {
+                field_name: f.field_name.clone(),
+                field_type: f.field_type.canonical_name(),
+                annotations: f.annotations.clone(),
+                validators: f.validators.iter().map(|v| format!("{:?}", v)).collect(),
+                is_optional: matches!(&f.field_type, FieldType::Option(_)),
+                record_link_target: match &f.field_type {
+                    FieldType::RecordLink(inner) => Some(inner.canonical_name()),
+                    FieldType::Option(inner) => match inner.as_ref() {
+                        FieldType::RecordLink(inner) => Some(inner.canonical_name()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                vec_inner_type: match &f.field_type {
+                    FieldType::Vec(inner) => Some(format!("{:?}", inner)),
+                    _ => None,
+                },
+                has_explicit_format: f.format.is_some(),
+                existing_format: f.format.as_ref().map(|fmt| format!("{:?}", fmt)),
+                has_explicit_define: f.define_config.is_some(),
+            })
+            .collect(),
+        table_name: table_name.to_string(),
+        is_relation,
+        has_explicit_permissions: false, // Not used in override model
+        has_explicit_events: false,
+        has_explicit_mock_data: false,
+        existing_macroforge_derives: sc.macroforge_derives.clone(),
+    }
+}
+
+#[cfg(feature = "wasm-plugins")]
+fn build_plugin_input_enum(
+    ec: &TaggedUnion,
+) -> crate::typesync::plugin_types::OutputRulePluginInput {
+    use crate::typesync::plugin_types::{
+        OutputRulePluginFieldInfo, OutputRulePluginInput, TypeKind,
+    };
+
+    OutputRulePluginInput {
+        type_name: ec.enum_name.clone(),
+        kind: TypeKind::Enum,
+        rust_derives: ec.rust_derives.clone(),
+        annotations: ec.annotations.clone(),
+        pipeline: format!("{:?}", ec.pipeline),
+        generator: String::new(),
+        fields: ec
+            .variants
+            .iter()
+            .map(|v| OutputRulePluginFieldInfo {
+                field_name: v.name.clone(),
+                field_type: match &v.data {
+                    Some(d) => format!("{:?}", d),
+                    None => "Unit".to_string(),
+                },
+                annotations: v.annotations.clone(),
+                validators: vec![],
+                is_optional: false,
+                record_link_target: None,
+                vec_inner_type: None,
+                has_explicit_format: false,
+                existing_format: None,
+                has_explicit_define: false,
+            })
+            .collect(),
+        table_name: String::new(),
+        is_relation: false,
+        has_explicit_permissions: false,
+        has_explicit_events: false,
+        has_explicit_mock_data: false,
+        existing_macroforge_derives: ec.macroforge_derives.clone(),
+    }
 }

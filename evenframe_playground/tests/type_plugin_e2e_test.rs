@@ -1,16 +1,16 @@
-//! End-to-end tests for type-transform WASM plugins.
+//! End-to-end tests for output-rule WASM plugins.
 //!
-//! Tests the TypePluginManager by loading a compiled WASM plugin
+//! Tests the OutputRulePluginManager by loading a compiled WASM plugin
 //! and verifying it returns expected type overrides based on struct context.
 //!
 //! Run with: cargo test --test type_plugin_e2e_test --features wasm-plugins
 
 #[cfg(feature = "wasm-plugins")]
 mod tests {
-    use evenframe_core::config::TypePluginConfig;
-    use evenframe_core::typesync::plugin::TypePluginManager;
+    use evenframe_core::config::OutputRulePluginConfig;
+    use evenframe_core::typesync::plugin::OutputRulePluginManager;
     use evenframe_core::typesync::plugin_types::{
-        TypeKind, TypePluginFieldInfo, TypePluginInput,
+        TypeKind, OutputRulePluginFieldInfo, OutputRulePluginInput,
     };
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -19,15 +19,15 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
-    fn create_plugin_manager() -> TypePluginManager {
+    fn create_plugin_manager() -> OutputRulePluginManager {
         let mut plugins = HashMap::new();
         plugins.insert(
             "decimal_override".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/decimal_override.wasm".to_string(),
             },
         );
-        TypePluginManager::new(&plugins, &playground_root()).expect("Should load type plugin")
+        OutputRulePluginManager::new(&plugins, &playground_root()).expect("Should load type plugin")
     }
 
     fn make_struct_input(
@@ -35,8 +35,8 @@ mod tests {
         derives: Vec<&str>,
         fields: Vec<(&str, &str)>,
         generator: &str,
-    ) -> TypePluginInput {
-        TypePluginInput {
+    ) -> OutputRulePluginInput {
+        OutputRulePluginInput {
             type_name: type_name.to_string(),
             kind: TypeKind::Struct,
             rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
@@ -45,7 +45,7 @@ mod tests {
             generator: generator.to_string(),
             fields: fields
                 .into_iter()
-                .map(|(name, ty)| TypePluginFieldInfo {
+                .map(|(name, ty)| OutputRulePluginFieldInfo {
                     field_name: name.to_string(),
                     field_type: ty.to_string(),
                     annotations: vec![],
@@ -69,11 +69,11 @@ mod tests {
         let mut plugins = HashMap::new();
         plugins.insert(
             "missing".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/does_not_exist.wasm".to_string(),
             },
         );
-        let result = TypePluginManager::new(&plugins, &playground_root());
+        let result = OutputRulePluginManager::new(&plugins, &playground_root());
         assert!(result.is_err(), "Should fail for missing WASM file");
     }
 
@@ -186,7 +186,7 @@ mod tests {
     fn test_skip_fields_with_internal_annotation() {
         let mut pm = create_plugin_manager();
 
-        let input = TypePluginInput {
+        let input = OutputRulePluginInput {
             type_name: "AuditLog".to_string(),
             kind: TypeKind::Struct,
             rust_derives: vec!["Debug".to_string()],
@@ -194,13 +194,13 @@ mod tests {
             pipeline: "Both".to_string(),
             generator: "arktype".to_string(),
             fields: vec![
-                TypePluginFieldInfo {
+                OutputRulePluginFieldInfo {
                     field_name: "message".to_string(),
                     field_type: "String".to_string(),
                     annotations: vec![],
                     validators: vec![],
                 },
-                TypePluginFieldInfo {
+                OutputRulePluginFieldInfo {
                     field_name: "internal_id".to_string(),
                     field_type: "String".to_string(),
                     annotations: vec!["@internal".to_string()],

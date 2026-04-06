@@ -326,12 +326,11 @@ fn field_type_to_effect_schema(
     };
 
     // Check for foreign type in Other variant before using ts_template
-    if let FieldType::Other(type_name) = field_type {
-        if let Some(ftc) = registry.lookup(type_name) {
-            if !ftc.effect_schema.is_empty() {
-                return ftc.effect_schema.clone();
-            }
-        }
+    if let FieldType::Other(type_name) = field_type
+        && let Some(ftc) = registry.lookup(type_name)
+        && !ftc.effect_schema.is_empty()
+    {
+        return ftc.effect_schema.clone();
     }
 
     ts_template! {
@@ -387,12 +386,11 @@ fn field_type_to_effect_schema(
 
 fn field_type_to_ts_encoded(field_type: &FieldType, registry: &ForeignTypeRegistry) -> String {
     // Check for foreign type in Other variant before using ts_template
-    if let FieldType::Other(type_name) = field_type {
-        if let Some(ftc) = registry.lookup(type_name) {
-            if !ftc.effect_encoded.is_empty() {
-                return ftc.effect_encoded.clone();
-            }
-        }
+    if let FieldType::Other(type_name) = field_type
+        && let Some(ftc) = registry.lookup(type_name)
+        && !ftc.effect_encoded.is_empty()
+    {
+        return ftc.effect_encoded.clone();
     }
 
     ts_template! {
@@ -651,6 +649,7 @@ mod tests {
                         annotations: vec![],
                         unique: false,
                         mock_plugin: None,
+                        output_override: None,
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -664,6 +663,7 @@ mod tests {
                         annotations: vec![],
                         unique: false,
                         mock_plugin: None,
+                        output_override: None,
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -677,6 +677,7 @@ mod tests {
                         annotations: vec![],
                         unique: false,
                         mock_plugin: None,
+                        output_override: None,
                     },
                 ],
                 validators: vec![],
@@ -685,6 +686,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 

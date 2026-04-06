@@ -1,4 +1,4 @@
-//! The most complex type-transform rule possible.
+//! The most complex output-rule rule possible.
 //!
 //! Rule: "Effect-TS Branded Monetary Type"
 //!
@@ -28,10 +28,10 @@
 //!   - If ANY field has more than 2 validators, add `@heavily_validated` to it
 //!   - Count total monetary fields and embed the count in a struct-level comment import
 
-use evenframe_plugin::{TypePluginOutput, define_type_plugin};
+use evenframe_plugin::{OutputRulePluginOutput, define_type_plugin};
 
 define_type_plugin!(|ctx: &TypeContext| {
-    let mut output = TypePluginOutput::default();
+    let mut output = OutputRulePluginOutput::default();
 
     // ===== Gate: check all preconditions =====
 

@@ -1,4 +1,4 @@
-//! Hypercomplex stress tests for type-transform WASM plugins.
+//! Hypercomplex stress tests for output-rule WASM plugins.
 //!
 //! Covers every edge case: unicode, deeply nested types, empty inputs,
 //! massive field counts, all output fields, JSON special chars, error paths,
@@ -9,10 +9,10 @@
 
 #[cfg(feature = "wasm-plugins")]
 mod tests {
-    use evenframe_core::config::TypePluginConfig;
-    use evenframe_core::typesync::plugin::TypePluginManager;
+    use evenframe_core::config::OutputRulePluginConfig;
+    use evenframe_core::typesync::plugin::OutputRulePluginManager;
     use evenframe_core::typesync::plugin_types::{
-        TypeKind, TypePluginFieldInfo, TypePluginInput,
+        TypeKind, OutputRulePluginFieldInfo, OutputRulePluginInput,
     };
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -21,36 +21,36 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
-    fn stress_manager() -> TypePluginManager {
+    fn stress_manager() -> OutputRulePluginManager {
         let mut plugins = HashMap::new();
         plugins.insert(
             "stress".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/stress_test.wasm".to_string(),
             },
         );
-        TypePluginManager::new(&plugins, &playground_root()).expect("Should load stress plugin")
+        OutputRulePluginManager::new(&plugins, &playground_root()).expect("Should load stress plugin")
     }
 
-    fn both_managers() -> TypePluginManager {
+    fn both_managers() -> OutputRulePluginManager {
         let mut plugins = HashMap::new();
         plugins.insert(
             "decimal_override".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/decimal_override.wasm".to_string(),
             },
         );
         plugins.insert(
             "stress".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/stress_test.wasm".to_string(),
             },
         );
-        TypePluginManager::new(&plugins, &playground_root()).expect("Should load both plugins")
+        OutputRulePluginManager::new(&plugins, &playground_root()).expect("Should load both plugins")
     }
 
-    fn field(name: &str, ty: &str) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn field(name: &str, ty: &str) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: vec![],
@@ -58,8 +58,8 @@ mod tests {
         }
     }
 
-    fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: anns.into_iter().map(|s| s.to_string()).collect(),
@@ -67,8 +67,8 @@ mod tests {
         }
     }
 
-    fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: vec![],
@@ -83,9 +83,9 @@ mod tests {
         annotations: Vec<&str>,
         pipeline: &str,
         generator: &str,
-        fields: Vec<TypePluginFieldInfo>,
-    ) -> TypePluginInput {
-        TypePluginInput {
+        fields: Vec<OutputRulePluginFieldInfo>,
+    ) -> OutputRulePluginInput {
+        OutputRulePluginInput {
             type_name: type_name.to_string(),
             kind,
             rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn test_100_fields() {
         let mut pm = stress_manager();
-        let fields: Vec<TypePluginFieldInfo> = (0..100)
+        let fields: Vec<OutputRulePluginFieldInfo> = (0..100)
             .map(|i| {
                 if i % 3 == 0 {
                     field(&format!("decimal_{}", i), "Decimal")
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_500_fields_performance() {
         let mut pm = stress_manager();
-        let fields: Vec<TypePluginFieldInfo> = (0..500)
+        let fields: Vec<OutputRulePluginFieldInfo> = (0..500)
             .map(|i| field(&format!("f_{}", i), "String"))
             .collect();
 

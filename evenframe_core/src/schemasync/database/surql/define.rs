@@ -24,47 +24,50 @@ pub fn generate_define_statements(
         "Context sizes"
     );
     trace!("Table config: {:?}", table_config);
-    let table_type = if let Some(relation) = &table_config.relation {
-        debug!(
-            table = %table_name,
-            from = ?relation.from,
-            to = ?relation.to,
-            "Table is a relation."
-        );
-        let from_clause = relation.from.join(" | ");
-        let to_clause = relation.to.join(" | ");
-        format!("RELATION FROM {} TO {}", from_clause, to_clause)
-    } else {
-        debug!(table_name = %table_name, "Table is normal type");
-        "NORMAL".to_string()
-    };
-    let select_permissions = table_config
-        .permissions
-        .as_ref()
-        .and_then(|p| p.select_permissions.as_deref())
-        .unwrap_or("FULL");
-    let create_permissions = table_config
-        .permissions
-        .as_ref()
-        .and_then(|p| p.create_permissions.as_deref())
-        .unwrap_or("FULL");
-    let update_permissions = table_config
-        .permissions
-        .as_ref()
-        .and_then(|p| p.update_permissions.as_deref())
-        .unwrap_or("FULL");
-    let delete_permissions = table_config
-        .permissions
-        .as_ref()
-        .and_then(|p| p.delete_permissions.as_deref())
-        .unwrap_or("FULL");
 
-    let mut output = "".to_owned();
+    let mut output = String::new();
     debug!(table_name = %table_name, "Starting statement generation");
 
-    output.push_str(&format!(
-        "DEFINE TABLE OVERWRITE {table_name} SCHEMAFULL TYPE {table_type} CHANGEFEED 3d PERMISSIONS FOR select {select_permissions} FOR update {update_permissions} FOR create {create_permissions} FOR delete {delete_permissions};\n"
-    ));
+    {
+        let table_type = if let Some(relation) = &table_config.relation {
+            debug!(
+                table = %table_name,
+                from = ?relation.from,
+                to = ?relation.to,
+                "Table is a relation."
+            );
+            let from_clause = relation.from.join(" | ");
+            let to_clause = relation.to.join(" | ");
+            format!("RELATION FROM {} TO {}", from_clause, to_clause)
+        } else {
+            debug!(table_name = %table_name, "Table is normal type");
+            "NORMAL".to_string()
+        };
+        let select_permissions = table_config
+            .permissions
+            .as_ref()
+            .and_then(|p| p.select_permissions.as_deref())
+            .unwrap_or("FULL");
+        let create_permissions = table_config
+            .permissions
+            .as_ref()
+            .and_then(|p| p.create_permissions.as_deref())
+            .unwrap_or("FULL");
+        let update_permissions = table_config
+            .permissions
+            .as_ref()
+            .and_then(|p| p.update_permissions.as_deref())
+            .unwrap_or("FULL");
+        let delete_permissions = table_config
+            .permissions
+            .as_ref()
+            .and_then(|p| p.delete_permissions.as_deref())
+            .unwrap_or("FULL");
+
+        output.push_str(&format!(
+            "DEFINE TABLE OVERWRITE {table_name} SCHEMAFULL TYPE {table_type} CHANGEFEED 3d PERMISSIONS FOR select {select_permissions} FOR update {update_permissions} FOR create {create_permissions} FOR delete {delete_permissions};\n"
+        ));
+    }
 
     debug!(table_name = %table_name, field_count = table_config.struct_config.fields.len(), "Processing table fields");
     for table_field in &table_config.struct_config.fields {
@@ -163,6 +166,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
             relation: None,
             permissions: None,
@@ -220,6 +224,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         };
 
         let result = field
@@ -269,6 +274,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         };
 
         let result = field
@@ -314,6 +320,7 @@ mod tests {
             annotations: vec![],
             unique: false,
             mock_plugin: None,
+            output_override: None,
         };
 
         let result = field
@@ -366,6 +373,7 @@ mod tests {
                         annotations: vec![],
                         unique: true,
                         mock_plugin: None,
+                        output_override: None,
                     },
                     StructField {
                         field_name: "name".to_string(),
@@ -393,6 +401,7 @@ mod tests {
                         annotations: vec![],
                         unique: false,
                         mock_plugin: None,
+                        output_override: None,
                     },
                 ],
                 validators: Vec::new(),
@@ -401,6 +410,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
             relation: None,
             permissions: None,

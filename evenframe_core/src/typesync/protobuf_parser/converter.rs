@@ -88,6 +88,7 @@ fn convert_message(message: &DescriptorProto, prefix: &str, result: &mut Protobu
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     };
 
     result.structs.insert(name.clone(), struct_config);
@@ -157,6 +158,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
         annotations: vec![],
         unique: false,
         mock_plugin: None,
+        output_override: None,
     }
 }
 
@@ -225,6 +227,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
             data: None, // Protobuf enums don't have associated data
             doccom: None,
             annotations: vec![],
+            output_override: None,
         })
         .collect();
 
@@ -237,6 +240,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         annotations: vec![],
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
+        output_override: None,
     }
 }
 

@@ -1,4 +1,4 @@
-//! Stress-test type-transform plugin.
+//! Stress-test output-rule plugin.
 //!
 //! Exercises every output field and handles edge cases:
 //! - Unicode type names and field names
@@ -9,10 +9,10 @@
 //! - JSON special characters in strings
 //! - Conflicting overrides (last wins at host level)
 
-use evenframe_plugin::{TypePluginOutput, define_type_plugin};
+use evenframe_plugin::{OutputRulePluginOutput, define_type_plugin};
 
 define_type_plugin!(|ctx: &TypeContext| {
-    let mut output = TypePluginOutput::default();
+    let mut output = OutputRulePluginOutput::default();
 
     // ---- Error path: type named "PanicType" triggers an error ----
     if ctx.type_name == "PanicType" {

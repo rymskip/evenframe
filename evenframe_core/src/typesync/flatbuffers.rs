@@ -230,10 +230,10 @@ fn field_type_to_flatbuffers(
 
         FieldType::Other(type_name) => {
             // Check foreign type registry first
-            if let Some(ftc) = registry.lookup(type_name) {
-                if !ftc.flatbuffers.is_empty() {
-                    return ftc.flatbuffers.clone();
-                }
+            if let Some(ftc) = registry.lookup(type_name)
+                && !ftc.flatbuffers.is_empty()
+            {
+                return ftc.flatbuffers.clone();
             }
             type_name.to_case(Case::Pascal)
         }
@@ -752,6 +752,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -793,18 +794,21 @@ mod tests {
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                     Variant {
                         name: "Inactive".to_string(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                     Variant {
                         name: "Pending".to_string(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -813,6 +817,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -882,6 +887,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 
@@ -896,12 +902,14 @@ mod tests {
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                     Variant {
                         name: "User".to_string(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
+                        output_override: None,
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -910,6 +918,7 @@ mod tests {
                 annotations: vec![],
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
+                output_override: None,
             },
         );
 

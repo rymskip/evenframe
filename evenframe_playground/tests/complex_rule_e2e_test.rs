@@ -15,9 +15,9 @@
 
 #[cfg(feature = "wasm-plugins")]
 mod tests {
-    use evenframe_core::config::TypePluginConfig;
-    use evenframe_core::typesync::plugin::TypePluginManager;
-    use evenframe_core::typesync::plugin_types::{TypeKind, TypePluginFieldInfo, TypePluginInput};
+    use evenframe_core::config::OutputRulePluginConfig;
+    use evenframe_core::typesync::plugin::OutputRulePluginManager;
+    use evenframe_core::typesync::plugin_types::{TypeKind, OutputRulePluginFieldInfo, OutputRulePluginInput};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -25,19 +25,19 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
-    fn mgr() -> TypePluginManager {
+    fn mgr() -> OutputRulePluginManager {
         let mut plugins = HashMap::new();
         plugins.insert(
             "complex".to_string(),
-            TypePluginConfig {
+            OutputRulePluginConfig {
                 path: ".evenframe/plugins/complex_rule.wasm".to_string(),
             },
         );
-        TypePluginManager::new(&plugins, &playground_root()).expect("Should load complex plugin")
+        OutputRulePluginManager::new(&plugins, &playground_root()).expect("Should load complex plugin")
     }
 
-    fn f(name: &str, ty: &str) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn f(name: &str, ty: &str) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: vec![],
@@ -45,8 +45,8 @@ mod tests {
         }
     }
 
-    fn f_ann(name: &str, ty: &str, anns: Vec<&str>) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn f_ann(name: &str, ty: &str, anns: Vec<&str>) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: anns.into_iter().map(|s| s.to_string()).collect(),
@@ -54,8 +54,8 @@ mod tests {
         }
     }
 
-    fn f_val(name: &str, ty: &str, vals: Vec<&str>) -> TypePluginFieldInfo {
-        TypePluginFieldInfo {
+    fn f_val(name: &str, ty: &str, vals: Vec<&str>) -> OutputRulePluginFieldInfo {
+        OutputRulePluginFieldInfo {
             field_name: name.to_string(),
             field_type: ty.to_string(),
             annotations: vec![],
@@ -69,9 +69,9 @@ mod tests {
         annotations: Vec<&str>,
         pipeline: &str,
         generator: &str,
-        fields: Vec<TypePluginFieldInfo>,
-    ) -> TypePluginInput {
-        TypePluginInput {
+        fields: Vec<OutputRulePluginFieldInfo>,
+    ) -> OutputRulePluginInput {
+        OutputRulePluginInput {
             type_name: name.to_string(),
             kind: TypeKind::Struct,
             rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
@@ -83,7 +83,7 @@ mod tests {
     }
 
     /// The canonical "everything matches" input
-    fn full_match_input(generator: &str) -> TypePluginInput {
+    fn full_match_input(generator: &str) -> OutputRulePluginInput {
         inp(
             "Invoice",
             vec!["Debug", "Clone", "Serialize", "Deserialize"],

@@ -10,6 +10,9 @@ pub mod plugin_types;
 #[cfg(feature = "wasm-plugins")]
 pub mod plugin;
 
+#[cfg(all(test, feature = "macroforge"))]
+pub mod testing;
+
 // Feature-gated parsers
 #[cfg(feature = "flatbuffers")]
 pub mod flatbuffers;
