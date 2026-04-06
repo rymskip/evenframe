@@ -17,14 +17,6 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value = "rust")]
     pub source: SourceOfTruth,
 
-    /// Enable verbose output (-v, -vv, -vvv for increasing verbosity)
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
-    pub verbose: u8,
-
-    /// Suppress all output except errors
-    #[arg(short, long, global = true)]
-    pub quiet: bool,
-
     /// Output path override (overrides config file)
     #[arg(short, long, global = true)]
     pub output: Option<PathBuf>,
@@ -63,6 +55,10 @@ pub enum Commands {
 
     /// Display information about detected types and configuration
     Info(InfoArgs),
+
+    /// Test an output rule plugin by running it against the project types
+    /// and printing what it produces (JSON output for scripted assertions)
+    TestPlugin(TestPluginArgs),
 }
 
 // ============================================================================
@@ -347,4 +343,15 @@ pub enum InfoFormat {
     Pretty,
     Json,
     Yaml,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct TestPluginArgs {
+    /// Filter to a specific type name (e.g., "Site", "Order")
+    #[arg(long)]
+    pub type_name: Option<String>,
+
+    /// Only show types where the plugin produced output
+    #[arg(long, default_value = "true")]
+    pub changed_only: bool,
 }

@@ -66,6 +66,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let barrel_file = config.typesync.output.barrel_file;
     let file_naming = config.typesync.output.file_naming;
     let file_extension = &config.typesync.output.file_extension;
+    let array_style = config.typesync.output.array_style;
 
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
@@ -91,16 +92,16 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     OutputMode::Single => {
                         generate_effect(&structs, &enums, &output_path, &registry)?
                     }
-                    OutputMode::PerFile => generate_effect_per_file(
-                        &structs,
-                        &enums,
-                        &config.typesync.output_path,
-                        "effect",
+                    OutputMode::PerFile => generate_effect_per_file(EffectPerFileArgs {
+                        structs: &structs,
+                        enums: &enums,
+                        base_output_path: &config.typesync.output_path,
+                        subdir: "effect",
                         barrel_file,
-                        file_naming,
-                        file_extension,
-                        &registry,
-                    )?,
+                        naming: file_naming,
+                        file_ext: file_extension,
+                        registry: &registry,
+                    })?,
                 }
             }
             TypesyncCommands::Macroforge(macroforge_args) => {
@@ -110,17 +111,18 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
                     OutputMode::Single => {
-                        generate_macroforge(&structs, &enums, &output_path, &registry)?
+                        generate_macroforge(&structs, &enums, &output_path, array_style, &registry)?
                     }
-                    OutputMode::PerFile => generate_macroforge_per_file(
-                        &structs,
-                        &enums,
-                        &config.typesync.output_path,
+                    OutputMode::PerFile => generate_macroforge_per_file(MacroforgePerFileArgs {
+                        structs: &structs,
+                        enums: &enums,
+                        base_output_path: &config.typesync.output_path,
                         barrel_file,
-                        file_naming,
-                        file_extension,
-                        &registry,
-                    )?,
+                        naming: file_naming,
+                        file_ext: file_extension,
+                        array_style,
+                        registry: &registry,
+                    })?,
                 }
             }
             TypesyncCommands::Flatbuffers(fbs_args) => {
@@ -217,33 +219,34 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     generate_effect(&structs, &enums, &path, &registry)?;
                 }
                 OutputMode::PerFile => {
-                    generate_effect_per_file(
-                        &structs,
-                        &enums,
-                        &config.typesync.output_path,
-                        "effect",
+                    generate_effect_per_file(EffectPerFileArgs {
+                        structs: &structs,
+                        enums: &enums,
+                        base_output_path: &config.typesync.output_path,
+                        subdir: "effect",
                         barrel_file,
-                        file_naming,
-                        file_extension,
-                        &registry,
-                    )?;
+                        naming: file_naming,
+                        file_ext: file_extension,
+                        registry: &registry,
+                    })?;
                 }
             },
             TypeFormat::Macroforge => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}macroforge.ts", config.typesync.output_path);
-                    generate_macroforge(&structs, &enums, &path, &registry)?;
+                    generate_macroforge(&structs, &enums, &path, array_style, &registry)?;
                 }
                 OutputMode::PerFile => {
-                    generate_macroforge_per_file(
-                        &structs,
-                        &enums,
-                        &config.typesync.output_path,
+                    generate_macroforge_per_file(MacroforgePerFileArgs {
+                        structs: &structs,
+                        enums: &enums,
+                        base_output_path: &config.typesync.output_path,
                         barrel_file,
-                        file_naming,
-                        file_extension,
-                        &registry,
-                    )?;
+                        naming: file_naming,
+                        file_ext: file_extension,
+                        array_style,
+                        registry: &registry,
+                    })?;
                 }
             },
             TypeFormat::Flatbuffers => {
@@ -308,16 +311,29 @@ fn generate_effect(
     Ok(())
 }
 
-fn generate_effect_per_file(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
-    base_output_path: &str,
-    subdir: &str,
+struct EffectPerFileArgs<'a> {
+    structs: &'a std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &'a std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    base_output_path: &'a str,
+    subdir: &'a str,
     barrel_file: bool,
     naming: FileNamingConvention,
-    file_ext: &str,
-    registry: &ForeignTypeRegistry,
-) -> Result<()> {
+    file_ext: &'a str,
+    registry: &'a ForeignTypeRegistry,
+}
+
+fn generate_effect_per_file(args: EffectPerFileArgs<'_>) -> Result<()> {
+    let EffectPerFileArgs {
+        structs,
+        enums,
+        base_output_path,
+        subdir,
+        barrel_file,
+        naming,
+        file_ext,
+        registry,
+    } = args;
+
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path).join(subdir);
     std::fs::create_dir_all(&dir)?;
@@ -365,24 +381,38 @@ fn generate_macroforge(
     structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
     enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
+    array_style: evenframe_core::typesync::config::ArrayStyle,
     registry: &ForeignTypeRegistry,
 ) -> Result<()> {
     info!("Generating Macroforge types to {}", output_path);
-    let content = generate_macroforge_type_string(structs, enums, false, registry);
+    let content = generate_macroforge_type_string(structs, enums, false, array_style, registry);
     std::fs::write(output_path, content)?;
     debug!("Macroforge types written successfully");
     Ok(())
 }
 
-fn generate_macroforge_per_file(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
-    base_output_path: &str,
+struct MacroforgePerFileArgs<'a> {
+    structs: &'a std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &'a std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    base_output_path: &'a str,
     barrel_file: bool,
     naming: FileNamingConvention,
-    file_ext: &str,
-    registry: &ForeignTypeRegistry,
-) -> Result<()> {
+    file_ext: &'a str,
+    array_style: evenframe_core::typesync::config::ArrayStyle,
+    registry: &'a ForeignTypeRegistry,
+}
+
+fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
+    let MacroforgePerFileArgs {
+        structs,
+        enums,
+        base_output_path,
+        barrel_file,
+        naming,
+        file_ext,
+        array_style,
+        registry,
+    } = args;
     let plan = compute_file_grouping(structs, enums);
     let dir = Path::new(base_output_path);
     std::fs::create_dir_all(dir)?;
@@ -397,7 +427,8 @@ fn generate_macroforge_per_file(
     for group in &plan.groups {
         let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
         let type_names = group.all_types();
-        let body = generate_macroforge_for_types(&type_names, structs, enums, registry);
+        let body =
+            generate_macroforge_for_types(&type_names, structs, enums, array_style, registry);
 
         let mut file_content = String::new();
 

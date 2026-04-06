@@ -6,7 +6,7 @@ mod workspace_scanner;
 use clap::Parser;
 use cli::{Cli, Commands};
 use evenframe_core::{config::EvenframeConfig, error::Result, evenframe_log};
-use tracing::{Level, error, info};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging based on verbosity
-    init_logging(cli.verbose, cli.quiet);
+    init_logging();
 
     evenframe_log!("", "tracing.log");
     evenframe_log!("", "errors.log");
@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
         Some(Commands::Init(args)) => commands::init::run(&cli, args.clone()).await,
         Some(Commands::Validate(args)) => commands::validate::run(&cli, args.clone()).await,
         Some(Commands::Info(args)) => commands::info::run(&cli, args.clone()).await,
+        Some(Commands::TestPlugin(args)) => commands::test_plugin::run(&cli, args.clone()).await,
         None => {
             // Default behavior: run full pipeline (backward compatibility)
             commands::generate::run_default(&cli).await
@@ -50,17 +51,11 @@ async fn main() -> Result<()> {
     }
 }
 
-fn init_logging(verbose: u8, quiet: bool) {
-    let level = if quiet {
-        Level::ERROR
-    } else {
-        match verbose {
-            0 => Level::WARN,
-            1 => Level::INFO,
-            2 => Level::DEBUG,
-            _ => Level::TRACE,
-        }
-    };
-
-    tracing_subscriber::fmt().with_max_level(level).init();
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "evenframe=warn,evenframe_core=warn".into()),
+        )
+        .init();
 }
