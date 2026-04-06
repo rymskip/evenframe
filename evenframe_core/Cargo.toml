@@ -56,7 +56,7 @@ typesync-all = ["typesync", "protobuf", "flatbuffers", "macroforge"]
 # DEFINE statement generation, mock data field value generators, and the
 # database execution pipeline.
 # Implies: surrealdb
-schemasync = ["surrealdb"]
+schemasync = ["surrealdb", "tempfile"]
 
 # Enables full timezone support for mock data generation via the `chrono-tz`
 # crate, providing access to the complete IANA timezone database. Without this
@@ -133,6 +133,7 @@ toml = { workspace = true }
 # Database providers (optional based on features)
 surrealdb = { version = "3.0.0", features = ["kv-mem", "protocol-http"], optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls"], optional = true }
+tempfile = { version = "3.10", optional = true }
 
 # Always compiled (core)
 async-trait = "0.1"

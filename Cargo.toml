@@ -1,5 +1,5 @@
 [workspace]
-members = ["evenframe_core", "evenframe", "evenframe_derive"]
+members = ["evenframe_core", "evenframe", "evenframe_derive", "evenframe_plugin"]
 resolver = "2"
 
 [workspace.dependencies]
