@@ -361,7 +361,9 @@ impl<'a> FieldValueGenerator<'a> {
                             FieldType::Other(type_name) => {
                                 // Check if this is a foreign type with a mock strategy
                                 if let Some(ftc) = self.registry.lookup(type_name) {
-                                    match ftc.mock_strategy.as_str() {
+                                    let strategy = ftc.mock_strategy.as_str();
+                                    match strategy {
+                                        // SurrealQL-specific formats that need special encoding
                                         "datetime" => {
                                             value_stack.push(format!(
                                                 "d'{}'",
@@ -421,7 +423,16 @@ impl<'a> FieldValueGenerator<'a> {
                                             ));
                                             continue;
                                         }
+                                        "object" => {
+                                            value_stack.push("{}".to_string());
+                                            continue;
+                                        }
                                         _ => {
+                                            if let Ok(fmt) = strategy.parse::<Format>() {
+                                                let val = fmt.generate_formatted_value();
+                                                value_stack.push(format!("'{}'", val));
+                                                continue;
+                                            }
                                             // Fall through to existing Other logic
                                         }
                                     }

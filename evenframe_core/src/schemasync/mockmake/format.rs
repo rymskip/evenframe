@@ -33,7 +33,18 @@ fn generate_date_range_pattern(days: i64) -> String {
     pattern
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, TryFromExpr, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    TryFromExpr,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
 pub enum Format {
     /// Generate a random UUID string
     Uuid,

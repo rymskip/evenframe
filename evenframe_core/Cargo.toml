@@ -171,6 +171,7 @@ logos = { version = "0.15", optional = true }
 protox = { version = "0.8", optional = true }
 prost-types = { version = "0.13", optional = true }
 macroforge_ts = { version = "0.1.17", optional = true }
+strum = { version = "0.28.0", features = ["derive"] }
 
 [dev-dependencies]
 proptest = "1.4"

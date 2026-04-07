@@ -219,7 +219,16 @@ fn generate_enum_block(
     lines.push(format!(
         "export type {} = {};",
         name,
-        variant_parts.join(" | ")
+        variant_parts
+            .iter()
+            .enumerate()
+            .map(|(i, part)| if i == 0 {
+                part.clone()
+            } else {
+                format!("| {}", part)
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     ));
     lines.push(String::new());
     lines.join("\n")
@@ -252,7 +261,12 @@ fn render_variant(
     all_annotations.extend(variant.annotations.iter().cloned());
 
     let ann_prefix = if !all_annotations.is_empty() {
-        format!("/** {} */ ", all_annotations.join(" "))
+        let joined = all_annotations
+            .iter()
+            .map(|a| format!("/** {} */", a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{} ", joined)
     } else {
         String::new()
     };

@@ -115,6 +115,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 annotations: vec![],
                                 pipeline: #pipeline_tokens_inner,
                                 rust_derives: vec![],
+                                output_override: None,
                             }))
                         }
                     }
