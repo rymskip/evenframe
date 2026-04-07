@@ -142,17 +142,15 @@ pub fn deps_of(
             if let Some(variant_data) = &v.data {
                 match variant_data {
                     VariantData::InlineStruct(enum_struct) => {
-                        // Collect the struct name itself as a dependency
+                        // Inline structs are now rendered as intersection types
+                        // (e.g., `{ variant: 'X' } & StructName`), so only the
+                        // struct name is a direct dependency. Field-level deps
+                        // are transitive and belong to the struct's own file.
                         collect_refs(
                             &FieldType::Other(enum_struct.struct_name.clone()),
                             &known,
                             &mut acc,
                         );
-                        // Also walk the inline struct's fields to collect
-                        // transitive type refs (e.g., `eventType: EntityEventType`)
-                        for f in &enum_struct.fields {
-                            collect_refs(&f.field_type, &known, &mut acc);
-                        }
                     }
                     VariantData::DataStructureRef(field_type) => {
                         collect_refs(field_type, &known, &mut acc);

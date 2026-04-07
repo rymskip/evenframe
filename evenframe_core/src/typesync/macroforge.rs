@@ -313,7 +313,7 @@ fn render_variant_externally_tagged(
 }
 
 /// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
-/// InlineStruct fields are inlined: `{ tag: 'VariantName'; field1: Type1; field2: Type2 }`.
+/// InlineStruct: `{ tag: 'VariantName' } & StructName` intersection.
 /// DataStructureRef (newtype variants): `{ tag: 'VariantName' } & TypeRef` intersection.
 /// Unit variants: `{ tag: 'VariantName' }`.
 fn render_variant_internally_tagged(
@@ -324,13 +324,13 @@ fn render_variant_internally_tagged(
 ) -> String {
     match &variant.data {
         Some(VariantData::InlineStruct(s)) => {
-            let mut members = vec![format!("{}: '{}'", tag, variant.name)];
-            for field in &s.fields {
-                let field_name = field.field_name.to_case(Case::Camel);
-                let type_str = field_type_to_typescript(&field.field_type, array_style, registry);
-                members.push(format!("{}: {}", field_name, type_str.trim()));
-            }
-            format!("{{ {} }}", members.join("; "))
+            // Use intersection: { tag: 'VariantName' } & StructName
+            format!(
+                "{{ {}: '{}' }} & {}",
+                tag,
+                variant.name,
+                s.struct_name.to_case(Case::Pascal)
+            )
         }
         Some(VariantData::DataStructureRef(ft)) => {
             // Serde flattens newtype variants wrapping structs when internally tagged.
@@ -784,14 +784,10 @@ pub fn compute_extra_imports(
             for variant in &e.variants {
                 if let Some(data) = &variant.data {
                     match data {
-                        VariantData::InlineStruct(s) => {
-                            for field in &s.fields {
-                                check_field_type(
-                                    &field.field_type,
-                                    &mut needs_record_link,
-                                    &mut foreign_imports,
-                                );
-                            }
+                        VariantData::InlineStruct(_) => {
+                            // Inline structs render as intersections, so their
+                            // field-level imports are transitive (belong to the
+                            // struct's own file, not this enum's file).
                         }
                         VariantData::DataStructureRef(ft) => {
                             check_field_type(ft, &mut needs_record_link, &mut foreign_imports);
