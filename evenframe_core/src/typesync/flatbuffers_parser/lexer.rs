@@ -171,10 +171,10 @@ pub enum Token {
     Identifier(std::string::String),
 
     // Comments
-    #[regex(r"//[^\n]*", |lex| lex.slice()[2..].trim().to_string())]
+    #[regex(r"//[^\n]*", callback = |lex| lex.slice()[2..].trim().to_string(), allow_greedy = true)]
     LineComment(std::string::String),
 
-    #[regex(r"///[^\n]*", |lex| lex.slice()[3..].trim().to_string())]
+    #[regex(r"///[^\n]*", callback = |lex| lex.slice()[3..].trim().to_string(), allow_greedy = true)]
     DocComment(std::string::String),
 
     #[regex(r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/", |lex| {

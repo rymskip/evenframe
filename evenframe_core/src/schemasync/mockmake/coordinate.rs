@@ -15,7 +15,7 @@ use crate::types::{FieldType, StructField};
 #[cfg(feature = "surrealdb")]
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 #[cfg(feature = "surrealdb")]
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, Builder)]
 pub struct CoordinationId {

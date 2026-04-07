@@ -9,7 +9,7 @@ use bon::Builder;
 #[cfg(feature = "mockmake")]
 use chrono_tz::TZ_VARIANTS;
 use convert_case::{Case, Casing};
-use rand::{Rng, rngs::ThreadRng, seq::IndexedRandom};
+use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
 use std::collections::HashSet;
 use tracing;
 

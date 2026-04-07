@@ -25,7 +25,7 @@ use crate::{
     wrappers::EvenframeRecordId,
 };
 #[cfg(feature = "surrealdb")]
-use rand::Rng;
+use rand::RngExt;
 #[cfg(feature = "surrealdb")]
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "surrealdb")]

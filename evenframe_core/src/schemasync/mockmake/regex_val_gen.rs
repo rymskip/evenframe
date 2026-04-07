@@ -12,7 +12,7 @@
 //! // Might generate: "abc12"
 //! ```
 
-use rand::Rng;
+use rand::RngExt;
 use std::error::Error;
 use std::fmt;
 use tracing;
