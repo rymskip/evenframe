@@ -207,7 +207,12 @@ fn generate_enum_block(
                 tag, content
             ));
         }
-        _ => {}
+        EnumRepresentation::ExternallyTagged => {
+            lines.push("/** @serde({ externallyTagged: true }) */".to_string());
+        }
+        EnumRepresentation::Untagged => {
+            lines.push("/** @serde({ untagged: true }) */".to_string());
+        }
     }
 
     let variant_parts: Vec<String> = enum_def
@@ -217,18 +222,13 @@ fn generate_enum_block(
         .collect();
 
     lines.push(format!(
-        "export type {} = {};",
+        "export type {} =\n\t{};",
         name,
         variant_parts
             .iter()
-            .enumerate()
-            .map(|(i, part)| if i == 0 {
-                part.clone()
-            } else {
-                format!("| {}", part)
-            })
+            .map(|part| format!("| {}", part))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join("\n\t")
     ));
     lines.push(String::new());
     lines.join("\n")
@@ -241,23 +241,7 @@ fn render_variant(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Determine whether to emit @variant annotation.
-    // For Untagged and ExternallyTagged: emit @variant on DataStructureRef and Unit only
-    //   (InlineStruct uses the struct name as a TypeRef, so name is inherently preserved).
-    // For InternallyTagged and AdjacentlyTagged: @serde({ tag }) on the union handles
-    //   variant identification, so no @variant needed on individual variants.
-    let needs_variant_annotation = match representation {
-        EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-            !matches!(&variant.data, Some(VariantData::InlineStruct(_)))
-        }
-        EnumRepresentation::InternallyTagged { .. }
-        | EnumRepresentation::AdjacentlyTagged { .. } => false,
-    };
-
     let mut all_annotations: Vec<String> = Vec::new();
-    if needs_variant_annotation {
-        all_annotations.push(format!("@variant(\"{}\")", variant.name));
-    }
     all_annotations.extend(variant.annotations.iter().cloned());
 
     let ann_prefix = if !all_annotations.is_empty() {
@@ -725,18 +709,18 @@ pub fn compute_extra_imports(
 ) -> Vec<String> {
     let type_set: HashSet<String> = type_names.iter().cloned().collect();
     let mut needs_record_link = false;
-    let mut foreign_imports: HashSet<String> = HashSet::new();
+    let mut foreign_imports: HashMap<String, bool> = HashMap::new();
 
     fn collect_foreign_imports_recursive(
         ft: &FieldType,
         registry: &crate::types::ForeignTypeRegistry,
-        fi: &mut HashSet<String>,
+        fi: &mut HashMap<String, bool>,
     ) {
         if let FieldType::Other(name) = ft
             && let Some(ftc) = registry.lookup(name)
-            && !ftc.macroforge_import.is_empty()
+            && !ftc.ts_import.is_empty()
         {
-            fi.insert(ftc.macroforge_import.clone());
+            fi.insert(ftc.ts_import.name.clone(), ftc.ts_import.is_type_only);
         }
         match ft {
             FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
@@ -760,7 +744,7 @@ pub fn compute_extra_imports(
         }
     }
 
-    let check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut HashSet<String>| {
+    let check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut HashMap<String, bool>| {
         if field_type_contains(ft, &|f| matches!(f, FieldType::RecordLink(_))) {
             *rl = true;
         }
@@ -802,10 +786,11 @@ pub fn compute_extra_imports(
 
     // Foreign type imports from effect library
     if !foreign_imports.is_empty() {
-        let mut sorted_imports: Vec<String> = foreign_imports.into_iter().collect();
-        sorted_imports.sort();
-        for import_name in sorted_imports {
-            lines.push(format!("import type {{ {} }} from 'effect';", import_name));
+        let mut sorted_imports: Vec<(String, bool)> = foreign_imports.into_iter().collect();
+        sorted_imports.sort_by(|a, b| a.0.cmp(&b.0));
+        for (import_name, is_type_only) in sorted_imports {
+            let keyword = if is_type_only { "import type" } else { "import" };
+            lines.push(format!("{} {{ {} }} from 'effect';", keyword, import_name));
         }
     }
 
@@ -1544,7 +1529,10 @@ mod tests {
             ForeignTypeConfig {
                 rust_type_names: vec!["DateTime".to_string()],
                 macroforge: "DateTime.Utc".to_string(),
-                macroforge_import: "DateTime".to_string(),
+                ts_import: crate::config::TsImport {
+                    name: "DateTime".to_string(),
+                    is_type_only: false,
+                },
                 ..Default::default()
             },
         );
@@ -1553,7 +1541,10 @@ mod tests {
             ForeignTypeConfig {
                 rust_type_names: vec!["Decimal".to_string()],
                 macroforge: "BigDecimal.BigDecimal".to_string(),
-                macroforge_import: "BigDecimal".to_string(),
+                ts_import: crate::config::TsImport {
+                    name: "BigDecimal".to_string(),
+                    is_type_only: false,
+                },
                 ..Default::default()
             },
         );
