@@ -6,6 +6,7 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use syn::{Attribute, Item, Meta, parse_file};
 use tracing::{debug, info, trace, warn};
 use walkdir::WalkDir;
@@ -51,6 +52,7 @@ pub enum TypeKind {
 pub struct WorkspaceScanner {
     start_path: PathBuf,
     apply_aliases: Vec<String>,
+    expand_macros: bool,
 }
 
 impl WorkspaceScanner {
@@ -59,9 +61,10 @@ impl WorkspaceScanner {
     /// # Arguments
     ///
     /// * `apply_aliases` - A list of attribute aliases to look for.
-    pub fn new(apply_aliases: Vec<String>) -> Result<Self> {
+    /// * `expand_macros` - Whether to run `cargo expand` before scanning.
+    pub fn new(apply_aliases: Vec<String>, expand_macros: bool) -> Result<Self> {
         let start_path = env::current_dir()?;
-        Ok(Self::with_path(start_path, apply_aliases))
+        Ok(Self::with_path(start_path, apply_aliases, expand_macros))
     }
 
     /// Creates a new WorkspaceScanner with a specific start path.
@@ -71,10 +74,12 @@ impl WorkspaceScanner {
     /// * `start_path` - The directory to start scanning from. It will search this
     ///   directory and its children for Rust workspaces or standalone crates.
     /// * `apply_aliases` - A list of attribute aliases to look for.
-    pub fn with_path(start_path: PathBuf, apply_aliases: Vec<String>) -> Self {
+    /// * `expand_macros` - Whether to run `cargo expand` before scanning.
+    pub fn with_path(start_path: PathBuf, apply_aliases: Vec<String>, expand_macros: bool) -> Self {
         Self {
             start_path,
             apply_aliases,
+            expand_macros,
         }
     }
 
@@ -193,6 +198,28 @@ impl WorkspaceScanner {
                         .unwrap_or("unknown_crate")
                 });
 
+            if self.expand_macros
+                && let Some(expanded) = self.expand_crate(manifest_dir, crate_name)
+            {
+                let cache_path = Self::expanded_cache_path(manifest_dir, crate_name);
+                if let Some(parent) = cache_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if let Err(e) = fs::write(&cache_path, &expanded) {
+                    warn!("Failed to write expanded source cache: {}", e);
+                }
+                let path_str = cache_path.to_string_lossy().to_string();
+                match self.scan_expanded_source(&expanded, types, crate_name, &path_str) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse expanded source for '{}': {}. Falling back to raw source.",
+                            crate_name, e
+                        );
+                    }
+                }
+            }
+
             let src_path = manifest_dir.join("src");
             if src_path.exists() {
                 info!("Scanning crate: {} at {:?}", crate_name, src_path);
@@ -300,6 +327,153 @@ impl WorkspaceScanner {
             }
         }
         Ok(())
+    }
+
+    /// Runs `cargo expand` on a crate and returns the expanded source.
+    fn expand_crate(&self, manifest_dir: &Path, crate_name: &str) -> Option<String> {
+        info!("Running cargo expand for crate '{}'", crate_name);
+
+        let output = Command::new("cargo")
+            .arg("expand")
+            .arg("--lib")
+            .arg("--theme=none")
+            .current_dir(manifest_dir)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let expanded = String::from_utf8_lossy(&out.stdout).to_string();
+                debug!(
+                    "cargo expand succeeded for '{}': {} bytes",
+                    crate_name,
+                    expanded.len()
+                );
+                Some(expanded)
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("no such subcommand") || stderr.contains("not found") {
+                    warn!(
+                        "cargo-expand is not installed. Install with: cargo install cargo-expand. \
+                         Falling back to raw source scanning for crate '{}'.",
+                        crate_name
+                    );
+                } else {
+                    warn!(
+                        "cargo expand failed for crate '{}': {}. Falling back to raw source scanning.",
+                        crate_name,
+                        stderr.trim()
+                    );
+                }
+                None
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to run cargo expand for crate '{}': {}. Falling back to raw source scanning.",
+                    crate_name, e
+                );
+                None
+            }
+        }
+    }
+
+    /// Scans expanded source (a single string with nested mod blocks) for Evenframe types.
+    fn scan_expanded_source(
+        &self,
+        source: &str,
+        types: &mut Vec<EvenframeType>,
+        crate_name: &str,
+        expanded_file_path: &str,
+    ) -> Result<()> {
+        let syntax_tree = parse_file(source).map_err(|e| {
+            EvenframeError::parse_error(Path::new(expanded_file_path), e.to_string())
+        })?;
+
+        self.scan_items_recursive(&syntax_tree.items, types, crate_name, expanded_file_path);
+        Ok(())
+    }
+
+    /// Recursively walks syn Items, descending into `mod { ... }` blocks,
+    /// tracking module paths.
+    fn scan_items_recursive(
+        &self,
+        items: &[Item],
+        types: &mut Vec<EvenframeType>,
+        module_path: &str,
+        file_path: &str,
+    ) {
+        for item in items {
+            match item {
+                Item::Struct(s) => {
+                    let pipeline = detect_pipeline(&s.attrs);
+                    if pipeline.is_some() || self.has_apply_alias(&s.attrs) {
+                        let pipeline = pipeline.unwrap_or(crate::types::Pipeline::Both);
+                        let name = s.ident.to_string();
+                        let has_id = has_id_field(&s.fields);
+                        debug!(
+                            "Found Evenframe Struct '{}' in module '{}' (expanded)",
+                            name, module_path
+                        );
+                        types.push(EvenframeType {
+                            name,
+                            module_path: module_path.to_string(),
+                            file_path: file_path.to_string(),
+                            kind: TypeKind::Struct,
+                            has_id_field: has_id,
+                            pipeline,
+                        });
+                    }
+                }
+                Item::Enum(e) => {
+                    let pipeline = detect_pipeline(&e.attrs);
+                    if pipeline.is_some() || self.has_apply_alias(&e.attrs) {
+                        let pipeline = pipeline.unwrap_or(crate::types::Pipeline::Both);
+                        let name = e.ident.to_string();
+                        debug!(
+                            "Found Evenframe Enum '{}' in module '{}' (expanded)",
+                            name, module_path
+                        );
+                        types.push(EvenframeType {
+                            name,
+                            module_path: module_path.to_string(),
+                            file_path: file_path.to_string(),
+                            kind: TypeKind::Enum,
+                            has_id_field: false,
+                            pipeline,
+                        });
+                    }
+                }
+                Item::Mod(m) => {
+                    if let Some((_, ref mod_items)) = m.content {
+                        let child_module = format!("{}::{}", module_path, m.ident);
+                        self.scan_items_recursive(mod_items, types, &child_module, file_path);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns the cache path for expanded source output.
+    fn expanded_cache_path(manifest_dir: &Path, crate_name: &str) -> PathBuf {
+        let target_dir = Self::find_target_dir(manifest_dir);
+        target_dir
+            .join(".evenframe-expanded")
+            .join(format!("{}.rs", crate_name))
+    }
+
+    /// Walks up from `start` to find an existing `target/` directory.
+    fn find_target_dir(start: &Path) -> PathBuf {
+        let mut current = start.to_path_buf();
+        loop {
+            let target = current.join("target");
+            if target.is_dir() {
+                return target;
+            }
+            if !current.pop() {
+                return start.join("target");
+            }
+        }
     }
 
     /// Checks for `#[apply(Alias)]` attributes.
@@ -498,7 +672,7 @@ mod tests {
     fn test_workspace_scanner_with_path() {
         let path = PathBuf::from("/some/path");
         let aliases = vec!["MyMacro".to_string()];
-        let scanner = WorkspaceScanner::with_path(path.clone(), aliases.clone());
+        let scanner = WorkspaceScanner::with_path(path.clone(), aliases.clone(), false);
 
         assert_eq!(scanner.start_path, path);
         assert_eq!(scanner.apply_aliases, aliases);
@@ -507,7 +681,7 @@ mod tests {
     #[test]
     fn test_workspace_scanner_with_empty_aliases() {
         let path = PathBuf::from("/test");
-        let scanner = WorkspaceScanner::with_path(path, vec![]);
+        let scanner = WorkspaceScanner::with_path(path, vec![], false);
 
         assert!(scanner.apply_aliases.is_empty());
     }
@@ -520,7 +694,7 @@ mod tests {
             "Macro2".to_string(),
             "Macro3".to_string(),
         ];
-        let scanner = WorkspaceScanner::with_path(path, aliases.clone());
+        let scanner = WorkspaceScanner::with_path(path, aliases.clone(), false);
 
         assert_eq!(scanner.apply_aliases.len(), 3);
         assert!(scanner.apply_aliases.contains(&"Macro1".to_string()));
@@ -826,7 +1000,7 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -858,7 +1032,7 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "status.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -893,7 +1067,7 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "regular.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -932,7 +1106,7 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "models.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -965,7 +1139,7 @@ mod tests {
         create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
 
         let scanner =
-            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()]);
+            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()], false);
         let mut types = Vec::new();
 
         scanner
@@ -994,7 +1168,7 @@ mod tests {
         create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
 
         let scanner =
-            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()]);
+            WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec!["MyMacro".to_string()], false);
         let mut types = Vec::new();
 
         scanner
@@ -1023,7 +1197,7 @@ mod tests {
 
         create_rust_file(&src_dir, "lib.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -1060,7 +1234,7 @@ mod tests {
         create_rust_file(&src_dir, "lib.rs", main_content).unwrap();
         create_rust_file(&tests_dir, "test.rs", test_content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -1097,7 +1271,7 @@ mod tests {
         create_rust_file(&src_dir, "lib.rs", main_content).unwrap();
         create_rust_file(&benches_dir, "bench.rs", bench_content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -1120,7 +1294,7 @@ mod tests {
             fs::create_dir(&current_dir).unwrap();
         }
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         let result = scanner.scan_directory(temp_dir.path(), &mut types, "test_crate", 0);
@@ -1151,7 +1325,7 @@ mod tests {
 
         create_rust_file(&models_dir, "mod.rs", mod_content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -1189,7 +1363,7 @@ mod tests {
         create_rust_file(&src_dir, "user.rs", user_content).unwrap();
         create_rust_file(&src_dir, "order.rs", order_content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner
@@ -1229,7 +1403,7 @@ mod tests {
         create_rust_file(temp_dir.path(), "Cargo.toml", cargo_toml).unwrap();
         create_rust_file(&src_dir, "lib.rs", lib_content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
         let mut processed = HashSet::new();
 
@@ -1249,7 +1423,7 @@ mod tests {
     #[test]
     fn test_scan_for_evenframe_types_empty_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
 
         let types = scanner.scan_for_evenframe_types().unwrap();
 
@@ -1269,7 +1443,7 @@ mod tests {
 
         create_rust_file(temp_dir.path(), "address.rs", content).unwrap();
 
-        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![]);
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
         let mut types = Vec::new();
 
         scanner

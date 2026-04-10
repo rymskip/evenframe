@@ -22,6 +22,9 @@ pub struct BuildConfig {
     /// Apply aliases for attribute detection (e.g., custom derive macros).
     pub apply_aliases: Vec<String>,
 
+    /// When true, use `cargo expand` to resolve macro-generated types.
+    pub expand_macros: bool,
+
     /// Generate ArkType schema.
     pub arktype: bool,
 
@@ -65,6 +68,7 @@ impl Default for BuildConfig {
             scan_path: PathBuf::from("."),
             output_path: PathBuf::from("./src/generated/"),
             apply_aliases: Vec::new(),
+            expand_macros: false,
             arktype: true,
             effect: false,
             macroforge: false,
@@ -153,6 +157,7 @@ impl BuildConfig {
                 })?;
 
             config.apply_aliases = general_config.apply_aliases;
+            config.expand_macros = general_config.expand_macros;
             config.foreign_types = general_config.foreign_types;
             config.output_rule_plugins = general_config.output_rule_plugins;
         }
@@ -290,6 +295,12 @@ impl BuildConfigBuilder {
     /// Sets multiple apply aliases.
     pub fn apply_aliases(mut self, aliases: Vec<String>) -> Self {
         self.config.apply_aliases = aliases;
+        self
+    }
+
+    /// Enables or disables macro expansion via `cargo expand`.
+    pub fn expand_macros(mut self, enabled: bool) -> Self {
+        self.config.expand_macros = enabled;
         self
     }
 

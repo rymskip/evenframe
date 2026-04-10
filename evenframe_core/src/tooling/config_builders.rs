@@ -42,8 +42,11 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
     let mut struct_configs = HashMap::new();
 
     debug!("Creating workspace scanner");
-    let scanner =
-        WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
+    let scanner = WorkspaceScanner::with_path(
+        config.scan_path.clone(),
+        config.apply_aliases.clone(),
+        config.expand_macros,
+    );
 
     let types = scanner.scan_for_evenframe_types()?;
     info!("Found {} Evenframe types", types.len());
@@ -109,8 +112,11 @@ pub fn build_all_configs_default() -> AllConfigs {
     };
 
     debug!("Creating workspace scanner");
-    let scanner =
-        WorkspaceScanner::with_path(config.scan_path.clone(), config.apply_aliases.clone());
+    let scanner = WorkspaceScanner::with_path(
+        config.scan_path.clone(),
+        config.apply_aliases.clone(),
+        config.expand_macros,
+    );
 
     let types = match scanner.scan_for_evenframe_types() {
         Ok(types) => {
@@ -251,6 +257,24 @@ fn resolve_field_to_tables(
     None
 }
 
+/// Recursively collects all `Item::Struct` and `Item::Enum` from nested `mod` blocks.
+/// For non-expanded files (no `Item::Mod`), this returns the same items unchanged.
+fn collect_items_flat(items: Vec<Item>) -> Vec<Item> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            Item::Mod(ref m) => {
+                if let Some((_, ref mod_items)) = m.content {
+                    result.extend(collect_items_flat(mod_items.clone()));
+                }
+            }
+            item @ (Item::Struct(_) | Item::Enum(_)) => result.push(item),
+            _ => {}
+        }
+    }
+    result
+}
+
 /// Processes found Evenframe types into configurations.
 fn process_types(
     types: &[EvenframeType],
@@ -295,7 +319,7 @@ fn process_types(
         };
         trace!("Parsed {} items from {}", syntax.items.len(), file_path);
 
-        for item in syntax.items {
+        for item in collect_items_flat(syntax.items) {
             match item {
                 Item::Struct(item_struct) => {
                     if let Some(evenframe_type) =

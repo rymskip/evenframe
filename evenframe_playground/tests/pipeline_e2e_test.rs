@@ -61,7 +61,7 @@ fn test_scanner_detects_typesync_derive() {
         "#,
     );
 
-    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![]);
+    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![], false);
     let types = scanner.scan_for_evenframe_types().unwrap();
 
     assert_eq!(types.len(), 1);
@@ -87,7 +87,7 @@ fn test_scanner_detects_schemasync_derive() {
         "#,
     );
 
-    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![]);
+    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![], false);
     let types = scanner.scan_for_evenframe_types().unwrap();
 
     assert_eq!(types.len(), 1);
@@ -114,7 +114,7 @@ fn test_scanner_detects_evenframe_as_both() {
         "#,
     );
 
-    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![]);
+    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![], false);
     let types = scanner.scan_for_evenframe_types().unwrap();
 
     assert_eq!(types.len(), 1);
@@ -139,7 +139,7 @@ fn test_scanner_both_derives_yields_pipeline_both() {
         "#,
     );
 
-    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![]);
+    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![], false);
     let types = scanner.scan_for_evenframe_types().unwrap();
 
     assert_eq!(types.len(), 1);
@@ -165,7 +165,7 @@ fn test_scanner_enum_with_typesync_derive() {
         "#,
     );
 
-    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![]);
+    let scanner = WorkspaceScanner::with_path(root.to_path_buf(), vec![], false);
     let types = scanner.scan_for_evenframe_types().unwrap();
 
     assert_eq!(types.len(), 1);

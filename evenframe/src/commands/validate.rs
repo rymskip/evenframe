@@ -81,7 +81,7 @@ pub async fn run(_cli: &Cli, args: ValidateArgs) -> Result<()> {
 fn validate_types() -> Result<(usize, usize, usize)> {
     let config = EvenframeConfig::new()?;
 
-    let scanner = WorkspaceScanner::new(config.general.apply_aliases)?;
+    let scanner = WorkspaceScanner::new(config.general.apply_aliases, config.general.expand_macros)?;
     let types = scanner.scan_for_evenframe_types()?;
 
     if types.is_empty() {
