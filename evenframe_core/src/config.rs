@@ -188,11 +188,27 @@ pub struct GeneralConfig {
     /// type generation output (overrides, skips, imports, etc.).
     #[serde(default)]
     pub output_rule_plugins: HashMap<String, OutputRulePluginConfig>,
+
+    /// Synthetic-item WASM plugins, keyed by plugin name.
+    ///
+    /// Unlike `output_rule_plugins`, these plugins *add* new structs, tagged
+    /// unions, and database tables derived from the scanner results rather
+    /// than overriding existing ones. They run after the rule plugins so
+    /// they see the final override state.
+    #[serde(default)]
+    pub synthetic_item_plugins: HashMap<String, SyntheticItemPluginConfig>,
 }
 
 /// Configuration for a output-rule WASM plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OutputRulePluginConfig {
+    /// Path to the `.wasm` file, relative to the project root.
+    pub path: String,
+}
+
+/// Configuration for a synthetic-item WASM plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SyntheticItemPluginConfig {
     /// Path to the `.wasm` file, relative to the project root.
     pub path: String,
 }

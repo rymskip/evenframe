@@ -117,13 +117,75 @@ fn test_evenframe_attributes() {
 }
 
 /// Test that edge relationships are correctly defined
+/// Returns `content` with `#[edge(...)]` spans normalized into a single
+/// line: whitespace after `(`, before `)`, and around `,` is collapsed so
+/// downstream assertions can use literal substrings like
+/// `#[edge(name = "comment_post"` without worrying about formatting.
+fn collapse_multiline_edge_attributes(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"#[edge(") {
+            // Scan forward, balancing parens, until we close the outer `(`.
+            let mut depth: i32 = 0;
+            let start = i;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if b == b'(' {
+                    depth += 1;
+                } else if b == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1; // include the closing paren
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            let span = &content[start..i];
+
+            // 1. Collapse whitespace runs to a single space.
+            let mut collapsed = String::with_capacity(span.len());
+            let mut prev_ws = false;
+            for ch in span.chars() {
+                if ch.is_whitespace() {
+                    if !prev_ws {
+                        collapsed.push(' ');
+                    }
+                    prev_ws = true;
+                } else {
+                    collapsed.push(ch);
+                    prev_ws = false;
+                }
+            }
+
+            // 2. Remove spaces adjacent to structural punctuation so the
+            //    result matches how the attribute would look on a single
+            //    line without extra whitespace.
+            let normalized = collapsed
+                .replace("( ", "(")
+                .replace(" )", ")")
+                .replace(" ,", ",");
+
+            out.push_str(&normalized);
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
 #[test]
 fn test_edge_relationships() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    // Check blog models for edge relationships
-    let blog_content = fs::read_to_string(playground_dir.join("src/models/blog.rs"))
+    // Check blog models for edge relationships. Edge attributes may span
+    // multiple lines, so normalize them into a single-line form first.
+    let blog_raw = fs::read_to_string(playground_dir.join("src/models/blog.rs"))
         .expect("Failed to read blog.rs");
+    let blog_content = collapse_multiline_edge_attributes(&blog_raw);
 
     // Author -> User edge
     assert!(
@@ -155,9 +217,10 @@ fn test_edge_relationships() {
         "Comment should have edge to Author"
     );
 
-    // Check ecommerce models for edge relationships
-    let ecommerce_content = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
+    // Check ecommerce models for edge relationships.
+    let ecommerce_raw = fs::read_to_string(playground_dir.join("src/models/ecommerce.rs"))
         .expect("Failed to read ecommerce.rs");
+    let ecommerce_content = collapse_multiline_edge_attributes(&ecommerce_raw);
 
     // Customer -> User edge
     assert!(
@@ -405,12 +468,18 @@ fn test_persistable_structs_have_id() {
     }
 }
 
-/// Test that mock_data attributes have valid n values
+/// Test that mock_data attributes have valid n values.
+///
+/// Parses `n = <digits>` where digits end at a non-digit character (`,`, `)`,
+/// whitespace, etc.) so this handles attributes like
+/// `#[mock_data(n = 200, coordinate = [Coordination::OneToOne("out")])]`
+/// where the naive "first `)` after n" heuristic would capture the wrong
+/// closing paren.
 #[test]
 fn test_mock_data_values() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let files = vec![
+    let files = [
         "src/models/auth.rs",
         "src/models/blog.rs",
         "src/models/ecommerce.rs",
@@ -420,24 +489,45 @@ fn test_mock_data_values() {
         let content = fs::read_to_string(playground_dir.join(file_path))
             .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
-        // Find all mock_data attributes
         for line in content.lines() {
-            if line.contains("#[mock_data(n = ") {
-                // Extract the n value
-                let start = line.find("n = ").unwrap() + 4;
-                let end = line[start..].find(")").unwrap() + start;
-                let n_str = &line[start..end];
-
-                let n: u32 = n_str.parse().unwrap_or_else(|_| {
-                    panic!("mock_data n value should be valid integer: {}", n_str)
-                });
-
-                assert!(n > 0, "mock_data n value should be positive");
-                assert!(
-                    n <= 1000,
-                    "mock_data n value should be reasonable (<= 1000)"
-                );
+            let Some(n_start_rel) = line.find("n = ") else {
+                continue;
+            };
+            if !line.contains("#[mock_data(") {
+                continue;
             }
+            let digits_start = n_start_rel + "n = ".len();
+            let digits_end = line[digits_start..]
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_digit())
+                .map(|(i, _)| digits_start + i)
+                .unwrap_or(line.len());
+            let n_str = &line[digits_start..digits_end];
+            assert!(
+                !n_str.is_empty(),
+                "mock_data n value missing digits in {}: {}",
+                file_path,
+                line
+            );
+            let n: u32 = n_str.parse().unwrap_or_else(|_| {
+                panic!(
+                    "mock_data n value should be valid integer: {}, line = {}",
+                    n_str, line
+                )
+            });
+
+            assert!(
+                n > 0,
+                "mock_data n value should be positive in {}: {}",
+                file_path,
+                line
+            );
+            assert!(
+                n <= 1000,
+                "mock_data n value should be reasonable (<= 1000) in {}: {}",
+                file_path,
+                line
+            );
         }
     }
 }

@@ -1,4 +1,11 @@
-//! WASM plugin manager for output rule plugins.
+//! WASM plugin manager for synthetic-item plugins.
+//!
+//! This is a sibling of [`super::plugin::OutputRulePluginManager`]. The key
+//! differences:
+//!
+//! - The required WASM export is `generate_items`, not `transform_type`.
+//! - The plugin's *role* is to *add* new structs/enums/tables derived from the
+//!   scanner results, not to override existing ones.
 
 use crate::error::EvenframeError;
 use std::collections::HashMap;
@@ -7,25 +14,25 @@ use tracing::{debug, info, warn};
 use wasmtime::*;
 
 use super::plugin_runtime::LoadedPlugin;
-use super::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
+use super::synthetic_plugin_types::{SyntheticPluginInput, SyntheticPluginOutput};
 
-pub struct OutputRulePluginManager {
+pub struct SyntheticItemPluginManager {
     _engine: Engine,
     plugin_names: Vec<String>,
     plugins: HashMap<String, LoadedPlugin>,
 }
 
-impl std::fmt::Debug for OutputRulePluginManager {
+impl std::fmt::Debug for SyntheticItemPluginManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OutputRulePluginManager")
+        f.debug_struct("SyntheticItemPluginManager")
             .field("plugins", &self.plugin_names)
             .finish()
     }
 }
 
-impl OutputRulePluginManager {
+impl SyntheticItemPluginManager {
     pub fn new(
-        plugin_configs: &HashMap<String, crate::config::OutputRulePluginConfig>,
+        plugin_configs: &HashMap<String, crate::config::SyntheticItemPluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
         let engine = Engine::default();
@@ -36,21 +43,21 @@ impl OutputRulePluginManager {
             let wasm_path = project_root.join(&config.path);
             if !wasm_path.exists() {
                 return Err(EvenframeError::plugin(format!(
-                    "Output rule plugin '{}': WASM file not found at {}",
+                    "Synthetic-item plugin '{}': WASM file not found at {}",
                     name,
                     wasm_path.display()
                 )));
             }
 
             info!(
-                "Loading output-rule plugin '{}' from {}",
+                "Loading synthetic-item plugin '{}' from {}",
                 name,
                 wasm_path.display()
             );
 
             let module = Module::from_file(&engine, &wasm_path).map_err(|e| {
                 EvenframeError::plugin(format!(
-                    "Output rule plugin '{}': failed to compile WASM: {}",
+                    "Synthetic-item plugin '{}': failed to compile WASM: {}",
                     name, e
                 ))
             })?;
@@ -59,28 +66,28 @@ impl OutputRulePluginManager {
             let linker = Linker::new(&engine);
             let instance = linker.instantiate(&mut store, &module).map_err(|e| {
                 EvenframeError::plugin(format!(
-                    "Output rule plugin '{}': failed to instantiate: {}",
+                    "Synthetic-item plugin '{}': failed to instantiate: {}",
                     name, e
                 ))
             })?;
 
             let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
                 EvenframeError::plugin(format!(
-                    "Output rule plugin '{}': missing 'memory' export",
+                    "Synthetic-item plugin '{}': missing 'memory' export",
                     name
                 ))
             })?;
 
             instance
-                .get_typed_func::<(i32, i32), i64>(&mut store, "transform_type")
+                .get_typed_func::<(i32, i32), i64>(&mut store, "generate_items")
                 .map_err(|_| {
                     EvenframeError::plugin(format!(
-                        "Output rule plugin '{}': missing 'transform_type' export",
+                        "Synthetic-item plugin '{}': missing 'generate_items' export",
                         name
                     ))
                 })?;
 
-            debug!("Output rule plugin '{}' loaded successfully", name);
+            debug!("Synthetic-item plugin '{}' loaded successfully", name);
             plugin_names.push(name.clone());
             plugins.insert(
                 name.clone(),
@@ -92,7 +99,7 @@ impl OutputRulePluginManager {
             );
         }
 
-        info!("Loaded {} output-rule plugin(s)", plugins.len());
+        info!("Loaded {} synthetic-item plugin(s)", plugins.len());
         Ok(Self {
             _engine: engine,
             plugin_names,
@@ -100,29 +107,30 @@ impl OutputRulePluginManager {
         })
     }
 
-    pub fn transform_type(
+    /// Calls the `generate_items` entry point on a single loaded plugin.
+    pub fn generate_items(
         &mut self,
         plugin_name: &str,
-        input: &OutputRulePluginInput,
-    ) -> Result<OutputRulePluginOutput, EvenframeError> {
+        input: &SyntheticPluginInput,
+    ) -> Result<SyntheticPluginOutput, EvenframeError> {
         let plugin = self.plugins.get_mut(plugin_name).ok_or_else(|| {
-            EvenframeError::plugin(format!("Output rule plugin '{}' not found", plugin_name))
+            EvenframeError::plugin(format!("Synthetic-item plugin '{}' not found", plugin_name))
         })?;
 
         let input_json = serde_json::to_vec(input)
             .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
 
-        let output_str = plugin.call_plugin_fn("transform_type", &input_json)?;
+        let output_str = plugin.call_plugin_fn("generate_items", &input_json)?;
 
-        let output: OutputRulePluginOutput = serde_json::from_str(&output_str).map_err(|e| {
+        let output: SyntheticPluginOutput = serde_json::from_str(&output_str).map_err(|e| {
             EvenframeError::plugin(format!(
-                "Output rule plugin '{}' returned invalid JSON: {} (raw: {})",
+                "Synthetic-item plugin '{}' returned invalid JSON: {} (raw: {})",
                 plugin_name, e, output_str
             ))
         })?;
 
         if let Some(ref err) = output.error {
-            warn!("Output rule plugin '{}' error: {}", plugin_name, err);
+            warn!("Synthetic-item plugin '{}' error: {}", plugin_name, err);
         }
 
         Ok(output)

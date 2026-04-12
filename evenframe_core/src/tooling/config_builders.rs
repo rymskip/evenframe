@@ -89,6 +89,25 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         );
     }
 
+    // Apply synthetic-item plugins — these add new structs/enums/tables
+    // derived from the (now finalized) scanner+rule-plugin state.
+    #[cfg(feature = "wasm-plugins")]
+    if !config.synthetic_item_plugins.is_empty() {
+        info!(
+            "Synthetic-item plugins configured: {}",
+            config.synthetic_item_plugins.len()
+        );
+        apply_synthetic_plugins(
+            config,
+            &mut table_configs,
+            &mut struct_configs,
+            &mut enum_configs,
+        )?;
+        // Re-run relation endpoint resolution so any synthetic relation
+        // tables get their from/to resolved from their `in`/`out` fields.
+        resolve_relation_endpoints(&mut table_configs, &enum_configs);
+    }
+
     Ok((enum_configs, table_configs, struct_configs))
 }
 
@@ -552,6 +571,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         .ok()
         .unwrap_or_default();
     let rust_derives = parse_rust_derives(&item_struct.attrs);
+    let raw_attributes = collect_raw_attributes(&item_struct.attrs);
 
     Some(StructConfig {
         struct_name,
@@ -566,6 +586,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         pipeline: crate::types::Pipeline::default(),
         rust_derives,
         output_override: None,
+        raw_attributes,
     })
 }
 
@@ -628,16 +649,13 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
                 Some(VariantData::InlineStruct(StructConfig {
                     struct_name: variant_name.clone(),
                     fields: struct_fields,
-                    validators: vec![],
-                    doccom: None,
                     macroforge_derives: variant_macroforge_derives,
-                    annotations: vec![],
-                    pipeline: crate::types::Pipeline::default(),
-                    rust_derives: vec![],
-                    output_override: None,
+                    ..Default::default()
                 }))
             }
         };
+
+        let variant_raw_attributes = collect_raw_attributes(&variant.attrs);
 
         variants.push(Variant {
             name: variant_name,
@@ -645,8 +663,11 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
             doccom: variant_doccom,
             annotations: variant_annotations,
             output_override: None,
+            raw_attributes: variant_raw_attributes,
         });
     }
+
+    let enum_raw_attributes = collect_raw_attributes(&item_enum.attrs);
 
     Some(TaggedUnion {
         enum_name,
@@ -658,6 +679,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: enum_rust_derives,
         output_override: None,
+        raw_attributes: enum_raw_attributes,
     })
 }
 
@@ -682,6 +704,8 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             .ok()
             .unwrap_or_default();
 
+        let field_raw_attributes = collect_raw_attributes(&field.attrs);
+
         struct_fields.push(StructField {
             field_name,
             field_type,
@@ -695,9 +719,70 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: field_raw_attributes,
         });
     }
     struct_fields
+}
+
+/// Attributes that evenframe's own attribute parsers handle. Everything
+/// else ends up in `StructConfig::raw_attributes` so plugins can see it.
+const KNOWN_ATTRS: &[&str] = &[
+    "annotation",
+    "apply",
+    "define_field_statement",
+    "derive",
+    "doc",
+    "doccom",
+    "edge",
+    "event",
+    "fetch",
+    "format",
+    "macroforge_derive",
+    "mock_data",
+    "mockmake",
+    "permissions",
+    "relation",
+    "serde",
+    "subquery",
+    "unique",
+    "validators",
+    // These are handled by proc-macros but aren't plugin-relevant metadata.
+    "cfg",
+    "cfg_attr",
+    "allow",
+    "warn",
+    "deny",
+    "forbid",
+    "must_use",
+    "non_exhaustive",
+    "repr",
+    "automatically_derived",
+];
+
+/// Collects every attribute that evenframe doesn't natively handle into
+/// a map of `attr_name → [raw_body, …]`. The "body" is the stringified
+/// token stream inside the parens (or empty string for path-only attrs).
+fn collect_raw_attributes(attrs: &[syn::Attribute]) -> HashMap<String, Vec<String>> {
+    use quote::ToTokens;
+
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for attr in attrs {
+        let Some(ident) = attr.path().get_ident() else {
+            continue;
+        };
+        let name = ident.to_string();
+        if KNOWN_ATTRS.contains(&name.as_str()) {
+            continue;
+        }
+        let body = match &attr.meta {
+            syn::Meta::Path(_) => String::new(),
+            syn::Meta::List(list) => list.tokens.to_token_stream().to_string(),
+            syn::Meta::NameValue(nv) => nv.value.to_token_stream().to_string(),
+        };
+        out.entry(name).or_default().push(body);
+    }
+    out
 }
 
 /// Merges tables and objects into a single struct config map.
@@ -1073,4 +1158,197 @@ fn build_plugin_input_enum(
         has_explicit_mock_data: false,
         existing_macroforge_derives: ec.macroforge_derives.clone(),
     }
+}
+
+// ============================================================
+// Synthetic-item plugin application
+// ============================================================
+
+/// Call each configured synthetic-item plugin in sequence, merging the items
+/// it emits into the running config maps. Each plugin sees the output of
+/// all previous plugins, matching the sequential composition of
+/// `apply_rule_plugins`.
+///
+/// Collisions between plugin output and existing items honor the configured
+/// [`CollisionStrategy`]:
+///
+/// - `Error` → abort the whole build with a collision message.
+/// - `AutoRename` → prefix the synthetic item's name with the plugin name,
+///   Pascal-cased.
+#[cfg(feature = "wasm-plugins")]
+fn apply_synthetic_plugins(
+    config: &BuildConfig,
+    table_configs: &mut HashMap<String, TableConfig>,
+    struct_configs: &mut HashMap<String, StructConfig>,
+    enum_configs: &mut HashMap<String, TaggedUnion>,
+) -> Result<()> {
+    use crate::typesync::synthetic_plugin::SyntheticItemPluginManager;
+
+    let mut pm = SyntheticItemPluginManager::new(&config.synthetic_item_plugins, &config.scan_path)
+        .map_err(|e| {
+            crate::error::EvenframeError::Plugin(format!(
+                "Failed to load synthetic-item plugins: {}",
+                e
+            ))
+        })?;
+
+    for plugin_name in pm.plugin_names().to_vec() {
+        let input = build_synthetic_input(table_configs, struct_configs, enum_configs);
+
+        let output = pm.generate_items(&plugin_name, &input).map_err(|e| {
+            crate::error::EvenframeError::Plugin(format!(
+                "Synthetic-item plugin '{}' failed: {}",
+                plugin_name, e
+            ))
+        })?;
+
+        if let Some(err) = output.error {
+            return Err(crate::error::EvenframeError::Plugin(format!(
+                "Synthetic-item plugin '{}' reported error: {}",
+                plugin_name, err
+            )));
+        }
+
+        info!(
+            "Synthetic-item plugin '{}' produced: {} structs, {} enums, {} tables",
+            plugin_name,
+            output.new_structs.len(),
+            output.new_enums.len(),
+            output.new_tables.len()
+        );
+
+        merge_synthetic_output(
+            &plugin_name,
+            output,
+            table_configs,
+            struct_configs,
+            enum_configs,
+            config.collision_strategy,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Builds the full-context snapshot handed to each synthetic-item plugin.
+///
+/// Plugins receive the actual `StructConfig` / `TaggedUnion` / `TableConfig`
+/// maps (not lightweight summaries) so they can make system-wide decisions:
+/// walk relations, copy field types verbatim into new structs, inspect
+/// derives, etc. The clone is cheap (all three types derive `Clone`) and
+/// simpler than threading references through the JSON boundary.
+#[cfg(feature = "wasm-plugins")]
+fn build_synthetic_input(
+    table_configs: &HashMap<String, TableConfig>,
+    struct_configs: &HashMap<String, StructConfig>,
+    enum_configs: &HashMap<String, TaggedUnion>,
+) -> crate::typesync::synthetic_plugin_types::SyntheticPluginInput {
+    use crate::typesync::synthetic_plugin_types::SyntheticPluginInput;
+
+    SyntheticPluginInput {
+        structs: struct_configs.clone(),
+        enums: enum_configs.clone(),
+        tables: table_configs.clone(),
+    }
+}
+
+#[cfg(feature = "wasm-plugins")]
+fn merge_synthetic_output(
+    plugin_name: &str,
+    output: crate::typesync::synthetic_plugin_types::SyntheticPluginOutput,
+    table_configs: &mut HashMap<String, TableConfig>,
+    struct_configs: &mut HashMap<String, StructConfig>,
+    enum_configs: &mut HashMap<String, TaggedUnion>,
+    collision_strategy: CollisionStrategy,
+) -> Result<()> {
+    let prefix = plugin_name.to_case(Case::Pascal);
+
+    for mut sc in output.new_structs {
+        let original = sc.struct_name.clone();
+        if struct_configs.contains_key(&sc.struct_name) {
+            match collision_strategy {
+                CollisionStrategy::Error => {
+                    return Err(crate::error::EvenframeError::Config(format!(
+                        "Synthetic-item plugin '{}' produced struct '{}' which collides with an \
+                         existing type. Rename it inside the plugin, or set \
+                         collision_strategy = \"auto_rename\" in [typesync] config.",
+                        plugin_name, sc.struct_name
+                    )));
+                }
+                CollisionStrategy::AutoRename => {
+                    sc.struct_name = format!("{}{}", prefix, sc.struct_name);
+                    warn!(
+                        "Synthetic struct '{}' from plugin '{}' renamed to '{}' to avoid collision",
+                        original, plugin_name, sc.struct_name
+                    );
+                }
+            }
+        }
+        debug!(
+            "Synthetic plugin '{}' added struct '{}'",
+            plugin_name, sc.struct_name
+        );
+        struct_configs.insert(sc.struct_name.clone(), sc);
+    }
+
+    for mut ec in output.new_enums {
+        let original = ec.enum_name.clone();
+        if enum_configs.contains_key(&ec.enum_name) {
+            match collision_strategy {
+                CollisionStrategy::Error => {
+                    return Err(crate::error::EvenframeError::Config(format!(
+                        "Synthetic-item plugin '{}' produced enum '{}' which collides with an \
+                         existing type. Rename it inside the plugin, or set \
+                         collision_strategy = \"auto_rename\" in [typesync] config.",
+                        plugin_name, ec.enum_name
+                    )));
+                }
+                CollisionStrategy::AutoRename => {
+                    ec.enum_name = format!("{}{}", prefix, ec.enum_name);
+                    warn!(
+                        "Synthetic enum '{}' from plugin '{}' renamed to '{}' to avoid collision",
+                        original, plugin_name, ec.enum_name
+                    );
+                }
+            }
+        }
+        debug!(
+            "Synthetic plugin '{}' added enum '{}'",
+            plugin_name, ec.enum_name
+        );
+        enum_configs.insert(ec.enum_name.clone(), ec);
+    }
+
+    for mut tc in output.new_tables {
+        let original = tc.table_name.clone();
+        if table_configs.contains_key(&tc.table_name) {
+            match collision_strategy {
+                CollisionStrategy::Error => {
+                    return Err(crate::error::EvenframeError::Config(format!(
+                        "Synthetic-item plugin '{}' produced table '{}' which collides with an \
+                         existing table. Rename it inside the plugin, or set \
+                         collision_strategy = \"auto_rename\" in [typesync] config.",
+                        plugin_name, tc.table_name
+                    )));
+                }
+                CollisionStrategy::AutoRename => {
+                    let new_table = format!("{}_{}", prefix.to_case(Case::Snake), tc.table_name);
+                    tc.table_name = new_table;
+                    tc.struct_config.struct_name =
+                        format!("{}{}", prefix, tc.struct_config.struct_name);
+                    warn!(
+                        "Synthetic table '{}' from plugin '{}' renamed to '{}' to avoid collision",
+                        original, plugin_name, tc.table_name
+                    );
+                }
+            }
+        }
+        debug!(
+            "Synthetic plugin '{}' added table '{}'",
+            plugin_name, tc.table_name
+        );
+        table_configs.insert(tc.table_name.clone(), tc);
+    }
+
+    Ok(())
 }

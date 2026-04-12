@@ -412,13 +412,61 @@ fn test_mock_data_counts() {
     }
 }
 
+/// Collects every `#[edge(...)]` attribute from `content` as a string,
+/// joining continuation lines so the resulting strings can be inspected
+/// without worrying about formatting. Stops scanning at the matching
+/// closing paren of the outer `(`.
+fn collect_edge_attributes(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"#[edge(") {
+            let start = i;
+            let mut depth: i32 = 0;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if b == b'(' {
+                    depth += 1;
+                } else if b == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            // Collapse whitespace runs to a single space.
+            let span = &content[start..i];
+            let mut collapsed = String::with_capacity(span.len());
+            let mut prev_ws = false;
+            for ch in span.chars() {
+                if ch.is_whitespace() {
+                    if !prev_ws {
+                        collapsed.push(' ');
+                    }
+                    prev_ws = true;
+                } else {
+                    collapsed.push(ch);
+                    prev_ws = false;
+                }
+            }
+            out.push(collapsed);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Test relationship directions
 #[test]
 fn test_edge_directions() {
     let playground_dir = get_playground_dir();
 
-    // All edges in our models use direction = "from"
-    let files = vec![
+    // All edges in our models use direction = "from".
+    let files = [
         "src/models/auth.rs",
         "src/models/blog.rs",
         "src/models/ecommerce.rs",
@@ -428,15 +476,13 @@ fn test_edge_directions() {
         let content = fs::read_to_string(playground_dir.join(file_path))
             .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
-        for line in content.lines() {
-            if line.contains("#[edge(") {
-                assert!(
-                    line.contains(r#"direction = "from""#),
-                    "Edge in {} should have direction = \"from\": {}",
-                    file_path,
-                    line
-                );
-            }
+        for attr in collect_edge_attributes(&content) {
+            assert!(
+                attr.contains(r#"direction = "from""#),
+                "Edge in {} should have direction = \"from\": {}",
+                file_path,
+                attr
+            );
         }
     }
 }

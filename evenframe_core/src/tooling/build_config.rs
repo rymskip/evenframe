@@ -60,6 +60,10 @@ pub struct BuildConfig {
 
     /// Type-transform WASM plugin configurations.
     pub output_rule_plugins: HashMap<String, crate::config::OutputRulePluginConfig>,
+
+    /// Synthetic-item WASM plugin configurations. These plugins add new
+    /// structs/enums/tables derived from the scanner results.
+    pub synthetic_item_plugins: HashMap<String, crate::config::SyntheticItemPluginConfig>,
 }
 
 impl Default for BuildConfig {
@@ -81,6 +85,7 @@ impl Default for BuildConfig {
             collision_strategy: CollisionStrategy::Error,
             foreign_types: HashMap::new(),
             output_rule_plugins: HashMap::new(),
+            synthetic_item_plugins: HashMap::new(),
         }
     }
 }
@@ -160,6 +165,7 @@ impl BuildConfig {
             config.expand_macros = general_config.expand_macros;
             config.foreign_types = general_config.foreign_types;
             config.output_rule_plugins = general_config.output_rule_plugins;
+            config.synthetic_item_plugins = general_config.synthetic_item_plugins;
         }
 
         // Derive project root: for .evenframe/config.toml go up one more level

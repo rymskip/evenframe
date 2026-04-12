@@ -21,8 +21,40 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub output: Option<PathBuf>,
 
+    /// Increase logging verbosity (repeat for more: -v=info, -vv=debug, -vvv=trace)
+    #[arg(
+        short,
+        long,
+        global = true,
+        action = clap::ArgAction::Count,
+        conflicts_with = "quiet"
+    )]
+    pub verbose: u8,
+
+    /// Silence all non-error logging
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+impl Cli {
+    /// Returns the default `tracing_subscriber` env-filter directive for the
+    /// current `--verbose`/`--quiet` settings. Callers can use this when
+    /// `RUST_LOG` is unset.
+    pub fn log_filter(&self) -> &'static str {
+        if self.quiet {
+            "evenframe=error,evenframe_core=error"
+        } else {
+            match self.verbose {
+                0 => "evenframe=warn,evenframe_core=warn",
+                1 => "evenframe=info,evenframe_core=info",
+                2 => "evenframe=debug,evenframe_core=debug",
+                _ => "evenframe=trace,evenframe_core=trace",
+            }
+        }
+    }
 }
 
 /// Source of truth for type definitions

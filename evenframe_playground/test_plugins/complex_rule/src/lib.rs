@@ -1,6 +1,7 @@
-//! The most complex output-rule rule possible.
+//! The most complex output-rule rule possible, ported to the current
+//! `OutputRulePluginOutput` API (annotations-only, no type substitution).
 //!
-//! Rule: "Effect-TS Branded Monetary Type"
+//! Rule: "Branded Monetary Type via annotations"
 //!
 //! IF:
 //!   - The struct derives BOTH Serialize AND Deserialize
@@ -12,26 +13,36 @@
 //!   - AND there exists a "currency" field of type String somewhere in the struct
 //!
 //! THEN for each qualifying monetary field:
-//!   - Override its type to a branded Effect type:
-//!     `Schema.BigDecimal.pipe(Schema.brand("MonetaryAmount"))`  (effect)
-//!     `BigDecimal.BigDecimal & { readonly __brand: "MonetaryAmount" }`  (macroforge)
-//!   - Add a field annotation: `@monetary({ currency_field: "<name of currency field>" })`
-//!   - Add the currency field's annotation: `@iso4217`
-//!   - Add extra imports for the branded type
-//!   - Skip any field named "raw_amount" or annotated @internal
-//!   - Rename the type: append "Monetary" suffix if it doesn't already have one
+//!   - Add a `@brand("MonetaryAmount")` field annotation
+//!   - Add a `@monetary({ currency_field: "..." })` field annotation
+//!   - Add `@iso4217` to the currency field
+//!   - Add a type-level `@rename("<Name>Monetary")` annotation (if not already)
+//!   - Add a type-level `@generator(<effect|macroforge>)` annotation
+//!   - Add a type-level `@monetary_count(N)` annotation
 //!
-//! Additionally:
-//!   - If the struct has a field whose type is `Vec<X>` where X is another struct
-//!     name found in the field list (cross-field reference detection), add
-//!     `@nested_collection` annotation to that field
-//!   - If ANY field has more than 2 validators, add `@heavily_validated` to it
-//!   - Count total monetary fields and embed the count in a struct-level comment import
+//! Always-on rules (no gate):
+//!   - Vec<X> where X appears as another field's struct-typed value →
+//!     `@nested_collection({ type: "X" })` on that field
+//!   - Field with >2 validators → `@heavily_validated` on that field
+//!   - @internal field → `@skip_internal` marker on that field
 
-use evenframe_plugin::{OutputRulePluginOutput, define_type_plugin};
+use evenframe_plugin::{FieldOverride, OutputRulePluginOutput, define_output_rule_plugin};
 
-define_type_plugin!(|ctx: &TypeContext| {
+define_output_rule_plugin!(|ctx: &TypeContext| {
     let mut output = OutputRulePluginOutput::default();
+
+    fn push_field_annotation(
+        output: &mut OutputRulePluginOutput,
+        field_name: &str,
+        annotation: String,
+    ) {
+        output
+            .field_overrides
+            .entry(field_name.to_string())
+            .or_insert_with(FieldOverride::default)
+            .annotations
+            .push(annotation);
+    }
 
     // ===== Gate: check all preconditions =====
 
@@ -43,26 +54,26 @@ define_type_plugin!(|ctx: &TypeContext| {
     let valid_generator = is_effect || is_macroforge;
     let valid_pipeline = ctx.pipeline == "Both" || ctx.pipeline == "Typesync";
 
-    // Find the currency field (must be a String field with "currency" in the name)
-    let currency_field = ctx.fields.iter().find(|f| {
-        f.field_name.contains("currency") && f.field_type == "String"
-    });
+    let currency_field = ctx
+        .fields
+        .iter()
+        .find(|f| f.field_name.contains("currency") && f.field_type == "String");
 
-    // Identify monetary field types
     let monetary_types = ["Decimal", "f64", "i64"];
     let has_monetary_field = ctx.fields.iter().any(|f| {
         monetary_types.iter().any(|mt| f.field_type == *mt)
             && !f.annotations.iter().any(|a| a.contains("@raw"))
     });
 
-    // Collect all field names for cross-reference detection
-    let _all_field_names: Vec<String> = ctx.fields.iter().map(|f| f.field_name.clone()).collect();
-    // Also collect type names that look like struct refs (PascalCase, not primitives)
-    let struct_type_names: Vec<String> = ctx.fields.iter()
+    // Collect struct-like type names for cross-field Vec detection.
+    let struct_type_names: Vec<String> = ctx
+        .fields
+        .iter()
         .filter_map(|f| {
             let ft = &f.field_type;
             if ft.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                && !["String", "Decimal", "Uuid", "DateTime", "Url", "Duration"].contains(&ft.as_str())
+                && !["String", "Decimal", "Uuid", "DateTime", "Url", "Duration"]
+                    .contains(&ft.as_str())
                 && !ft.starts_with("Option<")
                 && !ft.starts_with("Vec<")
                 && !ft.starts_with("HashMap<")
@@ -76,34 +87,33 @@ define_type_plugin!(|ctx: &TypeContext| {
 
     // ===== Always-on rules (no gate) =====
 
-    // Cross-field reference detection: Vec<X> where X appears as another field's type
     for field in &ctx.fields {
-        if field.field_type.starts_with("Vec<") && field.field_type.ends_with(">") {
-            let inner = &field.field_type[4..field.field_type.len() - 1];
-            // Check if inner type name matches any other field's struct type
-            if struct_type_names.iter().any(|st| st == inner) {
-                output.field_annotations
-                    .entry(field.field_name.clone())
-                    .or_insert_with(Vec::new)
-                    .push(format!("@nested_collection({{ type: \"{}\" }})", inner));
-            }
+        // Vec<X> where X is another field's struct type
+        if let Some(rest) = field.field_type.strip_prefix("Vec<")
+            && let Some(inner) = rest.strip_suffix('>')
+            && struct_type_names.iter().any(|st| st == inner)
+        {
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                format!("@nested_collection({{ type: \"{}\" }})", inner),
+            );
         }
-    }
 
-    // Heavily validated detection
-    for field in &ctx.fields {
         if field.validators.len() > 2 {
-            output.field_annotations
-                .entry(field.field_name.clone())
-                .or_insert_with(Vec::new)
-                .push("@heavily_validated".to_string());
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@heavily_validated".to_string(),
+            );
         }
-    }
 
-    // Skip @internal fields always
-    for field in &ctx.fields {
         if field.annotations.iter().any(|a| a.contains("@internal")) {
-            output.skip_fields.push(field.field_name.clone());
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@skip_internal".to_string(),
+            );
         }
     }
 
@@ -122,23 +132,37 @@ define_type_plugin!(|ctx: &TypeContext| {
 
     let currency_field_name = currency_field.unwrap().field_name.clone();
 
-    // Rename type if it doesn't already end with "Monetary"
+    // Rename type via annotation if it doesn't already end with "Monetary".
     if !ctx.type_name.ends_with("Monetary") {
-        output.type_name_override = Some(format!("{}Monetary", ctx.type_name));
+        output
+            .type_override
+            .annotations
+            .push(format!("@rename(\"{}Monetary\")", ctx.type_name));
     }
 
-    // Process each monetary field
-    let mut monetary_count = 0u32;
+    // Record the active generator at the type level.
+    let generator_label = if is_effect { "effect" } else { "macroforge" };
+    output
+        .type_override
+        .annotations
+        .push(format!("@generator(\"{}\")", generator_label));
+
+    // Process each monetary field.
+    let mut monetary_count: u32 = 0;
 
     for field in &ctx.fields {
-        // Skip raw-annotated fields
+        // Skip raw-annotated fields.
         if field.annotations.iter().any(|a| a.contains("@raw")) {
             continue;
         }
 
-        // Skip raw_amount by name
+        // Mark raw_amount as skipped.
         if field.field_name == "raw_amount" {
-            output.skip_fields.push(field.field_name.clone());
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@skip_raw_amount".to_string(),
+            );
             continue;
         }
 
@@ -149,53 +173,26 @@ define_type_plugin!(|ctx: &TypeContext| {
 
         monetary_count += 1;
 
-        // Override type based on generator
-        if is_effect {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "Schema.BigDecimal.pipe(Schema.brand(\"MonetaryAmount\"))".to_string(),
-            );
-        } else if is_macroforge {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "BigDecimal.BigDecimal & { readonly __brand: \"MonetaryAmount\" }".to_string(),
-            );
-        }
-
-        // Add monetary annotation linking to currency field
-        output.field_annotations
-            .entry(field.field_name.clone())
-            .or_insert_with(Vec::new)
-            .push(format!(
-                "@monetary({{ currency_field: \"{}\" }})",
-                currency_field_name
-            ));
-    }
-
-    // Add @iso4217 to the currency field
-    output.field_annotations
-        .entry(currency_field_name.clone())
-        .or_insert_with(Vec::new)
-        .push("@iso4217".to_string());
-
-    // Add imports
-    if is_effect {
-        output.extra_imports.push(
-            "import { Schema } from '@effect/schema';".to_string(),
+        push_field_annotation(
+            &mut output,
+            &field.field_name,
+            "@brand(\"MonetaryAmount\")".to_string(),
         );
-        output.extra_imports.push(
-            "import type { BigDecimal } from 'effect';".to_string(),
-        );
-    } else if is_macroforge {
-        output.extra_imports.push(
-            "import type { BigDecimal } from 'effect';".to_string(),
+        push_field_annotation(
+            &mut output,
+            &field.field_name,
+            format!("@monetary({{ currency_field: \"{}\" }})", currency_field_name),
         );
     }
 
-    // Embed monetary field count as a comment import
-    output.extra_imports.push(
-        format!("// {} monetary field(s) branded in {}", monetary_count, ctx.type_name),
-    );
+    // Add @iso4217 to the currency field.
+    push_field_annotation(&mut output, &currency_field_name, "@iso4217".to_string());
+
+    // Embed monetary field count.
+    output
+        .type_override
+        .annotations
+        .push(format!("@monetary_count({})", monetary_count));
 
     output
 });

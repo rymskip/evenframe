@@ -16,8 +16,9 @@ use convert_case::{Case, Casing};
 pub use foreign_type_registry::ForeignTypeRegistry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 #[cfg(feature = "surrealdb")]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Which pipeline(s) a type participates in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -63,7 +64,7 @@ pub enum EnumRepresentation {
     Untagged,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaggedUnion {
     pub enum_name: String,
     pub variants: Vec<Variant>,
@@ -81,6 +82,8 @@ pub struct TaggedUnion {
     pub rust_derives: Vec<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -134,7 +137,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Variant {
     pub name: String,
     pub data: Option<VariantData>,
@@ -144,15 +147,17 @@ pub struct Variant {
     pub annotations: Vec<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VariantData {
     InlineStruct(StructConfig),
     DataStructureRef(FieldType),
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructField {
     pub field_name: String,
     pub field_type: FieldType,
@@ -172,6 +177,28 @@ pub struct StructField {
     pub mock_plugin: Option<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
+}
+
+/// Manual Hash impl — hashes every field except `raw_attributes` (HashMap
+/// doesn't implement Hash). StructField is used as a HashMap key in
+/// `MockGenerationConfig.table_level_override`.
+impl std::hash::Hash for StructField {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.field_name.hash(state);
+        self.field_type.hash(state);
+        self.edge_config.hash(state);
+        self.define_config.hash(state);
+        self.format.hash(state);
+        self.validators.hash(state);
+        self.always_regenerate.hash(state);
+        self.doccom.hash(state);
+        self.annotations.hash(state);
+        self.unique.hash(state);
+        self.mock_plugin.hash(state);
+        self.output_override.hash(state);
+    }
 }
 
 impl StructField {
@@ -179,16 +206,7 @@ impl StructField {
         Self {
             field_name,
             field_type: FieldType::Unit,
-            edge_config: None,
-            define_config: None,
-            format: None,
-            validators: Vec::new(),
-            always_regenerate: false,
-            doccom: None,
-            annotations: Vec::new(),
-            unique: false,
-            mock_plugin: None,
-            output_override: None,
+            ..Default::default()
         }
     }
 
@@ -196,16 +214,7 @@ impl StructField {
         Self {
             field_name: field_name.to_string(),
             field_type: FieldType::Struct(Vec::new()),
-            edge_config: None,
-            define_config: None,
-            format: None,
-            validators: Vec::new(),
-            always_regenerate: false,
-            doccom: None,
-            annotations: Vec::new(),
-            unique: false,
-            mock_plugin: None,
-            output_override: None,
+            ..Default::default()
         }
     }
     #[cfg(feature = "surrealdb")]
@@ -778,7 +787,7 @@ impl StructField {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructConfig {
     pub struct_name: String,
     pub fields: Vec<StructField>,
@@ -795,6 +804,16 @@ pub struct StructConfig {
     pub rust_derives: Vec<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    /// Every attribute on this item that evenframe doesn't natively parse,
+    /// keyed by attribute name. Each value is one occurrence's raw token
+    /// body (the part inside the parens). Multiple uses of the same
+    /// attribute produce multiple entries under that key.
+    ///
+    /// Synthetic plugins can read project-specific attributes like
+    /// `#[partial_route(name = "PartialUser", fields(id, email))]`
+    /// without evenframe needing to understand them.
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
 }
 
 #[cfg(test)]

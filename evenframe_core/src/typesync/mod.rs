@@ -9,6 +9,12 @@ pub mod plugin_types;
 
 #[cfg(feature = "wasm-plugins")]
 pub mod plugin;
+#[cfg(feature = "wasm-plugins")]
+pub(crate) mod plugin_runtime;
+#[cfg(feature = "wasm-plugins")]
+pub mod synthetic_plugin;
+#[cfg(feature = "wasm-plugins")]
+pub mod synthetic_plugin_types;
 
 #[cfg(all(test, feature = "macroforge"))]
 pub mod testing;

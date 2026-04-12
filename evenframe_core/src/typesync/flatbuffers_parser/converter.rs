@@ -78,13 +78,7 @@ fn convert_table(table: &TableDef) -> StructConfig {
     StructConfig {
         struct_name: table.name.clone(),
         fields,
-        validators: Vec::new(), // Validators will be extracted separately
-        doccom: None,
-        macroforge_derives: vec![],
-        annotations: vec![],
-        pipeline: crate::types::Pipeline::default(),
-        rust_derives: vec![],
-        output_override: None,
+        ..Default::default()
     }
 }
 
@@ -94,13 +88,7 @@ fn convert_struct(struct_def: &StructDef) -> StructConfig {
     StructConfig {
         struct_name: struct_def.name.clone(),
         fields,
-        validators: Vec::new(),
-        doccom: None,
-        macroforge_derives: vec![],
-        annotations: vec![],
-        pipeline: crate::types::Pipeline::default(),
-        rust_derives: vec![],
-        output_override: None,
+        ..Default::default()
     }
 }
 
@@ -108,16 +96,7 @@ fn convert_field(field: &FieldDef) -> StructField {
     StructField {
         field_name: field.name.clone(),
         field_type: convert_type(&field.field_type),
-        edge_config: None,
-        define_config: None,
-        format: None,
-        validators: Vec::new(), // Validators extracted separately
-        always_regenerate: false,
-        doccom: None,
-        annotations: vec![],
-        unique: false,
-        mock_plugin: None,
-        output_override: None,
+        ..Default::default()
     }
 }
 
@@ -160,6 +139,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
             doccom: None,
             annotations: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         })
         .collect();
 
@@ -173,6 +153,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
+        raw_attributes: HashMap::new(),
     }
 }
 
@@ -191,6 +172,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                 doccom: None,
                 annotations: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             }
         })
         .collect();
@@ -205,6 +187,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
+        raw_attributes: HashMap::new(),
     }
 }
 

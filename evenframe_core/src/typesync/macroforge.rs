@@ -700,7 +700,12 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
 }
 
 /// Computes extra import lines needed for a set of types.
-/// Returns import lines for effect types (DateTime, BigDecimal) and utility types (RecordLink).
+///
+/// Emits:
+/// - one import line per foreign type referenced by the given types whose
+///   TS import is declared in the passed `registry` (built from the user's
+///   `[general.foreign_types]` config — no foreign types are hardcoded);
+/// - a single `RecordLink` utility import if any field in the types uses it.
 pub fn compute_extra_imports(
     type_names: &[String],
     structs: &HashMap<String, StructConfig>,
@@ -789,7 +794,11 @@ pub fn compute_extra_imports(
         let mut sorted_imports: Vec<(String, bool)> = foreign_imports.into_iter().collect();
         sorted_imports.sort_by(|a, b| a.0.cmp(&b.0));
         for (import_name, is_type_only) in sorted_imports {
-            let keyword = if is_type_only { "import type" } else { "import" };
+            let keyword = if is_type_only {
+                "import type"
+            } else {
+                "import"
+            };
             lines.push(format!("{} {{ {} }} from 'effect';", keyword, import_name));
         }
     }
@@ -1524,6 +1533,9 @@ mod tests {
     fn make_datetime_registry() -> crate::types::ForeignTypeRegistry {
         use crate::config::ForeignTypeConfig;
         let mut foreign_types = HashMap::new();
+        // DateTime and BigDecimal are type-only re-exports from the
+        // `effect` package; the registry is configured for `import type`
+        // so generated TS doesn't pull runtime artifacts it doesn't need.
         foreign_types.insert(
             "DateTime".to_string(),
             ForeignTypeConfig {
@@ -1531,7 +1543,7 @@ mod tests {
                 macroforge: "DateTime.Utc".to_string(),
                 ts_import: crate::config::TsImport {
                     name: "DateTime".to_string(),
-                    is_type_only: false,
+                    is_type_only: true,
                 },
                 ..Default::default()
             },
@@ -1543,7 +1555,7 @@ mod tests {
                 macroforge: "BigDecimal.BigDecimal".to_string(),
                 ts_import: crate::config::TsImport {
                     name: "BigDecimal".to_string(),
-                    is_type_only: false,
+                    is_type_only: true,
                 },
                 ..Default::default()
             },

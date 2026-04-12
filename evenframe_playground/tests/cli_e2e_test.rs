@@ -9,25 +9,42 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Get the path to the evenframe binary (built via cargo)
+/// Get the path to the evenframe binary (built via cargo).
+///
+/// Prefers whichever of `target/{release,debug}/evenframe` has the more
+/// recent modification time so local debug builds aren't shadowed by a
+/// stale release binary left over from a prior run.
 fn get_evenframe_binary() -> PathBuf {
-    // The binary is built in the workspace target directory
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.parent().unwrap();
 
-    // Try release first, then debug
     let release_path = workspace_root
         .join("target")
         .join("release")
         .join("evenframe");
-    if release_path.exists() {
-        return release_path;
-    }
-
-    workspace_root
+    let debug_path = workspace_root
         .join("target")
         .join("debug")
-        .join("evenframe")
+        .join("evenframe");
+
+    let mtime = |p: &PathBuf| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+    };
+
+    match (mtime(&release_path), mtime(&debug_path)) {
+        (Some(r), Some(d)) => {
+            if r >= d {
+                release_path
+            } else {
+                debug_path
+            }
+        }
+        (Some(_), None) => release_path,
+        (None, Some(_)) => debug_path,
+        (None, None) => debug_path, // return debug path anyway so the test fails with a clear error
+    }
 }
 
 /// Helper to run evenframe with arguments

@@ -82,13 +82,7 @@ fn convert_message(message: &DescriptorProto, prefix: &str, result: &mut Protobu
     let struct_config = StructConfig {
         struct_name: name.clone(),
         fields,
-        validators: Vec::new(),
-        doccom: None,
-        macroforge_derives: vec![],
-        annotations: vec![],
-        pipeline: crate::types::Pipeline::default(),
-        rust_derives: vec![],
-        output_override: None,
+        ..Default::default()
     };
 
     result.structs.insert(name.clone(), struct_config);
@@ -149,16 +143,7 @@ fn convert_field(field: &FieldDescriptorProto) -> StructField {
     StructField {
         field_name,
         field_type: final_type,
-        edge_config: None,
-        define_config: None,
-        format: None,
-        validators: Vec::new(),
-        always_regenerate: false,
-        doccom: None,
-        annotations: vec![],
-        unique: false,
-        mock_plugin: None,
-        output_override: None,
+        ..Default::default()
     }
 }
 
@@ -228,6 +213,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
             doccom: None,
             annotations: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         })
         .collect();
 
@@ -241,6 +227,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
+        raw_attributes: HashMap::new(),
     }
 }
 

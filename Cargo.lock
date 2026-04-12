@@ -1743,6 +1743,7 @@ name = "evenframe_core"
 version = "0.1.2"
 dependencies = [
  "async-trait",
+ "blake3",
  "bon",
  "chrono",
  "chrono-tz",
@@ -1767,6 +1768,7 @@ dependencies = [
  "quote",
  "rand 0.10.0",
  "rand_distr",
+ "rayon",
  "regex",
  "serde",
  "serde-value",

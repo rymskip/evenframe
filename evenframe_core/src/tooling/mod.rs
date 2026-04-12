@@ -18,6 +18,7 @@
 
 mod build_config;
 mod config_builders;
+pub mod expansion_cache;
 mod generator;
 mod workspace_scanner;
 

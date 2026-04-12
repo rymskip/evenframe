@@ -1243,15 +1243,7 @@ impl<'a> Merger<'a> {
                         field_name: field.field_name.clone(),
                         field_type: *inner.clone(),
                         format: field.format.clone(),
-                        edge_config: None,
-                        define_config: None,
-                        validators: Vec::new(),
-                        always_regenerate: false,
-                        doccom: None,
-                        annotations: vec![],
-                        unique: false,
-                        mock_plugin: None,
-                        output_override: None,
+                        ..Default::default()
                     };
                     Self::generate_field_value(&inner_field, _table_config)
                 } else {

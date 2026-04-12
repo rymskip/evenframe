@@ -1,9 +1,11 @@
 //! Helper crate for writing evenframe WASM plugins.
 //!
-//! Supports two plugin types:
+//! Supports three plugin types:
 //! - **Mock data plugins** (`define_mock_data_plugin!`): Generate mock data for individual fields.
 //! - **Output rule plugins** (`define_output_rule_plugin!`): Provide convention-based annotations,
-//!   permissions, events, derives, and field-level rules for structs.
+//!   permissions, events, derives, and field-level rules for existing structs.
+//! - **Synthetic item plugins** (`define_synthetic_item_plugin!`): Emit *new*
+//!   structs, tagged unions, and DB tables derived from the scanner results.
 //!
 //! Eliminates all WASM boilerplate (alloc, dealloc, JSON serialization,
 //! pointer packing) so you only write your generation logic.
@@ -488,4 +490,266 @@ fn extract_vec_inner(t: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+// ============================================================
+// Synthetic item plugin types and macro
+// ============================================================
+//
+// Unlike output-rule plugins, synthetic plugins *add* new structs/enums/
+// tables derived from the scanner results rather than overriding existing
+// items. The host sends the FULL set of configs (not lossy summaries) so
+// plugins can make system-wide decisions and copy field types verbatim
+// from existing types into new ones.
+//
+// Both the input and output carry items as `serde_json::Value` so this
+// crate stays tiny (no `evenframe_core` dep). The host serializes real
+// `StructConfig` / `TaggedUnion` / `TableConfig` values and the plugin
+// navigates the raw JSON or deserializes it into a locally-defined
+// mirror type tailored to its needs.
+
+/// Full snapshot of everything evenframe knows about so far, handed to
+/// each synthetic plugin call.
+///
+/// All three maps hold items as `serde_json::Value`:
+///
+/// - `structs`:  keyed by struct name, values are the JSON form of
+///               `evenframe_core::types::StructConfig`.
+/// - `enums`:    keyed by enum name, values are the JSON form of
+///               `evenframe_core::types::TaggedUnion`.
+/// - `tables`:   keyed by snake_case table name, values are the JSON form of
+///               `evenframe_core::schemasync::table::TableConfig`.
+///
+/// Each plugin sees the cumulative state after all previous synthetic
+/// plugins have run, so chained plugins can build on each other.
+#[derive(Debug, Deserialize)]
+pub struct SyntheticContext {
+    #[serde(default)]
+    pub structs: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub enums: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub tables: HashMap<String, serde_json::Value>,
+}
+
+impl SyntheticContext {
+    /// Returns the serialized `FieldType` of a field inside a given struct,
+    /// if that struct exists and has such a field. The returned value is
+    /// ready to be splatted into a new struct via [`struct_item`] or
+    /// [`struct_item_with_raw`].
+    ///
+    /// This is the primary ergonomic helper for partial/projection-style
+    /// plugins that need to copy an existing field's type verbatim into
+    /// a newly-generated struct.
+    pub fn struct_field_type(
+        &self,
+        struct_name: &str,
+        field_name: &str,
+    ) -> Option<serde_json::Value> {
+        let sc = self.structs.get(struct_name)?;
+        let fields = sc.get("fields")?.as_array()?;
+        for f in fields {
+            if f.get("field_name")?.as_str()? == field_name {
+                return f.get("field_type").cloned();
+            }
+        }
+        None
+    }
+
+    /// Same as [`Self::struct_field_type`] but searches a *table*'s
+    /// inner `struct_config.fields`.
+    pub fn table_field_type(
+        &self,
+        table_name: &str,
+        field_name: &str,
+    ) -> Option<serde_json::Value> {
+        let tc = self.tables.get(table_name)?;
+        let fields = tc.get("struct_config")?.get("fields")?.as_array()?;
+        for f in fields {
+            if f.get("field_name")?.as_str()? == field_name {
+                return f.get("field_type").cloned();
+            }
+        }
+        None
+    }
+
+    /// Returns every Rust derive on a struct (e.g. `["Debug","Clone","Serialize"]`).
+    pub fn struct_rust_derives(&self, struct_name: &str) -> Vec<String> {
+        self.structs
+            .get(struct_name)
+            .and_then(|sc| sc.get("rust_derives"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Returns every `#[annotation("...")]` string on a struct.
+    pub fn struct_annotations(&self, struct_name: &str) -> Vec<String> {
+        self.structs
+            .get(struct_name)
+            .and_then(|sc| sc.get("annotations"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Output from a synthetic-item plugin.
+///
+/// Each item is carried as an opaque `serde_json::Value` whose shape must
+/// match evenframe_core's `StructConfig` / `TaggedUnion` / `TableConfig`
+/// on the host side. See the built-in helpers [`struct_item`],
+/// [`enum_item`], and [`table_item`] for ergonomic constructors.
+#[derive(Debug, Serialize, Default)]
+pub struct SyntheticPluginOutput {
+    #[serde(default)]
+    pub new_structs: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub new_enums: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub new_tables: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Build a minimal `StructConfig`-shaped JSON value.
+///
+/// `fields` is a slice of `(field_name, field_type_json)` pairs. The
+/// `field_type_json` is an already-built `FieldType` JSON value — use
+/// [`string_type`], [`bool_type`], etc. for primitives.
+pub fn struct_item(name: &str, fields: &[(&str, serde_json::Value)]) -> serde_json::Value {
+    let field_objs: Vec<serde_json::Value> = fields
+        .iter()
+        .map(|(fname, ftype)| {
+            serde_json::json!({
+                "field_name": fname,
+                "field_type": ftype,
+                "edge_config": serde_json::Value::Null,
+                "define_config": serde_json::Value::Null,
+                "format": serde_json::Value::Null,
+                "validators": [],
+                "always_regenerate": false,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "struct_name": name,
+        "fields": field_objs,
+        "validators": [],
+    })
+}
+
+/// Build an enum-as-tagged-union JSON value. Variants are given as
+/// name-only strings (unit variants).
+pub fn enum_item(name: &str, unit_variants: &[&str]) -> serde_json::Value {
+    let variants: Vec<serde_json::Value> = unit_variants
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "name": v,
+                "data": serde_json::Value::Null,
+                "annotations": [],
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "enum_name": name,
+        "variants": variants,
+        "representation": "ExternallyTagged",
+    })
+}
+
+/// Build a `TableConfig`-shaped JSON value wrapping a synthetic struct.
+pub fn table_item(
+    table_name: &str,
+    struct_name: &str,
+    fields: &[(&str, serde_json::Value)],
+) -> serde_json::Value {
+    serde_json::json!({
+        "table_name": table_name,
+        "struct_config": struct_item(struct_name, fields),
+        "relation": serde_json::Value::Null,
+        "permissions": serde_json::Value::Null,
+        "mock_generation_config": serde_json::Value::Null,
+    })
+}
+
+// Convenience field-type constructors — match the `FieldType` serde tags.
+
+pub fn string_type() -> serde_json::Value {
+    serde_json::json!("String")
+}
+pub fn bool_type() -> serde_json::Value {
+    serde_json::json!("Bool")
+}
+pub fn i64_type() -> serde_json::Value {
+    serde_json::json!("I64")
+}
+pub fn f64_type() -> serde_json::Value {
+    serde_json::json!("F64")
+}
+pub fn option_of(inner: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "Option": inner })
+}
+pub fn vec_of(inner: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "Vec": inner })
+}
+
+/// Define a synthetic-item WASM plugin.
+///
+/// Takes a closure `|ctx: &SyntheticContext| -> SyntheticPluginOutput`.
+/// Inspect the scanner summary and return new structs/enums/tables.
+///
+/// Generates all required WASM exports: `alloc`, `dealloc`, `generate_items`, `memory`.
+#[macro_export]
+macro_rules! define_synthetic_item_plugin {
+    (|$ctx:ident : &SyntheticContext| $body:expr) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn alloc(size: i32) -> i32 {
+            let layout = ::std::alloc::Layout::from_size_align(size as usize, 1).unwrap();
+            unsafe { ::std::alloc::alloc(layout) as i32 }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn dealloc(ptr: i32, len: i32) {
+            let layout = ::std::alloc::Layout::from_size_align(len as usize, 1).unwrap();
+            unsafe { ::std::alloc::dealloc(ptr as *mut u8, layout) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn generate_items(ptr: i32, len: i32) -> i64 {
+            let input_bytes =
+                unsafe { ::std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+
+            let output =
+                match $crate::serde_json::from_slice::<$crate::SyntheticContext>(input_bytes) {
+                    Ok($ctx) => {
+                        let $ctx = &$ctx;
+                        let result: $crate::SyntheticPluginOutput = (|| $body)();
+                        result
+                    }
+                    Err(e) => $crate::SyntheticPluginOutput {
+                        error: Some(format!("parse error: {}", e)),
+                        ..Default::default()
+                    },
+                };
+
+            let bytes = $crate::serde_json::to_vec(&output).unwrap();
+            let out_ptr = alloc(bytes.len() as i32);
+            unsafe {
+                ::std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr as *mut u8, bytes.len());
+            }
+            ((out_ptr as i64) << 32) | (bytes.len() as i64)
+        }
+    };
 }

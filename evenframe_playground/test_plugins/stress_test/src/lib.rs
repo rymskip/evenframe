@@ -1,17 +1,25 @@
-//! Stress-test output-rule plugin.
+//! Stress-test output-rule plugin, ported to the current plugin API.
 //!
-//! Exercises every output field and handles edge cases:
-//! - Unicode type names and field names
-//! - Deeply nested generic types
-//! - Empty input (no fields, no derives)
-//! - Massive field counts
-//! - Every output feature: overrides, skips, imports, annotations, type_name_override, error
-//! - JSON special characters in strings
-//! - Conflicting overrides (last wins at host level)
+//! This exercises every output capability the current
+//! `OutputRulePluginOutput` actually supports:
+//!
+//! - `output.error` for the intentional panic path
+//! - `type_override.macroforge_derives` for injected derives
+//! - `type_override.annotations` for type-level annotations
+//! - `type_override.permissions` for table permissions
+//! - `type_override.events` for table events
+//! - `field_overrides[name].annotations` for field-level annotations
+//!
+//! Capabilities removed from the plugin surface (type substitution, skip
+//! fields, extra imports, type renaming) are *simulated* via annotation
+//! markers so the downstream consumer can still act on them if desired.
 
-use evenframe_plugin::{OutputRulePluginOutput, define_type_plugin};
+use evenframe_plugin::{
+    EventOverride, FieldOverride, OutputRulePluginOutput, PermissionsOverride,
+    define_output_rule_plugin,
+};
 
-define_type_plugin!(|ctx: &TypeContext| {
+define_output_rule_plugin!(|ctx: &TypeContext| {
     let mut output = OutputRulePluginOutput::default();
 
     // ---- Error path: type named "PanicType" triggers an error ----
@@ -20,130 +28,151 @@ define_type_plugin!(|ctx: &TypeContext| {
         return output;
     }
 
-    // ---- Type name override: rename types ending with "Dto" ----
+    // ---- Type renaming simulated as a type annotation ----
     if ctx.type_name.ends_with("Dto") {
         let base = &ctx.type_name[..ctx.type_name.len() - 3];
-        output.type_name_override = Some(format!("{}Response", base));
+        output
+            .type_override
+            .annotations
+            .push(format!("@rename(\"{}Response\")", base));
     }
 
-    // ---- Field type overrides based on derive combinations ----
+    // ---- Derive combination matrix → field annotations ----
     let has_serialize = ctx.rust_derives.iter().any(|d| d == "Serialize");
     let has_clone = ctx.rust_derives.iter().any(|d| d == "Clone");
     let has_debug = ctx.rust_derives.iter().any(|d| d == "Debug");
 
+    fn push_field_annotation(
+        output: &mut OutputRulePluginOutput,
+        field_name: &str,
+        annotation: String,
+    ) {
+        output
+            .field_overrides
+            .entry(field_name.to_string())
+            .or_insert_with(FieldOverride::default)
+            .annotations
+            .push(annotation);
+    }
+
     for field in &ctx.fields {
-        // Decimal + Serialize → BigDecimal
+        // Decimal + Serialize → @bigdecimal
         if has_serialize && field.field_type == "Decimal" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "BigDecimal.BigDecimal".to_string(),
-            );
-            output.extra_imports.push(
-                "import type { BigDecimal } from 'effect';".to_string(),
-            );
+            push_field_annotation(&mut output, &field.field_name, "@bigdecimal".to_string());
         }
 
-        // DateTime + Clone → DateTimeIso
+        // Option<DateTime> + Clone → @datetime_nullable
         if has_clone && field.field_type == "Option<DateTime>" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "DateTime.Utc | null".to_string(),
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@datetime_nullable".to_string(),
             );
         }
 
-        // Vec<Uuid> with Debug → readonly array
+        // Vec<Uuid> with Debug → @readonly_uuid_array
         if has_debug && field.field_type == "Vec<Uuid>" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "ReadonlyArray<Uuid>".to_string(),
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@readonly_uuid_array".to_string(),
             );
         }
 
-        // HashMap override
+        // HashMap<String, i64> → @string_number_map
         if field.field_type == "HashMap<String, i64>" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "Record<string, number>".to_string(),
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@string_number_map".to_string(),
             );
         }
 
-        // Deeply nested type
+        // Deeply nested type → @deep_nested
         if field.field_type == "Option<Vec<HashMap<String, Decimal>>>" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                "Array<Record<string, BigDecimal>> | null".to_string(),
-            );
+            push_field_annotation(&mut output, &field.field_name, "@deep_nested".to_string());
         }
 
-        // ---- Skip fields ----
-        // Skip @internal annotated fields
+        // ---- Skip markers (since we can't actually skip) ----
         if field.annotations.iter().any(|a| a.contains("@internal")) {
-            output.skip_fields.push(field.field_name.clone());
+            push_field_annotation(&mut output, &field.field_name, "@skip_internal".to_string());
         }
-        // Skip @deprecated annotated fields
         if field.annotations.iter().any(|a| a.contains("@deprecated")) {
-            output.skip_fields.push(field.field_name.clone());
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@skip_deprecated".to_string(),
+            );
         }
-        // Skip fields named exactly "__private"
         if field.field_name == "__private" {
-            output.skip_fields.push(field.field_name.clone());
+            push_field_annotation(&mut output, &field.field_name, "@skip_private".to_string());
         }
 
-        // ---- Field annotations ----
-        // Add @readonly to fields with "created" or "updated" in name
+        // ---- Readonly/validated ----
         if field.field_name.contains("created") || field.field_name.contains("updated") {
-            output.field_annotations
-                .entry(field.field_name.clone())
-                .or_insert_with(Vec::new)
-                .push("@readonly".to_string());
+            push_field_annotation(&mut output, &field.field_name, "@readonly".to_string());
         }
-
-        // Fields with validators get a @validated annotation
         if !field.validators.is_empty() {
-            output.field_annotations
-                .entry(field.field_name.clone())
-                .or_insert_with(Vec::new)
-                .push("@validated".to_string());
+            push_field_annotation(&mut output, &field.field_name, "@validated".to_string());
         }
-    }
 
-    // ---- Generator-specific behavior ----
-    if ctx.generator == "arktype" {
-        // Add arktype-specific import
-        if !output.field_type_overrides.is_empty() {
-            output.extra_imports.push(
-                "import { type } from 'arktype';".to_string(),
+        // ---- JSON special characters (verifies wire round-trip) ----
+        if field.field_name == "json_tricky" {
+            push_field_annotation(
+                &mut output,
+                &field.field_name,
+                "@tricky(\"value\\\"with\\\\escapes\")".to_string(),
             );
         }
     }
 
-    // ---- Pipeline-specific behavior ----
+    // ---- Generator-specific type annotations ----
+    if ctx.generator == "arktype" && !output.field_overrides.is_empty() {
+        output
+            .type_override
+            .annotations
+            .push("@arktype_generator".to_string());
+    }
+
+    // ---- Pipeline-specific annotations ----
     if ctx.pipeline == "Schemasync" {
-        // For schemasync-only types, skip all Option fields
         for field in &ctx.fields {
             if field.field_type.starts_with("Option<") {
-                output.skip_fields.push(field.field_name.clone());
+                push_field_annotation(
+                    &mut output,
+                    &field.field_name,
+                    "@schemasync_option".to_string(),
+                );
             }
         }
     }
 
     // ---- Enum handling ----
     if ctx.kind == "Enum" {
-        // Add enum-specific import
-        output.extra_imports.push(
-            format!("// Enum: {}", ctx.type_name),
-        );
+        output
+            .type_override
+            .annotations
+            .push(format!("@tracked_enum(\"{}\")", ctx.type_name));
     }
 
-    // ---- JSON special characters in output ----
-    // Field named "json_tricky" gets a type with special chars
-    for field in &ctx.fields {
-        if field.field_name == "json_tricky" {
-            output.field_type_overrides.insert(
-                field.field_name.clone(),
-                r#"string & { readonly __brand: "tricky\"value" }"#.to_string(),
-            );
-        }
+    // ---- Permissions + events demonstration for Dto-named tables ----
+    if !ctx.table_name.is_empty() && ctx.type_name.ends_with("Dto") {
+        output.type_override.permissions = Some(PermissionsOverride {
+            select: "FULL".to_string(),
+            create: "WHERE $auth != NONE".to_string(),
+            update: "WHERE $auth != NONE".to_string(),
+            delete: "WHERE $auth.role = 'admin'".to_string(),
+        });
+        output.type_override.events.push(EventOverride {
+            name: "dto_audit".to_string(),
+            statement: "CREATE audit SET table = $table, action = $event, at = time::now()"
+                .to_string(),
+        });
+    }
+
+    // ---- Macroforge derive injection demo ----
+    if has_serialize && has_clone && has_debug {
+        output.type_override.macroforge_derives.push("StressGold".to_string());
     }
 
     output

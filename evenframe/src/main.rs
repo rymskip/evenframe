@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging based on verbosity
-    init_logging();
+    init_logging(&cli);
 
     evenframe_log!("", "tracing.log");
     evenframe_log!("", "errors.log");
@@ -51,11 +51,11 @@ async fn main() -> Result<()> {
     }
 }
 
-fn init_logging() {
+fn init_logging(cli: &Cli) {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "evenframe=warn,evenframe_core=warn".into()),
+                .unwrap_or_else(|_| cli.log_filter().into()),
         )
         .init();
 }

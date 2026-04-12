@@ -152,7 +152,7 @@ fn test_valid_format_attributes() {
     ];
 
     // Valid format attribute patterns
-    let valid_formats = vec![
+    let valid_formats = [
         "#[format(Email)]",
         "#[format(DateTime)]",
         "#[format(Date)]",
@@ -179,12 +179,41 @@ fn test_valid_format_attributes() {
     }
 }
 
+/// Collects attribute occurrences whose opening line contains `starts_with`,
+/// concatenating continuation lines until the matching `)]` is seen.
+///
+/// Used by the attribute-shape tests so multi-line `#[edge(...)]` and
+/// `#[validators(...)]` attributes don't get examined line-by-line (which
+/// would miss the params that live on separate lines).
+fn collect_multiline_attributes(content: &str, starts_with: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut lines = content.lines().peekable();
+    while let Some(line) = lines.next() {
+        if !line.trim_start().starts_with(starts_with) {
+            continue;
+        }
+        let mut combined = line.to_string();
+        // Keep appending lines until we see the attribute's closing `)]`.
+        while !combined.contains(")]") {
+            match lines.next() {
+                Some(next) => {
+                    combined.push(' ');
+                    combined.push_str(next);
+                }
+                None => break,
+            }
+        }
+        out.push(combined);
+    }
+    out
+}
+
 /// Test that edge attributes have required parameters
 #[test]
 fn test_edge_attribute_structure() {
     let playground_dir = get_playground_dir();
 
-    let files = vec![
+    let files = [
         "src/models/auth.rs",
         "src/models/blog.rs",
         "src/models/ecommerce.rs",
@@ -194,41 +223,31 @@ fn test_edge_attribute_structure() {
         let content = fs::read_to_string(playground_dir.join(file_path))
             .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
-        // Find all edge attributes
-        for line in content.lines() {
-            if line.contains("#[edge(") {
-                // Edge should have name parameter
-                assert!(
-                    line.contains("name = "),
-                    "Edge attribute should have 'name' parameter in {}: {}",
-                    file_path,
-                    line
-                );
-
-                // Edge should have from parameter
-                assert!(
-                    line.contains("from = "),
-                    "Edge attribute should have 'from' parameter in {}: {}",
-                    file_path,
-                    line
-                );
-
-                // Edge should have to parameter
-                assert!(
-                    line.contains("to = "),
-                    "Edge attribute should have 'to' parameter in {}: {}",
-                    file_path,
-                    line
-                );
-
-                // Edge should have direction parameter
-                assert!(
-                    line.contains("direction = "),
-                    "Edge attribute should have 'direction' parameter in {}: {}",
-                    file_path,
-                    line
-                );
-            }
+        for attr in collect_multiline_attributes(&content, "#[edge(") {
+            assert!(
+                attr.contains("name = "),
+                "Edge attribute should have 'name' parameter in {}: {}",
+                file_path,
+                attr
+            );
+            assert!(
+                attr.contains("from = "),
+                "Edge attribute should have 'from' parameter in {}: {}",
+                file_path,
+                attr
+            );
+            assert!(
+                attr.contains("to = "),
+                "Edge attribute should have 'to' parameter in {}: {}",
+                file_path,
+                attr
+            );
+            assert!(
+                attr.contains("direction = "),
+                "Edge attribute should have 'direction' parameter in {}: {}",
+                file_path,
+                attr
+            );
         }
     }
 }
@@ -637,7 +656,7 @@ fn test_url_fields_have_format_and_validators() {
 fn test_validators_attribute_syntax() {
     let playground_dir = get_playground_dir();
 
-    let files = vec![
+    let files = [
         "src/models/auth.rs",
         "src/models/blog.rs",
         "src/models/ecommerce.rs",
@@ -647,28 +666,23 @@ fn test_validators_attribute_syntax() {
         let content = fs::read_to_string(playground_dir.join(file_path))
             .unwrap_or_else(|_| panic!("Failed to read {}", file_path));
 
-        // Find all validators attributes and verify they have proper syntax
-        for line in content.lines() {
-            if line.trim().starts_with("#[validators(") {
-                // Should contain valid validator types
-                let has_string_validator = line.contains("StringValidator::");
-                let has_number_validator = line.contains("NumberValidator::");
-                let has_array_validator = line.contains("ArrayValidator::");
+        for attr in collect_multiline_attributes(&content, "#[validators(") {
+            let has_string_validator = attr.contains("StringValidator::");
+            let has_number_validator = attr.contains("NumberValidator::");
+            let has_array_validator = attr.contains("ArrayValidator::");
 
-                assert!(
-                    has_string_validator || has_number_validator || has_array_validator,
-                    "validators attribute in {} should contain valid validator types: {}",
-                    file_path,
-                    line
-                );
+            assert!(
+                has_string_validator || has_number_validator || has_array_validator,
+                "validators attribute in {} should contain valid validator types: {}",
+                file_path,
+                attr
+            );
 
-                // Should end with )]
-                assert!(
-                    line.trim().ends_with(")]"),
-                    "validators attribute should have proper closing: {}",
-                    line
-                );
-            }
+            assert!(
+                attr.trim_end().ends_with(")]"),
+                "validators attribute should have proper closing: {}",
+                attr
+            );
         }
     }
 }
