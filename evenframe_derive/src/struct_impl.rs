@@ -287,6 +287,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     unique: #is_unique,
                     mock_plugin: #mock_plugin_tokens,
                     output_override: None,
+                    raw_attributes: std::collections::HashMap::new(),
                 }
             });
 
@@ -382,6 +383,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                                 pipeline: #pipeline_tokens,
                                 rust_derives: #rust_derives_tokens,
                                 output_override: None,
+                                raw_attributes: std::collections::HashMap::new(),
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,

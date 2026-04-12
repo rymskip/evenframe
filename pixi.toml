@@ -1,0 +1,19 @@
+[workspace]
+authors = ["rymskip <17lochinskij@protonmail.com>"]
+channels = ["conda-forge"]
+name = "evenframe"
+platforms = ["osx-64"]
+version = "0.1.0"
+
+[tasks]
+verify = "cargo run -p tooling -- verify"
+verify-fast = "cargo run -p tooling -- verify --fail-fast"
+test = "cargo run -p tooling -- test"
+test-snapshot = "cargo run -p tooling -- test --snapshot"
+test-e2e = "cargo run -p tooling -- test --e2e"
+test-derive = "cargo run -p tooling -- test --derive"
+snapshot-accept = "cargo run -p tooling -- snapshot accept"
+snapshot-review = "cargo run -p tooling -- snapshot review"
+snapshot-update = "cargo run -p tooling -- snapshot update"
+
+[dependencies]

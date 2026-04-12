@@ -99,6 +99,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                         unique: false,
                                         mock_plugin: None,
                                         output_override: None,
+                                        raw_attributes: std::collections::HashMap::new(),
                                     }
                                 }
                             })
@@ -116,6 +117,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 pipeline: #pipeline_tokens_inner,
                                 rust_derives: vec![],
                                 output_override: None,
+                                raw_attributes: std::collections::HashMap::new(),
                             }))
                         }
                     }
@@ -142,6 +144,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                     unique: false,
                                     mock_plugin: None,
                                     output_override: None,
+                                    raw_attributes: std::collections::HashMap::new(),
                                 }
                             }
                         })
@@ -159,6 +162,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             pipeline: #pipeline_tokens_inner,
                             rust_derives: vec![],
                             output_override: None,
+                            raw_attributes: std::collections::HashMap::new(),
                         }))
                     }
                 }
@@ -177,6 +181,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     doccom: None,
                     annotations: #variant_annotations_tokens,
                     output_override: None,
+                    raw_attributes: std::collections::HashMap::new(),
                 }
             });
         }
@@ -215,6 +220,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             pipeline: #pipeline_tokens,
                             rust_derives: rust_derives_val,
                             output_override: None,
+                            raw_attributes: std::collections::HashMap::new(),
                         }
                     }
                 }

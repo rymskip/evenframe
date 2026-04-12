@@ -1,0 +1,8 @@
+[package]
+name = "tooling"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
