@@ -1,0 +1,27 @@
+{
+  "description": "Table with event triggers",
+  "table_name": "order",
+  "table_config": {
+    "table_name": "order",
+    "struct_config": {
+      "struct_name": "Order",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "customer_id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "total", "field_type": "F64", "validators": [], "always_regenerate": false },
+        { "field_name": "status", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "relation": null,
+    "permissions": null,
+    "mock_generation_config": null,
+    "events": [
+      { "statement": "DEFINE EVENT OVERWRITE order_created ON TABLE order WHEN $event = 'CREATE' THEN { CREATE audit SET table = 'order', action = 'create', record = $after.id, time = time::now() };" },
+      { "statement": "DEFINE EVENT OVERWRITE order_updated ON TABLE order WHEN $event = 'UPDATE' AND $before.status != $after.status THEN { CREATE audit SET table = 'order', action = 'status_change', record = $after.id, old_status = $before.status, new_status = $after.status, time = time::now() };" }
+    ]
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

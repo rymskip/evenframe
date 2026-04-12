@@ -1,0 +1,22 @@
+{
+  "description": "Enum with adjacently-tagged representation (tag + content)",
+  "structs": {},
+  "enums": {
+    "Event": {
+      "enum_name": "Event",
+      "variants": [
+        { "name": "Click", "data": { "InlineStruct": {
+          "struct_name": "ClickData",
+          "fields": [
+            { "field_name": "x", "field_type": "I32", "validators": [], "always_regenerate": false },
+            { "field_name": "y", "field_type": "I32", "validators": [], "always_regenerate": false }
+          ],
+          "validators": []
+        }}},
+        { "name": "KeyPress", "data": { "DataStructureRef": "String" } },
+        { "name": "Scroll" }
+      ],
+      "representation": { "AdjacentlyTagged": { "tag": "t", "content": "c" } }
+    }
+  }
+}

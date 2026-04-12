@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Shape {
+    oneof variant {
+        CircleData circle = 1;
+        RectangleData rectangle = 2;
+        bool point = 3;
+    }
+}

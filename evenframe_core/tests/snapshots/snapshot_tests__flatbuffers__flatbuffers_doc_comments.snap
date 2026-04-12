@@ -1,0 +1,19 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/// Severity levels for log output
+enum LogLevel : byte {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3
+}
+
+/// Application configuration settings
+table Config {
+    /// The API key used for authentication
+    api_key: string;
+    /// Request timeout in milliseconds
+    timeout_ms: uint64;
+}

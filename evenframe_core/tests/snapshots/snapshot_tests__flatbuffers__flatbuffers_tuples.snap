@@ -1,0 +1,9 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table Geometry {
+    point_2_d: Tuple2;
+    point_3_d: Tuple3;
+    labeled: Tuple2;
+}

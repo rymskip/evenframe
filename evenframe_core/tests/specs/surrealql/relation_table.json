@@ -1,0 +1,28 @@
+{
+  "description": "Relation/edge table connecting two entities",
+  "table_name": "likes",
+  "table_config": {
+    "table_name": "likes",
+    "struct_config": {
+      "struct_name": "Likes",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "created_at", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "strength", "field_type": { "Option": "F64" }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "relation": {
+      "edge_name": "likes",
+      "from": ["user"],
+      "to": ["post", "comment"],
+      "direction": null
+    },
+    "permissions": null,
+    "mock_generation_config": null,
+    "events": []
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

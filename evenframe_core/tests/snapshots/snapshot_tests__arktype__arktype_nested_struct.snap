@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Person: {
+  name: 'string',
+  homeAddress: 'address',
+  workAddress: [['address', '|', 'undefined'], '|', 'null']
+},
+
+});
+
+
+export const defaultPerson: Person = {
+name: "",
+homeAddress: undefined,
+workAddress: null
+};
+
+export type Person = typeof bindings.Person.infer;

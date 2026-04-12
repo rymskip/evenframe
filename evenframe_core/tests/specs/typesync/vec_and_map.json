@@ -1,0 +1,17 @@
+{
+  "description": "Struct with Vec, HashMap, and BTreeMap fields",
+  "structs": {
+    "Collection": {
+      "struct_name": "Collection",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "tags", "field_type": { "Vec": "String" }, "validators": [], "always_regenerate": false },
+        { "field_name": "scores", "field_type": { "Vec": "F64" }, "validators": [], "always_regenerate": false },
+        { "field_name": "metadata", "field_type": { "HashMap": ["String", "String"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "sorted_data", "field_type": { "BTreeMap": ["String", "I32"] }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

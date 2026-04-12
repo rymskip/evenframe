@@ -1,0 +1,16 @@
+{
+  "description": "Enum with default externally-tagged representation (unit variants only)",
+  "structs": {},
+  "enums": {
+    "Status": {
+      "enum_name": "Status",
+      "variants": [
+        { "name": "Active" },
+        { "name": "Inactive" },
+        { "name": "Pending" },
+        { "name": "Suspended" }
+      ],
+      "representation": "ExternallyTagged"
+    }
+  }
+}

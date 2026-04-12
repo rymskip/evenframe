@@ -753,6 +753,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 
@@ -795,6 +796,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                     Variant {
                         name: "Inactive".to_string(),
@@ -802,6 +804,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                     Variant {
                         name: "Pending".to_string(),
@@ -809,6 +812,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -818,6 +822,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 
@@ -888,6 +893,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 
@@ -903,6 +909,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                     Variant {
                         name: "User".to_string(),
@@ -910,6 +917,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -919,6 +927,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 

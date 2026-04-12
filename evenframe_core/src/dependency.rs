@@ -747,6 +747,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         }
     }
 
@@ -941,6 +942,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         }
     }
 
@@ -1140,6 +1142,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                     Variant {
                         name: "Inactive".to_string(),
@@ -1147,6 +1150,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -1156,6 +1160,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 
@@ -1622,6 +1627,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
+                    raw_attributes: HashMap::new(),
                 }],
                 representation: EnumRepresentation::default(),
                 doccom: None,
@@ -1630,6 +1636,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
         );
 

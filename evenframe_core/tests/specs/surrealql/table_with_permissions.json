@@ -1,0 +1,30 @@
+{
+  "description": "Table with permission configuration on CRUD operations",
+  "table_name": "customer",
+  "table_config": {
+    "table_name": "customer",
+    "struct_config": {
+      "struct_name": "Customer",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "name", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "email", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "credit_score", "field_type": "I32", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "relation": null,
+    "permissions": {
+      "all_permissions": null,
+      "select_permissions": "WHERE user = $auth.id",
+      "update_permissions": "WHERE user = $auth.id",
+      "delete_permissions": "WHERE user = $auth.id AND role = 'admin'",
+      "create_permissions": "FULL"
+    },
+    "mock_generation_config": null,
+    "events": []
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

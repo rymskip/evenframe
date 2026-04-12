@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Value: [[['string', '|', 'number'], '|', 'boolean'], '|', ['===', 'Nothing']],
+
+});
+
+
+
+export type Value = typeof bindings.Value.infer;

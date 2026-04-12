@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Coordinates extends Schema.Class<Coordinates>("Coordinates")( { 
+  lat: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lat' is required` }),
+  lng: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lng' is required` })
+}) {[key: string]: unknown}
+
+export const Location = Schema.Union(Schema.Struct({ Address: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }), Schema.Struct({ Coords: Coordinates }), Schema.Struct({ Inline: Inline }), Schema.Literal("Unknown")).annotations({ identifier: `Location` });
+
+export interface CoordinatesEncoded {
+  readonly lat: number;
+  readonly lng: number;
+}
+
+export type LocationEncoded = { readonly Address: string } | { readonly Coords: CoordinatesEncoded } | { readonly Inline: InlineEncoded } | "Unknown";
+
+
+export type CoordinatesType = typeof Coordinates.Type;
+export type LocationType = typeof Location.Type;

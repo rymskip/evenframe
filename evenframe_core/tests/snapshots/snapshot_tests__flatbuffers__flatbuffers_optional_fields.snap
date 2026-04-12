@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table Profile {
+    id: string;
+    bio: string;
+    age: uint32;
+    rating: double;
+    verified: bool;
+}

@@ -1,0 +1,49 @@
+{
+  "description": "Struct with various string and number validators",
+  "structs": {
+    "Registration": {
+      "struct_name": "Registration",
+      "fields": [
+        {
+          "field_name": "email",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": "Email" },
+            { "StringValidator": { "MaxLength": 255 } },
+            { "StringValidator": { "MinLength": 5 } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "username",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": "Alphanumeric" },
+            { "StringValidator": { "MinLength": 3 } },
+            { "StringValidator": { "MaxLength": 50 } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "age",
+          "field_type": "U32",
+          "validators": [
+            { "NumberValidator": { "GreaterThanOrEqualTo": 13.0 } },
+            { "NumberValidator": { "LessThanOrEqualTo": 150.0 } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "website",
+          "field_type": { "Option": "String" },
+          "validators": [
+            { "StringValidator": "Url" }
+          ],
+          "always_regenerate": false
+        }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

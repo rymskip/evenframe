@@ -1305,6 +1305,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1411,6 +1412,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1426,6 +1428,7 @@ mod tests {
                         doccom: None,
                         annotations: vec!["@default".to_string()],
                         output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
                     },
                     Variant {
                         name: "OnDeck".to_string(),
@@ -1433,6 +1436,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
                     },
                 ],
                 doccom: None,
@@ -1446,6 +1450,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1512,6 +1517,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1624,6 +1630,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1655,6 +1662,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1697,6 +1705,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1731,6 +1740,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 
@@ -1759,6 +1769,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: std::collections::HashMap::new(),
             },
         );
 

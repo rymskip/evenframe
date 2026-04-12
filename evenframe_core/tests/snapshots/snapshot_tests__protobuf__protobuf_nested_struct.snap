@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Person {
+    string name = 1;
+    Address home_address = 2;
+    optional Address work_address = 3;
+}

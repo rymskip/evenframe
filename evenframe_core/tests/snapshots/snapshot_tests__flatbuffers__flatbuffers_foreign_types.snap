@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table Appointment {
+    id: string;
+    title: string;
+    scheduled_at: string;
+    duration: int64;
+    cancelled_at: string;
+}

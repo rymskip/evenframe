@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table Post {
+    id: string;
+    title: string;
+    author: Author;
+    related_posts: [Post];
+}

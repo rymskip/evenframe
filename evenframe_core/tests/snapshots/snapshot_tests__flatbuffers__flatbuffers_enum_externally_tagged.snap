@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+enum Status : byte {
+    Active = 0,
+    Inactive = 1,
+    Pending = 2,
+    Suspended = 3
+}

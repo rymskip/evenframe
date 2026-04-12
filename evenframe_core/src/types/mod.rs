@@ -834,6 +834,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
@@ -845,6 +846,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert_eq!(tu1, tu2);
     }
@@ -860,6 +862,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
+                    raw_attributes: HashMap::new(),
                 },
                 Variant {
                     name: "Inactive".to_string(),
@@ -867,6 +870,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
+                    raw_attributes: HashMap::new(),
                 },
             ],
             representation: EnumRepresentation::default(),
@@ -876,6 +880,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -891,6 +896,7 @@ mod tests {
                 doccom: None,
                 annotations: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             }],
             representation: EnumRepresentation::default(),
             doccom: None,
@@ -899,6 +905,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -906,9 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tagged_union_hash() {
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
+    fn test_tagged_union_distinctness() {
         let tu1 = TaggedUnion {
             enum_name: "A".to_string(),
             variants: vec![],
@@ -919,6 +924,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
@@ -930,10 +936,12 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
-        set.insert(tu1);
-        set.insert(tu2);
-        assert_eq!(set.len(), 2);
+        assert_ne!(tu1, tu2);
+        let items = vec![tu1, tu2];
+        assert_eq!(items.len(), 2);
+        assert_ne!(items[0], items[1]);
     }
 
     // ==================== Variant Tests ====================
@@ -946,6 +954,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert!(v.data.is_none());
     }
@@ -958,6 +967,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert!(matches!(
             v.data,
@@ -977,6 +987,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let v = Variant {
             name: "Complex".to_string(),
@@ -984,6 +995,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }
@@ -1010,6 +1022,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         });
         assert_ne!(vd1, vd2);
     }
@@ -1052,6 +1065,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -1071,6 +1085,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert!(sc.fields.is_empty());
     }
@@ -1093,6 +1108,7 @@ mod tests {
                     unique: false,
                     mock_plugin: None,
                     output_override: None,
+                    raw_attributes: HashMap::new(),
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -1107,6 +1123,7 @@ mod tests {
                     unique: false,
                     mock_plugin: None,
                     output_override: None,
+                    raw_attributes: HashMap::new(),
                 },
             ],
             validators: vec![],
@@ -1116,6 +1133,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -1132,6 +1150,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -1260,6 +1279,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert!(sc.struct_name.is_empty());
     }
@@ -1289,6 +1309,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
         assert_eq!(field.validators.len(), 1);
     }

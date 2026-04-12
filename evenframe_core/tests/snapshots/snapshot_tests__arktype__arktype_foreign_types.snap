@@ -1,0 +1,26 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Appointment: {
+  id: 'string',
+  title: 'string',
+  scheduledAt: 'string',
+  duration: 'number',
+  cancelledAt: [['string', '|', 'undefined'], '|', 'null']
+},
+
+});
+
+
+export const defaultAppointment: Appointment = {
+id: "",
+title: "",
+scheduledAt: ,
+duration: ,
+cancelledAt: null
+};
+
+export type Appointment = typeof bindings.Appointment.infer;

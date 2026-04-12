@@ -1,0 +1,26 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Profile: {
+  id: 'string',
+  bio: [['string', '|', 'undefined'], '|', 'null'],
+  age: [['number', '|', 'undefined'], '|', 'null'],
+  rating: [['number', '|', 'undefined'], '|', 'null'],
+  verified: [['boolean', '|', 'undefined'], '|', 'null']
+},
+
+});
+
+
+export const defaultProfile: Profile = {
+id: "",
+bio: null,
+age: null,
+rating: null,
+verified: null
+};
+
+export type Profile = typeof bindings.Profile.infer;

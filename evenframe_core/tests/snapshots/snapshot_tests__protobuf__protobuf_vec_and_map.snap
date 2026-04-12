@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Collection {
+    string id = 1;
+    repeated string tags = 2;
+    repeated double scores = 3;
+    map<string, string> metadata = 4;
+    map<string, int32> sorted_data = 5;
+}

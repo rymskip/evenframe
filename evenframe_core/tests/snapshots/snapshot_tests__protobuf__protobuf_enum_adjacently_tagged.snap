@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Event {
+    oneof variant {
+        ClickData click = 1;
+        string key_press = 2;
+        bool scroll = 3;
+    }
+}

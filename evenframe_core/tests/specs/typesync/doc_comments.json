@@ -1,0 +1,39 @@
+{
+  "description": "Types and fields with doc comments (JSDoc generation)",
+  "structs": {
+    "Config": {
+      "struct_name": "Config",
+      "fields": [
+        {
+          "field_name": "api_key",
+          "field_type": "String",
+          "validators": [],
+          "always_regenerate": false,
+          "doccom": "The API key used for authentication"
+        },
+        {
+          "field_name": "timeout_ms",
+          "field_type": "U64",
+          "validators": [],
+          "always_regenerate": false,
+          "doccom": "Request timeout in milliseconds"
+        }
+      ],
+      "validators": [],
+      "doccom": "Application configuration settings"
+    }
+  },
+  "enums": {
+    "LogLevel": {
+      "enum_name": "LogLevel",
+      "variants": [
+        { "name": "Debug" },
+        { "name": "Info" },
+        { "name": "Warn" },
+        { "name": "Error" }
+      ],
+      "representation": "ExternallyTagged",
+      "doccom": "Severity levels for log output"
+    }
+  }
+}

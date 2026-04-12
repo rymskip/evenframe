@@ -1,0 +1,24 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Post: {
+  id: 'string',
+  title: 'string',
+  author: ['author', "|",  "string"],
+  relatedPosts: [['post', "|",  "string"], '[]']
+},
+
+});
+
+
+export const defaultPost: Post = {
+id: "",
+title: "",
+author: '',
+relatedPosts: []
+};
+
+export type Post = typeof bindings.Post.infer;

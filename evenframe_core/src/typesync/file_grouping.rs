@@ -245,6 +245,7 @@ mod tests {
             pipeline: crate::types::Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: std::collections::HashMap::new(),
         }
     }
 

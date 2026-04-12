@@ -1,0 +1,28 @@
+{
+  "description": "Enum with internally-tagged representation",
+  "structs": {},
+  "enums": {
+    "Shape": {
+      "enum_name": "Shape",
+      "variants": [
+        { "name": "Circle", "data": { "InlineStruct": {
+          "struct_name": "CircleData",
+          "fields": [
+            { "field_name": "radius", "field_type": "F64", "validators": [], "always_regenerate": false }
+          ],
+          "validators": []
+        }}},
+        { "name": "Rectangle", "data": { "InlineStruct": {
+          "struct_name": "RectangleData",
+          "fields": [
+            { "field_name": "width", "field_type": "F64", "validators": [], "always_regenerate": false },
+            { "field_name": "height", "field_type": "F64", "validators": [], "always_regenerate": false }
+          ],
+          "validators": []
+        }}},
+        { "name": "Point" }
+      ],
+      "representation": { "InternallyTagged": { "tag": "type" } }
+    }
+  }
+}

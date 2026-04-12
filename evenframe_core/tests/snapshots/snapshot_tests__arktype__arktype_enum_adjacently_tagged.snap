@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Event: [[{ t: ['===', 'Click'], c: 'clickData' }, '|', { t: ['===', 'KeyPress'], c: 'string' }], '|', { t: ['===', 'Scroll'] }],
+
+});
+
+
+
+export type Event = typeof bindings.Event.infer;

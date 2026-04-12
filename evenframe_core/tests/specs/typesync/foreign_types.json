@@ -1,0 +1,35 @@
+{
+  "description": "Struct referencing foreign types via the registry",
+  "structs": {
+    "Appointment": {
+      "struct_name": "Appointment",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "title", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "scheduled_at", "field_type": { "Other": "DateTime" }, "validators": [], "always_regenerate": false },
+        { "field_name": "duration", "field_type": { "Other": "Duration" }, "validators": [], "always_regenerate": false },
+        { "field_name": "cancelled_at", "field_type": { "Option": { "Other": "DateTime" } }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {},
+  "foreign_types": {
+    "DateTime": {
+      "rust_type_names": ["DateTime", "chrono::DateTime"],
+      "arktype": "'string'",
+      "effect_schema": "Schema.String",
+      "effect_encoded": "string",
+      "protobuf": "string",
+      "flatbuffers": "string"
+    },
+    "Duration": {
+      "rust_type_names": ["Duration", "std::time::Duration"],
+      "arktype": "'number'",
+      "effect_schema": "Schema.Number",
+      "effect_encoded": "number",
+      "protobuf": "int64",
+      "flatbuffers": "int64"
+    }
+  }
+}

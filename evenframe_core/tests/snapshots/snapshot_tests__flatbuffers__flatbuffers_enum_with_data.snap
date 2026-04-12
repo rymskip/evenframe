@@ -1,0 +1,14 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Location {
+    string,
+    Coordinates,
+    InlineData,
+}
+
+table Coordinates {
+    lat: double;
+    lng: double;
+}

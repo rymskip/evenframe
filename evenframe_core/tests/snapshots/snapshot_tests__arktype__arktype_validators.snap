@@ -1,0 +1,24 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Registration: {
+  email: 'string',
+  username: 'string',
+  age: 'number',
+  website: [['string', '|', 'undefined'], '|', 'null']
+},
+
+});
+
+
+export const defaultRegistration: Registration = {
+email: "",
+username: "",
+age: 0,
+website: null
+};
+
+export type Registration = typeof bindings.Registration.infer;

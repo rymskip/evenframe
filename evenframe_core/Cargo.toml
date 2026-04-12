@@ -181,3 +181,6 @@ mockall = "0.12"
 temp-env = "0.3"
 tempfile = "3.10"
 pretty_assertions = "1.4"
+insta = { workspace = true }
+serde_json = { workspace = true }
+tests_macros = { path = "../tests_macros" }

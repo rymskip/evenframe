@@ -1,0 +1,17 @@
+{
+  "description": "Struct with Option<T> wrapping various types",
+  "structs": {
+    "Profile": {
+      "struct_name": "Profile",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "bio", "field_type": { "Option": "String" }, "validators": [], "always_regenerate": false },
+        { "field_name": "age", "field_type": { "Option": "U32" }, "validators": [], "always_regenerate": false },
+        { "field_name": "rating", "field_type": { "Option": "F64" }, "validators": [], "always_regenerate": false },
+        { "field_name": "verified", "field_type": { "Option": "Bool" }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

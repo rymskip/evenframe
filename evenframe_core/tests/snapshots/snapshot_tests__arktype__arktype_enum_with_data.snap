@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Location: [[[{ Address: 'string' }, '|', { Coords: 'coordinates' }], '|', { Inline: 'inlineData' }], '|', ['===', 'Unknown']],
+Coordinates: {
+  lat: 'number',
+  lng: 'number'
+},
+
+});
+
+
+export const defaultCoordinates: Coordinates = {
+lat: 0,
+lng: 0
+};
+
+export type Location = typeof bindings.Location.infer;
+export type Coordinates = typeof bindings.Coordinates.infer;

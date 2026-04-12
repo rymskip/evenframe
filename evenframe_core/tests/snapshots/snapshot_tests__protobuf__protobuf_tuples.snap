@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Geometry {
+    Tuple2 point_2_d = 1;
+    Tuple3 point_3_d = 2;
+    Tuple2 labeled = 3;
+}

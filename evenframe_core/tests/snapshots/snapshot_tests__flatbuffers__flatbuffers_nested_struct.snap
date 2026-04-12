@@ -1,0 +1,9 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table Person {
+    name: string;
+    home_address: Address;
+    work_address: Address;
+}

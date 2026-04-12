@@ -1,0 +1,15 @@
+{
+  "description": "Struct referencing another struct via Other type",
+  "structs": {
+    "Person": {
+      "struct_name": "Person",
+      "fields": [
+        { "field_name": "name", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "home_address", "field_type": { "Other": "Address" }, "validators": [], "always_regenerate": false },
+        { "field_name": "work_address", "field_type": { "Option": { "Other": "Address" } }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

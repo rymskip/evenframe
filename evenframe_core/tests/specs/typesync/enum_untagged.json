@@ -1,0 +1,16 @@
+{
+  "description": "Enum with untagged representation",
+  "structs": {},
+  "enums": {
+    "Value": {
+      "enum_name": "Value",
+      "variants": [
+        { "name": "Text", "data": { "DataStructureRef": "String" } },
+        { "name": "Number", "data": { "DataStructureRef": "F64" } },
+        { "name": "Flag", "data": { "DataStructureRef": "Bool" } },
+        { "name": "Nothing" }
+      ],
+      "representation": "Untagged"
+    }
+  }
+}

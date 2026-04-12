@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+table User {
+    id: string;
+    email: string;
+    age: uint32;
+    score: double;
+    is_active: bool;
+}

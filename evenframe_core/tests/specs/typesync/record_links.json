@@ -1,0 +1,16 @@
+{
+  "description": "Struct with RecordLink fields (SurrealDB record references)",
+  "structs": {
+    "Post": {
+      "struct_name": "Post",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "title", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "author", "field_type": { "RecordLink": { "Other": "Author" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "related_posts", "field_type": { "Vec": { "RecordLink": { "Other": "Post" } } }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

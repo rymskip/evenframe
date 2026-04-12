@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Status: [[[['===', 'Active'], '|', ['===', 'Inactive']], '|', ['===', 'Pending']], '|', ['===', 'Suspended']],
+
+});
+
+
+
+export type Status = typeof bindings.Status.infer;

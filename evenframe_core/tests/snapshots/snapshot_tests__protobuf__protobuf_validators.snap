@@ -1,0 +1,12 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Registration {
+    string email = 1;
+    string username = 2;
+    uint32 age = 3;
+    optional string website = 4;
+}

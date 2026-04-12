@@ -1,0 +1,26 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Collection: {
+  id: 'string',
+  tags: ['string', '[]'],
+  scores: ['number', '[]'],
+  metadata: 'Record<string, string>',
+  sortedData: 'Record<string, number>'
+},
+
+});
+
+
+export const defaultCollection: Collection = {
+id: "",
+tags: [],
+scores: [],
+metadata: {},
+sortedData: {}
+};
+
+export type Collection = typeof bindings.Collection.infer;

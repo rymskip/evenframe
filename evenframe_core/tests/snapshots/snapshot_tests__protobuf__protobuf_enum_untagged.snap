@@ -1,0 +1,14 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Value {
+    oneof variant {
+        string text = 1;
+        double number = 2;
+        bool flag = 3;
+        bool nothing = 4;
+    }
+}

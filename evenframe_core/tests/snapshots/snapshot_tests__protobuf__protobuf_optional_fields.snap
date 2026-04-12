@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Profile {
+    string id = 1;
+    optional string bio = 2;
+    optional uint32 age = 3;
+    optional double rating = 4;
+    optional bool verified = 5;
+}

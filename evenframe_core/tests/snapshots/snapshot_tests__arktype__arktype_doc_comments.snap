@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+/** Severity levels for log output */LogLevel: [[[['===', 'Debug'], '|', ['===', 'Info']], '|', ['===', 'Warn']], '|', ['===', 'Error']],
+/** Application configuration settings */Config: {
+  /** The API key used for authentication */  apiKey: 'string',
+  /** Request timeout in milliseconds */  timeoutMs: 'number'
+},
+
+});
+
+
+export const defaultConfig: Config = {
+apiKey: "",
+timeoutMs: 0
+};
+
+export type LogLevel = typeof bindings.LogLevel.infer;
+export type Config = typeof bindings.Config.infer;

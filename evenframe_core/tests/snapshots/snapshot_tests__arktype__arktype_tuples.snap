@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Geometry: {
+  point2D: ['number', 'number'],
+  point3D: ['number', 'number', 'number'],
+  labeled: ['string', 'number']
+},
+
+});
+
+
+export const defaultGeometry: Geometry = {
+point2D: [0, 0],
+point3D: [0, 0, 0],
+labeled: ["", 0]
+};
+
+export type Geometry = typeof bindings.Geometry.infer;

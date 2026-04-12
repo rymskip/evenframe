@@ -1,0 +1,19 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Location {
+    oneof variant {
+        string address = 1;
+        Coordinates coords = 2;
+        InlineData inline = 3;
+        bool unknown = 4;
+    }
+}
+
+message Coordinates {
+    double lat = 1;
+    double lng = 2;
+}

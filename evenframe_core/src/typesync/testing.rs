@@ -53,6 +53,7 @@ pub fn generate_struct_with_override(
         pipeline: crate::types::Pipeline::Both,
         rust_derives: vec![],
         output_override: override_config,
+        raw_attributes: HashMap::new(),
     };
 
     for (field_name, ov) in field_overrides {
@@ -97,6 +98,7 @@ pub fn generate_enum_with_override(
         pipeline: crate::types::Pipeline::Both,
         rust_derives: vec![],
         output_override: override_config,
+        raw_attributes: HashMap::new(),
     };
 
     let structs: HashMap<String, StructConfig> = HashMap::new();
@@ -131,6 +133,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         unique: false,
         mock_plugin: None,
         output_override: None,
+        raw_attributes: HashMap::new(),
     }
 }
 
@@ -156,6 +159,7 @@ mod tests {
             pipeline: crate::types::Pipeline::Both,
             rust_derives: vec![],
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
 
         let output = generate_struct_with_override(

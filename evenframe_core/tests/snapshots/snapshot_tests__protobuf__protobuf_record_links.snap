@@ -1,0 +1,12 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Post {
+    string id = 1;
+    string title = 2;
+    Author author = 3;
+    repeated Post related_posts = 4;
+}

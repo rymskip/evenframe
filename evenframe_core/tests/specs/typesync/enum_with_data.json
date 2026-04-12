@@ -1,0 +1,32 @@
+{
+  "description": "Externally-tagged enum with struct and newtype variant data",
+  "structs": {
+    "Coordinates": {
+      "struct_name": "Coordinates",
+      "fields": [
+        { "field_name": "lat", "field_type": "F64", "validators": [], "always_regenerate": false },
+        { "field_name": "lng", "field_type": "F64", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Location": {
+      "enum_name": "Location",
+      "variants": [
+        { "name": "Address", "data": { "DataStructureRef": "String" } },
+        { "name": "Coords", "data": { "DataStructureRef": { "Other": "Coordinates" } } },
+        { "name": "Inline", "data": { "InlineStruct": {
+          "struct_name": "InlineData",
+          "fields": [
+            { "field_name": "label", "field_type": "String", "validators": [], "always_regenerate": false },
+            { "field_name": "value", "field_type": "I64", "validators": [], "always_regenerate": false }
+          ],
+          "validators": []
+        }}},
+        { "name": "Unknown" }
+      ],
+      "representation": "ExternallyTagged"
+    }
+  }
+}
