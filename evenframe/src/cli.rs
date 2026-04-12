@@ -91,6 +91,9 @@ pub enum Commands {
     /// Test an output rule plugin by running it against the project types
     /// and printing what it produces (JSON output for scripted assertions)
     TestPlugin(TestPluginArgs),
+
+    /// Manage the macro expansion cache
+    Cache(CacheArgs),
 }
 
 // ============================================================================
@@ -386,4 +389,26 @@ pub struct TestPluginArgs {
     /// Only show types where the plugin produced output
     #[arg(long, default_value = "true")]
     pub changed_only: bool,
+}
+
+// ============================================================================
+// Cache Arguments
+// ============================================================================
+
+#[derive(Args, Debug, Clone)]
+pub struct CacheArgs {
+    #[command(subcommand)]
+    pub command: CacheCommands,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CacheCommands {
+    /// Show cache status (per-crate hit/miss counts, total size on disk)
+    Status,
+
+    /// Warm the cache by expanding all workspace crates
+    Warm,
+
+    /// Clear the expansion cache
+    Clear,
 }

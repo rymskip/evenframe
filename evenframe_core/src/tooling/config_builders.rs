@@ -1106,6 +1106,8 @@ fn build_plugin_input(
                 has_explicit_format: f.format.is_some(),
                 existing_format: f.format.as_ref().map(|fmt| format!("{:?}", fmt)),
                 has_explicit_define: f.define_config.is_some(),
+                raw_attributes: f.raw_attributes.clone(),
+                doccom: f.doccom.clone(),
             })
             .collect(),
         table_name: table_name.to_string(),
@@ -1114,6 +1116,8 @@ fn build_plugin_input(
         has_explicit_events: false,
         has_explicit_mock_data: false,
         existing_macroforge_derives: sc.macroforge_derives.clone(),
+        raw_attributes: sc.raw_attributes.clone(),
+        doccom: sc.doccom.clone(),
     }
 }
 
@@ -1149,6 +1153,8 @@ fn build_plugin_input_enum(
                 has_explicit_format: false,
                 existing_format: None,
                 has_explicit_define: false,
+                raw_attributes: v.raw_attributes.clone(),
+                doccom: v.doccom.clone(),
             })
             .collect(),
         table_name: String::new(),
@@ -1157,6 +1163,8 @@ fn build_plugin_input_enum(
         has_explicit_events: false,
         has_explicit_mock_data: false,
         existing_macroforge_derives: ec.macroforge_derives.clone(),
+        raw_attributes: ec.raw_attributes.clone(),
+        doccom: ec.doccom.clone(),
     }
 }
 

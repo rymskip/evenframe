@@ -32,6 +32,10 @@ pub struct OutputRulePluginInput {
     pub has_explicit_mock_data: bool,
     #[serde(default)]
     pub existing_macroforge_derives: Vec<String>,
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 /// Field metadata included in the plugin input.
@@ -53,6 +57,10 @@ pub struct OutputRulePluginFieldInfo {
     pub existing_format: Option<String>,
     #[serde(default)]
     pub has_explicit_define: bool,
+    #[serde(default)]
+    pub raw_attributes: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub doccom: Option<String>,
 }
 
 /// Type-level override from a rule plugin.

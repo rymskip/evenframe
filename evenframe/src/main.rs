@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
         Some(Commands::Validate(args)) => commands::validate::run(&cli, args.clone()).await,
         Some(Commands::Info(args)) => commands::info::run(&cli, args.clone()).await,
         Some(Commands::TestPlugin(args)) => commands::test_plugin::run(&cli, args.clone()).await,
+        Some(Commands::Cache(args)) => commands::cache::run(&cli, args.clone()).await,
         None => {
             // Default behavior: run full pipeline (backward compatibility)
             commands::generate::run_default(&cli).await
