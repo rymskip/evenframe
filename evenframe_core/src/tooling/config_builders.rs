@@ -797,8 +797,20 @@ pub fn merge_tables_and_objects(
     );
     let mut struct_configs = objects.clone();
 
+    // Tables are present in `objects` under their PascalCase `struct_name`
+    // (inserted by `process_types` during the scan) and carry whatever
+    // output_override was set by the rule-plugin struct loop. We also want
+    // the table's authoritative struct_config (with the output_override set
+    // by the rule-plugin table loop) accessible under the snake_case key.
+    //
+    // Drop the PascalCase duplicate before inserting the table entry so
+    // downstream consumers that dedup by PascalCase `struct_name` (e.g.
+    // `generate_macroforge_for_types` via its `seen_structs` set) see
+    // exactly one entry per table — the authoritative one from the table
+    // loop — rather than racing HashMap iteration order.
     for (name, table_config) in tables {
         trace!("Merging table config for: {}", name);
+        struct_configs.remove(&table_config.struct_config.struct_name);
         struct_configs.insert(name.clone(), table_config.struct_config.clone());
     }
 
@@ -879,7 +891,6 @@ fn apply_rule_plugins(
     enum_configs: &mut HashMap<String, TaggedUnion>,
 ) {
     use crate::typesync::plugin::OutputRulePluginManager;
-    use crate::typesync::plugin_types::TypeKind;
 
     let mut pm = match OutputRulePluginManager::new(&config.output_rule_plugins, &config.scan_path)
     {
@@ -898,12 +909,7 @@ fn apply_rule_plugins(
     );
     for table_name in &table_names {
         let tc = &table_configs[table_name];
-        let input = build_plugin_input(
-            &tc.struct_config,
-            TypeKind::Struct,
-            &tc.table_name,
-            tc.relation.is_some(),
-        );
+        let input = build_plugin_input_struct(&tc.struct_config, Some(tc));
 
         for plugin_name in pm.plugin_names().to_vec() {
             match pm.transform_type(&plugin_name, &input) {
@@ -975,7 +981,7 @@ fn apply_rule_plugins(
     );
     for struct_name in &struct_names {
         let sc = &struct_configs[struct_name];
-        let input = build_plugin_input(sc, TypeKind::Struct, "", false);
+        let input = build_plugin_input_struct(sc, None);
 
         for plugin_name in pm.plugin_names().to_vec() {
             match pm.transform_type(&plugin_name, &input) {
@@ -1052,6 +1058,23 @@ fn apply_rule_plugins(
                         }
                         ec.output_override = Some(Box::new(ov));
                     }
+                    // Apply per-variant annotations: the plugin's field_overrides
+                    // map variant names to annotations, mirroring how struct
+                    // fields are handled above. Without this, a plugin cannot
+                    // emit inline variant annotations such as `@default` on an
+                    // enum variant marked `#[default_value]`.
+                    for (variant_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(variant) =
+                            ec.variants.iter_mut().find(|v| &v.name == variant_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            for ann in &field_override.annotations {
+                                if !variant.annotations.contains(ann) {
+                                    variant.annotations.push(ann.clone());
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     warn!(
@@ -1067,57 +1090,25 @@ fn apply_rule_plugins(
 }
 
 #[cfg(feature = "wasm-plugins")]
-fn build_plugin_input(
+fn build_plugin_input_struct(
     sc: &StructConfig,
-    kind: crate::typesync::plugin_types::TypeKind,
-    table_name: &str,
-    is_relation: bool,
+    table: Option<&crate::schemasync::table::TableConfig>,
 ) -> crate::typesync::plugin_types::OutputRulePluginInput {
-    use crate::typesync::plugin_types::{OutputRulePluginFieldInfo, OutputRulePluginInput};
+    use crate::typesync::plugin_types::OutputRulePluginInput;
 
-    OutputRulePluginInput {
-        type_name: sc.struct_name.clone(),
-        kind,
-        rust_derives: sc.rust_derives.clone(),
-        annotations: sc.annotations.clone(),
-        pipeline: format!("{:?}", sc.pipeline),
-        generator: String::new(),
-        fields: sc
-            .fields
-            .iter()
-            .map(|f| OutputRulePluginFieldInfo {
-                field_name: f.field_name.clone(),
-                field_type: f.field_type.canonical_name(),
-                annotations: f.annotations.clone(),
-                validators: f.validators.iter().map(|v| format!("{:?}", v)).collect(),
-                is_optional: matches!(&f.field_type, FieldType::Option(_)),
-                record_link_target: match &f.field_type {
-                    FieldType::RecordLink(inner) => Some(inner.canonical_name()),
-                    FieldType::Option(inner) => match inner.as_ref() {
-                        FieldType::RecordLink(inner) => Some(inner.canonical_name()),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                vec_inner_type: match &f.field_type {
-                    FieldType::Vec(inner) => Some(format!("{:?}", inner)),
-                    _ => None,
-                },
-                has_explicit_format: f.format.is_some(),
-                existing_format: f.format.as_ref().map(|fmt| format!("{:?}", fmt)),
-                has_explicit_define: f.define_config.is_some(),
-                raw_attributes: f.raw_attributes.clone(),
-                doccom: f.doccom.clone(),
-            })
-            .collect(),
-        table_name: table_name.to_string(),
-        is_relation,
-        has_explicit_permissions: false, // Not used in override model
-        has_explicit_events: false,
-        has_explicit_mock_data: false,
-        existing_macroforge_derives: sc.macroforge_derives.clone(),
-        raw_attributes: sc.raw_attributes.clone(),
-        doccom: sc.doccom.clone(),
+    let pipeline = format!("{:?}", sc.pipeline);
+    match table {
+        Some(tc) => OutputRulePluginInput::Table {
+            pipeline,
+            generator: String::new(),
+            struct_config: sc.clone(),
+            table_config: tc.clone(),
+        },
+        None => OutputRulePluginInput::Struct {
+            pipeline,
+            generator: String::new(),
+            config: sc.clone(),
+        },
     }
 }
 
@@ -1125,46 +1116,12 @@ fn build_plugin_input(
 fn build_plugin_input_enum(
     ec: &TaggedUnion,
 ) -> crate::typesync::plugin_types::OutputRulePluginInput {
-    use crate::typesync::plugin_types::{
-        OutputRulePluginFieldInfo, OutputRulePluginInput, TypeKind,
-    };
+    use crate::typesync::plugin_types::OutputRulePluginInput;
 
-    OutputRulePluginInput {
-        type_name: ec.enum_name.clone(),
-        kind: TypeKind::Enum,
-        rust_derives: ec.rust_derives.clone(),
-        annotations: ec.annotations.clone(),
+    OutputRulePluginInput::Enum {
         pipeline: format!("{:?}", ec.pipeline),
         generator: String::new(),
-        fields: ec
-            .variants
-            .iter()
-            .map(|v| OutputRulePluginFieldInfo {
-                field_name: v.name.clone(),
-                field_type: match &v.data {
-                    Some(d) => format!("{:?}", d),
-                    None => "Unit".to_string(),
-                },
-                annotations: v.annotations.clone(),
-                validators: vec![],
-                is_optional: false,
-                record_link_target: None,
-                vec_inner_type: None,
-                has_explicit_format: false,
-                existing_format: None,
-                has_explicit_define: false,
-                raw_attributes: v.raw_attributes.clone(),
-                doccom: v.doccom.clone(),
-            })
-            .collect(),
-        table_name: String::new(),
-        is_relation: false,
-        has_explicit_permissions: false,
-        has_explicit_events: false,
-        has_explicit_mock_data: false,
-        existing_macroforge_derives: ec.macroforge_derives.clone(),
-        raw_attributes: ec.raw_attributes.clone(),
-        doccom: ec.doccom.clone(),
+        config: ec.clone(),
     }
 }
 

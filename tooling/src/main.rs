@@ -65,24 +65,42 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let ok = match cli.command {
-        Cmd::Test { snapshot, e2e, derive, features, extra } => {
-            cmd_test(snapshot, e2e, derive, &features, &extra)
-        }
+        Cmd::Test {
+            snapshot,
+            e2e,
+            derive,
+            features,
+            extra,
+        } => cmd_test(snapshot, e2e, derive, &features, &extra),
         Cmd::Snapshot { action } => cmd_snapshot(action),
         Cmd::Verify { fail_fast } => cmd_verify(fail_fast),
     };
 
-    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[String]) -> bool {
     let specific = snapshot || e2e || derive;
 
     if !specific || snapshot {
-        header(&format!("snapshot tests (evenframe_core --features {features})"));
+        header(&format!(
+            "snapshot tests (evenframe_core --features {features})"
+        ));
         if !run("cargo", |c| {
-            c.args(["test", "-p", "evenframe_core", "--features", features, "--test", "snapshot_tests"])
-                .args(extra);
+            c.args([
+                "test",
+                "-p",
+                "evenframe_core",
+                "--features",
+                features,
+                "--test",
+                "snapshot_tests",
+            ])
+            .args(extra);
         }) {
             return false;
         }
@@ -90,16 +108,27 @@ fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[St
 
     if !specific || derive {
         header("derive trybuild tests");
-        if !run("cargo", |c| { c.args(["test", "-p", "evenframe_derive"]).args(extra); }) {
+        if !run("cargo", |c| {
+            c.args(["test", "-p", "evenframe_derive"]).args(extra);
+        }) {
             return false;
         }
     }
 
     if !specific {
-        header(&format!("evenframe_core unit tests (--features {features})"));
+        header(&format!(
+            "evenframe_core unit tests (--features {features})"
+        ));
         if !run("cargo", |c| {
-            c.args(["test", "-p", "evenframe_core", "--features", features, "--lib"])
-                .args(extra);
+            c.args([
+                "test",
+                "-p",
+                "evenframe_core",
+                "--features",
+                features,
+                "--lib",
+            ])
+            .args(extra);
         }) {
             return false;
         }
@@ -107,7 +136,9 @@ fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[St
 
     if !specific || e2e {
         header("e2e tests (evenframe_playground)");
-        if !run("cargo", |c| { c.arg("test").current_dir(playground_dir()).args(extra); }) {
+        if !run("cargo", |c| {
+            c.arg("test").current_dir(playground_dir()).args(extra);
+        }) {
             return false;
         }
     }
@@ -117,43 +148,99 @@ fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[St
 
 fn cmd_snapshot(action: SnapshotAction) -> bool {
     match action {
-        SnapshotAction::Accept => run("cargo", |c| { c.args(["insta", "accept"]); }),
-        SnapshotAction::Review => run("cargo", |c| { c.args(["insta", "review"]); }),
+        SnapshotAction::Accept => run("cargo", |c| {
+            c.args(["insta", "accept"]);
+        }),
+        SnapshotAction::Review => run("cargo", |c| {
+            c.args(["insta", "review"]);
+        }),
         SnapshotAction::Update { features } => {
             header("regenerating snapshots");
             let _ = run("cargo", |c| {
-                c.args(["test", "-p", "evenframe_core", "--features", &features, "--test", "snapshot_tests"]);
+                c.args([
+                    "test",
+                    "-p",
+                    "evenframe_core",
+                    "--features",
+                    &features,
+                    "--test",
+                    "snapshot_tests",
+                ]);
             });
             header("accepting snapshots");
-            run("cargo", |c| { c.args(["insta", "accept"]); })
+            run("cargo", |c| {
+                c.args(["insta", "accept"]);
+            })
         }
     }
 }
 
 fn cmd_verify(fail_fast: bool) -> bool {
     let steps: Vec<(&str, Box<dyn Fn() -> bool>)> = vec![
-        ("fmt", Box::new(|| {
-            run("cargo", |c| { c.args(["fmt", "--all", "--", "--check"]); })
-        })),
-        ("clippy (all features, all targets)", Box::new(|| {
-            run("cargo", |c| {
-                c.args(["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]);
-            })
-        })),
-        ("evenframe_core unit tests (full)", Box::new(|| {
-            run("cargo", |c| { c.args(["test", "-p", "evenframe_core", "--features", "full"]); })
-        })),
-        ("snapshot tests (typesync-all)", Box::new(|| {
-            run("cargo", |c| {
-                c.args(["test", "-p", "evenframe_core", "--features", "typesync-all", "--test", "snapshot_tests"]);
-            })
-        })),
-        ("derive trybuild tests", Box::new(|| {
-            run("cargo", |c| { c.args(["test", "-p", "evenframe_derive"]); })
-        })),
-        ("e2e tests (evenframe_playground)", Box::new(|| {
-            run("cargo", |c| { c.arg("test").current_dir(playground_dir()); })
-        })),
+        (
+            "fmt",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["fmt", "--all", "--", "--check"]);
+                })
+            }),
+        ),
+        (
+            "clippy (all features, all targets)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args([
+                        "clippy",
+                        "--workspace",
+                        "--all-targets",
+                        "--all-features",
+                        "--",
+                        "-D",
+                        "warnings",
+                    ]);
+                })
+            }),
+        ),
+        (
+            "evenframe_core unit tests (full)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["test", "-p", "evenframe_core", "--features", "full"]);
+                })
+            }),
+        ),
+        (
+            "snapshot tests (typesync-all)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args([
+                        "test",
+                        "-p",
+                        "evenframe_core",
+                        "--features",
+                        "typesync-all",
+                        "--test",
+                        "snapshot_tests",
+                    ]);
+                })
+            }),
+        ),
+        (
+            "derive trybuild tests",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["test", "-p", "evenframe_derive"]);
+                })
+            }),
+        ),
+        (
+            "e2e tests (evenframe_playground)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.arg("test").current_dir(playground_dir());
+                })
+            }),
+        ),
     ];
 
     let mut failed: Vec<&str> = Vec::new();
@@ -173,7 +260,11 @@ fn cmd_verify(fail_fast: bool) -> bool {
         println!("\n=== all checks passed ===");
         true
     } else {
-        eprintln!("\n=== verify failed ({}/{} steps) ===", failed.len(), steps.len());
+        eprintln!(
+            "\n=== verify failed ({}/{} steps) ===",
+            failed.len(),
+            steps.len()
+        );
         for label in &failed {
             eprintln!("  FAIL: {label}");
         }

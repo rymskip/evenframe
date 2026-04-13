@@ -1,10 +1,8 @@
 use crate::cli::{CacheArgs, CacheCommands, Cli};
 use evenframe_core::error::Result;
 use evenframe_core::tooling::BuildConfig;
-use evenframe_core::tooling::expansion_cache::{
-    self, CacheManifest, hash_file,
-};
 use evenframe_core::tooling::WorkspaceScanner;
+use evenframe_core::tooling::expansion_cache::{self, CacheManifest, hash_file};
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -54,7 +52,11 @@ async fn status() -> Result<()> {
                 crate_size += md.len();
             }
 
-            let source_path = config.scan_path.join(&crate_name).join("src").join(rel_source);
+            let source_path = config
+                .scan_path
+                .join(&crate_name)
+                .join("src")
+                .join(rel_source);
             let is_hit = source_path.exists()
                 && hash_file(&source_path)
                     .map(|h| h == cache_entry.input_hash)
@@ -93,11 +95,7 @@ async fn warm() -> Result<()> {
     info!("Warming expansion cache for all workspace crates");
     println!("Warming expansion cache...");
 
-    let scanner = WorkspaceScanner::with_path(
-        config.scan_path,
-        config.apply_aliases,
-        true,
-    );
+    let scanner = WorkspaceScanner::with_path(config.scan_path, config.apply_aliases, true);
     let types = scanner.scan_for_evenframe_types()?;
 
     println!("Cache warmed: {} types discovered.", types.len());

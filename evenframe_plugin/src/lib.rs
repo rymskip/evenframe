@@ -101,61 +101,277 @@ macro_rules! define_mock_data_plugin {
 // ============================================================
 
 /// Context passed to output rule plugin functions.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TypeContext {
-    pub type_name: String,
-    /// "Struct" or "Enum" (matches evenframe's TypeKind serialization).
-    pub kind: String,
-    pub rust_derives: Vec<String>,
-    /// Annotations already explicitly defined on the struct.
-    pub annotations: Vec<String>,
-    /// Which pipeline: "Both", "Typesync", "Schemasync".
-    pub pipeline: String,
-    /// The generator being invoked ("macroforge", "arktype", "effect", "surrealdb", etc.).
-    pub generator: String,
-    pub fields: Vec<TypeFieldInfo>,
-    /// The snake_case table name (e.g., "order"). Empty for non-table types.
-    #[serde(default)]
-    pub table_name: String,
-    /// Whether this is a relation/edge table.
-    #[serde(default)]
-    pub is_relation: bool,
-    /// Whether `#[permissions(...)]` is explicitly defined.
-    #[serde(default)]
-    pub has_explicit_permissions: bool,
-    /// Whether `#[event(...)]` is explicitly defined.
-    #[serde(default)]
-    pub has_explicit_events: bool,
-    /// Whether `#[mock_data(...)]` is explicitly defined.
-    #[serde(default)]
-    pub has_explicit_mock_data: bool,
-    /// Macroforge derives already explicitly defined.
-    #[serde(default)]
-    pub existing_macroforge_derives: Vec<String>,
+///
+/// This is a tagged union matching
+/// `evenframe_core::typesync::plugin_types::OutputRulePluginInput`.
+/// Plugins should `match` on the variant to dispatch: free-standing
+/// struct, table-backed struct, or tagged-union enum. Each variant
+/// carries the full evenframe-side config(s) as `serde_json::Value` so
+/// plugin authors don't have to pull `evenframe_core` into their
+/// cdylibs. See the helper methods on [`TypeContext`] for ergonomic
+/// accessors that cover the common lookups; anything more specialized
+/// can navigate the JSON directly.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TypeContext {
+    /// A standalone (non-table) Rust struct.
+    Struct {
+        /// Which pipeline is consuming the result: "Both", "Typesync",
+        /// or "Schemasync".
+        pipeline: String,
+        /// Which generator is invoking the plugin ("macroforge",
+        /// "arktype", etc.), or empty for the schemasync pass.
+        generator: String,
+        /// JSON form of `evenframe_core::types::StructConfig`.
+        config: serde_json::Value,
+    },
+    /// A Rust struct that backs a SurrealDB table.
+    Table {
+        pipeline: String,
+        generator: String,
+        /// JSON form of `evenframe_core::types::StructConfig`.
+        struct_config: serde_json::Value,
+        /// JSON form of `evenframe_core::schemasync::table::TableConfig`.
+        table_config: serde_json::Value,
+    },
+    /// A tagged-union Rust enum.
+    Enum {
+        pipeline: String,
+        generator: String,
+        /// JSON form of `evenframe_core::types::TaggedUnion`.
+        config: serde_json::Value,
+    },
 }
 
-/// Field metadata in output rule plugin input.
-#[derive(Debug, Serialize, Deserialize)]
+impl TypeContext {
+    /// The pipeline that will consume this result ("Both", "Typesync",
+    /// or "Schemasync").
+    pub fn pipeline(&self) -> &str {
+        match self {
+            TypeContext::Struct { pipeline, .. }
+            | TypeContext::Table { pipeline, .. }
+            | TypeContext::Enum { pipeline, .. } => pipeline,
+        }
+    }
+
+    /// The generator invoking this plugin, or `""` for the schemasync pass.
+    pub fn generator(&self) -> &str {
+        match self {
+            TypeContext::Struct { generator, .. }
+            | TypeContext::Table { generator, .. }
+            | TypeContext::Enum { generator, .. } => generator,
+        }
+    }
+
+    /// The type's PascalCase name: `struct_name` for structs/tables,
+    /// `enum_name` for enums.
+    pub fn type_name(&self) -> Option<&str> {
+        match self {
+            TypeContext::Struct { config, .. } => {
+                config.get("struct_name").and_then(|v| v.as_str())
+            }
+            TypeContext::Table { struct_config, .. } => {
+                struct_config.get("struct_name").and_then(|v| v.as_str())
+            }
+            TypeContext::Enum { config, .. } => config.get("enum_name").and_then(|v| v.as_str()),
+        }
+    }
+
+    /// For tables: the snake_case table name. `None` for non-table
+    /// structs and enums.
+    pub fn table_name(&self) -> Option<&str> {
+        match self {
+            TypeContext::Table { table_config, .. } => {
+                table_config.get("table_name").and_then(|v| v.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// True when the table is a relation/edge. `false` for non-tables.
+    pub fn is_relation(&self) -> bool {
+        match self {
+            TypeContext::Table { table_config, .. } => {
+                table_config.get("relation").is_some_and(|v| !v.is_null())
+            }
+            _ => false,
+        }
+    }
+
+    /// True when the table already has explicit `permissions` set (via
+    /// `#[permissions(...)]` or the per-field `#[define_field_statement(...)]`
+    /// aggregate). `false` for non-tables.
+    pub fn has_explicit_permissions(&self) -> bool {
+        match self {
+            TypeContext::Table { table_config, .. } => table_config
+                .get("permissions")
+                .is_some_and(|v| !v.is_null()),
+            _ => false,
+        }
+    }
+
+    /// True when the table already has any `events` defined via
+    /// `#[event(...)]`. `false` for non-tables.
+    pub fn has_explicit_events(&self) -> bool {
+        match self {
+            TypeContext::Table { table_config, .. } => table_config
+                .get("events")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty()),
+            _ => false,
+        }
+    }
+
+    /// True when the table already has an explicit `mock_generation_config`.
+    /// `false` for non-tables.
+    pub fn has_explicit_mock_data(&self) -> bool {
+        match self {
+            TypeContext::Table { table_config, .. } => table_config
+                .get("mock_generation_config")
+                .is_some_and(|v| !v.is_null()),
+            _ => false,
+        }
+    }
+
+    /// Macroforge derives already declared in the Rust source via
+    /// `#[macroforge_derive(...)]`. Empty if none are present.
+    pub fn existing_macroforge_derives(&self) -> Vec<String> {
+        let node = match self {
+            TypeContext::Struct { config, .. } => config.get("macroforge_derives"),
+            TypeContext::Table { struct_config, .. } => struct_config.get("macroforge_derives"),
+            TypeContext::Enum { config, .. } => config.get("macroforge_derives"),
+        };
+        node.and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Type-level `#[annotation("...")]` strings as written in the
+    /// Rust source.
+    pub fn annotations(&self) -> Vec<String> {
+        let node = match self {
+            TypeContext::Struct { config, .. } => config.get("annotations"),
+            TypeContext::Table { struct_config, .. } => struct_config.get("annotations"),
+            TypeContext::Enum { config, .. } => config.get("annotations"),
+        };
+        node.and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Type-level raw attribute stubs — attributes that evenframe doesn't
+    /// parse natively, keyed by attribute name with each value being the
+    /// parenthesized body (or `""` for bare path attributes like
+    /// `#[overview]`). Multi-occurrence attributes preserve order.
+    pub fn raw_attributes(&self) -> HashMap<String, Vec<String>> {
+        let node = match self {
+            TypeContext::Struct { config, .. } => config.get("raw_attributes"),
+            TypeContext::Table { struct_config, .. } => struct_config.get("raw_attributes"),
+            TypeContext::Enum { config, .. } => config.get("raw_attributes"),
+        };
+        node.and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| {
+                        let bodies: Vec<String> = v
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect();
+                        Some((k.clone(), bodies))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Iterate the struct's fields (or enum's variants). Each entry is
+    /// the raw JSON node so callers can introspect anything — use the
+    /// [`TypeFieldInfo`] accessors for the common fields.
+    pub fn fields(&self) -> Vec<TypeFieldInfo> {
+        let arr = match self {
+            TypeContext::Struct { config, .. } => config.get("fields"),
+            TypeContext::Table { struct_config, .. } => struct_config.get("fields"),
+            TypeContext::Enum { config, .. } => config.get("variants"),
+        };
+        arr.and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|v| TypeFieldInfo { node: v.clone() })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// A single field (for structs/tables) or variant (for enums). Wraps the
+/// raw JSON node so callers can read any evenframe-side metadata; the
+/// common-case getters below cover stub parsing, annotations, and
+/// validators.
+#[derive(Debug, Clone)]
 pub struct TypeFieldInfo {
-    pub field_name: String,
-    /// Canonical type string (e.g., "String", "Option<DateTime<Utc>>", "RecordLink<Site>").
-    pub field_type: String,
-    pub annotations: Vec<String>,
-    pub validators: Vec<String>,
-    #[serde(default)]
-    pub is_optional: bool,
-    /// If field is `RecordLink<T>`, the inner type name (e.g., "Site").
-    #[serde(default)]
-    pub record_link_target: Option<String>,
-    /// If field is `Vec<T>`, the inner type name.
-    #[serde(default)]
-    pub vec_inner_type: Option<String>,
-    #[serde(default)]
-    pub has_explicit_format: bool,
-    #[serde(default)]
-    pub existing_format: Option<String>,
-    #[serde(default)]
-    pub has_explicit_define: bool,
+    /// JSON form of `evenframe_core::types::StructField` for struct
+    /// fields, or `VariantInfo` for enum variants.
+    pub node: serde_json::Value,
+}
+
+impl TypeFieldInfo {
+    /// Field or variant name (e.g., `"customer_name"` or `"Viewer"`).
+    pub fn field_name(&self) -> Option<&str> {
+        // Variants use `name`, struct fields use `field_name`.
+        self.node
+            .get("field_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| self.node.get("name").and_then(|v| v.as_str()))
+    }
+
+    /// Natively-parsed `#[annotation("...")]` strings on this field/variant.
+    pub fn annotations(&self) -> Vec<String> {
+        self.node
+            .get("annotations")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Field-level raw attribute stubs (e.g., `#[text(label = "...")]`).
+    /// See [`TypeContext::raw_attributes`] for shape details.
+    pub fn raw_attributes(&self) -> HashMap<String, Vec<String>> {
+        self.node
+            .get("raw_attributes")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| {
+                        let bodies: Vec<String> = v
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect();
+                        Some((k.clone(), bodies))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Documentation comment on this field/variant, if any.
+    pub fn doccom(&self) -> Option<&str> {
+        self.node.get("doccom").and_then(|v| v.as_str())
+    }
 }
 
 /// Type-level override from a rule plugin.
@@ -266,150 +482,320 @@ macro_rules! define_output_rule_plugin {
 // Testing utilities
 // ============================================================
 
-/// Builder for constructing `TypeContext` in tests.
+/// Builder for constructing a [`TypeContext`] in tests.
+///
+/// The builder emits the same JSON shape evenframe_core would send at
+/// runtime, so plugin tests exercise the exact deserialization path the
+/// production WASM plugin will. See the three entry points
+/// [`Self::struct_`], [`Self::table`], and [`Self::enum_`].
 pub struct TypeContextBuilder {
-    ctx: TypeContext,
+    variant: BuilderVariant,
+    pipeline: String,
+    generator: String,
+    // Shared "struct" config state (used by Struct and Table variants).
+    struct_name: String,
+    struct_annotations: Vec<String>,
+    struct_raw_attributes: HashMap<String, Vec<serde_json::Value>>,
+    struct_macroforge_derives: Vec<String>,
+    struct_rust_derives: Vec<String>,
+    fields: Vec<serde_json::Value>,
+    // Enum-only state.
+    enum_name: String,
+    enum_annotations: Vec<String>,
+    enum_raw_attributes: HashMap<String, Vec<serde_json::Value>>,
+    enum_macroforge_derives: Vec<String>,
+    variants: Vec<serde_json::Value>,
+    // Table-only state.
+    table_name: String,
+    table_permissions: Option<serde_json::Value>,
+    table_events: Vec<serde_json::Value>,
+    table_relation: Option<serde_json::Value>,
+}
+
+enum BuilderVariant {
+    Struct,
+    Table,
+    Enum,
 }
 
 impl TypeContextBuilder {
-    /// Create a table struct context with the given name (has table_name set).
-    pub fn handler(name: &str) -> Self {
+    /// Build a context for a standalone (non-table) struct.
+    pub fn struct_(name: &str) -> Self {
+        Self::new(BuilderVariant::Struct, name)
+    }
+
+    /// Build a context for a table-backed struct. The table name defaults
+    /// to snake_case(`name`); override with [`Self::table_name_override`].
+    pub fn table(name: &str) -> Self {
+        let mut b = Self::new(BuilderVariant::Table, name);
+        b.table_name = to_snake(name);
+        b
+    }
+
+    /// Build a context for a tagged-union enum.
+    pub fn enum_(name: &str) -> Self {
+        let mut b = Self::new(BuilderVariant::Enum, name);
+        b.enum_name = name.to_string();
+        b
+    }
+
+    fn new(variant: BuilderVariant, name: &str) -> Self {
         Self {
-            ctx: TypeContext {
-                type_name: name.to_string(),
-                kind: "Struct".to_string(),
-                rust_derives: vec![],
-                annotations: vec![],
-                pipeline: "Both".to_string(),
-                generator: String::new(),
-                fields: vec![],
-                table_name: to_snake(name),
-                is_relation: false,
-                has_explicit_permissions: false,
-                has_explicit_events: false,
-                has_explicit_mock_data: false,
-                existing_macroforge_derives: vec![],
-            },
+            variant,
+            pipeline: "Both".to_string(),
+            generator: String::new(),
+            struct_name: name.to_string(),
+            struct_annotations: Vec::new(),
+            struct_raw_attributes: HashMap::new(),
+            struct_macroforge_derives: Vec::new(),
+            struct_rust_derives: Vec::new(),
+            fields: Vec::new(),
+            enum_name: String::new(),
+            enum_annotations: Vec::new(),
+            enum_raw_attributes: HashMap::new(),
+            enum_macroforge_derives: Vec::new(),
+            variants: Vec::new(),
+            table_name: String::new(),
+            table_permissions: None,
+            table_events: Vec::new(),
+            table_relation: None,
         }
     }
 
-    /// Create a non-table struct context (no table_name).
-    pub fn standard(name: &str) -> Self {
-        let mut b = Self::handler(name);
-        b.ctx.table_name = String::new();
-        b
-    }
-
-    /// Create an enum context.
-    pub fn tagged_union(name: &str) -> Self {
-        let mut b = Self::handler(name);
-        b.ctx.kind = "Enum".to_string();
-        b.ctx.table_name = String::new();
-        b
-    }
-
-    /// Add a field.
+    /// Add a struct field. `field_type` is stored as a canonical string
+    /// (same shape evenframe produces).
     pub fn field(mut self, name: &str, field_type: &str) -> Self {
-        self.ctx.fields.push(TypeFieldInfo {
-            field_name: name.to_string(),
-            field_type: field_type.to_string(),
-            annotations: vec![],
-            validators: vec![],
-            is_optional: field_type.starts_with("Option"),
-            record_link_target: extract_record_link_target(field_type),
-            vec_inner_type: extract_vec_inner(field_type),
-            has_explicit_format: false,
-            existing_format: None,
-            has_explicit_define: false,
-        });
+        self.fields.push(serde_json::json!({
+            "field_name": name,
+            "field_type": field_type,
+            "annotations": Vec::<String>::new(),
+            "validators": Vec::<String>::new(),
+            "raw_attributes": serde_json::Map::new(),
+        }));
         self
     }
 
-    /// Add a field with an existing annotation.
+    /// Add a struct field with a pre-existing annotation (from a native
+    /// `#[annotation("...")]` attribute in Rust).
     pub fn field_with_annotation(mut self, name: &str, field_type: &str, annotation: &str) -> Self {
-        self.ctx.fields.push(TypeFieldInfo {
-            field_name: name.to_string(),
-            field_type: field_type.to_string(),
-            annotations: vec![annotation.to_string()],
-            validators: vec![],
-            is_optional: field_type.starts_with("Option"),
-            record_link_target: extract_record_link_target(field_type),
-            vec_inner_type: extract_vec_inner(field_type),
-            has_explicit_format: false,
-            existing_format: None,
-            has_explicit_define: false,
-        });
+        self.fields.push(serde_json::json!({
+            "field_name": name,
+            "field_type": field_type,
+            "annotations": vec![annotation.to_string()],
+            "validators": Vec::<String>::new(),
+            "raw_attributes": serde_json::Map::new(),
+        }));
         self
     }
 
-    pub fn with_explicit_permissions(mut self) -> Self {
-        self.ctx.has_explicit_permissions = true;
+    /// Add an enum variant (no data payload).
+    pub fn variant(mut self, name: &str) -> Self {
+        self.variants.push(serde_json::json!({
+            "name": name,
+            "data": serde_json::Value::Null,
+            "annotations": Vec::<String>::new(),
+            "raw_attributes": serde_json::Map::new(),
+        }));
         self
     }
 
-    pub fn with_explicit_events(mut self) -> Self {
-        self.ctx.has_explicit_events = true;
+    /// Add a type-level raw attribute stub (e.g. `#[overview]` →
+    /// `("overview", "")`). Appends bodies so multi-occurrence attributes
+    /// accumulate.
+    pub fn with_raw_attr(mut self, name: &str, body: &str) -> Self {
+        let target = match self.variant {
+            BuilderVariant::Enum => &mut self.enum_raw_attributes,
+            _ => &mut self.struct_raw_attributes,
+        };
+        target
+            .entry(name.to_string())
+            .or_default()
+            .push(serde_json::Value::String(body.to_string()));
         self
     }
 
-    pub fn with_explicit_mock_data(mut self) -> Self {
-        self.ctx.has_explicit_mock_data = true;
+    /// Add a field-level raw attribute stub to the last-added field or
+    /// variant.
+    pub fn with_field_raw_attr(mut self, name: &str, body: &str) -> Self {
+        let target = match self.variant {
+            BuilderVariant::Enum => self.variants.last_mut(),
+            _ => self.fields.last_mut(),
+        };
+        if let Some(node) = target
+            && let Some(map) = node
+                .get_mut("raw_attributes")
+                .and_then(|v| v.as_object_mut())
+        {
+            let entry = map
+                .entry(name.to_string())
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let Some(arr) = entry.as_array_mut() {
+                arr.push(serde_json::Value::String(body.to_string()));
+            }
+        }
         self
     }
 
+    /// Seed `macroforge_derives` on the underlying struct/enum config as
+    /// if the Rust source had `#[macroforge_derive(...)]`.
     pub fn with_macroforge_derives(mut self, derives: &[&str]) -> Self {
-        self.ctx.existing_macroforge_derives = derives.iter().map(|s| s.to_string()).collect();
+        let derives: Vec<String> = derives.iter().map(|s| s.to_string()).collect();
+        match self.variant {
+            BuilderVariant::Enum => self.enum_macroforge_derives = derives,
+            _ => self.struct_macroforge_derives = derives,
+        }
+        self
+    }
+
+    /// Override the snake_case table name (`Table` variant only).
+    pub fn table_name_override(mut self, name: &str) -> Self {
+        self.table_name = name.to_string();
+        self
+    }
+
+    /// Mark the table as already having explicit permissions.
+    pub fn with_explicit_permissions(mut self) -> Self {
+        self.table_permissions = Some(serde_json::json!({
+            "all_permissions": null,
+            "select_permissions": "FULL",
+            "update_permissions": "FULL",
+            "delete_permissions": "FULL",
+            "create_permissions": "FULL"
+        }));
+        self
+    }
+
+    /// Mark the table as already having explicit events.
+    pub fn with_explicit_events(mut self) -> Self {
+        self.table_events
+            .push(serde_json::json!({ "statement": "DEFINE EVENT stub ON TABLE x ..." }));
+        self
+    }
+
+    /// Mark the table as a relation/edge.
+    pub fn as_relation(mut self) -> Self {
+        self.table_relation = Some(serde_json::json!({
+            "edge_name": self.table_name,
+            "from": Vec::<String>::new(),
+            "to": Vec::<String>::new(),
+            "direction": null
+        }));
         self
     }
 
     pub fn build(self) -> TypeContext {
-        self.ctx
+        let struct_config = serde_json::json!({
+            "struct_name": self.struct_name,
+            "fields": self.fields,
+            "validators": Vec::<String>::new(),
+            "doccom": serde_json::Value::Null,
+            "macroforge_derives": self.struct_macroforge_derives,
+            "annotations": self.struct_annotations,
+            "pipeline": "Both",
+            "rust_derives": self.struct_rust_derives,
+            "raw_attributes": self.struct_raw_attributes,
+        });
+
+        match self.variant {
+            BuilderVariant::Struct => TypeContext::Struct {
+                pipeline: self.pipeline,
+                generator: self.generator,
+                config: struct_config,
+            },
+            BuilderVariant::Table => {
+                let table_config = serde_json::json!({
+                    "table_name": self.table_name,
+                    "struct_config": struct_config.clone(),
+                    "relation": self.table_relation,
+                    "permissions": self.table_permissions,
+                    "mock_generation_config": serde_json::Value::Null,
+                    "events": self.table_events,
+                });
+                TypeContext::Table {
+                    pipeline: self.pipeline,
+                    generator: self.generator,
+                    struct_config,
+                    table_config,
+                }
+            }
+            BuilderVariant::Enum => {
+                let enum_config = serde_json::json!({
+                    "enum_name": self.enum_name,
+                    "variants": self.variants,
+                    "representation": { "ExternallyTagged": null },
+                    "doccom": serde_json::Value::Null,
+                    "macroforge_derives": self.enum_macroforge_derives,
+                    "annotations": self.enum_annotations,
+                    "pipeline": "Both",
+                    "rust_derives": Vec::<String>::new(),
+                    "raw_attributes": self.enum_raw_attributes,
+                });
+                TypeContext::Enum {
+                    pipeline: self.pipeline,
+                    generator: self.generator,
+                    config: enum_config,
+                }
+            }
+        }
     }
 }
 
-/// Run a rule plugin function with full validation.
+/// Run a rule plugin function with a JSON roundtrip (simulates WASM IPC).
 ///
-/// 1. Validates the TypeContext matches evenframe's conventions (kind values, etc.)
-/// 2. JSON roundtrips input and output (simulates WASM IPC)
-/// 3. Validates the output overrides are well-formed
-///
-/// Panics with clear messages if anything is wrong.
+/// Panics with clear messages if the roundtrip fails.
 pub fn test_plugin(
     plugin_fn: impl Fn(&TypeContext) -> OutputRulePluginOutput,
     ctx: TypeContext,
 ) -> OutputRulePluginOutput {
-    // Validate kind matches evenframe's TypeKind enum
-    assert!(
-        ctx.kind == "Struct" || ctx.kind == "Enum",
-        "TypeContext.kind must be \"Struct\" or \"Enum\" (evenframe's TypeKind values), got \"{}\".\n\
-         Note: application-specific aliases like \"handler\", \"standard\", \"tagged_union\" are NOT \
-         what evenframe sends. Use table_name.is_empty() to distinguish tables from nested structs.",
-        ctx.kind
-    );
+    // We only serialize TypeContext via its Deserialize impl (from the
+    // JSON evenframe_core emits). Here we reconstruct that JSON shape
+    // from the in-memory TypeContext by matching on the variant and
+    // reassembling it so the roundtrip exercises real deserialization.
+    let json = match &ctx {
+        TypeContext::Struct {
+            pipeline,
+            generator,
+            config,
+        } => serde_json::json!({
+            "kind": "Struct",
+            "pipeline": pipeline,
+            "generator": generator,
+            "config": config,
+        }),
+        TypeContext::Table {
+            pipeline,
+            generator,
+            struct_config,
+            table_config,
+        } => serde_json::json!({
+            "kind": "Table",
+            "pipeline": pipeline,
+            "generator": generator,
+            "struct_config": struct_config,
+            "table_config": table_config,
+        }),
+        TypeContext::Enum {
+            pipeline,
+            generator,
+            config,
+        } => serde_json::json!({
+            "kind": "Enum",
+            "pipeline": pipeline,
+            "generator": generator,
+            "config": config,
+        }),
+    };
 
-    // Validate table_name consistency
-    if ctx.kind == "Enum" {
-        assert!(
-            ctx.table_name.is_empty(),
-            "Enums should not have a table_name, got \"{}\"",
-            ctx.table_name
-        );
-    }
-
-    // JSON roundtrip input (simulates WASM IPC)
-    let json = serde_json::to_vec(&ctx)
-        .expect("Failed to serialize TypeContext — builder produced invalid data");
-    let ctx: TypeContext = serde_json::from_slice(&json)
-        .expect("Failed to deserialize TypeContext — serialization roundtrip failed");
+    let bytes = serde_json::to_vec(&json).expect("Failed to serialize TypeContext test JSON");
+    let ctx: TypeContext = serde_json::from_slice(&bytes)
+        .expect("Failed to deserialize TypeContext — roundtrip failed");
 
     let output = plugin_fn(&ctx);
 
-    // JSON roundtrip output (simulates WASM IPC)
-    let json = serde_json::to_vec(&output).expect("Failed to serialize OutputRulePluginOutput");
-    let output: OutputRulePluginOutput = serde_json::from_slice(&json)
+    let bytes = serde_json::to_vec(&output).expect("Failed to serialize OutputRulePluginOutput");
+    let output: OutputRulePluginOutput = serde_json::from_slice(&bytes)
         .expect("Failed to deserialize OutputRulePluginOutput — roundtrip failed");
 
-    // Validate output overrides are well-formed
     for (field_name, ov) in &output.field_overrides {
         assert!(
             !ov.annotations.is_empty(),
@@ -468,28 +854,6 @@ fn to_snake(s: &str) -> String {
         }
     }
     result
-}
-
-fn extract_record_link_target(t: &str) -> Option<String> {
-    let s = t.strip_prefix("Option<").unwrap_or(t);
-    if let Some(rest) = s.strip_prefix("RecordLink<") {
-        rest.strip_suffix('>')
-            .or_else(|| rest.strip_suffix(">>"))
-            .map(|s| s.to_string())
-    } else {
-        None
-    }
-}
-
-fn extract_vec_inner(t: &str) -> Option<String> {
-    let s = t.strip_prefix("Option<").unwrap_or(t);
-    if let Some(rest) = s.strip_prefix("Vec<") {
-        rest.strip_suffix('>')
-            .or_else(|| rest.strip_suffix(">>"))
-            .map(|s| s.to_string())
-    } else {
-        None
-    }
 }
 
 // ============================================================

@@ -10,7 +10,13 @@ struct TypesyncFixture {
     foreign_types: HashMap<String, ForeignTypeConfig>,
 }
 
-fn load_typesync_fixture(path: &str) -> (HashMap<String, StructConfig>, HashMap<String, TaggedUnion>, ForeignTypeRegistry) {
+fn load_typesync_fixture(
+    path: &str,
+) -> (
+    HashMap<String, StructConfig>,
+    HashMap<String, TaggedUnion>,
+    ForeignTypeRegistry,
+) {
     let input = std::fs::read_to_string(path).unwrap();
     let fixture: TypesyncFixture = serde_json::from_str(&input).unwrap();
     let registry = ForeignTypeRegistry::from_config(&fixture.foreign_types);
@@ -18,7 +24,12 @@ fn load_typesync_fixture(path: &str) -> (HashMap<String, StructConfig>, HashMap<
 }
 
 mod arktype {
-    pub fn run(spec_input_file: &str, _expected_file: &str, _test_directory: &str, _file_type: &str) {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::arktype::generate_arktype_type_string(
             &structs, &enums, true, &registry,
@@ -35,7 +46,12 @@ mod arktype {
 }
 
 mod effect {
-    pub fn run(spec_input_file: &str, _expected_file: &str, _test_directory: &str, _file_type: &str) {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::effect::generate_effect_schema_string(
             &structs, &enums, true, &registry,
@@ -53,7 +69,12 @@ mod effect {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    pub fn run(spec_input_file: &str, _expected_file: &str, _test_directory: &str, _file_type: &str) {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::protobuf::generate_protobuf_schema_string(
             &structs, &enums, None, false, &registry,
@@ -71,7 +92,12 @@ mod protobuf {
 
 #[cfg(feature = "flatbuffers")]
 mod flatbuffers {
-    pub fn run(spec_input_file: &str, _expected_file: &str, _test_directory: &str, _file_type: &str) {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::flatbuffers::generate_flatbuffers_schema_string(
             &structs, &enums, None, &registry,
@@ -102,7 +128,12 @@ mod surrealql {
         enums: HashMap<String, TaggedUnion>,
     }
 
-    pub fn run(spec_input_file: &str, _expected_file: &str, _test_directory: &str, _file_type: &str) {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
         let input = std::fs::read_to_string(spec_input_file).unwrap();
         let fixture: SurrealqlFixture = serde_json::from_str(&input).unwrap();
         let registry = ForeignTypeRegistry::default();

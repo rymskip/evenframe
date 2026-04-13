@@ -1428,7 +1428,7 @@ mod tests {
                         doccom: None,
                         annotations: vec!["@default".to_string()],
                         output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::HashMap::new(),
                     },
                     Variant {
                         name: "OnDeck".to_string(),
@@ -1436,7 +1436,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::HashMap::new(),
                     },
                 ],
                 doccom: None,

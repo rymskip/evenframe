@@ -650,7 +650,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::HashMap::new(),
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -665,7 +665,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::HashMap::new(),
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -680,7 +680,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::HashMap::new(),
                     },
                 ],
                 validators: vec![],
