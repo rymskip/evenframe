@@ -14,7 +14,7 @@
 pub use serde_json;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // ============================================================
 // Mock data plugin types and macro
@@ -271,7 +271,10 @@ impl TypeContext {
     /// parse natively, keyed by attribute name with each value being the
     /// parenthesized body (or `""` for bare path attributes like
     /// `#[overview]`). Multi-occurrence attributes preserve order.
-    pub fn raw_attributes(&self) -> HashMap<String, Vec<String>> {
+    ///
+    /// Returned as a `BTreeMap` so iteration is in sorted attribute-name
+    /// order, which keeps downstream annotation emission deterministic.
+    pub fn raw_attributes(&self) -> BTreeMap<String, Vec<String>> {
         let node = match self {
             TypeContext::Struct { config, .. } => config.get("raw_attributes"),
             TypeContext::Table { struct_config, .. } => struct_config.get("raw_attributes"),
@@ -349,7 +352,7 @@ impl TypeFieldInfo {
 
     /// Field-level raw attribute stubs (e.g., `#[text(label = "...")]`).
     /// See [`TypeContext::raw_attributes`] for shape details.
-    pub fn raw_attributes(&self) -> HashMap<String, Vec<String>> {
+    pub fn raw_attributes(&self) -> BTreeMap<String, Vec<String>> {
         self.node
             .get("raw_attributes")
             .and_then(|v| v.as_object())
@@ -495,14 +498,14 @@ pub struct TypeContextBuilder {
     // Shared "struct" config state (used by Struct and Table variants).
     struct_name: String,
     struct_annotations: Vec<String>,
-    struct_raw_attributes: HashMap<String, Vec<serde_json::Value>>,
+    struct_raw_attributes: BTreeMap<String, Vec<serde_json::Value>>,
     struct_macroforge_derives: Vec<String>,
     struct_rust_derives: Vec<String>,
     fields: Vec<serde_json::Value>,
     // Enum-only state.
     enum_name: String,
     enum_annotations: Vec<String>,
-    enum_raw_attributes: HashMap<String, Vec<serde_json::Value>>,
+    enum_raw_attributes: BTreeMap<String, Vec<serde_json::Value>>,
     enum_macroforge_derives: Vec<String>,
     variants: Vec<serde_json::Value>,
     // Table-only state.
@@ -546,13 +549,13 @@ impl TypeContextBuilder {
             generator: String::new(),
             struct_name: name.to_string(),
             struct_annotations: Vec::new(),
-            struct_raw_attributes: HashMap::new(),
+            struct_raw_attributes: BTreeMap::new(),
             struct_macroforge_derives: Vec::new(),
             struct_rust_derives: Vec::new(),
             fields: Vec::new(),
             enum_name: String::new(),
             enum_annotations: Vec::new(),
-            enum_raw_attributes: HashMap::new(),
+            enum_raw_attributes: BTreeMap::new(),
             enum_macroforge_derives: Vec::new(),
             variants: Vec::new(),
             table_name: String::new(),
