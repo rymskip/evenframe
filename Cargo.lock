@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "clap",
  "convert_case 0.11.0",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "convert_case 0.11.0",
  "evenframe",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_plugin"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -6566,7 +6566,7 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
 name = "tests_macros"
-version = "0.0.0"
+version = "0.1.4"
 dependencies = [
  "convert_case 0.11.0",
  "globwalk",
