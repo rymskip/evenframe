@@ -85,6 +85,8 @@ regex = { workspace = true }
 toml = { workspace = true }
 
 serde_json = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 evenframe_derive = { version = "0.1.0", path = "../evenframe_derive" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5.0"

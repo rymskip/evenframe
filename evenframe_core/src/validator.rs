@@ -649,72 +649,72 @@ impl Validator {
                     }
                 },
                 StringValidator::Url => quote! {
-                    if url::Url::parse(&#value).is_err() {
+                    if ::evenframe::prelude::url::Url::parse(&#value).is_err() {
                         return Err(serde::de::Error::custom("invalid URL"));
                     }
                 },
                 StringValidator::UrlParse => quote! {
-                    let #value = url::Url::parse(&#value)
+                    let #value = ::evenframe::prelude::url::Url::parse(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid URL"))?;
                 },
                 StringValidator::Uuid => quote! {
-                    if uuid::Uuid::parse_str(&#value).is_err() {
+                    if ::evenframe::prelude::uuid::Uuid::parse_str(&#value).is_err() {
                         return Err(serde::de::Error::custom("invalid UUID"));
                     }
                 },
                 StringValidator::UuidV1 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Mac) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Mac) {
                         return Err(serde::de::Error::custom("UUID must be version 1"));
                     }
                 },
                 StringValidator::UuidV2 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Dce) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Dce) {
                         return Err(serde::de::Error::custom("UUID must be version 2"));
                     }
                 },
                 StringValidator::UuidV3 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Md5) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Md5) {
                         return Err(serde::de::Error::custom("UUID must be version 3"));
                     }
                 },
                 StringValidator::UuidV4 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Random) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Random) {
                         return Err(serde::de::Error::custom("UUID must be version 4"));
                     }
                 },
                 StringValidator::UuidV5 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Sha1) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Sha1) {
                         return Err(serde::de::Error::custom("UUID must be version 5"));
                     }
                 },
                 StringValidator::UuidV6 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::SortMac) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::SortMac) {
                         return Err(serde::de::Error::custom("UUID must be version 6"));
                     }
                 },
                 StringValidator::UuidV7 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::SortRand) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::SortRand) {
                         return Err(serde::de::Error::custom("UUID must be version 7"));
                     }
                 },
                 StringValidator::UuidV8 => quote! {
-                    let uuid = uuid::Uuid::parse_str(&#value)
+                    let uuid = ::evenframe::prelude::uuid::Uuid::parse_str(&#value)
                         .map_err(|_| serde::de::Error::custom("invalid UUID"))?;
-                    if uuid.get_version() != Some(uuid::Version::Custom) {
+                    if uuid.get_version() != Some(::evenframe::prelude::uuid::Version::Custom) {
                         return Err(serde::de::Error::custom("UUID must be version 8"));
                     }
                 },
