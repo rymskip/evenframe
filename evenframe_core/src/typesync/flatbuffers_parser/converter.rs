@@ -140,6 +140,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
             annotations: vec![],
             output_override: None,
             raw_attributes: HashMap::new(),
+            is_default: false,
         })
         .collect();
 
@@ -173,6 +174,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                 annotations: vec![],
                 output_override: None,
                 raw_attributes: HashMap::new(),
+                is_default: false,
             }
         })
         .collect();

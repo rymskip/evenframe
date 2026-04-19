@@ -167,6 +167,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
             relation: None,
             permissions: None,
@@ -225,6 +226,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
 
         let result = field
@@ -275,6 +277,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
 
         let result = field
@@ -321,6 +324,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
+            raw_attributes: HashMap::new(),
         };
 
         let result = field
@@ -374,6 +378,7 @@ mod tests {
                         unique: true,
                         mock_plugin: None,
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                     StructField {
                         field_name: "name".to_string(),
@@ -402,6 +407,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
+                        raw_attributes: HashMap::new(),
                     },
                 ],
                 validators: Vec::new(),
@@ -411,6 +417,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
+                raw_attributes: HashMap::new(),
             },
             relation: None,
             permissions: None,

@@ -840,6 +840,7 @@ mod tests {
                         annotations: vec![],
                         output_override: None,
                         raw_attributes: std::collections::HashMap::new(),
+                        is_default: false,
                     },
                     Variant {
                         name: "Inactive".to_string(),
@@ -848,6 +849,7 @@ mod tests {
                         annotations: vec![],
                         output_override: None,
                         raw_attributes: std::collections::HashMap::new(),
+                        is_default: false,
                     },
                     Variant {
                         name: "Pending".to_string(),
@@ -856,6 +858,7 @@ mod tests {
                         annotations: vec![],
                         output_override: None,
                         raw_attributes: std::collections::HashMap::new(),
+                        is_default: false,
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -952,6 +955,7 @@ mod tests {
                         annotations: vec![],
                         output_override: None,
                         raw_attributes: std::collections::HashMap::new(),
+                        is_default: false,
                     },
                     Variant {
                         name: "User".to_string(),
@@ -960,6 +964,7 @@ mod tests {
                         annotations: vec![],
                         output_override: None,
                         raw_attributes: std::collections::HashMap::new(),
+                        is_default: false,
                     },
                 ],
                 representation: EnumRepresentation::default(),

@@ -149,6 +149,12 @@ pub struct Variant {
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
     pub raw_attributes: HashMap<String, Vec<String>>,
+    /// True for the variant marked `#[default]` — the same attribute
+    /// `#[derive(Default)]` uses to pick an enum's default variant. Default
+    /// synthesis (both SurrealDB and TypeScript) picks this variant; if no
+    /// variant is flagged, the first declared variant is used.
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -863,6 +869,7 @@ mod tests {
                     annotations: vec![],
                     output_override: None,
                     raw_attributes: HashMap::new(),
+                    is_default: false,
                 },
                 Variant {
                     name: "Inactive".to_string(),
@@ -871,6 +878,7 @@ mod tests {
                     annotations: vec![],
                     output_override: None,
                     raw_attributes: HashMap::new(),
+                    is_default: false,
                 },
             ],
             representation: EnumRepresentation::default(),
@@ -897,6 +905,7 @@ mod tests {
                 annotations: vec![],
                 output_override: None,
                 raw_attributes: HashMap::new(),
+                is_default: false,
             }],
             representation: EnumRepresentation::default(),
             doccom: None,
@@ -955,6 +964,7 @@ mod tests {
             annotations: vec![],
             output_override: None,
             raw_attributes: HashMap::new(),
+            is_default: false,
         };
         assert!(v.data.is_none());
     }
@@ -968,6 +978,7 @@ mod tests {
             annotations: vec![],
             output_override: None,
             raw_attributes: HashMap::new(),
+            is_default: false,
         };
         assert!(matches!(
             v.data,
@@ -996,6 +1007,7 @@ mod tests {
             annotations: vec![],
             output_override: None,
             raw_attributes: HashMap::new(),
+            is_default: false,
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }

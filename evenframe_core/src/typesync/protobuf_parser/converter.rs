@@ -214,6 +214,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
             annotations: vec![],
             output_override: None,
             raw_attributes: HashMap::new(),
+            is_default: false,
         })
         .collect();
 

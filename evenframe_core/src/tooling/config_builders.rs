@@ -656,6 +656,10 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         };
 
         let variant_raw_attributes = collect_raw_attributes(&variant.attrs);
+        let is_default_variant = variant
+            .attrs
+            .iter()
+            .any(|a| a.path().is_ident("default"));
 
         variants.push(Variant {
             name: variant_name,
@@ -664,6 +668,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
             annotations: variant_annotations,
             output_override: None,
             raw_attributes: variant_raw_attributes,
+            is_default: is_default_variant,
         });
     }
 
@@ -1060,9 +1065,7 @@ fn apply_rule_plugins(
                     }
                     // Apply per-variant annotations: the plugin's field_overrides
                     // map variant names to annotations, mirroring how struct
-                    // fields are handled above. Without this, a plugin cannot
-                    // emit inline variant annotations such as `@default` on an
-                    // enum variant marked `#[default_value]`.
+                    // fields are handled above.
                     for (variant_name, field_override) in &plugin_output.field_overrides {
                         if let Some(variant) =
                             ec.variants.iter_mut().find(|v| &v.name == variant_name)

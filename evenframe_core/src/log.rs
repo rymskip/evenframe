@@ -118,5 +118,13 @@ macro_rules! evenframe_log {
 #[cfg(not(feature = "dev-mode"))]
 #[macro_export]
 macro_rules! evenframe_log {
-    ($($args:tt)*) => { () };
+    ($content:expr) => {{
+        let _ = &$content;
+    }};
+    ($content:expr, $filename:expr) => {{
+        let _ = (&$content, &$filename);
+    }};
+    ($content:expr, $filename:expr, $append:expr) => {{
+        let _ = (&$content, &$filename, &$append);
+    }};
 }

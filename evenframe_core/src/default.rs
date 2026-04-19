@@ -127,7 +127,12 @@ pub fn field_type_to_default_value(
                     enum_schema.variants.len()
                 );
                 let mut rng = rng();
-                if let Some(chosen_variant) = enum_schema.variants.choose(&mut rng) {
+                let chosen_variant = enum_schema
+                    .variants
+                    .iter()
+                    .find(|v| v.is_default)
+                    .or_else(|| enum_schema.variants.choose(&mut rng));
+                if let Some(chosen_variant) = chosen_variant {
                     trace!("Chosen variant: {}", chosen_variant.name);
                     // If the variant has data, generate a default for it.
                     if let Some(variant_data) = &chosen_variant.data {
@@ -365,7 +370,11 @@ pub fn field_type_to_surql_default(
                     name,
                     enum_schema.variants.len()
                 );
-                let chosen_variant = &enum_schema.variants[0];
+                let chosen_variant = enum_schema
+                    .variants
+                    .iter()
+                    .find(|v| v.is_default)
+                    .unwrap_or(&enum_schema.variants[0]);
                 if let Some(variant_data) = &chosen_variant.data {
                     let inner_default = match variant_data {
                         VariantData::InlineStruct(enum_struct) => field_type_to_surql_default(
@@ -441,19 +450,23 @@ pub fn field_type_to_surql_default(
                     .fields
                     .iter()
                     .map(|table_field| {
-                        format!(
-                            "{}: {}",
-                            table_field.field_name.to_case(Case::Snake),
-                            field_type_to_surql_default(
-                                &table_field.field_name,
-                                table_name,
-                                &table_field.field_type,
-                                enums,
-                                app_structs,
-                                persistable_structs,
-                                registry
-                            )
-                        )
+                        let value = table_field
+                            .define_config
+                            .as_ref()
+                            .and_then(|dc| dc.default.as_deref())
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| {
+                                field_type_to_surql_default(
+                                    &table_field.field_name,
+                                    table_name,
+                                    &table_field.field_type,
+                                    enums,
+                                    app_structs,
+                                    persistable_structs,
+                                    registry,
+                                )
+                            });
+                        format!("{}: {}", table_field.field_name.to_case(Case::Snake), value)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -781,4 +794,182 @@ pub fn field_type_to_surreal_type(
     };
     trace!("Generated SurrealDB type: {:?}", result);
     result
+}
+
+#[cfg(all(test, feature = "surrealdb"))]
+mod tests {
+    use super::*;
+    use crate::schemasync::DefineConfig;
+    use crate::types::{
+        EnumRepresentation, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, Variant,
+    };
+    use std::collections::HashMap;
+
+    fn base_define_config(default: Option<&str>) -> DefineConfig {
+        DefineConfig {
+            select_permissions: None,
+            update_permissions: None,
+            create_permissions: None,
+            data_type: None,
+            should_skip: false,
+            default: default.map(|s| s.to_string()),
+            default_always: None,
+            value: None,
+            assert: None,
+            readonly: None,
+            flexible: None,
+            computed: None,
+            comment: None,
+        }
+    }
+
+    fn variant(name: &str, is_default: bool) -> Variant {
+        Variant {
+            name: name.to_string(),
+            data: None,
+            doccom: None,
+            annotations: vec![],
+            output_override: None,
+            raw_attributes: HashMap::new(),
+            is_default,
+        }
+    }
+
+    fn tagged_union(name: &str, variants: Vec<Variant>) -> TaggedUnion {
+        TaggedUnion {
+            enum_name: name.to_string(),
+            variants,
+            representation: EnumRepresentation::Untagged,
+            doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
+            pipeline: crate::types::Pipeline::default(),
+            rust_derives: vec![],
+            output_override: None,
+            raw_attributes: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn enum_default_attribute_is_honored() {
+        let enum_name = "CardOrRow".to_string();
+        let card_or_row = tagged_union(
+            &enum_name,
+            vec![
+                variant("Card", false),
+                variant("Table", true),
+                variant("List", false),
+            ],
+        );
+        let mut enums = HashMap::new();
+        enums.insert(enum_name.clone(), card_or_row);
+        let app_structs = HashMap::new();
+        let persistable_structs = HashMap::new();
+        let registry = ForeignTypeRegistry::default();
+
+        let result = field_type_to_surql_default(
+            &"some_field".to_string(),
+            &"some_table".to_string(),
+            &FieldType::Other(enum_name),
+            &enums,
+            &app_structs,
+            &persistable_structs,
+            &registry,
+        );
+
+        assert_eq!(result, "'Table'");
+    }
+
+    #[test]
+    fn enum_without_default_attribute_falls_back_to_first_variant() {
+        let enum_name = "Color".to_string();
+        let color = tagged_union(
+            &enum_name,
+            vec![
+                variant("Red", false),
+                variant("Green", false),
+                variant("Blue", false),
+            ],
+        );
+        let mut enums = HashMap::new();
+        enums.insert(enum_name.clone(), color);
+        let app_structs = HashMap::new();
+        let persistable_structs = HashMap::new();
+        let registry = ForeignTypeRegistry::default();
+
+        let result = field_type_to_surql_default(
+            &"some_field".to_string(),
+            &"some_table".to_string(),
+            &FieldType::Other(enum_name),
+            &enums,
+            &app_structs,
+            &persistable_structs,
+            &registry,
+        );
+
+        assert_eq!(result, "'Red'");
+    }
+
+    #[test]
+    fn nested_struct_field_define_default_is_honored_in_parent_literal() {
+        let enum_name = "CardOrRow".to_string();
+        let card_or_row = tagged_union(
+            &enum_name,
+            vec![variant("Card", false), variant("Table", true)],
+        );
+        let mut enums = HashMap::new();
+        enums.insert(enum_name.clone(), card_or_row);
+
+        let overview_settings = StructConfig {
+            struct_name: "OverviewSettings".to_string(),
+            fields: vec![
+                StructField {
+                    field_name: "row_height".to_string(),
+                    field_type: FieldType::String,
+                    define_config: Some(base_define_config(Some("\"Medium\""))),
+                    ..Default::default()
+                },
+                StructField {
+                    field_name: "card_or_row".to_string(),
+                    field_type: FieldType::Other(enum_name.clone()),
+                    // Intentionally no explicit define_config default — rely on
+                    // the enum's #[default] marker.
+                    define_config: None,
+                    ..Default::default()
+                },
+                StructField {
+                    field_name: "per_page".to_string(),
+                    field_type: FieldType::U32,
+                    define_config: Some(base_define_config(Some("10"))),
+                    ..Default::default()
+                },
+                StructField {
+                    field_name: "column_configs".to_string(),
+                    field_type: FieldType::Vec(Box::new(FieldType::String)),
+                    define_config: None,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut app_structs = HashMap::new();
+        app_structs.insert("OverviewSettings".to_string(), overview_settings);
+        let persistable_structs = HashMap::new();
+        let registry = ForeignTypeRegistry::default();
+
+        let result = field_type_to_surql_default(
+            &"lorecast_section_overview_settings".to_string(),
+            &"user".to_string(),
+            &FieldType::Other("OverviewSettings".to_string()),
+            &enums,
+            &app_structs,
+            &persistable_structs,
+            &registry,
+        );
+
+        assert_eq!(
+            result,
+            "{ row_height: \"Medium\", card_or_row: 'Table', per_page: 10, column_configs: [] }"
+        );
+    }
 }
