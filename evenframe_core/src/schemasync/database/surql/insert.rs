@@ -14,8 +14,11 @@ impl Mockmaker<'_> {
     ) -> String {
         info!(table_name = %table_name, "Generating insert statements for table");
         debug!("Table config: {:?}", table_config);
-        let log_name = format!("insert_logs/{}.log", table_name);
-        evenframe_log!("", log_name);
+        #[cfg(feature = "dev-mode")]
+        {
+            let log_name = format!("insert_logs/{}.log", table_name);
+            evenframe_log!("", log_name);
+        }
 
         let mut output = String::new();
         let config = self

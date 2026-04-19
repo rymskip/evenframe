@@ -22,6 +22,11 @@ path = "src/lib.rs"
 # pick only what they need.
 default = ["cli"]
 
+# Enables file-based debug logging via the `evenframe_log!` macro.
+# Writes .log/.surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/.
+# Not intended for production use.
+dev-mode = ["evenframe_core/dev-mode"]
+
 # The CLI feature set: full schemasync pipeline with mock data generation,
 # all TypeScript/schema generators, and SurrealDB support. This is what the
 # evenframe binary requires. See evenframe_core for the full feature breakdown.

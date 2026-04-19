@@ -194,6 +194,7 @@ where
                     true
                 );
 
+                #[cfg(feature = "dev-mode")]
                 if let Some(stmt) = &error.statement {
                     evenframe_log!(&format!("Failed statement: {}", stmt), "errors.log", true);
                 }

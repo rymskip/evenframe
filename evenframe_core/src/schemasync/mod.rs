@@ -569,9 +569,12 @@ impl<'a> Schemasync<'a> {
                     Ok(())
                 }
                 Err(e) => {
-                    let error_msg =
-                        format!("Failed to execute define statements for table\n{e}:\n{stmt}",);
-                    evenframe_log!(&error_msg, "results.log", true);
+                    #[cfg(feature = "dev-mode")]
+                    {
+                        let error_msg =
+                            format!("Failed to execute define statements for table\n{e}:\n{stmt}",);
+                        evenframe_log!(&error_msg, "results.log", true);
+                    }
                     Err(e.into())
                 }
             }

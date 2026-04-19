@@ -18,6 +18,11 @@ categories = ["development-tools", "database"]
 # possible compile and is what evenframe_derive depends on.
 default = []
 
+# Enables file-based debug logging via the `evenframe_log!` macro.
+# Writes .log and .surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/.
+# Not intended for production use.
+dev-mode = []
+
 # ---------------------------------------------------------------------------
 # Type synchronization (TypeScript / schema generation)
 # ---------------------------------------------------------------------------

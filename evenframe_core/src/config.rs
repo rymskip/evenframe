@@ -348,14 +348,18 @@ impl EvenframeConfig {
     }
 
     /// Resolves the .env file path based on config.
-    /// If `general.env_path` is set, resolves it relative to project root.
+    /// If `general.env_path` is set, resolves it relative to the config file's directory.
     /// Otherwise defaults to `<project_root>/.env`.
     pub fn resolve_env_path(&self) -> PathBuf {
-        let project_root = self.project_root();
-        match &self.general.env_path {
-            Some(custom) => project_root.join(custom),
-            None => project_root.join(".env"),
-        }
+        let config_dir = self
+            .config_file_path
+            .parent()
+            .unwrap_or(Path::new("."));
+        let raw = match &self.general.env_path {
+            Some(custom) => config_dir.join(custom),
+            None => self.project_root().join(".env"),
+        };
+        std::path::absolute(&raw).unwrap_or(raw)
     }
 
     /// Load environment variables from the .env file resolved from config.
@@ -368,7 +372,7 @@ impl EvenframeConfig {
                 if env_path.exists() {
                     warn!("Failed to load .env file {:?}: {}", env_path, e);
                 } else {
-                    debug!("No .env file found at {:?}, skipping", env_path);
+                    warn!("No .env file found at {:?}, skipping", env_path);
                 }
             }
         }

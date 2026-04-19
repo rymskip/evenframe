@@ -1,4 +1,4 @@
-/// Internal macro for common logging logic
+#[cfg(feature = "dev-mode")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __internal_log_impl {
@@ -56,23 +56,18 @@ macro_rules! __internal_log_impl {
         }
 
         if let Ok(mut file_handle) = options.open(path) {
-            // Check if the expression is a format! macro or string literal
             let expr_str = stringify!($content);
             let formatted = if expr_str.starts_with("format!")
                 || expr_str.starts_with("&format!")
                 || expr_str.starts_with("\"")
                 || expr_str.starts_with("String::")
             {
-                // For formatted strings, just output the content directly
                 format!("{}\n", $content)
             } else if $filename.ends_with(".surql") {
-                // For .surql files, output the content as a plain string without debug formatting
                 format!("{}\n", $content)
             } else {
-                // For other types, use debug output with location info
                 let value_str = format!("{:#?}", &$content);
 
-                // Check if it's a multi-line value
                 if value_str.contains('\n') || value_str.len() > 80 {
                     format!(
                         "[{}:{}] {} = \n{}\n",
@@ -96,27 +91,17 @@ macro_rules! __internal_log_impl {
     }};
 }
 
-/// Logging macro for the evenframe crate.
+/// File-based debug logging macro. Only active with the `dev-mode` feature.
 ///
 /// # Examples
 ///
-/// Log to a timestamp-based file (e.g., "2024_01_12_14_30_52.log"):
 /// ```no_run
 /// # use evenframe_core::evenframe_log;
 /// evenframe_log!("Sync started");
-/// ```
-///
-/// Log to a specific file (overwrites existing content):
-/// ```no_run
-/// # use evenframe_core::evenframe_log;
 /// evenframe_log!("Types generated", "output.log");
-/// ```
-///
-/// Log to a specific file with append mode:
-/// ```no_run
-/// # use evenframe_core::evenframe_log;
 /// evenframe_log!("New type added", "output.log", true);
 /// ```
+#[cfg(feature = "dev-mode")]
 #[macro_export]
 macro_rules! evenframe_log {
     ($content:expr) => {{
@@ -128,4 +113,10 @@ macro_rules! evenframe_log {
     ($content:expr, $filename:expr, $append:expr) => {{
         $crate::__internal_log_impl!($content, "evenframe/logs", $filename, $append, standard);
     }};
+}
+
+#[cfg(not(feature = "dev-mode"))]
+#[macro_export]
+macro_rules! evenframe_log {
+    ($($args:tt)*) => { () };
 }
