@@ -1,0 +1,8 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+assertion_line: 155
+expression: output
+---
+DEFINE TABLE OVERWRITE likes SCHEMAFULL TYPE RELATION FROM user TO post | comment CHANGEFEED 3d PERMISSIONS FOR select FULL FOR update FULL FOR create FULL FOR delete FULL;
+DEFINE FIELD OVERWRITE created_at ON TABLE likes TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE strength ON TABLE likes TYPE any PERMISSIONS FULL;

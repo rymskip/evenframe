@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+assertion_line: 155
+expression: output
+---
+DEFINE TABLE OVERWRITE order SCHEMAFULL TYPE NORMAL CHANGEFEED 3d PERMISSIONS FOR select FULL FOR update FULL FOR create FULL FOR delete FULL;
+DEFINE FIELD OVERWRITE customer_id ON TABLE order TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE total ON TABLE order TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE status ON TABLE order TYPE any PERMISSIONS FULL;
+DEFINE EVENT OVERWRITE order_created ON TABLE order WHEN $event = 'CREATE' THEN { CREATE audit SET table = 'order', action = 'create', record = $after.id, time = time::now() };
+DEFINE EVENT OVERWRITE order_updated ON TABLE order WHEN $event = 'UPDATE' AND $before.status != $after.status THEN { CREATE audit SET table = 'order', action = 'status_change', record = $after.id, old_status = $before.status, new_status = $after.status, time = time::now() };

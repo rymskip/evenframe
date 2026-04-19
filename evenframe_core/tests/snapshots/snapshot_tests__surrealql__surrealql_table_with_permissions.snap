@@ -1,0 +1,9 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+assertion_line: 155
+expression: output
+---
+DEFINE TABLE OVERWRITE customer SCHEMAFULL TYPE NORMAL CHANGEFEED 3d PERMISSIONS FOR select WHERE user = $auth.id FOR update WHERE user = $auth.id FOR create FULL FOR delete WHERE user = $auth.id AND role = 'admin';
+DEFINE FIELD OVERWRITE name ON TABLE customer TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE email ON TABLE customer TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE credit_score ON TABLE customer TYPE any PERMISSIONS FULL;
