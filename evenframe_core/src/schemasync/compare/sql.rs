@@ -115,6 +115,8 @@ impl<'a> SqlSchemaComparator<'a> {
             schema_type_changed: false,
             new_events: Vec::new(),
             removed_events: Vec::new(),
+            new_indexes: Vec::new(),
+            removed_indexes: Vec::new(),
         };
 
         // Get column names

@@ -20,8 +20,8 @@ pub use import::SchemaImporter;
 #[cfg(feature = "surrealdb")]
 pub use surql::SurrealdbComparator;
 pub use types::{
-    AccessDefinition, FieldDefinition, ObjectType, PermissionSet, SchemaDefinition, SchemaType,
-    TableDefinition,
+    AccessDefinition, FieldDefinition, IndexDefinition, ObjectType, PermissionSet,
+    SchemaDefinition, SchemaType, TableDefinition,
 };
 
 #[cfg(feature = "surrealdb")]
@@ -159,6 +159,8 @@ pub struct TableChanges {
     pub schema_type_changed: bool,
     pub new_events: Vec<String>,
     pub removed_events: Vec<String>,
+    pub new_indexes: Vec<IndexDefinition>,
+    pub removed_indexes: Vec<IndexDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -279,6 +281,27 @@ impl SchemaChanges {
                     "Removed events on {}: {}",
                     table.table_name,
                     table.removed_events.join(", ")
+                ));
+            }
+            if !table.new_indexes.is_empty() {
+                let names: Vec<&str> =
+                    table.new_indexes.iter().map(|i| i.name.as_str()).collect();
+                summary.push(format!(
+                    "New indexes on {}: {}",
+                    table.table_name,
+                    names.join(", ")
+                ));
+            }
+            if !table.removed_indexes.is_empty() {
+                let names: Vec<&str> = table
+                    .removed_indexes
+                    .iter()
+                    .map(|i| i.name.as_str())
+                    .collect();
+                summary.push(format!(
+                    "Removed indexes on {}: {}",
+                    table.table_name,
+                    names.join(", ")
                 ));
             }
         }
@@ -476,6 +499,8 @@ impl Comparator {
             schema_type_changed: false,
             new_events: Vec::new(),
             removed_events: Vec::new(),
+            new_indexes: Vec::new(),
+            removed_indexes: Vec::new(),
         };
 
         // Check schema type change
@@ -605,6 +630,27 @@ impl Comparator {
             table_changes.removed_events.push(event.clone());
         }
 
+        // Compare indexes by name. DEFINE INDEX OVERWRITE handles same-name
+        // content changes idempotently, so we only diff presence here — an
+        // index present in the DB but absent from code is an orphan and must
+        // be dropped.
+        let old_index_names: HashSet<&str> =
+            old_table.indexes.iter().map(|i| i.name.as_str()).collect();
+        let new_index_names: HashSet<&str> =
+            new_table.indexes.iter().map(|i| i.name.as_str()).collect();
+
+        for index in &new_table.indexes {
+            if !old_index_names.contains(index.name.as_str()) {
+                table_changes.new_indexes.push(index.clone());
+            }
+        }
+
+        for index in &old_table.indexes {
+            if !new_index_names.contains(index.name.as_str()) {
+                table_changes.removed_indexes.push(index.clone());
+            }
+        }
+
         // Return None if no changes detected
         if table_changes.new_fields.is_empty()
             && table_changes.removed_fields.is_empty()
@@ -613,6 +659,8 @@ impl Comparator {
             && !table_changes.schema_type_changed
             && table_changes.new_events.is_empty()
             && table_changes.removed_events.is_empty()
+            && table_changes.new_indexes.is_empty()
+            && table_changes.removed_indexes.is_empty()
         {
             Ok(None)
         } else {
@@ -1261,5 +1309,99 @@ impl<'a> Merger<'a> {
             }
             _ => json!(null),
         }
+    }
+}
+
+#[cfg(test)]
+mod index_diff_tests {
+    use super::*;
+    use crate::schemasync::compare::types::{IndexDefinition, SchemaType};
+
+    fn table_with_indexes(name: &str, indexes: Vec<IndexDefinition>) -> TableDefinition {
+        TableDefinition {
+            name: name.to_string(),
+            schema_type: SchemaType::Schemafull,
+            fields: HashMap::new(),
+            array_wildcard_fields: HashMap::new(),
+            permissions: None,
+            indexes,
+            events: Vec::new(),
+        }
+    }
+
+    fn idx(name: &str, columns: &[&str], unique: bool) -> IndexDefinition {
+        IndexDefinition {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            unique,
+        }
+    }
+
+    fn schema_with(table_name: &str, table: TableDefinition) -> SchemaDefinition {
+        let mut tables = HashMap::new();
+        tables.insert(table_name.to_string(), table);
+        SchemaDefinition {
+            tables,
+            edges: HashMap::new(),
+            accesses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn compare_flags_orphan_index_for_removal() {
+        let old = schema_with(
+            "reaction",
+            table_with_indexes(
+                "reaction",
+                vec![
+                    idx("idx_reaction_user_message", &["user", "message"], true),
+                    idx("idx_reaction_created_at", &["created_at"], false),
+                ],
+            ),
+        );
+        let new = schema_with(
+            "reaction",
+            table_with_indexes(
+                "reaction",
+                vec![idx("idx_reaction_user_message", &["user", "message"], true)],
+            ),
+        );
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.modified_tables.len(), 1);
+        let tc = &changes.modified_tables[0];
+        assert_eq!(tc.table_name, "reaction");
+        assert!(tc.new_indexes.is_empty());
+        assert_eq!(tc.removed_indexes.len(), 1);
+        assert_eq!(tc.removed_indexes[0].name, "idx_reaction_created_at");
+    }
+
+    #[test]
+    fn compare_flags_added_index() {
+        let old = schema_with("reaction", table_with_indexes("reaction", vec![]));
+        let new = schema_with(
+            "reaction",
+            table_with_indexes(
+                "reaction",
+                vec![idx("idx_reaction_created_at", &["created_at"], false)],
+            ),
+        );
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.modified_tables.len(), 1);
+        let tc = &changes.modified_tables[0];
+        assert_eq!(tc.new_indexes.len(), 1);
+        assert_eq!(tc.new_indexes[0].name, "idx_reaction_created_at");
+        assert!(tc.removed_indexes.is_empty());
+    }
+
+    #[test]
+    fn compare_returns_no_change_when_indexes_identical() {
+        let indexes = vec![idx("idx_reaction_user_message", &["user", "message"], true)];
+        let old = schema_with("reaction", table_with_indexes("reaction", indexes.clone()));
+        let new = schema_with("reaction", table_with_indexes("reaction", indexes));
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert!(changes.modified_tables.is_empty());
     }
 }

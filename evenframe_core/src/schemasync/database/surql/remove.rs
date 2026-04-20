@@ -2,6 +2,29 @@ use crate::schemasync::{compare::SchemaChanges, mockmake::Mockmaker};
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
+/// Generate `REMOVE INDEX` statements for indexes that exist in the database
+/// but are no longer declared in Rust (orphans). Kept as a free function so it
+/// can be unit-tested without standing up a `Mockmaker` (which owns a live
+/// `Surreal<Client>`).
+pub fn generate_remove_index_statements(schema_changes: &SchemaChanges) -> String {
+    let mut output = String::new();
+    for table_change in &schema_changes.modified_tables {
+        if table_change.removed_indexes.is_empty() {
+            continue;
+        }
+        let table_name = table_change.table_name.to_case(Case::Snake);
+        output.push_str(&format!("-- Removing indexes from table {}\n", table_name));
+        for index in &table_change.removed_indexes {
+            output.push_str(&format!(
+                "REMOVE INDEX IF EXISTS {} ON TABLE {};\n",
+                index.name, table_name
+            ));
+        }
+        output.push('\n');
+    }
+    output
+}
+
 impl Mockmaker<'_> {
     /// Generate REMOVE statements based on schema changes and record differences
     ///
@@ -101,6 +124,11 @@ impl Mockmaker<'_> {
             output.push('\n');
         }
 
+        // Process removed indexes before removed fields: SurrealDB rejects
+        // `REMOVE FIELD` on a column that still has a live index referencing
+        // it, so orphan indexes must be dropped first.
+        output.push_str(&generate_remove_index_statements(schema_changes));
+
         // Process removed fields first (before removing tables)
         for table_change in &schema_changes.modified_tables {
             if !table_change.removed_fields.is_empty() {
@@ -128,5 +156,66 @@ impl Mockmaker<'_> {
         }
 
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemasync::compare::{IndexDefinition, SchemaChanges, TableChanges};
+
+    fn empty_table_change(name: &str) -> TableChanges {
+        TableChanges {
+            table_name: name.to_string(),
+            new_fields: Vec::new(),
+            removed_fields: Vec::new(),
+            modified_fields: Vec::new(),
+            permission_changed: false,
+            schema_type_changed: false,
+            new_events: Vec::new(),
+            removed_events: Vec::new(),
+            new_indexes: Vec::new(),
+            removed_indexes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn emits_remove_index_for_orphan() {
+        let mut tc = empty_table_change("Reaction");
+        tc.removed_indexes.push(IndexDefinition {
+            name: "idx_reaction_created_at".to_string(),
+            columns: vec!["created_at".to_string()],
+            unique: false,
+        });
+
+        let changes = SchemaChanges {
+            new_tables: Vec::new(),
+            removed_tables: Vec::new(),
+            modified_tables: vec![tc],
+            new_accesses: Vec::new(),
+            removed_accesses: Vec::new(),
+            modified_accesses: Vec::new(),
+        };
+
+        let out = generate_remove_index_statements(&changes);
+        assert!(
+            out.contains("REMOVE INDEX IF EXISTS idx_reaction_created_at ON TABLE reaction;"),
+            "missing REMOVE INDEX line; got:\n{out}"
+        );
+        assert!(out.contains("-- Removing indexes from table reaction"));
+    }
+
+    #[test]
+    fn emits_nothing_when_no_orphans() {
+        let tc = empty_table_change("Reaction");
+        let changes = SchemaChanges {
+            new_tables: Vec::new(),
+            removed_tables: Vec::new(),
+            modified_tables: vec![tc],
+            new_accesses: Vec::new(),
+            removed_accesses: Vec::new(),
+            modified_accesses: Vec::new(),
+        };
+        assert!(generate_remove_index_statements(&changes).is_empty());
     }
 }
