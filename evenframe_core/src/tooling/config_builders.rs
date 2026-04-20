@@ -6,7 +6,7 @@ use crate::{
     derive::{
         attributes::{
             parse_annotation_attributes, parse_doccom_attribute, parse_event_attributes,
-            parse_format_attribute_bin, parse_macroforge_derive_attribute,
+            parse_format_attribute_bin, parse_index_attributes, parse_macroforge_derive_attribute,
             parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
             parse_table_validators,
         },
@@ -409,6 +409,27 @@ fn process_types(
                                     }
                                 };
 
+                                let known_field_names: std::collections::HashSet<String> =
+                                    struct_config
+                                        .fields
+                                        .iter()
+                                        .map(|f| {
+                                            f.field_name
+                                                .trim_start_matches("r#")
+                                                .to_string()
+                                        })
+                                        .collect();
+                                let indexes = parse_index_attributes(
+                                    &item_struct.attrs,
+                                    &known_field_names,
+                                )
+                                .map_err(|e| {
+                                    crate::error::EvenframeError::Config(format!(
+                                        "Failed to parse #[index(...)] on struct '{}' in '{}': {}",
+                                        struct_config.struct_name, file_path, e
+                                    ))
+                                })?;
+
                                 let table_config = TableConfig {
                                     table_name: table_name.clone(),
                                     struct_config: struct_config.clone(),
@@ -423,6 +444,7 @@ fn process_types(
                                         .into_iter()
                                         .map(|statement| EventConfig { statement })
                                         .collect(),
+                                    indexes,
                                 };
                                 trace!(
                                     "Inserting table config {:?}: {:#?}",
@@ -1105,7 +1127,7 @@ fn build_plugin_input_struct(
             pipeline,
             generator: String::new(),
             struct_config: sc.clone(),
-            table_config: tc.clone(),
+            table_config: Box::new(tc.clone()),
         },
         None => OutputRulePluginInput::Struct {
             pipeline,

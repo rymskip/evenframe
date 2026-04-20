@@ -124,6 +124,24 @@ pub fn generate_define_statements(
         }
     }
 
+    // Generate DEFINE INDEX statements for struct-level #[index(...)] attributes
+    // (composite or non-unique single-column indexes).
+    for index in &table_config.indexes {
+        let joined_name = index.fields.join("_");
+        let joined_fields = index.fields.join(", ");
+        let unique_kw = if index.unique { " UNIQUE" } else { "" };
+        debug!(
+            table_name = %table_name,
+            fields = %joined_fields,
+            unique = index.unique,
+            "Generating struct-level index"
+        );
+        output.push_str(&format!(
+            "DEFINE INDEX OVERWRITE idx_{}_{} ON TABLE {} FIELDS {}{};\n",
+            table_name, joined_name, table_name, joined_fields, unique_kw
+        ));
+    }
+
     if !table_config.events.is_empty() {
         trace!(
             table_name = %table_name,
@@ -176,6 +194,7 @@ mod tests {
                 statement: "DEFINE EVENT user_change ON TABLE user WHEN true THEN { RETURN true };"
                     .to_string(),
             }],
+            indexes: vec![],
         };
 
         let query_details: HashMap<String, TableConfig> = HashMap::new();
@@ -423,6 +442,7 @@ mod tests {
             permissions: None,
             mock_generation_config: None,
             events: vec![],
+            indexes: vec![],
         };
 
         let query_details: HashMap<String, TableConfig> = HashMap::new();
@@ -446,5 +466,104 @@ mod tests {
             )
         );
         assert!(!statements.contains("idx_user_name"));
+    }
+
+    #[test]
+    fn generate_define_statements_includes_composite_index() {
+        dotenv::dotenv().ok();
+        use crate::schemasync::IndexConfig;
+
+        let make_field = |name: &str| StructField {
+            field_name: name.to_string(),
+            field_type: FieldType::String,
+            edge_config: None,
+            define_config: Some(DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: None,
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: None,
+                comment: None,
+            }),
+            format: None,
+            validators: Vec::new(),
+            always_regenerate: false,
+            doccom: None,
+            annotations: vec![],
+            unique: false,
+            mock_plugin: None,
+            output_override: None,
+            raw_attributes: HashMap::new(),
+        };
+
+        let table_config = TableConfig {
+            table_name: "reaction".to_string(),
+            struct_config: StructConfig {
+                struct_name: "Reaction".to_string(),
+                fields: vec![
+                    make_field("user"),
+                    make_field("message"),
+                    make_field("created_at"),
+                ],
+                validators: Vec::new(),
+                doccom: None,
+                macroforge_derives: vec![],
+                annotations: vec![],
+                pipeline: crate::types::Pipeline::default(),
+                rust_derives: vec![],
+                output_override: None,
+                raw_attributes: HashMap::new(),
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: vec![],
+            indexes: vec![
+                IndexConfig {
+                    fields: vec!["user".to_string(), "message".to_string()],
+                    unique: true,
+                },
+                IndexConfig {
+                    fields: vec!["created_at".to_string()],
+                    unique: false,
+                },
+            ],
+        };
+
+        let query_details: HashMap<String, TableConfig> = HashMap::new();
+        let server_only: HashMap<String, StructConfig> = HashMap::new();
+        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+
+        let statements = generate_define_statements(
+            "reaction",
+            &table_config,
+            &query_details,
+            &server_only,
+            &enums,
+            false,
+            &crate::types::ForeignTypeRegistry::default(),
+        );
+
+        assert!(
+            statements.contains(
+                "DEFINE INDEX OVERWRITE idx_reaction_user_message ON TABLE reaction FIELDS user, message UNIQUE;"
+            ),
+            "missing composite UNIQUE index line; output was:\n{}",
+            statements
+        );
+        assert!(
+            statements.contains(
+                "DEFINE INDEX OVERWRITE idx_reaction_created_at ON TABLE reaction FIELDS created_at;"
+            ),
+            "missing single-column non-unique index line; output was:\n{}",
+            statements
+        );
     }
 }

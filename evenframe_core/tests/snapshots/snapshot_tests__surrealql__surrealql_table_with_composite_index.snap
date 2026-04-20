@@ -1,0 +1,12 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+assertion_line: 155
+expression: output
+---
+DEFINE TABLE OVERWRITE reaction SCHEMAFULL TYPE NORMAL CHANGEFEED 3d PERMISSIONS FOR select FULL FOR update FULL FOR create FULL FOR delete FULL;
+DEFINE FIELD OVERWRITE user ON TABLE reaction TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE message ON TABLE reaction TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE emoji ON TABLE reaction TYPE any PERMISSIONS FULL;
+DEFINE FIELD OVERWRITE created_at ON TABLE reaction TYPE any PERMISSIONS FULL;
+DEFINE INDEX OVERWRITE idx_reaction_user_message ON TABLE reaction FIELDS user, message UNIQUE;
+DEFINE INDEX OVERWRITE idx_reaction_created_at ON TABLE reaction FIELDS created_at;

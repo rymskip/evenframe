@@ -57,7 +57,9 @@ pub enum OutputRulePluginInput {
         pipeline: String,
         generator: String,
         struct_config: StructConfig,
-        table_config: TableConfig,
+        // Boxed to keep the enum's largest variant small; the JSON shape is
+        // unchanged because serde sees through Box transparently.
+        table_config: Box<TableConfig>,
     },
     /// A tagged-union Rust enum.
     Enum {

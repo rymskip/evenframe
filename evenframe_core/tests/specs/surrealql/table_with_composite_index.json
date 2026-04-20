@@ -1,0 +1,29 @@
+{
+  "description": "Table with struct-level #[index(...)] composite UNIQUE index plus a single-column non-unique index",
+  "table_name": "reaction",
+  "table_config": {
+    "table_name": "reaction",
+    "struct_config": {
+      "struct_name": "Reaction",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "user", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "message", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "emoji", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "created_at", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "relation": null,
+    "permissions": null,
+    "mock_generation_config": null,
+    "events": [],
+    "indexes": [
+      { "fields": ["user", "message"], "unique": true },
+      { "fields": ["created_at"], "unique": false }
+    ]
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

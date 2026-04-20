@@ -141,17 +141,25 @@ impl SchemaDefinition {
                 fields: Self::extract_fields_from_config(config)?,
                 array_wildcard_fields: HashMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
-                indexes: config
-                    .struct_config
-                    .fields
-                    .iter()
-                    .filter(|f| f.unique)
-                    .map(|f| IndexDefinition {
-                        name: format!("idx_{}_{}", name, f.field_name),
-                        columns: vec![f.field_name.clone()],
-                        unique: true,
-                    })
-                    .collect(),
+                indexes: {
+                    let mut v: Vec<IndexDefinition> = config
+                        .struct_config
+                        .fields
+                        .iter()
+                        .filter(|f| f.unique)
+                        .map(|f| IndexDefinition {
+                            name: format!("idx_{}_{}", name, f.field_name),
+                            columns: vec![f.field_name.clone()],
+                            unique: true,
+                        })
+                        .collect();
+                    v.extend(config.indexes.iter().map(|idx| IndexDefinition {
+                        name: format!("idx_{}_{}", name, idx.fields.join("_")),
+                        columns: idx.fields.clone(),
+                        unique: idx.unique,
+                    }));
+                    v
+                },
                 events: config
                     .events
                     .iter()

@@ -1,14 +1,20 @@
 use quote::quote;
-use syn::{Attribute, Expr, ExprArray, ExprLit, Lit, LitStr, Meta, spanned::Spanned};
+use syn::parse::Parse;
+use syn::punctuated::Punctuated;
+use syn::{
+    Attribute, Expr, ExprArray, ExprLit, Ident, Lit, LitStr, Meta, Token, parenthesized,
+    spanned::Spanned,
+};
 use tracing::{debug, error, info, trace};
 
 use crate::{
     schemasync::{
-        Direction, EdgeConfig,
+        Direction, EdgeConfig, IndexConfig,
         mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
     },
     types::{EnumRepresentation, StructField},
 };
+use std::collections::HashSet;
 use std::{collections::HashMap, convert::TryFrom};
 
 // Remove unused imports - these are only used in the macro implementation, not generated code
@@ -299,6 +305,85 @@ pub fn parse_event_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::E
         "Completed event attribute parsing"
     );
     Ok(events)
+}
+
+/// Parses every `#[index(fields(a, b, ...), unique?)]` attribute on a struct
+/// into a `Vec<IndexConfig>`, validating that each ident inside `fields(...)`
+/// names a real struct field (`known_fields` is the snake-cased field name set
+/// with any `r#` prefix stripped).
+pub fn parse_index_attributes(
+    attrs: &[Attribute],
+    known_fields: &HashSet<String>,
+) -> Result<Vec<IndexConfig>, syn::Error> {
+    let mut indexes = Vec::new();
+
+    for attr in attrs.iter().filter(|a| a.path().is_ident("index")) {
+        let mut fields: Option<Vec<Ident>> = None;
+        let mut unique = false;
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("fields") {
+                if fields.is_some() {
+                    return Err(meta.error("duplicate `fields(...)` in #[index(...)]"));
+                }
+                let content;
+                parenthesized!(content in meta.input);
+                let parsed: Punctuated<Ident, Token![,]> =
+                    content.parse_terminated(Ident::parse, Token![,])?;
+                let collected: Vec<Ident> = parsed.into_iter().collect();
+                if collected.is_empty() {
+                    return Err(meta.error(
+                        "`fields(...)` must list at least one struct field identifier",
+                    ));
+                }
+                fields = Some(collected);
+                Ok(())
+            } else if meta.path.is_ident("unique") {
+                unique = true;
+                Ok(())
+            } else {
+                Err(meta
+                    .error("expected `fields(<ident>, ...)` or `unique` inside #[index(...)]"))
+            }
+        })?;
+
+        let fields = fields.ok_or_else(|| {
+            syn::Error::new(
+                attr.path().span(),
+                "`#[index(...)]` requires `fields(<ident>, ...)`\n\nExample: #[index(fields(user, message), unique)]",
+            )
+        })?;
+
+        let mut field_names = Vec::with_capacity(fields.len());
+        for ident in &fields {
+            let raw = ident.to_string();
+            let name = raw.trim_start_matches("r#").to_string();
+            if !known_fields.contains(&name) {
+                let mut all: Vec<&String> = known_fields.iter().collect();
+                all.sort();
+                let listed = all
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!(
+                        "unknown field `{}` in #[index(...)]; struct has fields: {}",
+                        name, listed
+                    ),
+                ));
+            }
+            field_names.push(name);
+        }
+
+        indexes.push(IndexConfig {
+            fields: field_names,
+            unique,
+        });
+    }
+
+    Ok(indexes)
 }
 
 pub fn parse_table_validators(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {

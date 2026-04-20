@@ -948,7 +948,7 @@ mod tests {
             raw_attributes: HashMap::new(),
         };
         assert_ne!(tu1, tu2);
-        let items = vec![tu1, tu2];
+        let items = [tu1, tu2];
         assert_eq!(items.len(), 2);
         assert_ne!(items[0], items[1]);
     }

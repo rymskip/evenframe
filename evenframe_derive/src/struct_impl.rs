@@ -6,8 +6,8 @@ use evenframe_core::{
     derive::{
         attributes::{
             parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
-            parse_macroforge_derive_attribute, parse_mock_data_attribute, parse_mockmake_attribute,
-            parse_relation_attribute, parse_rust_derives,
+            parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
+            parse_mockmake_attribute, parse_relation_attribute, parse_rust_derives,
         },
         validator_parser::parse_field_validators,
     },
@@ -120,6 +120,24 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // Parse all Rust derives (#[derive(Serialize, Clone, ...)])
         let rust_derives = parse_rust_derives(&input.attrs);
+
+        // Collect known field names so we can validate #[index(fields(...))]
+        // references at parse time.
+        let known_field_names: std::collections::HashSet<String> = fields_named
+            .named
+            .iter()
+            .filter_map(|f| {
+                f.ident
+                    .as_ref()
+                    .map(|i| i.to_string().trim_start_matches("r#").to_string())
+            })
+            .collect();
+
+        // Parse struct-level #[index(fields(a, b), unique)] attributes.
+        let indexes = match parse_index_attributes(&input.attrs, &known_field_names) {
+            Ok(v) => v,
+            Err(err) => return err.to_compile_error(),
+        };
 
         // Check if an "id" field exists.
         // Structs with an "id" field are treated as persistable entities (database tables).
@@ -367,6 +385,22 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         let pipeline_tokens = pipeline.to_tokens();
 
+        let indexes_tokens = if indexes.is_empty() {
+            quote! { vec![] }
+        } else {
+            let entries = indexes.iter().map(|idx| {
+                let field_strs = idx.fields.iter().map(|s| quote! { #s.to_string() });
+                let unique = idx.unique;
+                quote! {
+                    ::evenframe::schemasync::IndexConfig {
+                        fields: vec![ #(#field_strs),* ],
+                        unique: #unique,
+                    }
+                }
+            });
+            quote! { vec![ #(#entries),* ] }
+        };
+
         let evenframe_persistable_struct_impl = {
             quote! {
                 impl EvenframePersistableStruct for #ident {
@@ -389,6 +423,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                             permissions: #permissions_config_tokens,
                             mock_generation_config: #mock_data_tokens,
                             events: #event_tokens,
+                            indexes: #indexes_tokens,
                         }
                     }
                 }

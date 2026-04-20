@@ -1,0 +1,5 @@
+error: unknown field `nonexistent` in #[index(...)]; struct has fields: id, message, user
+ --> tests/ui/fail/index_unknown_field.rs:6:16
+  |
+6 | #[index(fields(nonexistent))]
+  |                ^^^^^^^^^^^

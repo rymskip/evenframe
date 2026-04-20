@@ -1191,6 +1191,7 @@ mod tests {
             permissions: None,
             mock_generation_config: None,
             events: Vec::new(),
+            indexes: Vec::new(),
         }
     }
 

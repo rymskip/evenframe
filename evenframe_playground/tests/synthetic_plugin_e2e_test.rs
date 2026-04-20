@@ -150,6 +150,7 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
             permissions: None,
             mock_generation_config: None,
             events: vec![],
+            indexes: vec![],
         },
     );
 

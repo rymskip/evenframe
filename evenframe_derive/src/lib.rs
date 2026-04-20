@@ -42,7 +42,8 @@ impl PipelineKind {
         doccom,
         macroforge_derive,
         annotation,
-        unique
+        unique,
+        index
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {
@@ -92,7 +93,8 @@ pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
         doccom,
         macroforge_derive,
         annotation,
-        unique
+        unique,
+        index
     )
 )]
 pub fn typesync_derive(input: TokenStream) -> TokenStream {
@@ -125,7 +127,8 @@ pub fn typesync_derive(input: TokenStream) -> TokenStream {
         doccom,
         macroforge_derive,
         annotation,
-        unique
+        unique,
+        index
     )
 )]
 pub fn schemasync_derive(input: TokenStream) -> TokenStream {

@@ -880,12 +880,12 @@ fn to_snake(s: &str) -> String {
 ///
 /// All three maps hold items as `serde_json::Value`:
 ///
-/// - `structs`:  keyed by struct name, values are the JSON form of
-///               `evenframe_core::types::StructConfig`.
-/// - `enums`:    keyed by enum name, values are the JSON form of
-///               `evenframe_core::types::TaggedUnion`.
-/// - `tables`:   keyed by snake_case table name, values are the JSON form of
-///               `evenframe_core::schemasync::table::TableConfig`.
+/// - `structs`: keyed by struct name, values are the JSON form of
+///   `evenframe_core::types::StructConfig`.
+/// - `enums`: keyed by enum name, values are the JSON form of
+///   `evenframe_core::types::TaggedUnion`.
+/// - `tables`: keyed by snake_case table name, values are the JSON form of
+///   `evenframe_core::schemasync::table::TableConfig`.
 ///
 /// Each plugin sees the cumulative state after all previous synthetic
 /// plugins have run, so chained plugins can build on each other.

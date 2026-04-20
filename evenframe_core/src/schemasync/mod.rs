@@ -19,7 +19,7 @@ pub use edge::{Direction, EdgeConfig, Subquery};
 pub use event::EventConfig;
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
-pub use table::TableConfig;
+pub use table::{IndexConfig, TableConfig};
 
 // PreservationMode - always available (used by MockGenerationConfig data type)
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize, serde::Serialize)]

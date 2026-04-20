@@ -11,4 +11,14 @@ pub struct TableConfig {
     pub mock_generation_config: Option<MockGenerationConfig>,
     #[serde(default)]
     pub events: Vec<EventConfig>,
+    #[serde(default)]
+    pub indexes: Vec<IndexConfig>,
+}
+
+/// A struct-level composite (or single-column) index declared via
+/// `#[index(fields(a, b), unique)]` on a `#[derive(Evenframe)]` struct.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndexConfig {
+    pub fields: Vec<String>,
+    pub unique: bool,
 }

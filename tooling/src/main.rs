@@ -175,8 +175,10 @@ fn cmd_snapshot(action: SnapshotAction) -> bool {
     }
 }
 
+type VerifyStep = (&'static str, Box<dyn Fn() -> bool>);
+
 fn cmd_verify(fail_fast: bool) -> bool {
-    let steps: Vec<(&str, Box<dyn Fn() -> bool>)> = vec![
+    let steps: Vec<VerifyStep> = vec![
         (
             "fmt",
             Box::new(|| {
