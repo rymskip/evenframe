@@ -7,7 +7,7 @@
 use crate::dependency::{analyse_recursion, deps_of};
 use crate::types::{StructConfig, TaggedUnion};
 use convert_case::{Case, Casing};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A group of types that will be emitted into a single file.
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ pub struct FileOutputPlan {
     /// Ordered list of file groups.
     pub groups: Vec<TypeFileGroup>,
     /// Maps each type name to its group index in `groups`.
-    pub type_to_group: HashMap<String, usize>,
+    pub type_to_group: BTreeMap<String, usize>,
 }
 
 /// Computes the file grouping for all known types.
@@ -50,24 +50,24 @@ pub struct FileOutputPlan {
 /// 6. SCC members that are all exclusively used by one external type
 ///    → co-locate the whole SCC with that dependent
 pub fn compute_file_grouping(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
 ) -> FileOutputPlan {
     // 1. Collect all type names in PascalCase.
-    let all_types: HashSet<String> = structs
+    let all_types: BTreeSet<String> = structs
         .values()
         .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
 
     // 2. Build forward deps.
-    let mut forward_deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut forward_deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for name in &all_types {
         forward_deps.insert(name.clone(), deps_of(name, structs, enums));
     }
 
     // 3. Invert to build reverse deps.
-    let mut reverse_deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut reverse_deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for name in &all_types {
         reverse_deps.entry(name.clone()).or_default();
     }
@@ -84,7 +84,7 @@ pub fn compute_file_grouping(
     let rec = analyse_recursion(structs, enums);
 
     // Build a map from SCC id → members for multi-member SCCs.
-    let mut scc_members: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut scc_members: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (name, &comp_id) in &rec.comp_of {
         if let Some((is_recursive, members)) = rec.meta.get(&comp_id)
             && *is_recursive
@@ -101,14 +101,14 @@ pub fn compute_file_grouping(
     // A type can be co-located if:
     //   - It has exactly 1 reverse dependent
     //   - It is NOT in a multi-member SCC (or the whole SCC is co-locatable)
-    let mut co_locate_target: HashMap<String, String> = HashMap::new(); // type → target to co-locate with
+    let mut co_locate_target: BTreeMap<String, String> = BTreeMap::new(); // type → target to co-locate with
 
     // First handle SCC groups: if ALL members of an SCC are exclusively used by
     // one external type, co-locate the whole SCC with that type.
     for members in scc_members.values() {
         // Collect all external reverse deps for the SCC as a whole.
-        let scc_set: HashSet<&String> = members.iter().collect();
-        let mut external_users: HashSet<String> = HashSet::new();
+        let scc_set: BTreeSet<&String> = members.iter().collect();
+        let mut external_users: BTreeSet<String> = BTreeSet::new();
         for member in members {
             if let Some(rev) = reverse_deps.get(member) {
                 for user in rev {
@@ -169,7 +169,7 @@ pub fn compute_file_grouping(
     };
 
     let mut groups: Vec<TypeFileGroup> = Vec::new();
-    let mut type_to_group: HashMap<String, usize> = HashMap::new();
+    let mut type_to_group: BTreeMap<String, usize> = BTreeMap::new();
 
     for primary in &primary_types {
         let group_idx = groups.len();
@@ -200,8 +200,8 @@ pub fn compute_file_grouping(
 /// Resolves transitive co-location chains.
 /// If A → B and B → C, resolves to A → C and B → C.
 fn resolve_transitive_colocation(
-    co_locate_target: &HashMap<String, String>,
-) -> HashMap<String, String> {
+    co_locate_target: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     let mut resolved = co_locate_target.clone();
     // Iterate until stable.
     loop {
@@ -245,7 +245,7 @@ mod tests {
             pipeline: crate::types::Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: std::collections::HashMap::new(),
+            raw_attributes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -253,7 +253,7 @@ mod tests {
     fn test_exclusive_dependent_co_locates() {
         // User uses Address (exclusively), Post uses nothing.
         // Address should be co-located with User.
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             make_struct(
@@ -269,7 +269,7 @@ mod tests {
             "Post".to_string(),
             make_struct("Post", vec![("title", FieldType::String)]),
         );
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);
 
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn test_shared_type_gets_own_file() {
         // Role is used by both User and Post → gets its own file.
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             make_struct("User", vec![("role", FieldType::Other("Role".to_string()))]),
@@ -307,7 +307,7 @@ mod tests {
             "Role".to_string(),
             make_struct("Role", vec![("name", FieldType::String)]),
         );
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);
 
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn test_plan_example_from_spec() {
         // User (uses Address, Role), Post (uses Role), Address (only by User), Role (shared)
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             make_struct(
@@ -342,7 +342,7 @@ mod tests {
             "Role".to_string(),
             make_struct("Role", vec![("name", FieldType::String)]),
         );
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);
 
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_no_deps_each_gets_own_file() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "A".to_string(),
             make_struct("A", vec![("x", FieldType::String)]),
@@ -368,7 +368,7 @@ mod tests {
             "B".to_string(),
             make_struct("B", vec![("y", FieldType::I32)]),
         );
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);
         assert_eq!(plan.groups.len(), 2);

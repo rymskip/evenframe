@@ -14,8 +14,8 @@ use crate::{
     },
     types::{EnumRepresentation, StructField},
 };
-use std::collections::HashSet;
-use std::{collections::HashMap, convert::TryFrom};
+use std::collections::{BTreeSet, HashMap};
+use std::convert::TryFrom;
 
 // Remove unused imports - these are only used in the macro implementation, not generated code
 
@@ -313,7 +313,7 @@ pub fn parse_event_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::E
 /// with any `r#` prefix stripped).
 pub fn parse_index_attributes(
     attrs: &[Attribute],
-    known_fields: &HashSet<String>,
+    known_fields: &BTreeSet<String>,
 ) -> Result<Vec<IndexConfig>, syn::Error> {
     let mut indexes = Vec::new();
 

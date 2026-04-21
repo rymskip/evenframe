@@ -61,7 +61,7 @@ use crate::{
     },
 };
 #[cfg(feature = "surrealdb")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 #[cfg(feature = "surrealdb")]
 use tracing::{debug, error, info, trace};
 
@@ -83,9 +83,9 @@ use crate::{
 #[derive(Default)]
 pub struct Schemasync<'a> {
     // Input parameters - set via builder methods
-    tables: Option<&'a HashMap<String, TableConfig>>,
-    objects: Option<&'a HashMap<String, StructConfig>>,
-    enums: Option<&'a HashMap<String, TaggedUnion>>,
+    tables: Option<&'a BTreeMap<String, TableConfig>>,
+    objects: Option<&'a BTreeMap<String, StructConfig>>,
+    enums: Option<&'a BTreeMap<String, TaggedUnion>>,
     registry: Option<&'a crate::types::ForeignTypeRegistry>,
 
     // Internal state - initialized automatically
@@ -159,21 +159,21 @@ impl<'a> Schemasync<'a> {
     }
 
     /// Builder methods for setting up the parameters
-    pub fn with_tables(mut self, tables: &'a HashMap<String, TableConfig>) -> Self {
+    pub fn with_tables(mut self, tables: &'a BTreeMap<String, TableConfig>) -> Self {
         debug!("Configuring Schemasync with {} tables", tables.len());
         trace!("Table names: {:?}", tables.keys().collect::<Vec<_>>());
         self.tables = Some(tables);
         self
     }
 
-    pub fn with_objects(mut self, objects: &'a HashMap<String, StructConfig>) -> Self {
+    pub fn with_objects(mut self, objects: &'a BTreeMap<String, StructConfig>) -> Self {
         debug!("Configuring Schemasync with {} objects", objects.len());
         trace!("Object names: {:?}", objects.keys().collect::<Vec<_>>());
         self.objects = Some(objects);
         self
     }
 
-    pub fn with_enums(mut self, enums: &'a HashMap<String, TaggedUnion>) -> Self {
+    pub fn with_enums(mut self, enums: &'a BTreeMap<String, TaggedUnion>) -> Self {
         debug!("Configuring Schemasync with {} enums", enums.len());
         trace!("Enum names: {:?}", enums.keys().collect::<Vec<_>>());
         self.enums = Some(enums);
@@ -250,9 +250,9 @@ impl<'a> Schemasync<'a> {
         &mut self,
     ) -> Result<(
         Surreal<Client>,
-        &'a HashMap<String, TableConfig>,
-        &'a HashMap<String, StructConfig>,
-        &'a HashMap<String, TaggedUnion>,
+        &'a BTreeMap<String, TableConfig>,
+        &'a BTreeMap<String, StructConfig>,
+        &'a BTreeMap<String, TaggedUnion>,
         crate::schemasync::config::SchemasyncConfig,
     )> {
         debug!("Validating required fields for Schemasync pipeline");
@@ -292,17 +292,17 @@ impl<'a> Schemasync<'a> {
 
     /// Generate define statements for all tables.
     fn generate_all_define_statements<'b>(
-        tables: &'b HashMap<String, TableConfig>,
-        objects: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        tables: &'b BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         full_refresh_mode: bool,
         registry: &crate::types::ForeignTypeRegistry,
-    ) -> (HashMap<&'b String, String>, String) {
+    ) -> (BTreeMap<&'b String, String>, String) {
         debug!(
             "Generating table and field definition statements (full_refresh_mode: {})",
             full_refresh_mode
         );
-        let mut define_statements: HashMap<&String, String> = HashMap::new();
+        let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
         for (table_name, table) in tables {
             define_statements.insert(
                 table_name,
@@ -386,8 +386,8 @@ impl<'a> Schemasync<'a> {
         }
 
         // Apply table filter if specified
-        let owned_filtered: HashMap<String, TableConfig>;
-        let effective_tables: &HashMap<String, TableConfig> = if let Some(ref filter) = table_filter
+        let owned_filtered: BTreeMap<String, TableConfig>;
+        let effective_tables: &BTreeMap<String, TableConfig> = if let Some(ref filter) = table_filter
         {
             owned_filtered = tables
                 .iter()
@@ -546,7 +546,7 @@ impl<'a> Schemasync<'a> {
     async fn define_tables(
         &self,
         db: &Surreal<Client>,
-        define_statments: HashMap<&String, String>,
+        define_statments: BTreeMap<&String, String>,
         schema_changes: &SchemaChanges,
         full_refresh_mode: bool,
     ) -> Result<()> {

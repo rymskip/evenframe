@@ -12,7 +12,7 @@ use bon::Builder;
 use chrono_tz::TZ_VARIANTS;
 use convert_case::{Case, Casing};
 use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Builder)]
 pub struct FieldValueGenerator<'a> {
@@ -20,7 +20,7 @@ pub struct FieldValueGenerator<'a> {
     table_config: &'a TableConfig,
     field: &'a StructField,
     id_index: &'a usize,
-    coordinated_values: &'a HashMap<String, String>,
+    coordinated_values: &'a BTreeMap<String, String>,
     registry: &'a ForeignTypeRegistry,
 }
 
@@ -206,7 +206,7 @@ impl<'a> FieldValueGenerator<'a> {
 
     fn handle_struct(&self, fields: &[(String, FieldType)]) -> String {
         // Build nested coordination context
-        let mut nested_coordinated_values = HashMap::new();
+        let mut nested_coordinated_values = BTreeMap::new();
         let field_prefix = format!("{}.", self.field.field_name);
 
         // Extract coordinated values for nested fields

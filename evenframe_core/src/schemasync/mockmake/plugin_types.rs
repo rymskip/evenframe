@@ -1,7 +1,7 @@
 //! Serde types for WASM plugin communication.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Input context sent to a field-level plugin.
 #[derive(Debug, Serialize)]
@@ -44,7 +44,7 @@ pub struct PluginFieldOutput {
 #[derive(Debug, Deserialize)]
 pub struct PluginTableOutput {
     /// Map of field_name → SurrealQL-compatible value.
-    pub fields: Option<HashMap<String, String>>,
+    pub fields: Option<BTreeMap<String, String>>,
     /// Error message if generation failed.
     pub error: Option<String>,
 }

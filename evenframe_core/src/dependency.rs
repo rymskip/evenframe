@@ -4,16 +4,16 @@ use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use petgraph::algo::toposort;
 use petgraph::{algo::kosaraju_scc, graphmap::DiGraphMap};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use tracing;
 
 /// A helper struct to track recursion information for types
 #[derive(Debug)]
 pub struct RecursionInfo {
     /// `type_name -> scc_id`
-    pub comp_of: HashMap<String, usize>,
+    pub comp_of: BTreeMap<String, usize>,
     /// `scc_id -> { "is_recursive": bool, "members": Vec<String> }`
-    pub meta: HashMap<usize, (bool, Vec<String>)>,
+    pub meta: BTreeMap<usize, (bool, Vec<String>)>,
 }
 
 impl RecursionInfo {
@@ -31,16 +31,16 @@ impl RecursionInfo {
 
 /// Build the dependency graph from your `FieldType` tree and analyze recursion
 pub fn analyse_recursion(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
 ) -> RecursionInfo {
-    let known: HashSet<_> = structs
+    let known: BTreeSet<_> = structs
         .values()
         .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
         .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
 
-    let mut deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for struct_config in structs.values() {
         let from = struct_config.struct_name.to_case(Case::Pascal);
@@ -88,8 +88,8 @@ pub fn analyse_recursion(
     let sccs = kosaraju_scc(&g); // Vec<Vec<&str>>
     tracing::debug!(scc_count = sccs.len(), "SCCs found");
 
-    let mut comp_of = HashMap::<String, usize>::new();
-    let mut meta = HashMap::<usize, (bool, Vec<String>)>::new();
+    let mut comp_of = BTreeMap::<String, usize>::new();
+    let mut meta = BTreeMap::<usize, (bool, Vec<String>)>::new();
 
     for (idx, comp) in sccs.iter().enumerate() {
         let self_loop = comp.len() == 1 && g.contains_edge(comp[0], comp[0]);
@@ -108,18 +108,18 @@ pub fn analyse_recursion(
 /// (other structs / enums that it references in its fields or variants).
 pub fn deps_of(
     name: &str,
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
-) -> HashSet<String> {
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+) -> BTreeSet<String> {
     tracing::trace!(name = %name, "Getting direct dependencies of type");
     // Build a quick "known-types" set so we don't count primitives.
-    let known: HashSet<_> = structs
+    let known: BTreeSet<_> = structs
         .values()
         .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
         .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
 
-    let mut acc = HashSet::new();
+    let mut acc = BTreeSet::new();
 
     // If `name` is a struct, walk its fields
     if let Some(struct_config) = structs
@@ -165,7 +165,7 @@ pub fn deps_of(
 }
 
 /// Collect references to other types from a FieldType
-pub fn collect_refs(ft: &FieldType, known: &HashSet<String>, acc: &mut HashSet<String>) {
+pub fn collect_refs(ft: &FieldType, known: &BTreeSet<String>, acc: &mut BTreeSet<String>) {
     tracing::trace!(field_type = ?ft, "Collecting references from field type");
     use FieldType::*;
     match ft {
@@ -186,21 +186,21 @@ pub fn collect_refs(ft: &FieldType, known: &HashSet<String>, acc: &mut HashSet<S
 /// Analyze recursion specifically for tables (TableConfig)
 /// This is a specialized version that only considers table dependencies
 pub fn analyse_recursion_tables(
-    tables: &HashMap<String, crate::schemasync::TableConfig>,
+    tables: &BTreeMap<String, crate::schemasync::TableConfig>,
 ) -> RecursionInfo {
     tracing::info!(
         table_count = tables.len(),
         "Analyzing recursion in table dependencies"
     );
     // Convert tables to structs for analysis
-    let structs: HashMap<String, StructConfig> = tables
+    let structs: BTreeMap<String, StructConfig> = tables
         .iter()
         .map(|(name, table)| (name.clone(), table.struct_config.clone()))
         .collect();
     tracing::debug!("Converted tables to structs for analysis");
 
     // Tables don't have enums, so pass empty map
-    let enums = HashMap::new();
+    let enums = BTreeMap::new();
 
     // Use the regular analyse_recursion with converted data
     tracing::debug!("Delegating to main recursion analyzer");
@@ -210,23 +210,23 @@ pub fn analyse_recursion_tables(
 /// Get dependencies of a table by analyzing its struct config
 pub fn deps_of_table(
     table_name: &str,
-    tables: &HashMap<String, crate::schemasync::TableConfig>,
-) -> HashSet<String> {
+    tables: &BTreeMap<String, crate::schemasync::TableConfig>,
+) -> BTreeSet<String> {
     tracing::debug!(table_name = %table_name, "Getting dependencies of table");
     // Build set of known table names in PascalCase
-    let known: HashSet<_> = tables.keys().map(|s| s.to_case(Case::Pascal)).collect();
+    let known: BTreeSet<_> = tables.keys().map(|s| s.to_case(Case::Pascal)).collect();
     tracing::trace!(
         known_table_count = known.len(),
         "Built set of known table names"
     );
 
     // Build a map from PascalCase to original table names
-    let pascal_to_original: HashMap<String, String> = tables
+    let pascal_to_original: BTreeMap<String, String> = tables
         .keys()
         .map(|k| (k.to_case(Case::Pascal), k.clone()))
         .collect();
 
-    let mut acc = HashSet::new();
+    let mut acc = BTreeSet::new();
 
     // Find the table and analyze its fields
     if let Some(table) = tables.get(table_name) {
@@ -243,7 +243,7 @@ pub fn deps_of_table(
     }
 
     // Convert PascalCase dependencies back to original table names
-    let result: HashSet<String> = acc
+    let result: BTreeSet<String> = acc
         .into_iter()
         .filter_map(|pascal_name| pascal_to_original.get(&pascal_name).cloned())
         .collect();
@@ -257,16 +257,16 @@ pub fn deps_of_table(
 /// Collect all dependencies of a table including nested objects and enums
 fn collect_table_dependencies(
     table_name: &str,
-    tables: &HashMap<String, TableConfig>,
-    objects: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
-    visited_types: &mut HashSet<String>,
-) -> HashSet<String> {
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    visited_types: &mut BTreeSet<String>,
+) -> BTreeSet<String> {
     tracing::trace!(
         table_name = %table_name,
         "Collecting all dependencies of table including nested objects"
     );
-    let mut dependencies = HashSet::new();
+    let mut dependencies = BTreeSet::new();
 
     // Get the table configuration
     if let Some(table) = tables.get(table_name) {
@@ -327,11 +327,11 @@ fn collect_table_dependencies(
 /// Recursively collect dependencies from a field type
 pub fn collect_field_type_dependencies(
     field_type: &FieldType,
-    tables: &HashMap<String, TableConfig>,
-    objects: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
-    dependencies: &mut HashSet<String>,
-    visited_types: &mut HashSet<String>,
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    dependencies: &mut BTreeSet<String>,
+    visited_types: &mut BTreeSet<String>,
 ) {
     tracing::trace!(field_type = ?field_type, "Collecting field type dependencies");
     match field_type {
@@ -475,9 +475,9 @@ pub fn collect_field_type_dependencies(
 
 /// Sort tables by dependencies using topological sort with SCC handling
 pub fn sort_tables_by_dependencies(
-    tables: &HashMap<String, TableConfig>,
-    objects: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
 ) -> Vec<String> {
     tracing::info!(
         table_count = tables.len(),
@@ -486,11 +486,11 @@ pub fn sort_tables_by_dependencies(
         "Sorting tables by dependencies"
     );
     // Build complete dependency graph including nested objects and enums
-    let mut dependency_graph: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut dependency_graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     tracing::debug!("Building dependency graph for all tables");
     for table_name in tables.keys() {
-        let mut visited_types = HashSet::new();
+        let mut visited_types = BTreeSet::new();
         let dependencies =
             collect_table_dependencies(table_name, tables, objects, enums, &mut visited_types);
         dependency_graph.insert(table_name.clone(), dependencies.clone());
@@ -533,7 +533,7 @@ pub fn sort_tables_by_dependencies(
 
     // Build condensation graph (DAG of SCCs)
     tracing::debug!("Building condensation graph");
-    let mut scc_map: HashMap<&str, usize> = HashMap::new();
+    let mut scc_map: BTreeMap<&str, usize> = BTreeMap::new();
     for (idx, scc) in sccs.iter().enumerate() {
         for node in scc {
             scc_map.insert(*node, idx);
@@ -575,7 +575,7 @@ pub fn sort_tables_by_dependencies(
     // Build final sorted list
     tracing::debug!("Building final sorted table list");
     let mut result = Vec::new();
-    let mut processed_tables = HashSet::new();
+    let mut processed_tables = BTreeSet::new();
 
     // Process SCCs in reverse topological order (dependencies first)
     for scc_idx in sorted_sccs.into_iter().rev() {
@@ -662,11 +662,11 @@ mod tests {
 
     #[test]
     fn test_recursion_info_is_recursive_pair_same_recursive_component() {
-        let mut comp_of = HashMap::new();
+        let mut comp_of = BTreeMap::new();
         comp_of.insert("TypeA".to_string(), 0);
         comp_of.insert("TypeB".to_string(), 0);
 
-        let mut meta = HashMap::new();
+        let mut meta = BTreeMap::new();
         meta.insert(0, (true, vec!["TypeA".to_string(), "TypeB".to_string()]));
 
         let info = RecursionInfo { comp_of, meta };
@@ -678,10 +678,10 @@ mod tests {
 
     #[test]
     fn test_recursion_info_is_recursive_pair_same_non_recursive_component() {
-        let mut comp_of = HashMap::new();
+        let mut comp_of = BTreeMap::new();
         comp_of.insert("TypeA".to_string(), 0);
 
-        let mut meta = HashMap::new();
+        let mut meta = BTreeMap::new();
         meta.insert(0, (false, vec!["TypeA".to_string()]));
 
         let info = RecursionInfo { comp_of, meta };
@@ -692,11 +692,11 @@ mod tests {
 
     #[test]
     fn test_recursion_info_is_recursive_pair_different_components() {
-        let mut comp_of = HashMap::new();
+        let mut comp_of = BTreeMap::new();
         comp_of.insert("TypeA".to_string(), 0);
         comp_of.insert("TypeB".to_string(), 1);
 
-        let mut meta = HashMap::new();
+        let mut meta = BTreeMap::new();
         meta.insert(0, (true, vec!["TypeA".to_string()]));
         meta.insert(1, (true, vec!["TypeB".to_string()]));
 
@@ -708,8 +708,8 @@ mod tests {
 
     #[test]
     fn test_recursion_info_is_recursive_pair_unknown_type() {
-        let comp_of = HashMap::new();
-        let meta = HashMap::new();
+        let comp_of = BTreeMap::new();
+        let meta = BTreeMap::new();
         let info = RecursionInfo { comp_of, meta };
 
         // Unknown types
@@ -718,10 +718,10 @@ mod tests {
 
     #[test]
     fn test_recursion_info_is_recursive_pair_one_unknown() {
-        let mut comp_of = HashMap::new();
+        let mut comp_of = BTreeMap::new();
         comp_of.insert("TypeA".to_string(), 0);
 
-        let mut meta = HashMap::new();
+        let mut meta = BTreeMap::new();
         meta.insert(0, (true, vec!["TypeA".to_string()]));
 
         let info = RecursionInfo { comp_of, meta };
@@ -747,14 +747,14 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         }
     }
 
     #[test]
     fn test_collect_refs_primitive_types() {
-        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(&FieldType::String, &known, &mut acc);
         collect_refs(&FieldType::I32, &known, &mut acc);
@@ -766,8 +766,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_other_known_type() {
-        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(&FieldType::Other("KnownType".to_string()), &known, &mut acc);
 
@@ -777,8 +777,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_other_unknown_type() {
-        let known: HashSet<String> = ["KnownType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["KnownType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::Other("UnknownType".to_string()),
@@ -791,8 +791,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_option_with_known_type() {
-        let known: HashSet<String> = ["InnerType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["InnerType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::Option(Box::new(FieldType::Other("InnerType".to_string()))),
@@ -805,8 +805,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_vec_with_known_type() {
-        let known: HashSet<String> = ["ElementType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["ElementType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::Vec(Box::new(FieldType::Other("ElementType".to_string()))),
@@ -819,8 +819,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_record_link() {
-        let known: HashSet<String> = ["LinkedType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["LinkedType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::RecordLink(Box::new(FieldType::Other("LinkedType".to_string()))),
@@ -833,10 +833,10 @@ mod tests {
 
     #[test]
     fn test_collect_refs_tuple() {
-        let known: HashSet<String> = ["TypeA".to_string(), "TypeB".to_string()]
+        let known: BTreeSet<String> = ["TypeA".to_string(), "TypeB".to_string()]
             .into_iter()
             .collect();
-        let mut acc = HashSet::new();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::Tuple(vec![
@@ -855,8 +855,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_struct_type() {
-        let known: HashSet<String> = ["FieldType1".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["FieldType1".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::Struct(vec![
@@ -876,10 +876,10 @@ mod tests {
 
     #[test]
     fn test_collect_refs_hashmap() {
-        let known: HashSet<String> = ["KeyType".to_string(), "ValueType".to_string()]
+        let known: BTreeSet<String> = ["KeyType".to_string(), "ValueType".to_string()]
             .into_iter()
             .collect();
-        let mut acc = HashSet::new();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::HashMap(
@@ -896,8 +896,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_btreemap() {
-        let known: HashSet<String> = ["KeyType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["KeyType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         collect_refs(
             &FieldType::BTreeMap(
@@ -914,8 +914,8 @@ mod tests {
 
     #[test]
     fn test_collect_refs_nested_types() {
-        let known: HashSet<String> = ["DeepType".to_string()].into_iter().collect();
-        let mut acc = HashSet::new();
+        let known: BTreeSet<String> = ["DeepType".to_string()].into_iter().collect();
+        let mut acc = BTreeSet::new();
 
         // Option<Vec<DeepType>>
         collect_refs(
@@ -942,14 +942,14 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         }
     }
 
     #[test]
     fn test_analyse_recursion_no_types() {
-        let structs: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         let info = analyse_recursion(&structs, &enums);
 
@@ -959,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_single_struct_no_deps() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             create_struct_config(
@@ -971,7 +971,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &HashMap::new());
+        let info = analyse_recursion(&structs, &BTreeMap::new());
 
         assert!(info.comp_of.contains_key("User"));
         let scc_id = info.comp_of["User"];
@@ -981,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_self_referential() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "Node".to_string(),
             create_struct_config(
@@ -996,7 +996,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &HashMap::new());
+        let info = analyse_recursion(&structs, &BTreeMap::new());
 
         assert!(info.comp_of.contains_key("Node"));
         // Self-loop should be detected as recursive
@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_mutual_recursion() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "TypeA".to_string(),
             create_struct_config(
@@ -1028,7 +1028,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &HashMap::new());
+        let info = analyse_recursion(&structs, &BTreeMap::new());
 
         // Both should be in the same SCC
         assert_eq!(info.comp_of.get("TypeA"), info.comp_of.get("TypeB"));
@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_chain_no_cycle() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "A".to_string(),
             create_struct_config(
@@ -1059,7 +1059,7 @@ mod tests {
             create_struct_config("C", vec![create_struct_field("value", FieldType::I32)]),
         );
 
-        let info = analyse_recursion(&structs, &HashMap::new());
+        let info = analyse_recursion(&structs, &BTreeMap::new());
 
         // All should be in different SCCs (no cycles)
         assert_ne!(info.comp_of.get("A"), info.comp_of.get("B"));
@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_deps_of_no_deps() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "Simple".to_string(),
             create_struct_config(
@@ -1084,14 +1084,14 @@ mod tests {
             ),
         );
 
-        let deps = deps_of("Simple", &structs, &HashMap::new());
+        let deps = deps_of("Simple", &structs, &BTreeMap::new());
 
         assert!(deps.is_empty());
     }
 
     #[test]
     fn test_deps_of_with_deps() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "Parent".to_string(),
             create_struct_config(
@@ -1110,7 +1110,7 @@ mod tests {
             ),
         );
 
-        let deps = deps_of("Parent", &structs, &HashMap::new());
+        let deps = deps_of("Parent", &structs, &BTreeMap::new());
 
         assert!(deps.contains("Child"));
         assert_eq!(deps.len(), 1);
@@ -1118,16 +1118,16 @@ mod tests {
 
     #[test]
     fn test_deps_of_unknown_type() {
-        let structs: HashMap<String, StructConfig> = HashMap::new();
-        let deps = deps_of("Unknown", &structs, &HashMap::new());
+        let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let deps = deps_of("Unknown", &structs, &BTreeMap::new());
 
         assert!(deps.is_empty());
     }
 
     #[test]
     fn test_deps_of_enum_with_variants() {
-        let _structs: HashMap<String, StructConfig> = HashMap::new();
-        let mut enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let _structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let mut enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         enums.insert(
             "Status".to_string(),
@@ -1142,7 +1142,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -1151,7 +1151,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -1162,12 +1162,12 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 
         // UserData must be in known set for it to be collected
-        let mut structs_with_user = HashMap::new();
+        let mut structs_with_user = BTreeMap::new();
         structs_with_user.insert(
             "UserData".to_string(),
             create_struct_config(
@@ -1197,7 +1197,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_tables_empty() {
-        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
         let info = analyse_recursion_tables(&tables);
 
         assert!(info.comp_of.is_empty());
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn test_analyse_recursion_tables_no_recursion() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "user".to_string(),
             create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
@@ -1220,7 +1220,7 @@ mod tests {
 
     #[test]
     fn test_deps_of_table_no_deps() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "user".to_string(),
             create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn test_deps_of_table_with_reference() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "post".to_string(),
             create_table_config(
@@ -1256,7 +1256,7 @@ mod tests {
 
     #[test]
     fn test_deps_of_table_unknown() {
-        let tables: HashMap<String, TableConfig> = HashMap::new();
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
         let deps = deps_of_table("unknown", &tables);
 
         assert!(deps.is_empty());
@@ -1267,9 +1267,9 @@ mod tests {
     #[test]
     fn test_sort_tables_empty() {
         dotenv::dotenv().ok();
-        let tables: HashMap<String, TableConfig> = HashMap::new();
-        let objects: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let objects: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         let sorted = sort_tables_by_dependencies(&tables, &objects, &enums);
 
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn test_sort_tables_no_dependencies() {
         dotenv::dotenv().ok();
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "user".to_string(),
             create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
@@ -1292,7 +1292,7 @@ mod tests {
             ),
         );
 
-        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+        let sorted = sort_tables_by_dependencies(&tables, &BTreeMap::new(), &BTreeMap::new());
 
         assert_eq!(sorted.len(), 2);
         assert!(sorted.contains(&"user".to_string()));
@@ -1302,7 +1302,7 @@ mod tests {
     #[test]
     fn test_sort_tables_with_dependency() {
         dotenv::dotenv().ok();
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "post".to_string(),
             create_table_config(
@@ -1318,7 +1318,7 @@ mod tests {
             create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
-        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+        let sorted = sort_tables_by_dependencies(&tables, &BTreeMap::new(), &BTreeMap::new());
 
         // user should come before post since post depends on user
         let user_pos = sorted.iter().position(|s| s == "user").unwrap();
@@ -1329,7 +1329,7 @@ mod tests {
     #[test]
     fn test_sort_tables_chain_dependency() {
         dotenv::dotenv().ok();
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "C".to_string(),
             create_table_config(
@@ -1355,7 +1355,7 @@ mod tests {
             create_table_config("A", vec![create_struct_field("value", FieldType::I32)]),
         );
 
-        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+        let sorted = sort_tables_by_dependencies(&tables, &BTreeMap::new(), &BTreeMap::new());
 
         // A should come first, then B, then C
         let a_pos = sorted.iter().position(|s| s == "A").unwrap();
@@ -1368,7 +1368,7 @@ mod tests {
     #[test]
     fn test_sort_tables_circular_dependency() {
         dotenv::dotenv().ok();
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "A".to_string(),
             create_table_config(
@@ -1390,7 +1390,7 @@ mod tests {
             ),
         );
 
-        let sorted = sort_tables_by_dependencies(&tables, &HashMap::new(), &HashMap::new());
+        let sorted = sort_tables_by_dependencies(&tables, &BTreeMap::new(), &BTreeMap::new());
 
         // Both should be in the result (circular deps are handled via SCC)
         assert_eq!(sorted.len(), 2);
@@ -1402,11 +1402,11 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_primitive() {
-        let tables: HashMap<String, TableConfig> = HashMap::new();
-        let objects: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let objects: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::String,
@@ -1422,20 +1422,20 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_table_ref() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "user".to_string(),
             create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Other("user".to_string()),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1445,7 +1445,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_avoids_infinite_recursion() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "node".to_string(),
             create_table_config(
@@ -1457,14 +1457,14 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Other("node".to_string()),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1475,20 +1475,20 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_nested_option() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "item".to_string(),
             create_table_config("item", vec![create_struct_field("name", FieldType::String)]),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Option(Box::new(FieldType::Other("item".to_string()))),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1498,20 +1498,20 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_vec() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "item".to_string(),
             create_table_config("item", vec![create_struct_field("name", FieldType::String)]),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Vec(Box::new(FieldType::Other("item".to_string()))),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1521,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_tuple() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "a".to_string(),
             create_table_config("a", vec![create_struct_field("val", FieldType::String)]),
@@ -1531,8 +1531,8 @@ mod tests {
             create_table_config("b", vec![create_struct_field("val", FieldType::I32)]),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Tuple(vec![
@@ -1540,8 +1540,8 @@ mod tests {
                 FieldType::Other("b".to_string()),
             ]),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1552,7 +1552,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_hashmap_values() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "value_type".to_string(),
             create_table_config(
@@ -1561,8 +1561,8 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::HashMap(
@@ -1570,8 +1570,8 @@ mod tests {
                 Box::new(FieldType::Other("value_type".to_string())),
             ),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1581,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_with_objects() {
-        let mut objects = HashMap::new();
+        let mut objects = BTreeMap::new();
         objects.insert(
             "Address".to_string(),
             create_struct_config(
@@ -1593,20 +1593,20 @@ mod tests {
             ),
         );
 
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "City".to_string(),
             create_table_config("City", vec![create_struct_field("name", FieldType::String)]),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Other("Address".to_string()),
             &tables,
             &objects,
-            &HashMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1617,7 +1617,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_with_enums() {
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
@@ -1630,7 +1630,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
-                    raw_attributes: HashMap::new(),
+                    raw_attributes: BTreeMap::new(),
                     is_default: false,
                 }],
                 representation: EnumRepresentation::default(),
@@ -1640,11 +1640,11 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "data_table".to_string(),
             create_table_config(
@@ -1653,13 +1653,13 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Other("Status".to_string()),
             &tables,
-            &HashMap::new(),
+            &BTreeMap::new(),
             &enums,
             &mut deps,
             &mut visited,
@@ -1670,7 +1670,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_record_link() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "linked".to_string(),
             create_table_config(
@@ -1679,14 +1679,14 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::RecordLink(Box::new(FieldType::Other("linked".to_string()))),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1696,7 +1696,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_struct_fields() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "inner".to_string(),
             create_table_config(
@@ -1705,8 +1705,8 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::Struct(vec![
@@ -1714,8 +1714,8 @@ mod tests {
                 ("field2".to_string(), FieldType::Other("inner".to_string())),
             ]),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );
@@ -1725,7 +1725,7 @@ mod tests {
 
     #[test]
     fn test_collect_field_type_dependencies_btreemap() {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(
             "key_type".to_string(),
             create_table_config(
@@ -1734,8 +1734,8 @@ mod tests {
             ),
         );
 
-        let mut deps = HashSet::new();
-        let mut visited = HashSet::new();
+        let mut deps = BTreeSet::new();
+        let mut visited = BTreeSet::new();
 
         collect_field_type_dependencies(
             &FieldType::BTreeMap(
@@ -1743,8 +1743,8 @@ mod tests {
                 Box::new(FieldType::I32),
             ),
             &tables,
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &mut deps,
             &mut visited,
         );

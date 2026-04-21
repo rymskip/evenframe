@@ -1,6 +1,6 @@
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use try_from_expr::TryFromExpr;
 use uuid::Uuid;
 
@@ -17,7 +17,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 #[cfg(feature = "surrealdb")]
 use rand::RngExt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, Builder)]
 pub struct CoordinationId {
     pub table_name: String,
     pub field_name: String,
@@ -93,7 +93,7 @@ pub struct CoordinationGroup {
     #[builder(default)]
     pub id: Uuid,
     #[builder(default)]
-    pub tables: HashSet<String>,
+    pub tables: BTreeSet<String>,
     #[builder(default)]
     pub coordination_pairs: Vec<CoordinationPair>,
 }
@@ -234,7 +234,7 @@ impl Mockmaker<'_> {
                             }
 
                             // Generate source values first
-                            let mut source_values_map = HashMap::new();
+                            let mut source_values_map = BTreeMap::new();
                             for (coord_id, field) in
                                 source_coord_ids.iter().zip(source_fields.iter())
                             {
@@ -333,9 +333,9 @@ impl Mockmaker<'_> {
         fields: &[&StructField],
         _index: usize,
         increment: &CoordinateIncrement,
-    ) -> HashMap<String, String> {
+    ) -> BTreeMap<String, String> {
         tracing::trace!(field_count = fields.len(), "Generating sequential values");
-        let mut values = HashMap::new();
+        let mut values = BTreeMap::new();
 
         // Generate base value
         let first_field = &fields[0];
@@ -427,13 +427,13 @@ impl Mockmaker<'_> {
         fields: &[&StructField],
         _index: usize,
         total: f64,
-    ) -> HashMap<String, String> {
+    ) -> BTreeMap<String, String> {
         tracing::trace!(
             field_count = fields.len(),
             total = total,
             "Generating sum values"
         );
-        let mut values = HashMap::new();
+        let mut values = BTreeMap::new();
         let mut rng = rand::rng();
 
         if fields.is_empty() {
@@ -499,10 +499,10 @@ impl Mockmaker<'_> {
         source_fields: &[&StructField],
         target_field: &str,
         derivation: &DerivationType,
-        source_values: &HashMap<String, String>,
-    ) -> HashMap<String, String> {
+        source_values: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
         tracing::trace!(target_field = %target_field, "Generating derived values");
-        let mut values = HashMap::new();
+        let mut values = BTreeMap::new();
 
         match derivation {
             DerivationType::Concatenate(separator) => {
@@ -588,7 +588,7 @@ impl Mockmaker<'_> {
         _fields: &[&StructField],
         dataset: &crate::schemasync::mockmake::coordinate::CoherentDataset,
         index: usize,
-    ) -> HashMap<String, String> {
+    ) -> BTreeMap<String, String> {
         tracing::trace!(index = index, "Generating coherent values");
         use crate::schemasync::mockmake::coordinate::*;
 
@@ -629,7 +629,7 @@ impl Mockmaker<'_> {
             } => {
                 let (city_val, state_val, zip_val, country_val) =
                     COHERENT_ADDRESSES[index % COHERENT_ADDRESSES.len()];
-                let mut values = HashMap::new();
+                let mut values = BTreeMap::new();
                 values.insert(city.clone(), city_val.to_string());
                 values.insert(state.clone(), state_val.to_string());
                 values.insert(zip.clone(), zip_val.to_string());
@@ -644,7 +644,7 @@ impl Mockmaker<'_> {
                 // Use the extended person names from coordinate.rs
                 let names = crate::schemasync::mockmake::coordinate::EXTENDED_PERSON_NAMES;
                 let (first, last, _gender) = names[index % names.len()];
-                let mut values = HashMap::new();
+                let mut values = BTreeMap::new();
                 values.insert(first_name.clone(), first.to_string());
                 values.insert(last_name.clone(), last.to_string());
                 values.insert(full_name.clone(), format!("{} {}", first, last));
@@ -658,7 +658,7 @@ impl Mockmaker<'_> {
             } => {
                 let (city_val, lat, lng, country_val) =
                     CITY_COORDINATES[index % CITY_COORDINATES.len()];
-                let mut values = HashMap::new();
+                let mut values = BTreeMap::new();
                 values.insert(latitude.clone(), lat.to_string());
                 values.insert(longitude.clone(), lng.to_string());
                 values.insert(city.clone(), city_val.to_string());
@@ -680,7 +680,7 @@ impl Mockmaker<'_> {
                 let start = base + Duration::days(start_offset);
                 let end = start + Duration::days(duration_days);
 
-                let mut values = HashMap::new();
+                let mut values = BTreeMap::new();
                 values.insert(start_date.clone(), start.to_string());
                 values.insert(end_date.clone(), end.to_string());
                 values
@@ -711,7 +711,7 @@ impl Mockmaker<'_> {
                     + (bearing.sin() * angular_dist.sin() * lat1.cos())
                         .atan2(angular_dist.cos() - lat1.sin() * lat2.sin());
 
-                let mut values = HashMap::new();
+                let mut values = BTreeMap::new();
                 values.insert(latitude.clone(), format!("{:.6}", lat2.to_degrees()));
                 values.insert(longitude.clone(), format!("{:.6}", lng2.to_degrees()));
                 values
@@ -1355,7 +1355,7 @@ pub enum CoherentDataset {
 
 /// Trait for custom coordinators
 pub trait CustomCoordinator: Send + Sync {
-    fn generate(&self, fields: &[&str], index: usize) -> HashMap<String, String>;
+    fn generate(&self, fields: &[&str], index: usize) -> BTreeMap<String, String>;
 }
 
 // Extended address dataset with more US cities
@@ -1744,7 +1744,7 @@ mod tests {
             radius_km: 100.0,
         };
 
-        let mut lats = std::collections::HashSet::new();
+        let mut lats = std::collections::BTreeSet::new();
         for i in 0..20 {
             let values = Mockmaker::generate_coherent_values(&[], &dataset, i);
             lats.insert(values["lat"].clone());

@@ -2,15 +2,15 @@ use crate::{
     schemasync::table::TableConfig,
     types::{StructConfig, TaggedUnion},
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{debug, error, info, trace};
 
 pub fn generate_define_statements(
     table_name: &str,
     table_config: &TableConfig,
-    query_details: &HashMap<String, TableConfig>,
-    server_only: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    query_details: &BTreeMap<String, TableConfig>,
+    server_only: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     full_refresh_mode: bool,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
@@ -185,7 +185,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
             relation: None,
             permissions: None,
@@ -197,9 +197,9 @@ mod tests {
             indexes: vec![],
         };
 
-        let query_details: HashMap<String, TableConfig> = HashMap::new();
-        let server_only: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let server_only: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         let statements = generate_define_statements(
             "user",
@@ -245,14 +245,14 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
 
         let result = field
             .generate_define_statement(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
             )
@@ -296,14 +296,14 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
 
         let result = field
             .generate_define_statement(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
             )
@@ -343,14 +343,14 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
 
         let result = field
             .generate_define_statement(
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
             )
@@ -397,7 +397,7 @@ mod tests {
                         unique: true,
                         mock_plugin: None,
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                     },
                     StructField {
                         field_name: "name".to_string(),
@@ -426,7 +426,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                     },
                 ],
                 validators: Vec::new(),
@@ -436,7 +436,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
             relation: None,
             permissions: None,
@@ -445,9 +445,9 @@ mod tests {
             indexes: vec![],
         };
 
-        let query_details: HashMap<String, TableConfig> = HashMap::new();
-        let server_only: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let server_only: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         let statements = generate_define_statements(
             "user",
@@ -500,7 +500,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
 
         let table_config = TableConfig {
@@ -519,7 +519,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
             relation: None,
             permissions: None,
@@ -537,9 +537,9 @@ mod tests {
             ],
         };
 
-        let query_details: HashMap<String, TableConfig> = HashMap::new();
-        let server_only: HashMap<String, StructConfig> = HashMap::new();
-        let enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let server_only: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         let statements = generate_define_statements(
             "reaction",

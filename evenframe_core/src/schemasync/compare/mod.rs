@@ -36,8 +36,8 @@ use ::surrealdb::Surreal;
 #[cfg(feature = "surrealdb")]
 use ::surrealdb::engine::remote::http::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 #[cfg(feature = "schemasync")]
 use crate::schemasync::database::types::SchemaExport;
@@ -53,9 +53,9 @@ pub trait SchemaComparator: Send + Sync {
     /// Compare the current database schema with the expected schema from Rust structs
     async fn compare_schemas(
         &self,
-        tables: &HashMap<String, TableConfig>,
-        objects: &HashMap<String, crate::types::StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, crate::types::StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
     ) -> Result<SchemaChanges>;
 
     /// Get the current schema from the database
@@ -355,8 +355,8 @@ impl Comparator {
         };
 
         // Get all table names from both schemas
-        let old_tables: HashSet<String> = old.tables.keys().cloned().collect();
-        let new_tables: HashSet<String> = new.tables.keys().cloned().collect();
+        let old_tables: BTreeSet<String> = old.tables.keys().cloned().collect();
+        let new_tables: BTreeSet<String> = new.tables.keys().cloned().collect();
 
         tracing::trace!(
             old_table_count = old_tables.len(),
@@ -401,8 +401,8 @@ impl Comparator {
         }
 
         // Also compare edges
-        let old_edges: HashSet<String> = old.edges.keys().cloned().collect();
-        let new_edges: HashSet<String> = new.edges.keys().cloned().collect();
+        let old_edges: BTreeSet<String> = old.edges.keys().cloned().collect();
+        let new_edges: BTreeSet<String> = new.edges.keys().cloned().collect();
 
         for edge in new_edges.difference(&old_edges) {
             changes.new_tables.push(edge.clone());
@@ -428,9 +428,9 @@ impl Comparator {
         }
 
         // Compare accesses
-        let old_access_names: HashSet<String> =
+        let old_access_names: BTreeSet<String> =
             old.accesses.iter().map(|a| a.name.clone()).collect();
-        let new_access_names: HashSet<String> =
+        let new_access_names: BTreeSet<String> =
             new.accesses.iter().map(|a| a.name.clone()).collect();
 
         // Find new accesses
@@ -514,8 +514,8 @@ impl Comparator {
         }
 
         // Compare regular fields
-        let old_fields: HashSet<String> = old_table.fields.keys().cloned().collect();
-        let new_fields: HashSet<String> = new_table.fields.keys().cloned().collect();
+        let old_fields: BTreeSet<String> = old_table.fields.keys().cloned().collect();
+        let new_fields: BTreeSet<String> = new_table.fields.keys().cloned().collect();
 
         // Find new fields
         for field in new_fields.difference(&old_fields) {
@@ -572,9 +572,9 @@ impl Comparator {
         }
 
         // Compare array wildcard fields
-        let old_wildcard_fields: HashSet<String> =
+        let old_wildcard_fields: BTreeSet<String> =
             old_table.array_wildcard_fields.keys().cloned().collect();
-        let new_wildcard_fields: HashSet<String> =
+        let new_wildcard_fields: BTreeSet<String> =
             new_table.array_wildcard_fields.keys().cloned().collect();
 
         // Find new wildcard fields (these represent new fields)
@@ -619,8 +619,8 @@ impl Comparator {
         }
 
         // Compare events by statement contents
-        let old_events: HashSet<String> = old_table.events.iter().cloned().collect();
-        let new_events: HashSet<String> = new_table.events.iter().cloned().collect();
+        let old_events: BTreeSet<String> = old_table.events.iter().cloned().collect();
+        let new_events: BTreeSet<String> = new_table.events.iter().cloned().collect();
 
         for event in new_events.difference(&old_events) {
             table_changes.new_events.push(event.clone());
@@ -634,9 +634,9 @@ impl Comparator {
         // content changes idempotently, so we only diff presence here — an
         // index present in the DB but absent from code is an orphan and must
         // be dropped.
-        let old_index_names: HashSet<&str> =
+        let old_index_names: BTreeSet<&str> =
             old_table.indexes.iter().map(|i| i.name.as_str()).collect();
-        let new_index_names: HashSet<&str> =
+        let new_index_names: BTreeSet<&str> =
             new_table.indexes.iter().map(|i| i.name.as_str()).collect();
 
         for index in &new_table.indexes {
@@ -717,8 +717,8 @@ impl Comparator {
         match (old_type, new_type) {
             // Both are objects - compare fields
             (ObjectType::Object(old_fields), ObjectType::Object(new_fields)) => {
-                let old_keys: HashSet<String> = old_fields.keys().cloned().collect();
-                let new_keys: HashSet<String> = new_fields.keys().cloned().collect();
+                let old_keys: BTreeSet<String> = old_fields.keys().cloned().collect();
+                let new_keys: BTreeSet<String> = new_fields.keys().cloned().collect();
 
                 // Find added fields
                 for key in new_keys.difference(&old_keys) {
@@ -913,7 +913,7 @@ impl Comparator {
 pub fn collect_referenced_objects(
     field_type: &FieldType,
     objects_to_process: &mut Vec<String>,
-    enums: &HashMap<String, TaggedUnion>,
+    enums: &BTreeMap<String, TaggedUnion>,
 ) {
     match field_type {
         FieldType::Other(type_name) => {
@@ -1004,7 +1004,7 @@ impl<'a> Merger<'a> {
     /// Generate schema from Rust structs
     pub fn generate_schema_from_structs(
         &self,
-        tables: &HashMap<String, TableConfig>,
+        tables: &BTreeMap<String, TableConfig>,
     ) -> Result<SchemaDefinition> {
         tracing::debug!(
             table_count = tables.len(),
@@ -1321,8 +1321,8 @@ mod index_diff_tests {
         TableDefinition {
             name: name.to_string(),
             schema_type: SchemaType::Schemafull,
-            fields: HashMap::new(),
-            array_wildcard_fields: HashMap::new(),
+            fields: BTreeMap::new(),
+            array_wildcard_fields: BTreeMap::new(),
             permissions: None,
             indexes,
             events: Vec::new(),
@@ -1338,11 +1338,11 @@ mod index_diff_tests {
     }
 
     fn schema_with(table_name: &str, table: TableDefinition) -> SchemaDefinition {
-        let mut tables = HashMap::new();
+        let mut tables = BTreeMap::new();
         tables.insert(table_name.to_string(), table);
         SchemaDefinition {
             tables,
-            edges: HashMap::new(),
+            edges: BTreeMap::new(),
             accesses: Vec::new(),
         }
     }

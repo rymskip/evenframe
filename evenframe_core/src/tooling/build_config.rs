@@ -5,7 +5,7 @@ use crate::error::EvenframeError;
 use crate::typesync::config::{
     ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,14 +56,14 @@ pub struct BuildConfig {
     pub collision_strategy: CollisionStrategy,
 
     /// Foreign type configurations, keyed by canonical type name.
-    pub foreign_types: HashMap<String, ForeignTypeConfig>,
+    pub foreign_types: BTreeMap<String, ForeignTypeConfig>,
 
     /// Type-transform WASM plugin configurations.
-    pub output_rule_plugins: HashMap<String, crate::config::OutputRulePluginConfig>,
+    pub output_rule_plugins: BTreeMap<String, crate::config::OutputRulePluginConfig>,
 
     /// Synthetic-item WASM plugin configurations. These plugins add new
     /// structs/enums/tables derived from the scanner results.
-    pub synthetic_item_plugins: HashMap<String, crate::config::SyntheticItemPluginConfig>,
+    pub synthetic_item_plugins: BTreeMap<String, crate::config::SyntheticItemPluginConfig>,
 }
 
 impl Default for BuildConfig {
@@ -83,9 +83,9 @@ impl Default for BuildConfig {
             protobuf_import_validate: false,
             output: OutputConfig::default(),
             collision_strategy: CollisionStrategy::Error,
-            foreign_types: HashMap::new(),
-            output_rule_plugins: HashMap::new(),
-            synthetic_item_plugins: HashMap::new(),
+            foreign_types: BTreeMap::new(),
+            output_rule_plugins: BTreeMap::new(),
+            synthetic_item_plugins: BTreeMap::new(),
         }
     }
 }
@@ -398,7 +398,7 @@ impl BuildConfigBuilder {
     }
 
     /// Sets foreign type configurations.
-    pub fn foreign_types(mut self, foreign_types: HashMap<String, ForeignTypeConfig>) -> Self {
+    pub fn foreign_types(mut self, foreign_types: BTreeMap<String, ForeignTypeConfig>) -> Self {
         self.config.foreign_types = foreign_types;
         self
     }

@@ -14,13 +14,13 @@ use crate::validator::{
 use convert_case::{Case, Casing};
 use macroforge_ts::macros::ts_template;
 use petgraph::{algo::toposort, graphmap::DiGraphMap};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use tracing;
 
 /// Main entry point for generating Effect Schema TypeScript code.
 pub fn generate_effect_schema_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     _print_types: bool,
     registry: &ForeignTypeRegistry,
 ) -> String {
@@ -55,7 +55,7 @@ pub fn generate_effect_schema_string(
     let mut ordered_comps = toposort(&condensation, None).unwrap_or_default();
     ordered_comps.reverse();
 
-    let mut processed = HashSet::<String>::new();
+    let mut processed = BTreeSet::<String>::new();
 
     // Collect ordered type names with their data
     let mut items: Vec<TypeItem> = Vec::new();
@@ -85,7 +85,7 @@ pub fn generate_effect_schema_string(
     }
 
     // Reset processed for schema generation
-    let mut processed = HashSet::<String>::new();
+    let mut processed = BTreeSet::<String>::new();
 
     let result = ts_template! {
         {#for item in &items}
@@ -152,9 +152,9 @@ fn variant_to_schema(
     v: &crate::types::Variant,
     repr: &EnumRepresentation,
     enum_name: &str,
-    structs: &HashMap<String, StructConfig>,
+    structs: &BTreeMap<String, StructConfig>,
     recursion_info: &crate::dependency::RecursionInfo,
-    processed: &HashSet<String>,
+    processed: &BTreeSet<String>,
     registry: &ForeignTypeRegistry,
 ) -> String {
     let to_inner = |ft: &FieldType| -> String {
@@ -308,10 +308,10 @@ fn variant_to_encoded(
 
 fn field_type_to_effect_schema(
     field_type: &FieldType,
-    structs: &HashMap<String, StructConfig>,
+    structs: &BTreeMap<String, StructConfig>,
     current_type: &str,
     recursion_info: &crate::dependency::RecursionInfo,
-    processed: &HashSet<String>,
+    processed: &BTreeSet<String>,
     registry: &ForeignTypeRegistry,
 ) -> String {
     let recurse = |inner_type: &FieldType| {
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_generate_effect_schema_string() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             StructConfig {
@@ -650,7 +650,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                     },
                     StructField {
                         field_name: "email".to_string(),
@@ -665,7 +665,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                     },
                     StructField {
                         field_name: "age".to_string(),
@@ -680,7 +680,7 @@ mod tests {
                         unique: false,
                         mock_plugin: None,
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                     },
                 ],
                 validators: vec![],
@@ -690,11 +690,11 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
         let output = generate_effect_schema_string(&structs, &enums, true, &registry);
 

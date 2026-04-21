@@ -4,7 +4,7 @@ use crate::{
 };
 use linkme::distributed_slice;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Registry entry for persistable structs (tables)
 #[derive(Clone, Copy)]
@@ -117,7 +117,7 @@ pub fn get_union_of_tables(type_name: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Type category for unified type resolution
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TypeCategory {
     Table,
     Object,
@@ -142,27 +142,35 @@ pub fn resolve_type_category(type_name: &str) -> Option<TypeCategory> {
 
 /// Get all registered table names
 pub fn get_all_table_names() -> Vec<&'static str> {
-    TABLE_REGISTRY.keys().copied().collect()
+    let mut names: Vec<&'static str> = TABLE_REGISTRY.keys().copied().collect();
+    names.sort();
+    names
 }
 
 /// Get all registered object names
 pub fn get_all_object_names() -> Vec<&'static str> {
-    OBJECT_REGISTRY.keys().copied().collect()
+    let mut names: Vec<&'static str> = OBJECT_REGISTRY.keys().copied().collect();
+    names.sort();
+    names
 }
 
 /// Get all registered enum names
 pub fn get_all_enum_names() -> Vec<&'static str> {
-    ENUM_REGISTRY.keys().copied().collect()
+    let mut names: Vec<&'static str> = ENUM_REGISTRY.keys().copied().collect();
+    names.sort();
+    names
 }
 
 /// Get all registered union of tables names
 pub fn get_all_union_of_tables_names() -> Vec<&'static str> {
-    UNION_OF_TABLES_REGISTRY.keys().copied().collect()
+    let mut names: Vec<&'static str> = UNION_OF_TABLES_REGISTRY.keys().copied().collect();
+    names.sort();
+    names
 }
 
 /// Get all registered type names across all categories
-pub fn get_all_type_names() -> HashMap<TypeCategory, Vec<&'static str>> {
-    let mut result = HashMap::new();
+pub fn get_all_type_names() -> BTreeMap<TypeCategory, Vec<&'static str>> {
+    let mut result = BTreeMap::new();
     result.insert(TypeCategory::Table, get_all_table_names());
     result.insert(TypeCategory::Object, get_all_object_names());
     result.insert(TypeCategory::Enum, get_all_enum_names());

@@ -7,15 +7,15 @@ use prost_types::{
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet,
     field_descriptor_proto::{Label, Type},
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Result of parsing and converting a Protocol Buffers schema.
 #[derive(Debug, Clone)]
 pub struct ProtobufParseResult {
     /// Converted struct configurations (from messages).
-    pub structs: HashMap<String, StructConfig>,
+    pub structs: BTreeMap<String, StructConfig>,
     /// Converted enum configurations.
-    pub enums: HashMap<String, TaggedUnion>,
+    pub enums: BTreeMap<String, TaggedUnion>,
     /// The package name from the schema, if any.
     pub package: Option<String>,
     /// Warnings generated during conversion.
@@ -25,8 +25,8 @@ pub struct ProtobufParseResult {
 impl ProtobufParseResult {
     pub fn new() -> Self {
         Self {
-            structs: HashMap::new(),
-            enums: HashMap::new(),
+            structs: BTreeMap::new(),
+            enums: BTreeMap::new(),
             package: None,
             warnings: Vec::new(),
         }
@@ -213,7 +213,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default: false,
         })
         .collect();
@@ -228,7 +228,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     }
 }
 

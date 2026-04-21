@@ -5,13 +5,13 @@ use crate::types::StructField;
 use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use rand::{rng, seq::IndexedRandom};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{debug, trace};
 
 pub fn field_type_to_default_value(
     field_type: &FieldType,
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     trace!("Generating default value for field type: {:?}", field_type);
@@ -242,9 +242,9 @@ pub fn field_type_to_surql_default(
     field_name: &String,
     table_name: &String,
     field_type: &FieldType,
-    enums: &HashMap<String, TaggedUnion>,
-    app_structs: &HashMap<String, StructConfig>,
-    persistable_structs: &HashMap<String, TableConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    app_structs: &BTreeMap<String, StructConfig>,
+    persistable_structs: &BTreeMap<String, TableConfig>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     trace!(
@@ -492,9 +492,9 @@ pub fn field_type_to_surreal_type(
     field_name: &String,
     table_name: &String,
     field_type: &FieldType,
-    enums: &HashMap<String, TaggedUnion>,
-    app_structs: &HashMap<String, StructConfig>,
-    persistable_structs: &HashMap<String, TableConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    app_structs: &BTreeMap<String, StructConfig>,
+    persistable_structs: &BTreeMap<String, TableConfig>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> (String, bool, Option<String>) {
     trace!(
@@ -803,7 +803,7 @@ mod tests {
     use crate::types::{
         EnumRepresentation, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, Variant,
     };
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn base_define_config(default: Option<&str>) -> DefineConfig {
         DefineConfig {
@@ -830,7 +830,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default,
         }
     }
@@ -846,7 +846,7 @@ mod tests {
             pipeline: crate::types::Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         }
     }
 
@@ -861,10 +861,10 @@ mod tests {
                 variant("List", false),
             ],
         );
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), card_or_row);
-        let app_structs = HashMap::new();
-        let persistable_structs = HashMap::new();
+        let app_structs = BTreeMap::new();
+        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -891,10 +891,10 @@ mod tests {
                 variant("Blue", false),
             ],
         );
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), color);
-        let app_structs = HashMap::new();
-        let persistable_structs = HashMap::new();
+        let app_structs = BTreeMap::new();
+        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -917,7 +917,7 @@ mod tests {
             &enum_name,
             vec![variant("Card", false), variant("Table", true)],
         );
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), card_or_row);
 
         let overview_settings = StructConfig {
@@ -952,9 +952,9 @@ mod tests {
             ],
             ..Default::default()
         };
-        let mut app_structs = HashMap::new();
+        let mut app_structs = BTreeMap::new();
         app_structs.insert("OverviewSettings".to_string(), overview_settings);
-        let persistable_structs = HashMap::new();
+        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(

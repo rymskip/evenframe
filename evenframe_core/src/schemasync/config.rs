@@ -1,7 +1,7 @@
 use crate::schemasync::{PreservationMode, mockmake::coordinate::CoordinationGroup};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{debug, trace};
 
 /// Configuration for a WASM mock data plugin.
@@ -25,7 +25,7 @@ pub struct SchemasyncConfig {
     /// WASM plugin definitions for mock data generation.
     #[serde(default)]
     #[builder(default)]
-    pub plugins: HashMap<String, PluginConfig>,
+    pub plugins: BTreeMap<String, PluginConfig>,
 }
 
 /// Database provider type for configuration
@@ -150,7 +150,7 @@ pub struct SchemasyncMockGenConfig {
     pub default_batch_size: usize,
 
     #[builder(default)]
-    /// global table field coordination, Vec<(HashSet<TableName>, Vec<Coordination>)>
+    /// global table field coordination, Vec<(BTreeSet<TableName>, Vec<Coordination>)>
     pub coordination_groups: Vec<CoordinationGroup>,
 
     pub full_refresh_mode: bool,

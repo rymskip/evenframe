@@ -8,7 +8,7 @@ use evenframe_core::{
     error::Result,
     types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::info;
 
 pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
@@ -48,9 +48,9 @@ pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
             entry["override_annotations"] = serde_json::json!(ov.annotations);
         }
 
-        let mut single = HashMap::new();
+        let mut single = BTreeMap::new();
         single.insert(name.clone(), sc.clone());
-        let empty_enums: HashMap<String, TaggedUnion> = HashMap::new();
+        let empty_enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &single,
             &empty_enums,
@@ -99,8 +99,8 @@ pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
             entry["override_annotations"] = serde_json::json!(ov.annotations);
         }
 
-        let empty_structs: HashMap<String, StructConfig> = HashMap::new();
-        let mut single_enum = HashMap::new();
+        let empty_structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let mut single_enum = BTreeMap::new();
         single_enum.insert(name.clone(), eu.clone());
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &empty_structs,

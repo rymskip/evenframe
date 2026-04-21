@@ -10,7 +10,7 @@ use bon::Builder;
 use chrono_tz::TZ_VARIANTS;
 use convert_case::{Case, Casing};
 use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use tracing;
 
 // The context struct is now simple again, with a direct reference.
@@ -20,7 +20,7 @@ struct Frame<'a> {
     table_config: &'a TableConfig,
     field_type: &'a FieldType,
     field_path: String,             // Track the full path for nested fields
-    visited_types: HashSet<String>, // Track visited types to avoid infinite recursion
+    visited_types: BTreeSet<String>, // Track visited types to avoid infinite recursion
 }
 
 enum WorkItem<'a> {
@@ -69,7 +69,7 @@ impl<'a> FieldValueGenerator<'a> {
             table_config: self.table_config,
             field_type: &self.field.field_type,
             field_path: self.field.field_name.clone(),
-            visited_types: HashSet::new(),
+            visited_types: BTreeSet::new(),
         };
         work_stack.push(WorkItem::Generate(initial_context));
 
@@ -274,8 +274,8 @@ impl<'a> FieldValueGenerator<'a> {
                                         // Helper: resolve a type name to a table key in self.mockmaker.tables
                                         // Closure uses RNG; mark as mut so it implements FnMut
                                         let mut resolve_table = |name: &str,
-                                                            tables: &std::collections::HashMap<String, crate::schemasync::table::TableConfig>,
-                                                            enums: &std::collections::HashMap<String, crate::types::TaggedUnion>,
+                                                            tables: &std::collections::BTreeMap<String, crate::schemasync::table::TableConfig>,
+                                                            enums: &std::collections::BTreeMap<String, crate::types::TaggedUnion>,
                                         | -> Option<String> {
                                             // 1) Direct match: type name corresponds to a table
                                             let snake = name.to_case(Case::Snake);

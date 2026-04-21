@@ -7,12 +7,12 @@ use crate::validator::{
 };
 use convert_case::{Case, Casing};
 use petgraph::{algo::toposort, graphmap::DiGraphMap};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use tracing;
 
 pub fn generate_effect_schema_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     print_types: bool,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
@@ -57,10 +57,10 @@ pub fn generate_effect_schema_string(
     let mut out_classes = String::new();
     let mut out_types = String::new();
     let mut out_encoded = String::new(); // All '...Encoded' interfaces/types go here.
-    let mut processed = HashSet::<String>::new();
+    let mut processed = BTreeSet::<String>::new();
 
     // Helper closure for field conversion that has access to `rec`.
-    let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
+    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> String {
         field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 
@@ -233,10 +233,10 @@ fn enum_variant_to_schema<F>(
     repr: &EnumRepresentation,
     enum_name: &str,
     to_schema: &F,
-    processed: &HashSet<String>,
+    processed: &BTreeSet<String>,
 ) -> String
 where
-    F: Fn(&FieldType, &str, &HashSet<String>) -> String,
+    F: Fn(&FieldType, &str, &BTreeSet<String>) -> String,
 {
     match repr {
         EnumRepresentation::ExternallyTagged => match &v.data {
@@ -402,10 +402,10 @@ fn enum_variant_to_encoded(
 /// Converts a `FieldType` into its corresponding Effect `Schema` representation.
 fn field_type_to_effect_schema(
     field_type: &FieldType,
-    structs: &HashMap<String, StructConfig>,
+    structs: &BTreeMap<String, StructConfig>,
     current: &str,
     rec: &RecursionInfo,
-    processed: &HashSet<String>,
+    processed: &BTreeSet<String>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     enum WorkItem<'a> {
@@ -699,11 +699,11 @@ fn field_type_to_ts_encoded(
 /// so `Schema.suspend()` will NOT be emitted for cross-file references.
 pub fn generate_effect_schema_for_types(
     type_names: &[String],
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    let type_set: HashSet<String> = type_names.iter().cloned().collect();
+    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
     // Analyse recursion across ALL types (needed for correct SCC detection).
     let rec = analyse_recursion(structs, enums);
@@ -729,14 +729,14 @@ pub fn generate_effect_schema_for_types(
 
     // Pre-populate processed with all types NOT in this group.
     // This means cross-file references won't get Schema.suspend().
-    let all_types: HashSet<String> = structs
+    let all_types: BTreeSet<String> = structs
         .values()
         .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
         .collect();
-    let mut processed: HashSet<String> = all_types.difference(&type_set).cloned().collect();
+    let mut processed: BTreeSet<String> = all_types.difference(&type_set).cloned().collect();
 
-    let to_schema = |ft: &FieldType, cur: &str, proc: &HashSet<String>| -> String {
+    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> String {
         field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 

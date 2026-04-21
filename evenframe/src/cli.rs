@@ -140,7 +140,7 @@ pub enum TypesyncCommands {
     Protobuf(ProtobufArgs),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ValueEnum)]
 pub enum TypeFormat {
     Arktype,
     Effect,

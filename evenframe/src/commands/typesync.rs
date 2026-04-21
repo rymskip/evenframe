@@ -23,7 +23,7 @@ use evenframe_core::{
         protobuf::generate_protobuf_schema_string,
     },
 };
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::Path;
 use tracing::{debug, error, info, warn};
 
@@ -170,7 +170,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     }
 
     // Determine which formats to generate
-    let mut formats_to_generate: HashSet<TypeFormat> = HashSet::new();
+    let mut formats_to_generate: BTreeSet<TypeFormat> = BTreeSet::new();
 
     if let Some(ref formats) = args.formats {
         // Use explicit formats from CLI
@@ -281,8 +281,8 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
 }
 
 fn generate_arktype(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     registry: &ForeignTypeRegistry,
 ) -> Result<()> {
@@ -298,8 +298,8 @@ fn generate_arktype(
 }
 
 fn generate_effect(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     registry: &ForeignTypeRegistry,
 ) -> Result<()> {
@@ -312,8 +312,8 @@ fn generate_effect(
 }
 
 struct EffectPerFileArgs<'a> {
-    structs: &'a std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &'a std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &'a std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &'a std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     base_output_path: &'a str,
     subdir: &'a str,
     barrel_file: bool,
@@ -378,8 +378,8 @@ fn generate_effect_per_file(args: EffectPerFileArgs<'_>) -> Result<()> {
 }
 
 fn generate_macroforge(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     array_style: evenframe_core::typesync::config::ArrayStyle,
     registry: &ForeignTypeRegistry,
@@ -392,8 +392,8 @@ fn generate_macroforge(
 }
 
 struct MacroforgePerFileArgs<'a> {
-    structs: &'a std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &'a std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &'a std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &'a std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     base_output_path: &'a str,
     barrel_file: bool,
     naming: FileNamingConvention,
@@ -473,8 +473,8 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
 }
 
 fn generate_flatbuffers(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     namespace: Option<&str>,
     registry: &ForeignTypeRegistry,
@@ -487,8 +487,8 @@ fn generate_flatbuffers(
 }
 
 fn generate_protobuf(
-    structs: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
+    structs: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     output_path: &str,
     package: Option<&str>,
     import_validate: bool,
@@ -510,7 +510,7 @@ fn cleanup_obsolete_files(
     naming: FileNamingConvention,
     file_ext: &str,
 ) -> Result<()> {
-    let mut expected: HashSet<String> = plan
+    let mut expected: BTreeSet<String> = plan
         .groups
         .iter()
         .map(|g| {

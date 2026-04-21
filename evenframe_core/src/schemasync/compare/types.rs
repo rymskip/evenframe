@@ -6,7 +6,7 @@
 use crate::{Result, schemasync::TableConfig, schemasync::config::AccessType};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     fmt::{self, Display, Formatter},
 };
 use tracing;
@@ -17,7 +17,7 @@ pub enum ObjectType {
     /// Simple type like string, int, bool, etc.
     Simple(String),
     /// Object with nested fields
-    Object(HashMap<String, ObjectType>),
+    Object(BTreeMap<String, ObjectType>),
     /// Array of a type
     Array(Box<ObjectType>),
     /// Union of multiple types (e.g., string | int)
@@ -68,10 +68,10 @@ pub struct FieldDefinition {
 pub struct TableDefinition {
     pub name: String,
     pub schema_type: SchemaType,
-    pub fields: HashMap<String, FieldDefinition>,
+    pub fields: BTreeMap<String, FieldDefinition>,
     /// Array wildcard fields (e.g., phones[*]) are stored separately
     /// Key is the parent field name (e.g., "phones"), value is the wildcard field definition
-    pub array_wildcard_fields: HashMap<String, FieldDefinition>,
+    pub array_wildcard_fields: BTreeMap<String, FieldDefinition>,
     pub permissions: Option<PermissionSet>,
     pub indexes: Vec<IndexDefinition>,
     pub events: Vec<String>,
@@ -119,27 +119,27 @@ pub struct AccessDefinition {
 /// Complete schema definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaDefinition {
-    pub tables: HashMap<String, TableDefinition>,
-    pub edges: HashMap<String, TableDefinition>,
+    pub tables: BTreeMap<String, TableDefinition>,
+    pub edges: BTreeMap<String, TableDefinition>,
     pub accesses: Vec<AccessDefinition>,
 }
 
 impl SchemaDefinition {
     /// Create from TableConfig HashMap (for code-based schema generation)
-    pub fn from_table_configs(tables: &HashMap<String, TableConfig>) -> Result<Self> {
+    pub fn from_table_configs(tables: &BTreeMap<String, TableConfig>) -> Result<Self> {
         tracing::debug!(
             table_count = tables.len(),
             "Creating SchemaDefinition from TableConfigs"
         );
-        let mut schema_tables = HashMap::new();
-        let mut schema_edges = HashMap::new();
+        let mut schema_tables = BTreeMap::new();
+        let mut schema_edges = BTreeMap::new();
 
         for (name, config) in tables {
             let table_def = TableDefinition {
                 name: name.clone(),
                 schema_type: SchemaType::Schemafull,
                 fields: Self::extract_fields_from_config(config)?,
-                array_wildcard_fields: HashMap::new(),
+                array_wildcard_fields: BTreeMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
                 indexes: {
                     let mut v: Vec<IndexDefinition> = config
@@ -191,8 +191,8 @@ impl SchemaDefinition {
 
     fn extract_fields_from_config(
         config: &TableConfig,
-    ) -> Result<HashMap<String, FieldDefinition>> {
-        let mut fields = HashMap::new();
+    ) -> Result<BTreeMap<String, FieldDefinition>> {
+        let mut fields = BTreeMap::new();
 
         for field in &config.struct_config.fields {
             // Check if field has a default value

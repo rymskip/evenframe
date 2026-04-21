@@ -5,7 +5,7 @@ use super::ast::{
     TableDef, UnionDef, UnionVariant,
 };
 use super::lexer::{SpannedToken, Token};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Parse error with location information.
 #[derive(Debug, Clone)]
@@ -430,7 +430,7 @@ impl Parser {
         }
 
         self.advance();
-        let mut attributes = HashMap::new();
+        let mut attributes = BTreeMap::new();
 
         while !self.check(&Token::RParen) {
             let key = self.expect_identifier()?;

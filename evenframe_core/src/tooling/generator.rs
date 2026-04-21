@@ -12,13 +12,13 @@ use crate::typesync::protobuf::generate_protobuf_schema_string;
 use crate::typesync::{
     arktype::generate_arktype_type_string, effect::generate_effect_schema_string,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
 /// Typesync-filtered configs: (enums, merged structs).
-type TypesyncConfigs = (HashMap<String, TaggedUnion>, HashMap<String, StructConfig>);
+type TypesyncConfigs = (BTreeMap<String, TaggedUnion>, BTreeMap<String, StructConfig>);
 
 /// The type of generator used to create a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,8 +220,8 @@ impl TypeGenerator {
 
     fn generate_arktype_internal(
         &self,
-        structs: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating ArkType types");
@@ -251,8 +251,8 @@ impl TypeGenerator {
 
     fn generate_effect_internal(
         &self,
-        structs: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Effect schemas");
@@ -280,8 +280,8 @@ impl TypeGenerator {
     #[cfg(feature = "macroforge")]
     fn generate_macroforge_internal(
         &self,
-        structs: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Macroforge types");
@@ -314,8 +314,8 @@ impl TypeGenerator {
     #[cfg(feature = "flatbuffers")]
     fn generate_flatbuffers_internal(
         &self,
-        structs: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating FlatBuffers schema");
@@ -347,8 +347,8 @@ impl TypeGenerator {
     #[cfg(feature = "protobuf")]
     fn generate_protobuf_internal(
         &self,
-        structs: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
         registry: &ForeignTypeRegistry,
     ) -> Result<GeneratedFile, EvenframeError> {
         info!("Generating Protocol Buffers schema");

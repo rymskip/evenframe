@@ -5,7 +5,7 @@
 
 use crate::types::{ForeignTypeRegistry, StructConfig, StructField, TaggedUnion};
 use crate::typesync::macroforge::generate_macroforge_type_string;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Result of running a plugin through the generator pipeline.
 #[derive(Debug)]
@@ -40,7 +40,7 @@ impl GeneratedOutput {
 pub fn generate_struct_with_override(
     name: &str,
     override_config: Option<Box<StructConfig>>,
-    field_overrides: HashMap<String, Box<StructField>>,
+    field_overrides: BTreeMap<String, Box<StructField>>,
     fields: Vec<StructField>,
 ) -> GeneratedOutput {
     let mut struct_config = StructConfig {
@@ -53,7 +53,7 @@ pub fn generate_struct_with_override(
         pipeline: crate::types::Pipeline::Both,
         rust_derives: vec![],
         output_override: override_config,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     };
 
     for (field_name, ov) in field_overrides {
@@ -66,9 +66,9 @@ pub fn generate_struct_with_override(
         }
     }
 
-    let mut structs = HashMap::new();
+    let mut structs = BTreeMap::new();
     structs.insert(name.to_string(), struct_config);
-    let enums: HashMap<String, TaggedUnion> = HashMap::new();
+    let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
     let registry = ForeignTypeRegistry::default();
 
     let output = generate_macroforge_type_string(
@@ -98,11 +98,11 @@ pub fn generate_enum_with_override(
         pipeline: crate::types::Pipeline::Both,
         rust_derives: vec![],
         output_override: override_config,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     };
 
-    let structs: HashMap<String, StructConfig> = HashMap::new();
-    let mut enums = HashMap::new();
+    let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+    let mut enums = BTreeMap::new();
     enums.insert(name.to_string(), enum_config);
     let registry = ForeignTypeRegistry::default();
 
@@ -133,7 +133,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         unique: false,
         mock_plugin: None,
         output_override: None,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     }
 }
 
@@ -159,13 +159,13 @@ mod tests {
             pipeline: crate::types::Pipeline::Both,
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
 
         let output = generate_struct_with_override(
             "Site",
             Some(Box::new(override_config)),
-            HashMap::new(),
+            BTreeMap::new(),
             vec![
                 test_field("id", crate::types::FieldType::String),
                 test_field("name", crate::types::FieldType::String),
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn field_override_preserves_declaration() {
-        let mut field_overrides: HashMap<String, Box<StructField>> = HashMap::new();
+        let mut field_overrides: BTreeMap<String, Box<StructField>> = BTreeMap::new();
         let mut email_override = test_field("email", crate::types::FieldType::String);
         email_override.annotations = vec!["@textController({ label: \"Email\" })".into()];
         field_overrides.insert("email".to_string(), Box::new(email_override));
@@ -202,7 +202,7 @@ mod tests {
         let output = generate_struct_with_override(
             "Foo",
             None,
-            HashMap::new(),
+            BTreeMap::new(),
             vec![test_field("bar", crate::types::FieldType::String)],
         );
 

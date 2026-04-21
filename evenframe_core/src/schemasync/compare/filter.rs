@@ -4,7 +4,7 @@ use crate::{
     schemasync::{PreservationMode, TableConfig, compare::collect_referenced_objects},
     types::{FieldType, StructConfig, StructField, TaggedUnion},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use tracing;
 
 impl Mockmaker<'_> {
@@ -27,22 +27,22 @@ impl Mockmaker<'_> {
     pub fn filter_changed_tables_and_objects(
         &self,
         schema_changes: &SchemaChanges,
-        tables: &HashMap<String, TableConfig>,
-        objects: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
-        record_diffs: &HashMap<String, i32>,
-    ) -> (HashMap<String, TableConfig>, HashMap<String, StructConfig>) {
+        tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
+        record_diffs: &BTreeMap<String, i32>,
+    ) -> (BTreeMap<String, TableConfig>, BTreeMap<String, StructConfig>) {
         tracing::debug!("Filtering changed tables and objects");
 
-        let mut filtered_tables = HashMap::new();
-        let mut filtered_objects = HashMap::new();
+        let mut filtered_tables = BTreeMap::new();
+        let mut filtered_objects = BTreeMap::new();
         let default_preservation_mode = &self
             .schemasync_config
             .mock_gen_config
             .default_preservation_mode;
 
         // Pre-index modified tables for efficient O(1) lookups.
-        let modified_tables_map: HashMap<_, _> = schema_changes
+        let modified_tables_map: BTreeMap<_, _> = schema_changes
             .modified_tables
             .iter()
             .map(|tc| (tc.table_name.as_str(), tc))
@@ -110,12 +110,12 @@ impl Mockmaker<'_> {
                         continue;
                     }
 
-                    let mut field_map: HashMap<String, StructField> = HashMap::new();
-                    let mut parents_with_partial = HashSet::new();
-                    let mut fields_to_include = HashSet::new();
+                    let mut field_map: BTreeMap<String, StructField> = BTreeMap::new();
+                    let mut parents_with_partial = BTreeSet::new();
+                    let mut fields_to_include = BTreeSet::new();
 
                     if let Some(change) = table_change {
-                        let removed_fields: HashSet<_> =
+                        let removed_fields: BTreeSet<_> =
                             change.removed_fields.iter().cloned().collect();
 
                         fields_to_include.extend(change.new_fields.iter().cloned());
@@ -227,7 +227,7 @@ impl Mockmaker<'_> {
         }
 
         // 4. Collect all referenced objects from the final set of filtered tables.
-        let mut processed_objects = HashSet::new();
+        let mut processed_objects = BTreeSet::new();
         let mut objects_to_process = Vec::new();
 
         for table in filtered_tables.values() {
@@ -264,7 +264,7 @@ impl Mockmaker<'_> {
 fn find_nested_field_def(
     parent_struct: &StructConfig,
     path: &str,
-    objects: &HashMap<String, StructConfig>,
+    objects: &BTreeMap<String, StructConfig>,
 ) -> Option<StructField> {
     let mut segments = path.split('.');
     let root_field_name = segments.next()?;
@@ -285,7 +285,7 @@ fn find_nested_field_def(
 fn resolve_path(
     field_type: &FieldType,
     mut segments: std::str::Split<'_, char>,
-    objects: &HashMap<String, StructConfig>,
+    objects: &BTreeMap<String, StructConfig>,
 ) -> Option<StructField> {
     // First, get the current segment we are trying to resolve.
     let segment = segments.next()?;

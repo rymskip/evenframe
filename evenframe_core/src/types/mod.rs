@@ -16,7 +16,7 @@ use convert_case::{Case, Casing};
 pub use foreign_type_registry::ForeignTypeRegistry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 #[cfg(feature = "surrealdb")]
 use std::collections::HashSet;
 
@@ -83,7 +83,7 @@ pub struct TaggedUnion {
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
-    pub raw_attributes: HashMap<String, Vec<String>>,
+    pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -148,7 +148,7 @@ pub struct Variant {
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
-    pub raw_attributes: HashMap<String, Vec<String>>,
+    pub raw_attributes: BTreeMap<String, Vec<String>>,
     /// True for the variant marked `#[default]` — the same attribute
     /// `#[derive(Default)]` uses to pick an enum's default variant. Default
     /// synthesis (both SurrealDB and TypeScript) picks this variant; if no
@@ -184,10 +184,10 @@ pub struct StructField {
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
-    pub raw_attributes: HashMap<String, Vec<String>>,
+    pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
 
-/// Manual Hash impl — hashes every field except `raw_attributes` (HashMap
+/// Manual Hash impl — hashes every field except `raw_attributes` (BTreeMap
 /// doesn't implement Hash). StructField is used as a HashMap key in
 /// `MockGenerationConfig.table_level_override`.
 impl std::hash::Hash for StructField {
@@ -226,9 +226,9 @@ impl StructField {
     #[cfg(feature = "surrealdb")]
     pub fn generate_define_statement(
         &self,
-        enums: HashMap<String, TaggedUnion>,
-        app_structs: HashMap<String, StructConfig>,
-        persistable_structs: HashMap<String, TableConfig>,
+        enums: BTreeMap<String, TaggedUnion>,
+        app_structs: BTreeMap<String, StructConfig>,
+        persistable_structs: BTreeMap<String, TableConfig>,
         table_name: &String,
         registry: &ForeignTypeRegistry,
     ) -> Result<String> {
@@ -819,7 +819,7 @@ pub struct StructConfig {
     /// `#[partial_route(name = "PartialUser", fields(id, email))]`
     /// without evenframe needing to understand them.
     #[serde(default)]
-    pub raw_attributes: HashMap<String, Vec<String>>,
+    pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
 
 #[cfg(test)]
@@ -840,7 +840,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let tu2 = TaggedUnion {
             enum_name: "Status".to_string(),
@@ -852,7 +852,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert_eq!(tu1, tu2);
     }
@@ -868,7 +868,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
-                    raw_attributes: HashMap::new(),
+                    raw_attributes: BTreeMap::new(),
                     is_default: false,
                 },
                 Variant {
@@ -877,7 +877,7 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
-                    raw_attributes: HashMap::new(),
+                    raw_attributes: BTreeMap::new(),
                     is_default: false,
                 },
             ],
@@ -888,7 +888,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert_eq!(tu.variants.len(), 2);
         assert_eq!(tu.variants[0].name, "Active");
@@ -904,7 +904,7 @@ mod tests {
                 doccom: None,
                 annotations: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
                 is_default: false,
             }],
             representation: EnumRepresentation::default(),
@@ -914,7 +914,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let json = serde_json::to_string(&tu).unwrap();
         let deserialized: TaggedUnion = serde_json::from_str(&json).unwrap();
@@ -933,7 +933,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let tu2 = TaggedUnion {
             enum_name: "B".to_string(),
@@ -945,7 +945,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert_ne!(tu1, tu2);
         let items = [tu1, tu2];
@@ -963,7 +963,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default: false,
         };
         assert!(v.data.is_none());
@@ -977,7 +977,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default: false,
         };
         assert!(matches!(
@@ -998,7 +998,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let v = Variant {
             name: "Complex".to_string(),
@@ -1006,7 +1006,7 @@ mod tests {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default: false,
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
@@ -1034,7 +1034,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         });
         assert_ne!(vd1, vd2);
     }
@@ -1077,7 +1077,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -1097,7 +1097,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert!(sc.fields.is_empty());
     }
@@ -1120,7 +1120,7 @@ mod tests {
                     unique: false,
                     mock_plugin: None,
                     output_override: None,
-                    raw_attributes: HashMap::new(),
+                    raw_attributes: BTreeMap::new(),
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -1135,7 +1135,7 @@ mod tests {
                     unique: false,
                     mock_plugin: None,
                     output_override: None,
-                    raw_attributes: HashMap::new(),
+                    raw_attributes: BTreeMap::new(),
                 },
             ],
             validators: vec![],
@@ -1145,7 +1145,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert_eq!(sc.fields.len(), 2);
     }
@@ -1162,7 +1162,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         let json = serde_json::to_string(&sc).unwrap();
         let deserialized: StructConfig = serde_json::from_str(&json).unwrap();
@@ -1291,7 +1291,7 @@ mod tests {
             pipeline: Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert!(sc.struct_name.is_empty());
     }
@@ -1321,7 +1321,7 @@ mod tests {
             unique: false,
             mock_plugin: None,
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
         };
         assert_eq!(field.validators.len(), 1);
     }

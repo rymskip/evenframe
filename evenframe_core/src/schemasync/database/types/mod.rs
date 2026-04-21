@@ -8,7 +8,7 @@ pub mod mapper;
 pub use mapper::TypeMapper;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Universal record identifier that works across all database backends.
 ///
@@ -219,7 +219,7 @@ pub struct TableInfo {
     /// Table name
     pub name: String,
     /// Column information
-    pub columns: HashMap<String, ColumnInfo>,
+    pub columns: BTreeMap<String, ColumnInfo>,
     /// Primary key columns
     pub primary_key: Vec<String>,
     /// Foreign key constraints

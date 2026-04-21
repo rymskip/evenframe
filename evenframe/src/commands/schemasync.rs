@@ -123,9 +123,9 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
 }
 
 async fn run_schemasync(
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
-    tables: &std::collections::HashMap<String, evenframe_core::schemasync::table::TableConfig>,
-    objects: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
+    tables: &std::collections::BTreeMap<String, evenframe_core::schemasync::table::TableConfig>,
+    objects: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
 ) -> Result<()> {
     let schemasync = Schemasync::new()
         .with_tables(tables)

@@ -14,7 +14,7 @@ use crate::{
     schemasync::{config::AccessType, database::surql::access::setup_access_definitions},
 };
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use surrealdb::engine::local::{Db, Mem};
 use surrealdb::{Surreal, engine::remote::http::Client};
 use tracing;
@@ -427,15 +427,15 @@ impl<'a> SchemaImporter<'a> {
 
     /// Parse SurrealDB export statements into structured schema
     fn parse_schema_statements(&self, statements: Vec<String>) -> Result<SchemaDefinition> {
-        let mut tables = HashMap::new();
-        let edges = HashMap::new();
+        let mut tables = BTreeMap::new();
+        let edges = BTreeMap::new();
         let mut accesses = Vec::new();
         let mut current_table: Option<String> = None;
         let mut current_table_statement: Option<String> = None;
-        let mut current_fields: HashMap<String, FieldDefinition> = HashMap::new();
-        let mut current_wildcard_fields: HashMap<String, FieldDefinition> = HashMap::new();
-        let mut table_events: HashMap<String, Vec<String>> = HashMap::new();
-        let mut table_indexes: HashMap<String, Vec<IndexDefinition>> = HashMap::new();
+        let mut current_fields: BTreeMap<String, FieldDefinition> = BTreeMap::new();
+        let mut current_wildcard_fields: BTreeMap<String, FieldDefinition> = BTreeMap::new();
+        let mut table_events: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut table_indexes: BTreeMap<String, Vec<IndexDefinition>> = BTreeMap::new();
 
         for statement in statements {
             let trimmed = statement.trim();
@@ -748,7 +748,7 @@ impl<'a> SchemaImporter<'a> {
 
     /// Parse object field definitions
     fn parse_object_fields(fields_str: &str) -> ObjectType {
-        let mut fields = HashMap::new();
+        let mut fields = BTreeMap::new();
 
         let mut current_pos = 0;
         let chars: Vec<char> = fields_str.chars().collect();

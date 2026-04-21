@@ -19,7 +19,7 @@ use crate::{
     validator::{StringValidator, Validator},
 };
 use convert_case::{Case, Casing};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use syn::{Fields, FieldsNamed, Item, ItemEnum, ItemStruct, parse_file};
@@ -27,9 +27,9 @@ use tracing::{debug, info, trace, warn};
 
 /// All configurations extracted from the workspace.
 pub type AllConfigs = (
-    HashMap<String, TaggedUnion>,
-    HashMap<String, TableConfig>,
-    HashMap<String, StructConfig>,
+    BTreeMap<String, TaggedUnion>,
+    BTreeMap<String, TableConfig>,
+    BTreeMap<String, StructConfig>,
 );
 
 /// Builds all configurations from the workspace using the provided build config.
@@ -37,9 +37,9 @@ pub type AllConfigs = (
 /// Returns a tuple of (enums, tables, objects).
 pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
     debug!("Starting build_all_configs");
-    let mut enum_configs = HashMap::new();
-    let mut table_configs = HashMap::new();
-    let mut struct_configs = HashMap::new();
+    let mut enum_configs = BTreeMap::new();
+    let mut table_configs = BTreeMap::new();
+    let mut struct_configs = BTreeMap::new();
 
     debug!("Creating workspace scanner");
     let scanner = WorkspaceScanner::with_path(
@@ -117,9 +117,9 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
 /// Returns a tuple of (enums, tables, objects).
 pub fn build_all_configs_default() -> AllConfigs {
     debug!("Starting build_all_configs_default");
-    let mut enum_configs = HashMap::new();
-    let mut table_configs = HashMap::new();
-    let mut struct_configs = HashMap::new();
+    let mut enum_configs = BTreeMap::new();
+    let mut table_configs = BTreeMap::new();
+    let mut struct_configs = BTreeMap::new();
 
     // Try to load config, fall back to defaults
     let config = match BuildConfig::from_toml() {
@@ -144,7 +144,7 @@ pub fn build_all_configs_default() -> AllConfigs {
         }
         Err(e) => {
             warn!("Error scanning workspace: {}", e);
-            return (HashMap::new(), HashMap::new(), HashMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         }
     };
 
@@ -156,7 +156,7 @@ pub fn build_all_configs_default() -> AllConfigs {
         CollisionStrategy::Error,
     ) {
         warn!("Error processing types: {}", e);
-        return (HashMap::new(), HashMap::new(), HashMap::new());
+        return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     }
 
     info!(
@@ -177,11 +177,11 @@ pub fn build_all_configs_default() -> AllConfigs {
 /// the `in` and `out` fields' `RecordLink<T>` types and resolves `T` to table names.
 /// If `T` is a persistable_union enum, all variant table names are collected.
 fn resolve_relation_endpoints(
-    table_configs: &mut HashMap<String, TableConfig>,
-    enum_configs: &HashMap<String, TaggedUnion>,
+    table_configs: &mut BTreeMap<String, TableConfig>,
+    enum_configs: &BTreeMap<String, TaggedUnion>,
 ) {
     // Snapshot table names to avoid borrow conflicts
-    let known_tables: std::collections::HashSet<String> = table_configs.keys().cloned().collect();
+    let known_tables: std::collections::BTreeSet<String> = table_configs.keys().cloned().collect();
 
     for table_config in table_configs.values_mut() {
         let Some(relation) = table_config.relation.as_mut() else {
@@ -229,8 +229,8 @@ fn resolve_relation_endpoints(
 fn resolve_field_to_tables(
     struct_config: &crate::types::StructConfig,
     field_name: &str,
-    enum_configs: &HashMap<String, TaggedUnion>,
-    known_tables: &std::collections::HashSet<String>,
+    enum_configs: &BTreeMap<String, TaggedUnion>,
+    known_tables: &std::collections::BTreeSet<String>,
 ) -> Option<Vec<String>> {
     let field = struct_config
         .fields
@@ -297,13 +297,13 @@ fn collect_items_flat(items: Vec<Item>) -> Vec<Item> {
 /// Processes found Evenframe types into configurations.
 fn process_types(
     types: &[EvenframeType],
-    enum_configs: &mut HashMap<String, TaggedUnion>,
-    table_configs: &mut HashMap<String, TableConfig>,
-    struct_configs: &mut HashMap<String, StructConfig>,
+    enum_configs: &mut BTreeMap<String, TaggedUnion>,
+    table_configs: &mut BTreeMap<String, TableConfig>,
+    struct_configs: &mut BTreeMap<String, StructConfig>,
     collision_strategy: CollisionStrategy,
 ) -> Result<()> {
     debug!("Grouping types by file");
-    let mut types_by_file: HashMap<String, Vec<_>> = HashMap::new();
+    let mut types_by_file: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for evenframe_type in types {
         types_by_file
             .entry(evenframe_type.file_path.clone())
@@ -313,10 +313,10 @@ fn process_types(
     debug!("Grouped into {} files", types_by_file.len());
 
     // Track which file each type name was first defined in (for collision messages)
-    let mut struct_origins: HashMap<String, String> = HashMap::new();
-    let mut enum_origins: HashMap<String, String> = HashMap::new();
+    let mut struct_origins: BTreeMap<String, String> = BTreeMap::new();
+    let mut enum_origins: BTreeMap<String, String> = BTreeMap::new();
     // Track renames so we can update field references after all types are collected
-    let mut renames: HashMap<String, String> = HashMap::new();
+    let mut renames: BTreeMap<String, String> = BTreeMap::new();
 
     debug!("Starting first pass: parsing structs and enums");
     for (file_path, file_types) in &types_by_file {
@@ -409,7 +409,7 @@ fn process_types(
                                     }
                                 };
 
-                                let known_field_names: std::collections::HashSet<String> =
+                                let known_field_names: std::collections::BTreeSet<String> =
                                     struct_config
                                         .fields
                                         .iter()
@@ -539,7 +539,7 @@ fn process_types(
 }
 
 /// Recursively updates type references that were renamed due to collisions.
-fn rename_field_type(field_type: &mut FieldType, renames: &HashMap<String, String>) {
+fn rename_field_type(field_type: &mut FieldType, renames: &BTreeMap<String, String>) {
     match field_type {
         FieldType::Other(name) => {
             if let Some(new_name) = renames.get(name.as_str()) {
@@ -790,10 +790,10 @@ const KNOWN_ATTRS: &[&str] = &[
 /// Collects every attribute that evenframe doesn't natively handle into
 /// a map of `attr_name → [raw_body, …]`. The "body" is the stringified
 /// token stream inside the parens (or empty string for path-only attrs).
-fn collect_raw_attributes(attrs: &[syn::Attribute]) -> HashMap<String, Vec<String>> {
+fn collect_raw_attributes(attrs: &[syn::Attribute]) -> BTreeMap<String, Vec<String>> {
     use quote::ToTokens;
 
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for attr in attrs {
         let Some(ident) = attr.path().get_ident() else {
             continue;
@@ -814,9 +814,9 @@ fn collect_raw_attributes(attrs: &[syn::Attribute]) -> HashMap<String, Vec<Strin
 
 /// Merges tables and objects into a single struct config map.
 pub fn merge_tables_and_objects(
-    tables: &HashMap<String, TableConfig>,
-    objects: &HashMap<String, StructConfig>,
-) -> HashMap<String, StructConfig> {
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
+) -> BTreeMap<String, StructConfig> {
     debug!(
         "Merging {} tables and {} objects",
         tables.len(),
@@ -850,13 +850,13 @@ pub fn merge_tables_and_objects(
 
 /// Filter configs to only types that participate in the typesync pipeline.
 pub fn filter_for_typesync(
-    enums: HashMap<String, TaggedUnion>,
-    tables: HashMap<String, TableConfig>,
-    objects: HashMap<String, StructConfig>,
+    enums: BTreeMap<String, TaggedUnion>,
+    tables: BTreeMap<String, TableConfig>,
+    objects: BTreeMap<String, StructConfig>,
 ) -> (
-    HashMap<String, TaggedUnion>,
-    HashMap<String, TableConfig>,
-    HashMap<String, StructConfig>,
+    BTreeMap<String, TaggedUnion>,
+    BTreeMap<String, TableConfig>,
+    BTreeMap<String, StructConfig>,
 ) {
     (
         enums
@@ -876,13 +876,13 @@ pub fn filter_for_typesync(
 
 /// Filter configs to only types that participate in the schemasync pipeline.
 pub fn filter_for_schemasync(
-    enums: HashMap<String, TaggedUnion>,
-    tables: HashMap<String, TableConfig>,
-    objects: HashMap<String, StructConfig>,
+    enums: BTreeMap<String, TaggedUnion>,
+    tables: BTreeMap<String, TableConfig>,
+    objects: BTreeMap<String, StructConfig>,
 ) -> (
-    HashMap<String, TaggedUnion>,
-    HashMap<String, TableConfig>,
-    HashMap<String, StructConfig>,
+    BTreeMap<String, TaggedUnion>,
+    BTreeMap<String, TableConfig>,
+    BTreeMap<String, StructConfig>,
 ) {
     (
         enums
@@ -913,9 +913,9 @@ pub fn filter_for_schemasync(
 #[cfg(feature = "wasm-plugins")]
 fn apply_rule_plugins(
     config: &BuildConfig,
-    table_configs: &mut HashMap<String, TableConfig>,
-    struct_configs: &mut HashMap<String, StructConfig>,
-    enum_configs: &mut HashMap<String, TaggedUnion>,
+    table_configs: &mut BTreeMap<String, TableConfig>,
+    struct_configs: &mut BTreeMap<String, StructConfig>,
+    enum_configs: &mut BTreeMap<String, TaggedUnion>,
 ) {
     use crate::typesync::plugin::OutputRulePluginManager;
 
@@ -1168,9 +1168,9 @@ fn build_plugin_input_enum(
 #[cfg(feature = "wasm-plugins")]
 fn apply_synthetic_plugins(
     config: &BuildConfig,
-    table_configs: &mut HashMap<String, TableConfig>,
-    struct_configs: &mut HashMap<String, StructConfig>,
-    enum_configs: &mut HashMap<String, TaggedUnion>,
+    table_configs: &mut BTreeMap<String, TableConfig>,
+    struct_configs: &mut BTreeMap<String, StructConfig>,
+    enum_configs: &mut BTreeMap<String, TaggedUnion>,
 ) -> Result<()> {
     use crate::typesync::synthetic_plugin::SyntheticItemPluginManager;
 
@@ -1229,9 +1229,9 @@ fn apply_synthetic_plugins(
 /// simpler than threading references through the JSON boundary.
 #[cfg(feature = "wasm-plugins")]
 fn build_synthetic_input(
-    table_configs: &HashMap<String, TableConfig>,
-    struct_configs: &HashMap<String, StructConfig>,
-    enum_configs: &HashMap<String, TaggedUnion>,
+    table_configs: &BTreeMap<String, TableConfig>,
+    struct_configs: &BTreeMap<String, StructConfig>,
+    enum_configs: &BTreeMap<String, TaggedUnion>,
 ) -> crate::typesync::synthetic_plugin_types::SyntheticPluginInput {
     use crate::typesync::synthetic_plugin_types::SyntheticPluginInput;
 
@@ -1246,9 +1246,9 @@ fn build_synthetic_input(
 fn merge_synthetic_output(
     plugin_name: &str,
     output: crate::typesync::synthetic_plugin_types::SyntheticPluginOutput,
-    table_configs: &mut HashMap<String, TableConfig>,
-    struct_configs: &mut HashMap<String, StructConfig>,
-    enum_configs: &mut HashMap<String, TaggedUnion>,
+    table_configs: &mut BTreeMap<String, TableConfig>,
+    struct_configs: &mut BTreeMap<String, StructConfig>,
+    enum_configs: &mut BTreeMap<String, TaggedUnion>,
     collision_strategy: CollisionStrategy,
 ) -> Result<()> {
     let prefix = plugin_name.to_case(Case::Pascal);

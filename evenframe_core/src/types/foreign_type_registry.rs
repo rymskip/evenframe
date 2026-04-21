@@ -1,20 +1,20 @@
 use crate::config::ForeignTypeConfig;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// A registry that maps Rust type names to their foreign type configurations.
 /// Built from the `[general.foreign_types]` config section.
 #[derive(Debug, Clone, Default)]
 pub struct ForeignTypeRegistry {
     /// Maps Rust type name (e.g., "DateTime", "chrono::DateTime") → canonical name
-    name_to_canonical: HashMap<String, String>,
+    name_to_canonical: BTreeMap<String, String>,
     /// Maps canonical name → config
-    configs: HashMap<String, ForeignTypeConfig>,
+    configs: BTreeMap<String, ForeignTypeConfig>,
 }
 
 impl ForeignTypeRegistry {
     /// Build a registry from the user's config.
     /// No built-in defaults — if foreign_types is empty, the registry is empty.
-    pub fn from_config(foreign_types: &HashMap<String, ForeignTypeConfig>) -> Self {
+    pub fn from_config(foreign_types: &BTreeMap<String, ForeignTypeConfig>) -> Self {
         let mut registry = Self::default();
 
         for (canonical_name, config) in foreign_types {
@@ -50,7 +50,7 @@ impl ForeignTypeRegistry {
     }
 
     /// Return all configured foreign types.
-    pub fn all(&self) -> &HashMap<String, ForeignTypeConfig> {
+    pub fn all(&self) -> &BTreeMap<String, ForeignTypeConfig> {
         &self.configs
     }
 }
@@ -61,14 +61,14 @@ mod tests {
 
     #[test]
     fn test_empty_registry() {
-        let registry = ForeignTypeRegistry::from_config(&HashMap::new());
+        let registry = ForeignTypeRegistry::from_config(&BTreeMap::new());
         assert!(registry.lookup("DateTime").is_none());
         assert!(!registry.is_foreign("DateTime"));
     }
 
     #[test]
     fn test_lookup_by_canonical_name() {
-        let mut foreign_types = HashMap::new();
+        let mut foreign_types = BTreeMap::new();
         foreign_types.insert(
             "DateTime".to_string(),
             ForeignTypeConfig {
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_lookup_by_alias() {
-        let mut foreign_types = HashMap::new();
+        let mut foreign_types = BTreeMap::new();
         foreign_types.insert(
             "DateTime".to_string(),
             ForeignTypeConfig {
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_is_foreign() {
-        let mut foreign_types = HashMap::new();
+        let mut foreign_types = BTreeMap::new();
         foreign_types.insert(
             "Decimal".to_string(),
             ForeignTypeConfig {

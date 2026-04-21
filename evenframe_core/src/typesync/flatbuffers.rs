@@ -10,12 +10,12 @@ use crate::validator::{
     NumberValidator, StringValidator, Validator,
 };
 use convert_case::{Case, Casing};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Main entry point for generating FlatBuffers schema.
 pub fn generate_flatbuffers_schema_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     namespace: Option<&str>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
@@ -33,7 +33,7 @@ pub fn generate_flatbuffers_schema_string(
     }
 
     // Deduplicate structs by PascalCase name
-    let mut seen_structs = HashSet::new();
+    let mut seen_structs = BTreeSet::new();
     let unique_structs: Vec<&StructConfig> = structs
         .values()
         .filter(|s| {
@@ -48,7 +48,7 @@ pub fn generate_flatbuffers_schema_string(
         .collect();
 
     // Deduplicate enums by PascalCase name
-    let mut seen_enums = HashSet::new();
+    let mut seen_enums = BTreeSet::new();
     let unique_enums: Vec<&TaggedUnion> = enums
         .values()
         .filter(|e| {
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_generate_simple_table() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user".to_string(),
             StructConfig {
@@ -753,13 +753,13 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 
         let output = generate_flatbuffers_schema_string(
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             None,
             &crate::types::ForeignTypeRegistry::default(),
         );
@@ -772,8 +772,8 @@ mod tests {
     #[test]
     fn test_generate_table_with_namespace() {
         let output = generate_flatbuffers_schema_string(
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             Some("com.example.app"),
             &crate::types::ForeignTypeRegistry::default(),
         );
@@ -784,7 +784,7 @@ mod tests {
     fn test_generate_simple_enum() {
         use crate::types::Variant;
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
@@ -796,7 +796,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -805,7 +805,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -814,7 +814,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -825,12 +825,12 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 
         let output = generate_flatbuffers_schema_string(
-            &HashMap::new(),
+            &BTreeMap::new(),
             &enums,
             None,
             &crate::types::ForeignTypeRegistry::default(),
@@ -846,7 +846,7 @@ mod tests {
     fn test_generate_complete_schema() {
         use crate::types::Variant;
 
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user_registration_form".to_string(),
             StructConfig {
@@ -896,11 +896,11 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Role".to_string(),
             TaggedUnion {
@@ -912,7 +912,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -921,7 +921,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: HashMap::new(),
+                        raw_attributes: BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -932,7 +932,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
             },
         );
 

@@ -8,7 +8,7 @@ use crate::types::{StructConfig, TaggedUnion};
 use crate::typesync::config::FileNamingConvention;
 use crate::typesync::file_grouping::{FileOutputPlan, TypeFileGroup};
 use convert_case::{Case, Casing};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A single TypeScript import statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,16 +52,16 @@ pub fn import_specifier_suffix(file_extension: &str) -> &str {
 pub fn resolve_imports(
     group: &TypeFileGroup,
     plan: &FileOutputPlan,
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     naming: FileNamingConvention,
     file_extension: &str,
 ) -> Vec<ImportStatement> {
-    let group_types: HashSet<String> = group.all_types().into_iter().collect();
+    let group_types: BTreeSet<String> = group.all_types().into_iter().collect();
     let suffix = import_specifier_suffix(file_extension);
 
     // Collect all external dependencies from all types in this group.
-    let mut external_deps: HashSet<String> = HashSet::new();
+    let mut external_deps: BTreeSet<String> = BTreeSet::new();
     for type_name in &group_types {
         for dep in deps_of(type_name, structs, enums) {
             if !group_types.contains(&dep) {
@@ -152,7 +152,7 @@ mod tests {
             pipeline: crate::types::Pipeline::default(),
             rust_derives: vec![],
             output_override: None,
-            raw_attributes: std::collections::HashMap::new(),
+            raw_attributes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn test_resolve_imports_cross_file() {
         // User uses Role (shared), Address is exclusive to User.
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
             make_struct(
@@ -202,7 +202,7 @@ mod tests {
             "Role".to_string(),
             make_struct("Role", vec![("name", FieldType::String)]),
         );
-        let enums = HashMap::new();
+        let enums = BTreeMap::new();
 
         let plan = compute_file_grouping(&structs, &enums);
         let user_group_idx = plan.type_to_group["User"];
@@ -258,7 +258,7 @@ mod tests {
                     co_located_types: vec![],
                 },
             ],
-            type_to_group: HashMap::new(),
+            type_to_group: BTreeMap::new(),
         };
 
         let barrel = generate_barrel_file(&plan, FileNamingConvention::Kebab, ".ts");

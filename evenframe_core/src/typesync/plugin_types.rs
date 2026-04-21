@@ -33,7 +33,7 @@
 use crate::schemasync::table::TableConfig;
 use crate::types::{StructConfig, TaggedUnion};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Full context for an output rule plugin call. The variant tells the
 /// plugin exactly what it's looking at — a free-standing object struct,
@@ -118,7 +118,7 @@ pub struct OutputRulePluginOutput {
     pub type_override: TypeOverride,
     /// Per-field (or per-variant) overrides, keyed by field/variant name.
     #[serde(default)]
-    pub field_overrides: HashMap<String, FieldOverride>,
+    pub field_overrides: BTreeMap<String, FieldOverride>,
     /// Error message — if set, this plugin's output is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

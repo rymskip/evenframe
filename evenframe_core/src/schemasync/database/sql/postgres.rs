@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::{info, trace};
 
 use crate::error::{EvenframeError, Result};
@@ -239,7 +239,7 @@ impl DatabaseProvider for PostgresProvider {
             return Ok(None);
         }
 
-        let mut columns = HashMap::new();
+        let mut columns = BTreeMap::new();
         for row in rows {
             let name: String = row.get("column_name");
             columns.insert(
@@ -460,9 +460,9 @@ impl DatabaseProvider for PostgresProvider {
         &self,
         table_name: &str,
         config: &TableConfig,
-        _all_tables: &HashMap<String, TableConfig>,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        _all_tables: &BTreeMap<String, TableConfig>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         let mut columns = Vec::new();
 
@@ -500,8 +500,8 @@ impl DatabaseProvider for PostgresProvider {
         &self,
         table_name: &str,
         field: &StructField,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
         let nullable = matches!(field.field_type, FieldType::Option(_));

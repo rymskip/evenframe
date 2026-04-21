@@ -12,12 +12,12 @@ use crate::validator::{
 };
 use convert_case::{Case, Casing};
 use macroforge_ts::macros::ts_template;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Main entry point for generating Macroforge TypeScript interfaces.
 pub fn generate_macroforge_type_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     _print_types: bool,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
@@ -29,7 +29,7 @@ pub fn generate_macroforge_type_string(
     );
 
     // Deduplicate structs by PascalCase name to avoid generating the same interface twice
-    let mut seen_structs = HashSet::new();
+    let mut seen_structs = BTreeSet::new();
     let mut unique_structs: Vec<&StructConfig> = structs
         .values()
         .filter(|s| {
@@ -45,7 +45,7 @@ pub fn generate_macroforge_type_string(
     unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
     // Deduplicate enums by PascalCase name
-    let mut seen_enums = HashSet::new();
+    let mut seen_enums = BTreeSet::new();
     let mut unique_enums: Vec<&TaggedUnion> = enums
         .values()
         .filter(|e| {
@@ -97,15 +97,15 @@ pub fn generate_macroforge_type_string(
 /// Generates Macroforge TypeScript interfaces for a specific subset of types (used in per-file mode).
 pub fn generate_macroforge_for_types(
     type_names: &[String],
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    let type_set: HashSet<String> = type_names.iter().cloned().collect();
+    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
     // Filter to only the requested types, deduplicating by PascalCase name.
-    let mut seen_structs = HashSet::new();
+    let mut seen_structs = BTreeSet::new();
     let mut filtered_structs: Vec<&StructConfig> = structs
         .values()
         .filter(|s| {
@@ -120,7 +120,7 @@ pub fn generate_macroforge_for_types(
         .collect();
     filtered_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    let mut seen_enums = HashSet::new();
+    let mut seen_enums = BTreeSet::new();
     let mut filtered_enums: Vec<&TaggedUnion> = enums
         .values()
         .filter(|e| {
@@ -629,17 +629,17 @@ fn render_field_type(
 /// (excluding Default, Serialize, Deserialize) and deduplicates them.
 pub fn compute_macro_import_line(
     type_names: &[String],
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
 ) -> Option<String> {
-    let type_set: HashSet<String> = type_names.iter().cloned().collect();
-    let standard_derives: HashSet<&str> = ["Default", "Serialize", "Deserialize"]
+    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
+    let standard_derives: BTreeSet<&str> = ["Default", "Serialize", "Deserialize"]
         .iter()
         .copied()
         .collect();
 
     let mut extra_derives: Vec<String> = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
 
     for s in structs.values() {
         let name = s.struct_name.to_case(Case::Pascal);
@@ -708,18 +708,18 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
 /// - a single `RecordLink` utility import if any field in the types uses it.
 pub fn compute_extra_imports(
     type_names: &[String],
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Vec<String> {
-    let type_set: HashSet<String> = type_names.iter().cloned().collect();
+    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
     let mut needs_record_link = false;
-    let mut foreign_imports: HashMap<String, bool> = HashMap::new();
+    let mut foreign_imports: BTreeMap<String, bool> = BTreeMap::new();
 
     fn collect_foreign_imports_recursive(
         ft: &FieldType,
         registry: &crate::types::ForeignTypeRegistry,
-        fi: &mut HashMap<String, bool>,
+        fi: &mut BTreeMap<String, bool>,
     ) {
         if let FieldType::Other(name) = ft
             && let Some(ftc) = registry.lookup(name)
@@ -749,7 +749,7 @@ pub fn compute_extra_imports(
         }
     }
 
-    let check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut HashMap<String, bool>| {
+    let check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut BTreeMap<String, bool>| {
         if field_type_contains(ft, &|f| matches!(f, FieldType::RecordLink(_))) {
             *rl = true;
         }
@@ -1264,7 +1264,7 @@ mod tests {
 
     #[test]
     fn test_generate_complete_interface() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user_registration_form".to_string(),
             StructConfig {
@@ -1305,14 +1305,14 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_type_string(
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             true,
             ArrayStyle::default(),
             &registry,
@@ -1376,7 +1376,7 @@ mod tests {
 
     #[test]
     fn test_custom_macroforge_derives_and_annotations() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "account".to_string(),
             StructConfig {
@@ -1412,11 +1412,11 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
@@ -1428,7 +1428,7 @@ mod tests {
                         doccom: None,
                         annotations: vec!["@default".to_string()],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -1437,7 +1437,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -1452,7 +1452,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
@@ -1506,7 +1506,7 @@ mod tests {
 
     #[test]
     fn test_empty_macroforge_derives_falls_back_to_deserialize() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "simple".to_string(),
             StructConfig {
@@ -1519,14 +1519,14 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_type_string(
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             true,
             ArrayStyle::default(),
             &registry,
@@ -1540,7 +1540,7 @@ mod tests {
 
     fn make_datetime_registry() -> crate::types::ForeignTypeRegistry {
         use crate::config::ForeignTypeConfig;
-        let mut foreign_types = HashMap::new();
+        let mut foreign_types = BTreeMap::new();
         // DateTime and BigDecimal are type-only re-exports from the
         // `effect` package; the registry is configured for `import type`
         // so generated TS doesn't pull runtime artifacts it doesn't need.
@@ -1615,7 +1615,7 @@ mod tests {
     #[test]
     fn test_compute_extra_imports_datetime() {
         let registry = make_datetime_registry();
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "event".to_string(),
             StructConfig {
@@ -1632,12 +1632,12 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let imports =
-            compute_extra_imports(&["Event".to_string()], &structs, &HashMap::new(), &registry);
+            compute_extra_imports(&["Event".to_string()], &structs, &BTreeMap::new(), &registry);
         assert_eq!(
             imports,
             vec!["import type { DateTime } from 'effect';".to_string()]
@@ -1647,7 +1647,7 @@ mod tests {
     #[test]
     fn test_compute_extra_imports_decimal() {
         let registry = make_datetime_registry();
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "payment".to_string(),
             StructConfig {
@@ -1664,14 +1664,14 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let imports = compute_extra_imports(
             &["Payment".to_string()],
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             &registry,
         );
         assert_eq!(
@@ -1683,7 +1683,7 @@ mod tests {
     #[test]
     fn test_compute_extra_imports_both() {
         let registry = make_datetime_registry();
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "order".to_string(),
             StructConfig {
@@ -1707,12 +1707,12 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let imports =
-            compute_extra_imports(&["Order".to_string()], &structs, &HashMap::new(), &registry);
+            compute_extra_imports(&["Order".to_string()], &structs, &BTreeMap::new(), &registry);
         assert_eq!(
             imports,
             vec![
@@ -1725,7 +1725,7 @@ mod tests {
     #[test]
     fn test_compute_extra_imports_none_needed() {
         let registry = crate::types::ForeignTypeRegistry::default();
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user".to_string(),
             StructConfig {
@@ -1742,18 +1742,18 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let imports =
-            compute_extra_imports(&["User".to_string()], &structs, &HashMap::new(), &registry);
+            compute_extra_imports(&["User".to_string()], &structs, &BTreeMap::new(), &registry);
         assert!(imports.is_empty());
     }
 
     #[test]
     fn test_generate_macroforge_for_types_with_annotations() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "order".to_string(),
             StructConfig {
@@ -1771,7 +1771,7 @@ mod tests {
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
@@ -1779,7 +1779,7 @@ mod tests {
         let output = generate_macroforge_for_types(
             &["Order".to_string()],
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             ArrayStyle::default(),
             &registry,
         );

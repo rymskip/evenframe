@@ -123,7 +123,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // Collect known field names so we can validate #[index(fields(...))]
         // references at parse time.
-        let known_field_names: std::collections::HashSet<String> = fields_named
+        let known_field_names: std::collections::BTreeSet<String> = fields_named
             .named
             .iter()
             .filter_map(|f| {
@@ -305,7 +305,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     unique: #is_unique,
                     mock_plugin: #mock_plugin_tokens,
                     output_override: None,
-                    raw_attributes: std::collections::HashMap::new(),
+                    raw_attributes: std::collections::BTreeMap::new(),
                 }
             });
 
@@ -417,7 +417,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                                 pipeline: #pipeline_tokens,
                                 rust_derives: #rust_derives_tokens,
                                 output_override: None,
-                                raw_attributes: std::collections::HashMap::new(),
+                                raw_attributes: std::collections::BTreeMap::new(),
                             },
                             relation: #relation_tokens,
                             permissions: #permissions_config_tokens,

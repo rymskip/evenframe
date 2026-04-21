@@ -1,20 +1,20 @@
 use evenframe_core::config::ForeignTypeConfig;
 use evenframe_core::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
 struct TypesyncFixture {
-    structs: HashMap<String, StructConfig>,
-    enums: HashMap<String, TaggedUnion>,
+    structs: BTreeMap<String, StructConfig>,
+    enums: BTreeMap<String, TaggedUnion>,
     #[serde(default)]
-    foreign_types: HashMap<String, ForeignTypeConfig>,
+    foreign_types: BTreeMap<String, ForeignTypeConfig>,
 }
 
 fn load_typesync_fixture(
     path: &str,
 ) -> (
-    HashMap<String, StructConfig>,
-    HashMap<String, TaggedUnion>,
+    BTreeMap<String, StructConfig>,
+    BTreeMap<String, TaggedUnion>,
     ForeignTypeRegistry,
 ) {
     let input = std::fs::read_to_string(path).unwrap();
@@ -117,15 +117,15 @@ mod flatbuffers {
 mod surrealql {
     use evenframe_core::schemasync::TableConfig;
     use evenframe_core::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[derive(serde::Deserialize)]
     struct SurrealqlFixture {
         table_name: String,
         table_config: TableConfig,
-        query_details: HashMap<String, TableConfig>,
-        server_only: HashMap<String, StructConfig>,
-        enums: HashMap<String, TaggedUnion>,
+        query_details: BTreeMap<String, TableConfig>,
+        server_only: BTreeMap<String, StructConfig>,
+        enums: BTreeMap<String, TaggedUnion>,
     }
 
     pub fn run(

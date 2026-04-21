@@ -72,9 +72,9 @@ pub async fn run(_cli: &Cli, args: GenerateArgs) -> Result<()> {
 
 async fn run_schemasync(
     _config: &EvenframeConfig,
-    enums: &std::collections::HashMap<String, evenframe_core::types::TaggedUnion>,
-    tables: &std::collections::HashMap<String, evenframe_core::schemasync::table::TableConfig>,
-    objects: &std::collections::HashMap<String, evenframe_core::types::StructConfig>,
+    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
+    tables: &std::collections::BTreeMap<String, evenframe_core::schemasync::table::TableConfig>,
+    objects: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
     _no_mocks: bool,
 ) -> Result<()> {
     info!("Starting Schemasync");

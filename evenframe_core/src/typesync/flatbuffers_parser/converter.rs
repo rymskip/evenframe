@@ -6,15 +6,15 @@ use super::ast::{
 use crate::types::{
     EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Result of parsing and converting a FlatBuffers schema.
 #[derive(Debug, Clone)]
 pub struct FlatBuffersParseResult {
     /// Converted struct configurations (from tables and structs).
-    pub structs: HashMap<String, StructConfig>,
+    pub structs: BTreeMap<String, StructConfig>,
     /// Converted enum configurations.
-    pub enums: HashMap<String, TaggedUnion>,
+    pub enums: BTreeMap<String, TaggedUnion>,
     /// The namespace from the schema, if any.
     pub namespace: Option<String>,
     /// Warnings generated during conversion.
@@ -24,8 +24,8 @@ pub struct FlatBuffersParseResult {
 impl FlatBuffersParseResult {
     pub fn new() -> Self {
         Self {
-            structs: HashMap::new(),
-            enums: HashMap::new(),
+            structs: BTreeMap::new(),
+            enums: BTreeMap::new(),
             namespace: None,
             warnings: Vec::new(),
         }
@@ -139,7 +139,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
             doccom: None,
             annotations: vec![],
             output_override: None,
-            raw_attributes: HashMap::new(),
+            raw_attributes: BTreeMap::new(),
             is_default: false,
         })
         .collect();
@@ -154,7 +154,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     }
 }
 
@@ -173,7 +173,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
                 doccom: None,
                 annotations: vec![],
                 output_override: None,
-                raw_attributes: HashMap::new(),
+                raw_attributes: BTreeMap::new(),
                 is_default: false,
             }
         })
@@ -189,7 +189,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: vec![],
         output_override: None,
-        raw_attributes: HashMap::new(),
+        raw_attributes: BTreeMap::new(),
     }
 }
 

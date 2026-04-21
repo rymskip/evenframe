@@ -27,7 +27,7 @@ use crate::{
 #[cfg(feature = "surrealdb")]
 use rand::RngExt;
 #[cfg(feature = "surrealdb")]
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "surrealdb")]
 use surrealdb::Surreal;
 #[cfg(feature = "surrealdb")]
@@ -41,19 +41,19 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
-    pub(super) tables: &'a HashMap<String, TableConfig>,
-    objects: &'a HashMap<String, StructConfig>,
-    enums: &'a HashMap<String, TaggedUnion>,
+    pub(super) tables: &'a BTreeMap<String, TableConfig>,
+    objects: &'a BTreeMap<String, StructConfig>,
+    enums: &'a BTreeMap<String, TaggedUnion>,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     pub comparator: Option<SurrealdbComparator<'a>>,
     pub(super) registry: &'a crate::types::ForeignTypeRegistry,
 
     // Runtime state
-    pub(super) id_map: HashMap<String, Vec<String>>,
-    pub(super) record_diffs: HashMap<String, i32>,
-    filtered_tables: HashMap<String, TableConfig>,
-    filtered_objects: HashMap<String, StructConfig>,
-    pub coordinated_values: HashMap<CoordinationId, String>,
+    pub(super) id_map: BTreeMap<String, Vec<String>>,
+    pub(super) record_diffs: BTreeMap<String, i32>,
+    filtered_tables: BTreeMap<String, TableConfig>,
+    filtered_objects: BTreeMap<String, StructConfig>,
+    pub coordinated_values: BTreeMap<CoordinationId, String>,
     #[cfg(feature = "wasm-plugins")]
     pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
@@ -62,9 +62,9 @@ pub struct Mockmaker<'a> {
 impl<'a> Mockmaker<'a> {
     pub fn new(
         db: &'a Surreal<Client>,
-        tables: &'a HashMap<String, TableConfig>,
-        objects: &'a HashMap<String, StructConfig>,
-        enums: &'a HashMap<String, TaggedUnion>,
+        tables: &'a BTreeMap<String, TableConfig>,
+        objects: &'a BTreeMap<String, StructConfig>,
+        enums: &'a BTreeMap<String, TaggedUnion>,
         schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
         registry: &'a crate::types::ForeignTypeRegistry,
     ) -> Self {
@@ -76,11 +76,11 @@ impl<'a> Mockmaker<'a> {
             schemasync_config,
             comparator: Some(SurrealdbComparator::new(db, schemasync_config)),
             registry,
-            id_map: HashMap::new(),
-            record_diffs: HashMap::new(),
-            filtered_tables: HashMap::new(),
-            filtered_objects: HashMap::new(),
-            coordinated_values: HashMap::new(),
+            id_map: BTreeMap::new(),
+            record_diffs: BTreeMap::new(),
+            filtered_tables: BTreeMap::new(),
+            filtered_objects: BTreeMap::new(),
+            coordinated_values: BTreeMap::new(),
             #[cfg(feature = "wasm-plugins")]
             plugin_manager: {
                 if schemasync_config.plugins.is_empty() {
@@ -133,8 +133,8 @@ impl<'a> Mockmaker<'a> {
     pub async fn generate_ids(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         evenframe_log!("", "record_diffs.log");
         tracing::trace!("Starting ID generation for all tables");
-        let mut map = HashMap::new();
-        let mut record_diffs = HashMap::new();
+        let mut map = BTreeMap::new();
+        let mut record_diffs = BTreeMap::new();
 
         let full_refresh = self.schemasync_config.mock_gen_config.full_refresh_mode;
 
@@ -448,7 +448,7 @@ impl<'a> Mockmaker<'a> {
     /// Builds coordination groups from the provided table configs
     pub fn build_coordination_groups(&mut self) -> Vec<CoordinationGroup> {
         let mut coordination_groups = Vec::new();
-        let mut coordination_map: HashMap<String, Vec<(String, Coordination)>> = HashMap::new();
+        let mut coordination_map: BTreeMap<String, Vec<(String, Coordination)>> = BTreeMap::new();
 
         // Extract coordination rules from each table's mock_generation_config
         for (table_name, table_config) in self.tables {
@@ -536,12 +536,12 @@ impl<'a> Mockmaker<'a> {
         for (_coordination_key, table_coordinations) in coordination_map {
             let mut group = CoordinationGroup::builder().id(Uuid::new_v4()).build();
 
-            let mut group_tables = HashSet::new();
+            let mut group_tables = BTreeSet::new();
             let mut group_pairs = Vec::new();
 
             // Group coordinations by their type and fields
-            let mut coordination_by_type: HashMap<String, Vec<(String, Coordination)>> =
-                HashMap::new();
+            let mut coordination_by_type: BTreeMap<String, Vec<(String, Coordination)>> =
+                BTreeMap::new();
 
             for (table_name, coordination) in table_coordinations {
                 let type_key = match &coordination {
@@ -564,7 +564,7 @@ impl<'a> Mockmaker<'a> {
             // Create CoordinationPair for each unique coordination
             for typed_coordinations in coordination_by_type.values() {
                 // Group coordinations with identical rules
-                let mut processed = HashSet::new();
+                let mut processed = BTreeSet::new();
 
                 for (_, coordination) in typed_coordinations {
                     let coord_str = format!("{:?}", coordination);

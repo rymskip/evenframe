@@ -1,7 +1,7 @@
 //! WASM plugin manager for output rule plugins.
 
 use crate::error::EvenframeError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tracing::{debug, info, warn};
 use wasmtime::*;
@@ -12,7 +12,7 @@ use super::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
 pub struct OutputRulePluginManager {
     _engine: Engine,
     plugin_names: Vec<String>,
-    plugins: HashMap<String, LoadedPlugin>,
+    plugins: BTreeMap<String, LoadedPlugin>,
 }
 
 impl std::fmt::Debug for OutputRulePluginManager {
@@ -25,11 +25,11 @@ impl std::fmt::Debug for OutputRulePluginManager {
 
 impl OutputRulePluginManager {
     pub fn new(
-        plugin_configs: &HashMap<String, crate::config::OutputRulePluginConfig>,
+        plugin_configs: &BTreeMap<String, crate::config::OutputRulePluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
         let engine = Engine::default();
-        let mut plugins = HashMap::new();
+        let mut plugins = BTreeMap::new();
         let mut plugin_names = Vec::new();
 
         for (name, config) in plugin_configs {

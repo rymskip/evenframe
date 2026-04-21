@@ -8,7 +8,7 @@
 //!   scanner results, not to override existing ones.
 
 use crate::error::EvenframeError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tracing::{debug, info, warn};
 use wasmtime::*;
@@ -19,7 +19,7 @@ use super::synthetic_plugin_types::{SyntheticPluginInput, SyntheticPluginOutput}
 pub struct SyntheticItemPluginManager {
     _engine: Engine,
     plugin_names: Vec<String>,
-    plugins: HashMap<String, LoadedPlugin>,
+    plugins: BTreeMap<String, LoadedPlugin>,
 }
 
 impl std::fmt::Debug for SyntheticItemPluginManager {
@@ -32,11 +32,11 @@ impl std::fmt::Debug for SyntheticItemPluginManager {
 
 impl SyntheticItemPluginManager {
     pub fn new(
-        plugin_configs: &HashMap<String, crate::config::SyntheticItemPluginConfig>,
+        plugin_configs: &BTreeMap<String, crate::config::SyntheticItemPluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
         let engine = Engine::default();
-        let mut plugins = HashMap::new();
+        let mut plugins = BTreeMap::new();
         let mut plugin_names = Vec::new();
 
         for (name, config) in plugin_configs {

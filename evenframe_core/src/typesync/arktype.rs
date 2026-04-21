@@ -3,7 +3,7 @@ use crate::types::StructConfig;
 use crate::types::{EnumRepresentation, FieldType, TaggedUnion, Variant, VariantData};
 use crate::typesync::doc_comment::format_jsdoc;
 use convert_case::{Case, Casing};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing;
 
 /// Converts a single enum variant into its ArkType representation,
@@ -11,8 +11,8 @@ use tracing;
 fn variant_to_arktype(
     variant: &Variant,
     representation: &EnumRepresentation,
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     match representation {
@@ -107,8 +107,8 @@ fn variant_to_arktype(
 
 pub fn field_type_to_arktype(
     field_type: &FieldType,
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::trace!(field_type = ?field_type, "Converting field type to Arktype");
@@ -235,8 +235,8 @@ pub fn field_type_to_arktype(
 }
 
 pub fn generate_arktype_type_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     print_types: bool,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {

@@ -15,7 +15,7 @@ use evenframe_core::schemasync::database::surql::define::generate_define_stateme
 use evenframe_core::schemasync::database::surql::remove::generate_remove_index_statements;
 use evenframe_core::tooling::{BuildConfig, build_all_configs};
 use evenframe_core::types::ForeignTypeRegistry;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use tempfile::TempDir;
 
@@ -89,9 +89,9 @@ fn scanner_threads_struct_level_index_into_define_statements() {
             generate_define_statements(
                 "reaction",
                 table,
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 false,
                 &registry,
             )

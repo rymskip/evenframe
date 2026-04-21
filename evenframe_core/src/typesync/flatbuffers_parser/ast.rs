@@ -1,6 +1,6 @@
 //! FlatBuffers Abstract Syntax Tree definitions.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// A complete FlatBuffers schema file.
 #[derive(Debug, Clone)]
@@ -160,13 +160,13 @@ impl ScalarType {
 /// Metadata (attributes) attached to types or fields.
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
-    pub attributes: HashMap<String, Option<String>>,
+    pub attributes: BTreeMap<String, Option<String>>,
 }
 
 impl Metadata {
     pub fn new() -> Self {
         Self {
-            attributes: HashMap::new(),
+            attributes: BTreeMap::new(),
         }
     }
 

@@ -13,7 +13,7 @@ use crate::validator::{
     NumberValidator, StringValidator, Validator,
 };
 use convert_case::{Case, Casing};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Main entry point for generating Protocol Buffers schema.
 ///
@@ -23,8 +23,8 @@ use std::collections::{HashMap, HashSet};
 /// * `package` - Optional package name (e.g., "com.example.app")
 /// * `import_validate` - Whether to import the validate.proto file for validation rules
 pub fn generate_protobuf_schema_string(
-    structs: &HashMap<String, StructConfig>,
-    enums: &HashMap<String, TaggedUnion>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
     package: Option<&str>,
     import_validate: bool,
     registry: &crate::types::ForeignTypeRegistry,
@@ -51,7 +51,7 @@ pub fn generate_protobuf_schema_string(
     }
 
     // Deduplicate structs by PascalCase name
-    let mut seen_structs = HashSet::new();
+    let mut seen_structs = BTreeSet::new();
     let unique_structs: Vec<&StructConfig> = structs
         .values()
         .filter(|s| {
@@ -66,7 +66,7 @@ pub fn generate_protobuf_schema_string(
         .collect();
 
     // Deduplicate enums by PascalCase name
-    let mut seen_enums = HashSet::new();
+    let mut seen_enums = BTreeSet::new();
     let unique_enums: Vec<&TaggedUnion> = enums
         .values()
         .filter(|e| {
@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_generate_simple_message() {
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user".to_string(),
             StructConfig {
@@ -779,13 +779,13 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let output = generate_protobuf_schema_string(
             &structs,
-            &HashMap::new(),
+            &BTreeMap::new(),
             None,
             true,
             &crate::types::ForeignTypeRegistry::default(),
@@ -802,8 +802,8 @@ mod tests {
     #[test]
     fn test_generate_message_with_package() {
         let output = generate_protobuf_schema_string(
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             Some("com.example.app"),
             false,
             &crate::types::ForeignTypeRegistry::default(),
@@ -814,8 +814,8 @@ mod tests {
     #[test]
     fn test_generate_message_with_import() {
         let output = generate_protobuf_schema_string(
-            &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             None,
             true,
             &crate::types::ForeignTypeRegistry::default(),
@@ -827,7 +827,7 @@ mod tests {
     fn test_generate_simple_enum() {
         use crate::types::Variant;
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
@@ -839,7 +839,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -848,7 +848,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -857,7 +857,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -868,12 +868,12 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
         let output = generate_protobuf_schema_string(
-            &HashMap::new(),
+            &BTreeMap::new(),
             &enums,
             None,
             false,
@@ -891,7 +891,7 @@ mod tests {
     fn test_generate_complete_schema() {
         use crate::types::Variant;
 
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(
             "user_registration_form".to_string(),
             StructConfig {
@@ -938,11 +938,11 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(
             "Role".to_string(),
             TaggedUnion {
@@ -954,7 +954,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                     Variant {
@@ -963,7 +963,7 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         output_override: None,
-                        raw_attributes: std::collections::HashMap::new(),
+                        raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
                     },
                 ],
@@ -974,7 +974,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
-                raw_attributes: std::collections::HashMap::new(),
+                raw_attributes: std::collections::BTreeMap::new(),
             },
         );
 

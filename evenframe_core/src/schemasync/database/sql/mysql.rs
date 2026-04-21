@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::info;
 
 use crate::error::{EvenframeError, Result};
@@ -223,9 +223,9 @@ impl DatabaseProvider for MysqlProvider {
         &self,
         table_name: &str,
         config: &TableConfig,
-        _all_tables: &HashMap<String, TableConfig>,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        _all_tables: &BTreeMap<String, TableConfig>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         let mut cols = vec!["    `id` INT AUTO_INCREMENT PRIMARY KEY".to_string()];
 
@@ -257,8 +257,8 @@ impl DatabaseProvider for MysqlProvider {
         &self,
         table_name: &str,
         field: &StructField,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         let sql_type = self.type_mapper().field_type_to_native(&field.field_type);
         format!(

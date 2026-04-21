@@ -4,7 +4,7 @@
 //! queries to compare database schemas.
 
 use async_trait::async_trait;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::Result;
 use crate::schemasync::TableConfig;
@@ -28,9 +28,9 @@ impl<'a> SqlSchemaComparator<'a> {
     /// Generate expected schema from Rust table configs
     fn generate_expected_schema(
         &self,
-        tables: &HashMap<String, TableConfig>,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        tables: &BTreeMap<String, TableConfig>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> Vec<TableSchema> {
         let mut result = Vec::new();
 
@@ -120,9 +120,9 @@ impl<'a> SqlSchemaComparator<'a> {
         };
 
         // Get column names
-        let current_columns: HashSet<String> =
+        let current_columns: BTreeSet<String> =
             current.columns.iter().map(|c| c.name.clone()).collect();
-        let expected_columns: HashSet<String> =
+        let expected_columns: BTreeSet<String> =
             expected.columns.iter().map(|c| c.name.clone()).collect();
 
         // Find new columns
@@ -188,9 +188,9 @@ fn normalize_type(type_name: &str) -> String {
 impl<'a> SchemaComparator for SqlSchemaComparator<'a> {
     async fn compare_schemas(
         &self,
-        tables: &HashMap<String, TableConfig>,
-        objects: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
     ) -> Result<SchemaChanges> {
         // Get current schema from database
         let current_schema = self.get_current_schema().await?;
@@ -199,15 +199,15 @@ impl<'a> SchemaComparator for SqlSchemaComparator<'a> {
         let expected_tables = self.generate_expected_schema(tables, objects, enums);
 
         // Build lookup maps
-        let current_table_map: HashMap<String, &TableSchema> = current_schema
+        let current_table_map: BTreeMap<String, &TableSchema> = current_schema
             .tables
             .iter()
             .map(|t| (t.name.clone(), t))
             .collect();
 
-        let expected_table_names: HashSet<String> =
+        let expected_table_names: BTreeSet<String> =
             expected_tables.iter().map(|t| t.name.clone()).collect();
-        let current_table_names: HashSet<String> = current_table_map.keys().cloned().collect();
+        let current_table_names: BTreeSet<String> = current_table_map.keys().cloned().collect();
 
         let mut changes = SchemaChanges {
             new_tables: Vec::new(),

@@ -25,18 +25,18 @@
 use crate::schemasync::table::TableConfig;
 use crate::types::{StructConfig, TaggedUnion};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Full snapshot of everything the scanner + rule plugins have accumulated,
 /// handed to each synthetic plugin for system-wide decisions.
 #[derive(Debug, Clone, Serialize)]
 pub struct SyntheticPluginInput {
     /// Non-persisted application structs, keyed by struct name.
-    pub structs: HashMap<String, StructConfig>,
+    pub structs: BTreeMap<String, StructConfig>,
     /// Tagged unions (Rust enums), keyed by enum name.
-    pub enums: HashMap<String, TaggedUnion>,
+    pub enums: BTreeMap<String, TaggedUnion>,
     /// Persisted structs (tables), keyed by snake_case table name.
-    pub tables: HashMap<String, TableConfig>,
+    pub tables: BTreeMap<String, TableConfig>,
 }
 
 /// Plugin response: a set of brand-new items to merge into the build.

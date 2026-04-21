@@ -16,7 +16,7 @@ pub mod surql;
 pub mod sql;
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::error::Result;
 use crate::schemasync::{EdgeConfig, TableConfig};
@@ -108,9 +108,9 @@ pub trait DatabaseProvider: Send + Sync {
         &self,
         table_name: &str,
         config: &TableConfig,
-        all_tables: &HashMap<String, TableConfig>,
-        objects: &HashMap<String, crate::types::StructConfig>,
-        enums: &HashMap<String, crate::types::TaggedUnion>,
+        all_tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, crate::types::StructConfig>,
+        enums: &BTreeMap<String, crate::types::TaggedUnion>,
     ) -> String;
 
     /// Generate a statement to define/create a field
@@ -118,8 +118,8 @@ pub trait DatabaseProvider: Send + Sync {
         &self,
         table_name: &str,
         field: &StructField,
-        objects: &HashMap<String, crate::types::StructConfig>,
-        enums: &HashMap<String, crate::types::TaggedUnion>,
+        objects: &BTreeMap<String, crate::types::StructConfig>,
+        enums: &BTreeMap<String, crate::types::TaggedUnion>,
     ) -> String;
 
     /// Map a FieldType to the database's native type string

@@ -14,7 +14,7 @@ pub mod upsert;
 pub mod value;
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use surrealdb::{
     Surreal,
     engine::remote::http::{Client, Http},
@@ -412,9 +412,9 @@ impl DatabaseProvider for SurrealdbProvider {
         &self,
         table_name: &str,
         config: &TableConfig,
-        all_tables: &HashMap<String, TableConfig>,
-        objects: &HashMap<String, StructConfig>,
-        enums: &HashMap<String, TaggedUnion>,
+        all_tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         // Use existing generate_define_statements function
         let default_registry = crate::types::ForeignTypeRegistry::default();
@@ -433,8 +433,8 @@ impl DatabaseProvider for SurrealdbProvider {
         &self,
         table_name: &str,
         field: &StructField,
-        _objects: &HashMap<String, StructConfig>,
-        _enums: &HashMap<String, TaggedUnion>,
+        _objects: &BTreeMap<String, StructConfig>,
+        _enums: &BTreeMap<String, TaggedUnion>,
     ) -> String {
         // Generate a DEFINE FIELD statement
         let field_type = self.type_mapper().field_type_to_surql(&field.field_type);

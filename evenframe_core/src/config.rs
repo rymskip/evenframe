@@ -1,7 +1,7 @@
 use crate::error::{EvenframeError, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -181,13 +181,13 @@ pub struct GeneralConfig {
     /// Foreign type configurations, keyed by canonical type name.
     /// Defines how external Rust types map to database schemas and TypeScript types.
     #[serde(default)]
-    pub foreign_types: HashMap<String, ForeignTypeConfig>,
+    pub foreign_types: BTreeMap<String, ForeignTypeConfig>,
 
     /// Type-transform WASM plugins, keyed by plugin name.
     /// These plugins receive full struct/enum context and can conditionally modify
     /// type generation output (overrides, skips, imports, etc.).
     #[serde(default)]
-    pub output_rule_plugins: HashMap<String, OutputRulePluginConfig>,
+    pub output_rule_plugins: BTreeMap<String, OutputRulePluginConfig>,
 
     /// Synthetic-item WASM plugins, keyed by plugin name.
     ///
@@ -196,7 +196,7 @@ pub struct GeneralConfig {
     /// than overriding existing ones. They run after the rule plugins so
     /// they see the final override state.
     #[serde(default)]
-    pub synthetic_item_plugins: HashMap<String, SyntheticItemPluginConfig>,
+    pub synthetic_item_plugins: BTreeMap<String, SyntheticItemPluginConfig>,
 }
 
 /// Configuration for a output-rule WASM plugin.

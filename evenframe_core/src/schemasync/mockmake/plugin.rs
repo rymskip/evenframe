@@ -1,7 +1,7 @@
 //! WASM plugin manager for mock data generation.
 
 use crate::error::EvenframeError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tracing::{debug, info};
 use wasmtime::*;
@@ -103,7 +103,7 @@ impl LoadedPlugin {
 /// Manages WASM plugin loading, caching, and invocation.
 pub struct PluginManager {
     _engine: Engine,
-    plugins: HashMap<String, LoadedPlugin>,
+    plugins: BTreeMap<String, LoadedPlugin>,
 }
 
 impl std::fmt::Debug for PluginManager {
@@ -117,11 +117,11 @@ impl std::fmt::Debug for PluginManager {
 impl PluginManager {
     /// Load all configured plugins from disk.
     pub fn new(
-        plugin_configs: &HashMap<String, crate::schemasync::config::PluginConfig>,
+        plugin_configs: &BTreeMap<String, crate::schemasync::config::PluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
         let engine = Engine::default();
-        let mut plugins = HashMap::new();
+        let mut plugins = BTreeMap::new();
 
         for (name, config) in plugin_configs {
             let wasm_path = project_root.join(&config.path);
@@ -245,7 +245,7 @@ impl PluginManager {
         &mut self,
         plugin_name: &str,
         input: &PluginTableInput,
-    ) -> Result<HashMap<String, String>, EvenframeError> {
+    ) -> Result<BTreeMap<String, String>, EvenframeError> {
         let plugin = self
             .plugins
             .get_mut(plugin_name)
