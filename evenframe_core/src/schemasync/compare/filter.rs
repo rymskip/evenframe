@@ -231,7 +231,13 @@ impl Mockmaker<'_> {
         let mut objects_to_process = Vec::new();
 
         for table in filtered_tables.values() {
+            // Skip alias tables (literal override semantics).
+            if table.output_override.is_some() {
+                continue;
+            }
+            let table = table.effective();
             for field in &table.struct_config.fields {
+                let field = field.effective();
                 collect_referenced_objects(&field.field_type, &mut objects_to_process, enums);
             }
         }
@@ -243,8 +249,10 @@ impl Mockmaker<'_> {
             processed_objects.insert(object_name.clone());
 
             if let Some(object_config) = objects.get(&object_name) {
+                let object_config_eff = object_config.effective();
                 filtered_objects.insert(object_name.clone(), object_config.clone());
-                for field in &object_config.fields {
+                for field in &object_config_eff.fields {
+                    let field = field.effective();
                     collect_referenced_objects(&field.field_type, &mut objects_to_process, enums);
                 }
             }

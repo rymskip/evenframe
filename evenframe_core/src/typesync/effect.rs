@@ -729,10 +729,18 @@ pub fn generate_effect_schema_for_types(
 
     // Pre-populate processed with all types NOT in this group.
     // This means cross-file references won't get Schema.suspend().
+    // Skip entries whose `output_override` is set — literal override
+    // semantics treat them as if they were never scanned in.
     let all_types: BTreeSet<String> = structs
         .values()
+        .filter(|s| s.output_override.is_none())
         .map(|s| s.struct_name.to_case(Case::Pascal))
-        .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
+        .chain(
+            enums
+                .values()
+                .filter(|e| e.output_override.is_none())
+                .map(|e| e.enum_name.to_case(Case::Pascal)),
+        )
         .collect();
     let mut processed: BTreeSet<String> = all_types.difference(&type_set).cloned().collect();
 

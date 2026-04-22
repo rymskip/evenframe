@@ -2,24 +2,65 @@
 //!
 //! Maps Evenframe's FieldType to SurrealDB native types.
 
+use crate::schemasync::TableConfig;
 use crate::schemasync::database::types::mapper::TypeMapper;
-use crate::types::{FieldType, ForeignTypeRegistry};
+use crate::types::{FieldType, ForeignTypeRegistry, StructConfig};
+use convert_case::{Case, Casing};
+use std::collections::BTreeMap;
 
 use super::value::to_surreal_string;
 
 /// Type mapper for SurrealDB
 pub struct SurrealdbTypeMapper<'a> {
     registry: &'a ForeignTypeRegistry,
+    structs: Option<&'a BTreeMap<String, StructConfig>>,
+    tables: Option<&'a BTreeMap<String, TableConfig>>,
 }
 
 impl<'a> SurrealdbTypeMapper<'a> {
     pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            structs: None,
+            tables: None,
+        }
+    }
+
+    /// Provide struct/table registries so the mapper can resolve
+    /// `output_override` on `RecordLink` targets — e.g. a synthetic
+    /// projection like `PartialUser` whose override points to the underlying
+    /// `User` table. When unset, `record<X>` references emit `X` verbatim.
+    pub fn with_struct_table_registries(
+        mut self,
+        structs: &'a BTreeMap<String, StructConfig>,
+        tables: &'a BTreeMap<String, TableConfig>,
+    ) -> Self {
+        self.structs = Some(structs);
+        self.tables = Some(tables);
+        self
     }
 
     /// Map a FieldType to SurrealQL type syntax
     pub fn field_type_to_surql(&self, field_type: &FieldType) -> String {
         self.field_type_to_surql_inner(field_type)
+    }
+
+    /// Resolve a `RecordLink` target name through `output_override`. Tries the
+    /// struct registry first (PascalCase keys), then the table registry
+    /// (snake_case keys). Returns `None` when neither registry is supplied or
+    /// the name doesn't match any known type.
+    fn resolve_record_link_target(&self, name: &str) -> Option<String> {
+        if let Some(structs) = self.structs
+            && let Some(sc) = structs.get(name)
+        {
+            return Some(sc.effective().struct_name.to_case(Case::Snake));
+        }
+        if let Some(tables) = self.tables
+            && let Some(tc) = tables.get(&name.to_case(Case::Snake))
+        {
+            return Some(tc.effective().table_name.clone());
+        }
+        None
     }
 
     fn field_type_to_surql_inner(&self, field_type: &FieldType) -> String {
@@ -52,7 +93,10 @@ impl<'a> SurrealdbTypeMapper<'a> {
             FieldType::RecordLink(inner) => {
                 // Try to extract the table name from the inner type
                 if let FieldType::Other(table_name) = inner.as_ref() {
-                    format!("record<{}>", table_name)
+                    let resolved = self
+                        .resolve_record_link_target(table_name)
+                        .unwrap_or_else(|| table_name.clone());
+                    format!("record<{}>", resolved)
                 } else {
                     "record".to_string()
                 }
@@ -130,5 +174,105 @@ impl<'a> TypeMapper for SurrealdbTypeMapper<'a> {
 
     fn uuid_generate_expr(&self) -> Option<&'static str> {
         Some("rand::uuid::v4()") // SurrealDB function for UUID generation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vec_record(name: &str) -> FieldType {
+        FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(FieldType::Other(
+            name.to_string(),
+        )))))
+    }
+
+    #[test]
+    fn record_link_emits_literal_when_no_registries_supplied() {
+        let registry = ForeignTypeRegistry::default();
+        let mapper = SurrealdbTypeMapper::new(&registry);
+        assert_eq!(
+            mapper.field_type_to_surql(&vec_record("PartialUser")),
+            "array<record<PartialUser>>"
+        );
+    }
+
+    #[test]
+    fn record_link_resolves_struct_override_to_underlying_table() {
+        // PartialUser → User; User is a real table.
+        let partial_user = StructConfig {
+            struct_name: "PartialUser".to_string(),
+            output_override: Some(Box::new(StructConfig {
+                struct_name: "User".to_string(),
+                ..StructConfig::default()
+            })),
+            ..StructConfig::default()
+        };
+        let mut structs = BTreeMap::new();
+        structs.insert("PartialUser".to_string(), partial_user);
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
+
+        let registry = ForeignTypeRegistry::default();
+        let mapper =
+            SurrealdbTypeMapper::new(&registry).with_struct_table_registries(&structs, &tables);
+
+        assert_eq!(
+            mapper.field_type_to_surql(&vec_record("PartialUser")),
+            "array<record<user>>"
+        );
+    }
+
+    #[test]
+    fn record_link_resolves_table_override_to_alias_table_name() {
+        let aliased_table = TableConfig {
+            table_name: "aliased_table".to_string(),
+            struct_config: StructConfig {
+                struct_name: "AliasedTable".to_string(),
+                ..StructConfig::default()
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: vec![],
+            indexes: vec![],
+            output_override: Some(Box::new(TableConfig {
+                table_name: "real_table".to_string(),
+                struct_config: StructConfig {
+                    struct_name: "RealTable".to_string(),
+                    ..StructConfig::default()
+                },
+                relation: None,
+                permissions: None,
+                mock_generation_config: None,
+                events: vec![],
+                indexes: vec![],
+                output_override: None,
+            })),
+        };
+        let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let mut tables = BTreeMap::new();
+        tables.insert("aliased_table".to_string(), aliased_table);
+
+        let registry = ForeignTypeRegistry::default();
+        let mapper =
+            SurrealdbTypeMapper::new(&registry).with_struct_table_registries(&structs, &tables);
+
+        assert_eq!(
+            mapper.field_type_to_surql(&vec_record("AliasedTable")),
+            "array<record<real_table>>"
+        );
+    }
+
+    #[test]
+    fn record_link_falls_through_to_literal_when_name_unknown() {
+        let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
+        let registry = ForeignTypeRegistry::default();
+        let mapper =
+            SurrealdbTypeMapper::new(&registry).with_struct_table_registries(&structs, &tables);
+        assert_eq!(
+            mapper.field_type_to_surql(&vec_record("UnknownThing")),
+            "array<record<UnknownThing>>"
+        );
     }
 }

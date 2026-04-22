@@ -142,7 +142,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn override_preserves_struct_body() {
+    fn override_skips_struct_at_top_level_iteration() {
+        // Literal-override semantics: a struct with `output_override` set is
+        // an alias marker — "as if the original was never scanned in".
+        // typesync skips it entirely; the override target is expected to
+        // appear under its own registry key. Plugin writers who want
+        // partial behavior (preserve body, swap annotations) must encode
+        // that in the override they emit.
         let override_config = StructConfig {
             struct_name: "Site".to_string(),
             fields: vec![],
@@ -172,11 +178,9 @@ mod tests {
             ],
         );
 
-        output.assert_contains("@derive(Default, Serialize, Deserialize, Gigaform, Overview)");
-        output.assert_contains("@overview");
-        output.assert_contains("export interface Site {");
-        output.assert_contains("id: string");
-        output.assert_contains("name: string");
+        output.assert_not_contains("export interface Site");
+        output.assert_not_contains("@overview");
+        output.assert_not_contains("id: string");
     }
 
     #[test]

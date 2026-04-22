@@ -13,6 +13,19 @@ pub struct TableConfig {
     pub events: Vec<EventConfig>,
     #[serde(default)]
     pub indexes: Vec<IndexConfig>,
+    #[serde(default)]
+    pub output_override: Option<Box<TableConfig>>,
+}
+
+impl TableConfig {
+    /// Resolve `output_override` recursively. Every consumer that reads a
+    /// `TableConfig` should call this first — `output_override` is a literal
+    /// replacement, applied uniformly across all consumers.
+    pub fn effective(&self) -> &Self {
+        self.output_override
+            .as_deref()
+            .map_or(self, Self::effective)
+    }
 }
 
 /// A struct-level composite (or single-column) index declared via

@@ -253,8 +253,13 @@ pub fn generate_arktype_type_string(
 
     scope_output.push_str("export const bindings = scope({\n\n");
 
-    // First, process all enums
+    // First, process all enums (skip alias entries with output_override —
+    // literal override semantics treat them as if they were never scanned in)
     for schema_enum in enums.values() {
+        if schema_enum.output_override.is_some() {
+            continue;
+        }
+        let schema_enum = schema_enum.effective();
         // Write doc comment if present
         if let Some(ref doc) = schema_enum.doccom {
             scope_output.push_str(&format_jsdoc(doc, ""));
@@ -300,9 +305,13 @@ pub fn generate_arktype_type_string(
         ));
     }
 
-    // Then, process all structs
+    // Then, process all structs (skip alias entries with output_override)
     tracing::debug!("Processing structs for Arktype");
     for struct_config in structs.values() {
+        if struct_config.output_override.is_some() {
+            continue;
+        }
+        let struct_config = struct_config.effective();
         tracing::trace!(struct_name = %struct_config.struct_name, "Processing struct");
         let type_name = struct_config.struct_name.to_case(Case::Pascal);
 

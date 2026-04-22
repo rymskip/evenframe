@@ -223,6 +223,15 @@ impl StructField {
             ..Default::default()
         }
     }
+
+    /// Resolve `output_override` recursively. Every consumer that reads a
+    /// `StructField` should call this first — `output_override` is a literal
+    /// replacement, applied uniformly across all consumers.
+    pub fn effective(&self) -> &Self {
+        self.output_override
+            .as_deref()
+            .map_or(self, Self::effective)
+    }
     #[cfg(feature = "surrealdb")]
     pub fn generate_define_statement(
         &self,
@@ -309,9 +318,21 @@ impl StructField {
                                 }
                                 FieldType::RecordLink(inner) => {
                                     if let FieldType::Other(type_name) = inner.as_ref() {
-                                        let type_str =
-                                            format!("record<{}>", type_name.to_case(Case::Snake));
-                                        value_stack.push((type_str, false, None));
+                                        // Resolve `output_override` so a synthetic
+                                        // projection (e.g. PartialUser → User) emits
+                                        // the underlying table name. Falls back to
+                                        // the literal name when no registered struct
+                                        // or table matches.
+                                        let resolved = if let Some(sc) = app_structs.get(type_name) {
+                                            sc.effective().struct_name.to_case(Case::Snake)
+                                        } else if let Some(tc) =
+                                            persistable_structs.get(&type_name.to_case(Case::Snake))
+                                        {
+                                            tc.effective().table_name.clone()
+                                        } else {
+                                            type_name.to_case(Case::Snake)
+                                        };
+                                        value_stack.push((format!("record<{}>", resolved), false, None));
                                     } else {
                                         work_stack.push(WorkItem::Process(inner));
                                     }
@@ -349,12 +370,14 @@ impl StructField {
                                         };
                                         value_stack.push((type_str, false, None));
                                     } else if let Some(enum_def) = enums.get(name) {
+                                        let enum_def = enum_def.effective();
                                         let total_variants = enum_def.variants.len();
                                         work_stack.push(WorkItem::AssembleEnum {
                                             count: total_variants,
                                         });
 
                                         for variant in enum_def.variants.iter().rev() {
+                                            let variant = variant.effective();
                                             if let Some(data) = &variant.data {
                                                 match data {
                                                     VariantData::InlineStruct(s) => {
@@ -365,30 +388,31 @@ impl StructField {
                                                             value_stack: format!("{:#?}", value_stack),
                                                             item: format!("{:#?}", item),
                                                             visited_types: format!("{:#?}", visited_types),
-                                                        })?;
+                                                        })?
+                                                        .effective();
                                                         match &enum_def.representation {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: { fields } }
                                                             work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
-                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
                                                         }
                                                         EnumRepresentation::InternallyTagged { tag } => {
                                                             // { tag: "VariantName", field1: type1, ... }
                                                             let mut names = vec![tag.clone()];
-                                                            names.extend(struct_config.fields.iter().map(|f| f.field_name.clone()));
+                                                            names.extend(struct_config.fields.iter().map(|f| f.effective().field_name.clone()));
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
                                                             work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
                                                         }
                                                         EnumRepresentation::AdjacentlyTagged { tag, content } => {
                                                             // { tag: "VariantName", content: { fields } }
-                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct {
                                                                 count: 2,
                                                                 names: vec![tag.clone(), content.clone()],
@@ -396,17 +420,17 @@ impl StructField {
                                                             // content value (inner struct)
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
                                                             // tag value
                                                             work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
                                                         }
                                                         EnumRepresentation::Untagged => {
                                                             // { fields } (no wrapping)
-                                                            let names = struct_config.fields.iter().map(|f| f.field_name.clone()).collect();
+                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.field_type));
+                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
                                                         }
                                                     }
@@ -478,33 +502,55 @@ impl StructField {
                                             }
                                         }
                                     } else if let Some(app_struct) = app_structs.get(name) {
-                                        if visited_types.contains(name) {
-                                            value_stack.push(("object".to_string(), false, None));
-                                            continue;
+                                        let app_struct = app_struct.effective();
+                                        // If the effective struct is itself a registered
+                                        // table (e.g. a synthetic projection that
+                                        // overrides to the underlying table), emit a
+                                        // record<> reference instead of inlining the
+                                        // struct's fields.
+                                        let effective_snake =
+                                            app_struct.struct_name.to_case(Case::Snake);
+                                        if persistable_structs.contains_key(&effective_snake) {
+                                            let resolved = persistable_structs
+                                                .get(&effective_snake)
+                                                .map(|tc| tc.effective().table_name.clone())
+                                                .unwrap_or(effective_snake);
+                                            value_stack.push((
+                                                format!("record<{}>", resolved),
+                                                false,
+                                                None,
+                                            ));
+                                        } else {
+                                            if visited_types.contains(name) {
+                                                value_stack.push(("object".to_string(), false, None));
+                                                continue;
+                                            }
+                                            work_stack.push(WorkItem::LeaveStructScope {
+                                                name: name.clone(),
+                                            });
+                                            let names = app_struct
+                                                .fields
+                                                .iter()
+                                                .map(|f| f.effective().field_name.clone())
+                                                .collect();
+                                            work_stack.push(WorkItem::AssembleStruct {
+                                                count: app_struct.fields.len(),
+                                                names,
+                                            });
+                                            for field in app_struct.fields.iter().rev() {
+                                                work_stack
+                                                    .push(WorkItem::Process(&field.effective().field_type));
+                                            }
+                                            work_stack.push(WorkItem::EnterStructScope {
+                                                name: name.clone(),
+                                            });
                                         }
-                                        work_stack.push(WorkItem::LeaveStructScope {
-                                            name: name.clone(),
-                                        });
-                                        let names = app_struct
-                                            .fields
-                                            .iter()
-                                            .map(|f| f.field_name.clone())
-                                            .collect();
-                                        work_stack.push(WorkItem::AssembleStruct {
-                                            count: app_struct.fields.len(),
-                                            names,
-                                        });
-                                        for field in app_struct.fields.iter().rev() {
-                                            work_stack.push(WorkItem::Process(&field.field_type));
-                                        }
-                                        work_stack.push(WorkItem::EnterStructScope {
-                                            name: name.clone(),
-                                        });
-                                    } else if persistable_structs
-                                        .contains_key(&name.to_case(Case::Snake))
+                                    } else if let Some(tc) =
+                                        persistable_structs.get(&name.to_case(Case::Snake))
                                     {
+                                        let resolved = tc.effective().table_name.clone();
                                         value_stack.push((
-                                            format!("record<{}>", name.to_case(Case::Snake)),
+                                            format!("record<{}>", resolved),
                                             false,
                                             None,
                                         ));
@@ -820,6 +866,35 @@ pub struct StructConfig {
     /// without evenframe needing to understand them.
     #[serde(default)]
     pub raw_attributes: BTreeMap<String, Vec<String>>,
+}
+
+impl StructConfig {
+    /// Resolve `output_override` recursively. Every consumer that reads a
+    /// `StructConfig` should call this first — `output_override` is a literal
+    /// replacement, applied uniformly across all consumers.
+    pub fn effective(&self) -> &Self {
+        self.output_override
+            .as_deref()
+            .map_or(self, Self::effective)
+    }
+}
+
+impl TaggedUnion {
+    /// Resolve `output_override` recursively. See [`StructConfig::effective`].
+    pub fn effective(&self) -> &Self {
+        self.output_override
+            .as_deref()
+            .map_or(self, Self::effective)
+    }
+}
+
+impl Variant {
+    /// Resolve `output_override` recursively. See [`StructConfig::effective`].
+    pub fn effective(&self) -> &Self {
+        self.output_override
+            .as_deref()
+            .map_or(self, Self::effective)
+    }
 }
 
 #[cfg(test)]
@@ -1324,5 +1399,270 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         };
         assert_eq!(field.validators.len(), 1);
+    }
+
+    // ==================== effective() Override Resolution Tests ====================
+
+    #[test]
+    fn test_struct_config_effective_returns_self_when_no_override() {
+        let sc = StructConfig {
+            struct_name: "User".to_string(),
+            ..StructConfig::default()
+        };
+        assert_eq!(sc.effective().struct_name, "User");
+    }
+
+    #[test]
+    fn test_struct_config_effective_returns_override() {
+        let user = StructConfig {
+            struct_name: "User".to_string(),
+            ..StructConfig::default()
+        };
+        let partial_user = StructConfig {
+            struct_name: "PartialUser".to_string(),
+            output_override: Some(Box::new(user)),
+            ..StructConfig::default()
+        };
+        assert_eq!(partial_user.effective().struct_name, "User");
+    }
+
+    #[test]
+    fn test_struct_config_effective_resolves_chained_overrides() {
+        let target = StructConfig {
+            struct_name: "Target".to_string(),
+            ..StructConfig::default()
+        };
+        let middle = StructConfig {
+            struct_name: "Middle".to_string(),
+            output_override: Some(Box::new(target)),
+            ..StructConfig::default()
+        };
+        let head = StructConfig {
+            struct_name: "Head".to_string(),
+            output_override: Some(Box::new(middle)),
+            ..StructConfig::default()
+        };
+        assert_eq!(head.effective().struct_name, "Target");
+    }
+
+    #[test]
+    fn test_struct_field_effective_returns_override() {
+        let real = StructField {
+            field_name: "real".to_string(),
+            field_type: FieldType::I32,
+            ..StructField::default()
+        };
+        let aliased = StructField {
+            field_name: "aliased".to_string(),
+            field_type: FieldType::String,
+            output_override: Some(Box::new(real)),
+            ..StructField::default()
+        };
+        assert_eq!(aliased.effective().field_name, "real");
+        assert_eq!(aliased.effective().field_type, FieldType::I32);
+    }
+
+    #[test]
+    fn test_tagged_union_effective_returns_override() {
+        let real_enum = TaggedUnion {
+            enum_name: "Real".to_string(),
+            variants: vec![],
+            representation: EnumRepresentation::default(),
+            doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
+            pipeline: Pipeline::default(),
+            rust_derives: vec![],
+            output_override: None,
+            raw_attributes: BTreeMap::new(),
+        };
+        let aliased = TaggedUnion {
+            enum_name: "Aliased".to_string(),
+            variants: vec![],
+            representation: EnumRepresentation::default(),
+            doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
+            pipeline: Pipeline::default(),
+            rust_derives: vec![],
+            output_override: Some(Box::new(real_enum)),
+            raw_attributes: BTreeMap::new(),
+        };
+        assert_eq!(aliased.effective().enum_name, "Real");
+    }
+
+    #[test]
+    fn test_variant_effective_returns_override() {
+        let real_variant = Variant {
+            name: "Real".to_string(),
+            data: None,
+            doccom: None,
+            annotations: vec![],
+            output_override: None,
+            raw_attributes: BTreeMap::new(),
+            is_default: false,
+        };
+        let aliased = Variant {
+            name: "Aliased".to_string(),
+            data: None,
+            doccom: None,
+            annotations: vec![],
+            output_override: Some(Box::new(real_variant)),
+            raw_attributes: BTreeMap::new(),
+            is_default: false,
+        };
+        assert_eq!(aliased.effective().name, "Real");
+    }
+
+    #[cfg(feature = "surrealdb")]
+    #[test]
+    fn test_generate_define_statement_resolves_record_link_override() {
+        // Models the dealdraft `partial_route` synthetic plugin scenario:
+        // a real table field is `Vec<RecordLink<PartialUser>>`, where
+        // `PartialUser` is a TS-only projection whose `output_override`
+        // points back to the underlying `User` table.
+        let field = StructField {
+            field_name: "dm_participants".to_string(),
+            field_type: FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(
+                FieldType::Other("PartialUser".to_string()),
+            )))),
+            edge_config: None,
+            define_config: Some(crate::schemasync::DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: None,
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: None,
+                comment: None,
+            }),
+            format: None,
+            validators: vec![],
+            always_regenerate: false,
+            doccom: None,
+            annotations: vec![],
+            unique: false,
+            mock_plugin: None,
+            output_override: None,
+            raw_attributes: BTreeMap::new(),
+        };
+
+        // Synthetic struct: PartialUser overrides to User
+        let partial_user = StructConfig {
+            struct_name: "PartialUser".to_string(),
+            fields: vec![],
+            validators: vec![],
+            doccom: None,
+            macroforge_derives: vec![],
+            annotations: vec![],
+            pipeline: Pipeline::Typesync,
+            rust_derives: vec![],
+            output_override: Some(Box::new(StructConfig {
+                struct_name: "User".to_string(),
+                ..StructConfig::default()
+            })),
+            raw_attributes: BTreeMap::new(),
+        };
+
+        // Real `user` table — the override target
+        let user_table = TableConfig {
+            table_name: "user".to_string(),
+            struct_config: StructConfig {
+                struct_name: "User".to_string(),
+                ..StructConfig::default()
+            },
+            relation: None,
+            permissions: None,
+            mock_generation_config: None,
+            events: vec![],
+            indexes: vec![],
+            output_override: None,
+        };
+
+        let mut app_structs = BTreeMap::new();
+        app_structs.insert("PartialUser".to_string(), partial_user);
+
+        let mut tables = BTreeMap::new();
+        tables.insert("user".to_string(), user_table);
+
+        let stmt = field
+            .generate_define_statement(
+                BTreeMap::new(),
+                app_structs,
+                tables,
+                &"errand_channel".to_string(),
+                &ForeignTypeRegistry::default(),
+            )
+            .expect("generate_define_statement should succeed");
+
+        assert!(
+            stmt.contains("TYPE array<record<user>>"),
+            "expected `array<record<user>>` after override resolution; got: {stmt}"
+        );
+        assert!(
+            !stmt.contains("partial_user"),
+            "PartialUser must not leak into the DEFINE FIELD output: {stmt}"
+        );
+    }
+
+    #[cfg(feature = "surrealdb")]
+    #[test]
+    fn test_generate_define_statement_no_override_emits_literal_name() {
+        // Regression guard: without `output_override`, the historical
+        // behavior (emitting the type name verbatim, snake-cased) must
+        // hold. If this test ever flips, schemasync would silently rename
+        // every record link.
+        let field = StructField {
+            field_name: "dm_participants".to_string(),
+            field_type: FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(
+                FieldType::Other("PartialUser".to_string()),
+            )))),
+            edge_config: None,
+            define_config: Some(crate::schemasync::DefineConfig {
+                select_permissions: Some("FULL".to_string()),
+                update_permissions: Some("FULL".to_string()),
+                create_permissions: Some("FULL".to_string()),
+                data_type: None,
+                should_skip: false,
+                default: None,
+                default_always: None,
+                value: None,
+                assert: None,
+                readonly: None,
+                flexible: Some(false),
+                computed: None,
+                comment: None,
+            }),
+            format: None,
+            validators: vec![],
+            always_regenerate: false,
+            doccom: None,
+            annotations: vec![],
+            unique: false,
+            mock_plugin: None,
+            output_override: None,
+            raw_attributes: BTreeMap::new(),
+        };
+
+        let stmt = field
+            .generate_define_statement(
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                &"errand_channel".to_string(),
+                &ForeignTypeRegistry::default(),
+            )
+            .expect("generate_define_statement should succeed");
+
+        assert!(
+            stmt.contains("TYPE array<record<partial_user>>"),
+            "without override, expected literal `record<partial_user>`; got: {stmt}"
+        );
     }
 }

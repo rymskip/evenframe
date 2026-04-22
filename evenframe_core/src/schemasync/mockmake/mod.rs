@@ -141,6 +141,13 @@ impl<'a> Mockmaker<'a> {
         // Process tables sequentially to avoid reference issues
         // Since these are just SELECT queries, they should be fast enough
         for (table_name, table_config) in self.tables {
+            // Skip alias entries with `output_override` — literal override
+            // semantics treat them as "never scanned in"; the override
+            // target already lives under its own key.
+            if table_config.output_override.is_some() {
+                continue;
+            }
+            let table_config = table_config.effective();
             tracing::trace!(table = %table_name, "Generating IDs for table");
 
             // Determine desired count from config or default
@@ -265,7 +272,11 @@ impl<'a> Mockmaker<'a> {
         if self.schemasync_config.mock_gen_config.full_refresh_mode {
             tracing::info!("Full refresh mode - deleting all records from all tables");
             let mut delete_all = String::new();
-            for table_name in self.tables.keys() {
+            for (table_name, table_config) in self.tables {
+                // Skip alias tables (literal override semantics).
+                if table_config.output_override.is_some() {
+                    continue;
+                }
                 delete_all.push_str(&format!("DELETE {};\n", table_name));
             }
 
@@ -380,6 +391,11 @@ impl<'a> Mockmaker<'a> {
 
         for table_name in &sorted_table_names {
             if let Some(table) = &self.filtered_tables.get(table_name) {
+                // Skip alias tables (literal override semantics).
+                if table.output_override.is_some() {
+                    continue;
+                }
+                let table = table.effective();
                 tracing::trace!(
                     table = %table_name,
                     is_relation = table.relation.is_some(),

@@ -445,6 +445,7 @@ fn process_types(
                                         .map(|statement| EventConfig { statement })
                                         .collect(),
                                     indexes,
+                                    output_override: None,
                                 };
                                 trace!(
                                     "Inserting table config {:?}: {:#?}",

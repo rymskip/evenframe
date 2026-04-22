@@ -28,10 +28,13 @@ pub fn generate_macroforge_type_string(
         "Generating Macroforge TypeScript interfaces"
     );
 
-    // Deduplicate structs by PascalCase name to avoid generating the same interface twice
+    // Skip entries whose `output_override` is set — they're alias markers,
+    // "as if the original was never scanned in", and the override target
+    // already appears under its own key. Then deduplicate by PascalCase name.
     let mut seen_structs = BTreeSet::new();
     let mut unique_structs: Vec<&StructConfig> = structs
         .values()
+        .filter(|s| s.output_override.is_none())
         .filter(|s| {
             let name = s.struct_name.to_case(Case::Pascal);
             if seen_structs.contains(&name) {
@@ -44,10 +47,10 @@ pub fn generate_macroforge_type_string(
         .collect();
     unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    // Deduplicate enums by PascalCase name
     let mut seen_enums = BTreeSet::new();
     let mut unique_enums: Vec<&TaggedUnion> = enums
         .values()
+        .filter(|e| e.output_override.is_none())
         .filter(|e| {
             let name = e.enum_name.to_case(Case::Pascal);
             if seen_enums.contains(&name) {
@@ -104,10 +107,13 @@ pub fn generate_macroforge_for_types(
 ) -> String {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
-    // Filter to only the requested types, deduplicating by PascalCase name.
+    // Skip entries whose `output_override` is set — they're alias markers,
+    // "as if the original was never scanned in". Then filter to requested
+    // types and deduplicate by PascalCase name.
     let mut seen_structs = BTreeSet::new();
     let mut filtered_structs: Vec<&StructConfig> = structs
         .values()
+        .filter(|s| s.output_override.is_none())
         .filter(|s| {
             let name = s.struct_name.to_case(Case::Pascal);
             if !type_set.contains(&name) || seen_structs.contains(&name) {
@@ -123,6 +129,7 @@ pub fn generate_macroforge_for_types(
     let mut seen_enums = BTreeSet::new();
     let mut filtered_enums: Vec<&TaggedUnion> = enums
         .values()
+        .filter(|e| e.output_override.is_none())
         .filter(|e| {
             let name = e.enum_name.to_case(Case::Pascal);
             if !type_set.contains(&name) || seen_enums.contains(&name) {
@@ -151,20 +158,19 @@ fn generate_struct_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
+    // Resolve `output_override` literally — every read below comes from the
+    // effective config. Plugin writers carry over anything they want
+    // preserved when constructing the override.
+    let struct_config = struct_config.effective();
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let mut lines: Vec<String> = Vec::new();
 
-    // Use the override config if provided, otherwise use the original
-    let effective = struct_config
-        .output_override
-        .as_deref()
-        .unwrap_or(struct_config);
-    let derive_line = format_derive_line(&effective.macroforge_derives);
-    if let Some(ref desc) = effective.doccom {
+    let derive_line = format_derive_line(&struct_config.macroforge_derives);
+    if let Some(ref desc) = struct_config.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &effective.annotations {
+    for ann in &struct_config.annotations {
         lines.push(format!("/** {} */", ann));
     }
     lines.push(format!("export interface {} {{", name));
@@ -182,16 +188,17 @@ fn generate_enum_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
+    // Resolve `output_override` literally — see [`generate_struct_block`].
+    let enum_def = enum_def.effective();
     let name = enum_def.enum_name.to_case(Case::Pascal);
     let mut lines: Vec<String> = Vec::new();
 
-    let effective = enum_def.output_override.as_deref().unwrap_or(enum_def);
-    let derive_line = format_derive_line(&effective.macroforge_derives);
-    if let Some(ref desc) = effective.doccom {
+    let derive_line = format_derive_line(&enum_def.macroforge_derives);
+    if let Some(ref desc) = enum_def.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &effective.annotations {
+    for ann in &enum_def.annotations {
         lines.push(format!("/** {} */", ann));
     }
 
@@ -241,6 +248,8 @@ fn render_variant(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
+    // Resolve `output_override` literally — see [`generate_struct_block`].
+    let variant = variant.effective();
     let mut all_annotations: Vec<String> = Vec::new();
     all_annotations.extend(variant.annotations.iter().cloned());
 
@@ -386,11 +395,12 @@ fn render_field_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
+    // Resolve `output_override` literally — see [`generate_struct_block`].
+    let field = field.effective();
     let mut lines: Vec<String> = Vec::new();
 
-    // 1. Field annotations — use override if present, otherwise original
-    let effective = field.output_override.as_deref().unwrap_or(field);
-    for ann in &effective.annotations {
+    // 1. Field annotations
+    for ann in &field.annotations {
         lines.push(format!("  /** {} */", ann));
     }
 
@@ -642,11 +652,13 @@ pub fn compute_macro_import_line(
     let mut seen = BTreeSet::new();
 
     for s in structs.values() {
+        if s.output_override.is_some() {
+            continue;
+        }
+        let s = s.effective();
         let name = s.struct_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            let effective = s.output_override.as_deref().unwrap_or(s);
-            let derives = effective.macroforge_derives.clone();
-            for d in &derives {
+            for d in &s.macroforge_derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -655,11 +667,13 @@ pub fn compute_macro_import_line(
     }
 
     for e in enums.values() {
+        if e.output_override.is_some() {
+            continue;
+        }
+        let e = e.effective();
         let name = e.enum_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            let effective = e.output_override.as_deref().unwrap_or(e);
-            let derives = effective.macroforge_derives.clone();
-            for d in &derives {
+            for d in &e.macroforge_derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -757,8 +771,13 @@ pub fn compute_extra_imports(
     };
 
     for s in structs.values() {
+        if s.output_override.is_some() {
+            continue;
+        }
+        let s = s.effective();
         if type_set.contains(&s.struct_name.to_case(Case::Pascal)) {
             for field in &s.fields {
+                let field = field.effective();
                 check_field_type(
                     &field.field_type,
                     &mut needs_record_link,
@@ -769,8 +788,13 @@ pub fn compute_extra_imports(
     }
 
     for e in enums.values() {
+        if e.output_override.is_some() {
+            continue;
+        }
+        let e = e.effective();
         if type_set.contains(&e.enum_name.to_case(Case::Pascal)) {
             for variant in &e.variants {
+                let variant = variant.effective();
                 if let Some(data) = &variant.data {
                     match data {
                         VariantData::InlineStruct(_) => {

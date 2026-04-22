@@ -195,6 +195,7 @@ mod tests {
                     .to_string(),
             }],
             indexes: vec![],
+            output_override: None,
         };
 
         let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();
@@ -443,6 +444,7 @@ mod tests {
             mock_generation_config: None,
             events: vec![],
             indexes: vec![],
+            output_override: None,
         };
 
         let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();
@@ -535,6 +537,7 @@ mod tests {
                     unique: false,
                 },
             ],
+            output_override: None,
         };
 
         let query_details: BTreeMap<String, TableConfig> = BTreeMap::new();

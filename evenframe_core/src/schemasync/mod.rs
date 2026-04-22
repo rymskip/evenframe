@@ -304,6 +304,13 @@ impl<'a> Schemasync<'a> {
         );
         let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
         for (table_name, table) in tables {
+            // Skip alias entries with `output_override` — literal override
+            // semantics mean the override target appears under its own key
+            // and the alias should not produce duplicate DEFINE TABLE output.
+            if table.output_override.is_some() {
+                continue;
+            }
+            let table = table.effective();
             define_statements.insert(
                 table_name,
                 generate_define_statements(

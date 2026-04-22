@@ -424,6 +424,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                             mock_generation_config: #mock_data_tokens,
                             events: #event_tokens,
                             indexes: #indexes_tokens,
+                            output_override: None,
                         }
                     }
                 }

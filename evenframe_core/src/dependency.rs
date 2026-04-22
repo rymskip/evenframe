@@ -1192,6 +1192,7 @@ mod tests {
             mock_generation_config: None,
             events: Vec::new(),
             indexes: Vec::new(),
+            output_override: None,
         }
     }
 
