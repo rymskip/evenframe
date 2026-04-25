@@ -231,10 +231,6 @@ impl Mockmaker<'_> {
         let mut objects_to_process = Vec::new();
 
         for table in filtered_tables.values() {
-            // Skip alias tables (literal override semantics).
-            if table.output_override.is_some() {
-                continue;
-            }
             let table = table.effective();
             for field in &table.struct_config.fields {
                 let field = field.effective();

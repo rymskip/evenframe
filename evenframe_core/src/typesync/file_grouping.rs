@@ -53,18 +53,15 @@ pub fn compute_file_grouping(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
 ) -> FileOutputPlan {
-    // 1. Collect all type names in PascalCase. Skip entries whose
-    //    `output_override` is set — literal override semantics mean they
-    //    represent "the original was never scanned in".
+    // 1. Collect all type names in PascalCase. Use `effective()` so the
+    //    override, when set, replaces the scanned type.
     let all_types: BTreeSet<String> = structs
         .values()
-        .filter(|s| s.output_override.is_none())
-        .map(|s| s.struct_name.to_case(Case::Pascal))
+        .map(|s| s.effective().struct_name.to_case(Case::Pascal))
         .chain(
             enums
                 .values()
-                .filter(|e| e.output_override.is_none())
-                .map(|e| e.enum_name.to_case(Case::Pascal)),
+                .map(|e| e.effective().enum_name.to_case(Case::Pascal)),
         )
         .collect();
 

@@ -28,15 +28,13 @@ pub fn generate_macroforge_type_string(
         "Generating Macroforge TypeScript interfaces"
     );
 
-    // Skip entries whose `output_override` is set — they're alias markers,
-    // "as if the original was never scanned in", and the override target
-    // already appears under its own key. Then deduplicate by PascalCase name.
+    // Use `effective()` so the override, when set, replaces the scanned
+    // type. Deduplicate by PascalCase name.
     let mut seen_structs = BTreeSet::new();
     let mut unique_structs: Vec<&StructConfig> = structs
         .values()
-        .filter(|s| s.output_override.is_none())
         .filter(|s| {
-            let name = s.struct_name.to_case(Case::Pascal);
+            let name = s.effective().struct_name.to_case(Case::Pascal);
             if seen_structs.contains(&name) {
                 false
             } else {
@@ -45,14 +43,13 @@ pub fn generate_macroforge_type_string(
             }
         })
         .collect();
-    unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
+    unique_structs.sort_by_key(|s| s.effective().struct_name.to_case(Case::Pascal));
 
     let mut seen_enums = BTreeSet::new();
     let mut unique_enums: Vec<&TaggedUnion> = enums
         .values()
-        .filter(|e| e.output_override.is_none())
         .filter(|e| {
-            let name = e.enum_name.to_case(Case::Pascal);
+            let name = e.effective().enum_name.to_case(Case::Pascal);
             if seen_enums.contains(&name) {
                 false
             } else {
@@ -61,16 +58,16 @@ pub fn generate_macroforge_type_string(
             }
         })
         .collect();
-    unique_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
+    unique_enums.sort_by_key(|e| e.effective().enum_name.to_case(Case::Pascal));
 
     // Collect all type names for effect import computation
     let all_type_names: Vec<String> = unique_structs
         .iter()
-        .map(|s| s.struct_name.to_case(Case::Pascal))
+        .map(|s| s.effective().struct_name.to_case(Case::Pascal))
         .chain(
             unique_enums
                 .iter()
-                .map(|e| e.enum_name.to_case(Case::Pascal)),
+                .map(|e| e.effective().enum_name.to_case(Case::Pascal)),
         )
         .collect();
 
@@ -107,15 +104,13 @@ pub fn generate_macroforge_for_types(
 ) -> String {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
-    // Skip entries whose `output_override` is set — they're alias markers,
-    // "as if the original was never scanned in". Then filter to requested
-    // types and deduplicate by PascalCase name.
+    // Use `effective()` so the override, when set, replaces the scanned
+    // type. Filter to requested types and deduplicate by PascalCase name.
     let mut seen_structs = BTreeSet::new();
     let mut filtered_structs: Vec<&StructConfig> = structs
         .values()
-        .filter(|s| s.output_override.is_none())
         .filter(|s| {
-            let name = s.struct_name.to_case(Case::Pascal);
+            let name = s.effective().struct_name.to_case(Case::Pascal);
             if !type_set.contains(&name) || seen_structs.contains(&name) {
                 false
             } else {
@@ -124,14 +119,13 @@ pub fn generate_macroforge_for_types(
             }
         })
         .collect();
-    filtered_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
+    filtered_structs.sort_by_key(|s| s.effective().struct_name.to_case(Case::Pascal));
 
     let mut seen_enums = BTreeSet::new();
     let mut filtered_enums: Vec<&TaggedUnion> = enums
         .values()
-        .filter(|e| e.output_override.is_none())
         .filter(|e| {
-            let name = e.enum_name.to_case(Case::Pascal);
+            let name = e.effective().enum_name.to_case(Case::Pascal);
             if !type_set.contains(&name) || seen_enums.contains(&name) {
                 false
             } else {
@@ -140,7 +134,7 @@ pub fn generate_macroforge_for_types(
             }
         })
         .collect();
-    filtered_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
+    filtered_enums.sort_by_key(|e| e.effective().enum_name.to_case(Case::Pascal));
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &filtered_structs {
@@ -652,9 +646,6 @@ pub fn compute_macro_import_line(
     let mut seen = BTreeSet::new();
 
     for s in structs.values() {
-        if s.output_override.is_some() {
-            continue;
-        }
         let s = s.effective();
         let name = s.struct_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
@@ -667,9 +658,6 @@ pub fn compute_macro_import_line(
     }
 
     for e in enums.values() {
-        if e.output_override.is_some() {
-            continue;
-        }
         let e = e.effective();
         let name = e.enum_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
@@ -771,9 +759,6 @@ pub fn compute_extra_imports(
     };
 
     for s in structs.values() {
-        if s.output_override.is_some() {
-            continue;
-        }
         let s = s.effective();
         if type_set.contains(&s.struct_name.to_case(Case::Pascal)) {
             for field in &s.fields {
@@ -788,9 +773,6 @@ pub fn compute_extra_imports(
     }
 
     for e in enums.values() {
-        if e.output_override.is_some() {
-            continue;
-        }
         let e = e.effective();
         if type_set.contains(&e.enum_name.to_case(Case::Pascal)) {
             for variant in &e.variants {
