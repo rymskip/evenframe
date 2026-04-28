@@ -10,3 +10,5 @@ CLAUDE.md
 .DS_Store
 # pixi environments
 .pixi
+
+**/scheduled_tasks.lock
