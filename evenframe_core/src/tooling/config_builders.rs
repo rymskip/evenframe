@@ -947,6 +947,26 @@ fn apply_rule_plugins(
                     }
                     let tc = table_configs.get_mut(table_name).unwrap();
                     let to = &plugin_output.type_override;
+                    // Apply field-level overrides FIRST so the type-level
+                    // override snapshot below captures fields-with-overrides.
+                    // Consumers read the struct via `effective()`, which returns
+                    // the snapshot — if we cloned before writing the field
+                    // overrides, the snapshot's fields would have no overrides
+                    // and the plugin's field annotations would be dropped.
+                    for (field_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(field) = tc
+                            .struct_config
+                            .fields
+                            .iter_mut()
+                            .find(|f| &f.field_name == field_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            let mut ov = field.clone();
+                            ov.output_override = None;
+                            ov.annotations = field_override.annotations.clone();
+                            field.output_override = Some(Box::new(ov));
+                        }
+                    }
                     if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
                         let mut ov = tc.struct_config.clone();
                         ov.output_override = None;
@@ -975,20 +995,6 @@ fn apply_rule_plugins(
                         tc.events.push(crate::schemasync::EventConfig {
                             statement: event.statement.clone(),
                         });
-                    }
-                    for (field_name, field_override) in &plugin_output.field_overrides {
-                        if let Some(field) = tc
-                            .struct_config
-                            .fields
-                            .iter_mut()
-                            .find(|f| &f.field_name == field_name)
-                            && !field_override.annotations.is_empty()
-                        {
-                            let mut ov = field.clone();
-                            ov.output_override = None;
-                            ov.annotations = field_override.annotations.clone();
-                            field.output_override = Some(Box::new(ov));
-                        }
                     }
                 }
                 Err(e) => {
@@ -1019,6 +1025,19 @@ fn apply_rule_plugins(
                     }
                     let sc = struct_configs.get_mut(struct_name).unwrap();
                     let to = &plugin_output.type_override;
+                    // Apply field-level overrides before the type-level snapshot;
+                    // see the comment in the table-config branch above.
+                    for (field_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(field) =
+                            sc.fields.iter_mut().find(|f| &f.field_name == field_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            let mut ov = field.clone();
+                            ov.output_override = None;
+                            ov.annotations = field_override.annotations.clone();
+                            field.output_override = Some(Box::new(ov));
+                        }
+                    }
                     if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
                         let mut ov = sc.clone();
                         ov.output_override = None;
@@ -1033,17 +1052,6 @@ fn apply_rule_plugins(
                             }
                         }
                         sc.output_override = Some(Box::new(ov));
-                    }
-                    for (field_name, field_override) in &plugin_output.field_overrides {
-                        if let Some(field) =
-                            sc.fields.iter_mut().find(|f| &f.field_name == field_name)
-                            && !field_override.annotations.is_empty()
-                        {
-                            let mut ov = field.clone();
-                            ov.output_override = None;
-                            ov.annotations = field_override.annotations.clone();
-                            field.output_override = Some(Box::new(ov));
-                        }
                     }
                 }
                 Err(e) => {
@@ -1071,6 +1079,22 @@ fn apply_rule_plugins(
                     }
                     let ec = enum_configs.get_mut(enum_name).unwrap();
                     let to = &plugin_output.type_override;
+                    // Apply per-variant annotations FIRST so the type-level
+                    // snapshot below captures the variant overrides — otherwise
+                    // downstream `.effective()` reads return the cloned enum
+                    // without them. Mirrors the struct branch above.
+                    for (variant_name, field_override) in &plugin_output.field_overrides {
+                        if let Some(variant) =
+                            ec.variants.iter_mut().find(|v| &v.name == variant_name)
+                            && !field_override.annotations.is_empty()
+                        {
+                            for ann in &field_override.annotations {
+                                if !variant.annotations.contains(ann) {
+                                    variant.annotations.push(ann.clone());
+                                }
+                            }
+                        }
+                    }
                     if !to.macroforge_derives.is_empty() || !to.annotations.is_empty() {
                         let mut ov = ec.clone();
                         ov.output_override = None;
@@ -1085,21 +1109,6 @@ fn apply_rule_plugins(
                             }
                         }
                         ec.output_override = Some(Box::new(ov));
-                    }
-                    // Apply per-variant annotations: the plugin's field_overrides
-                    // map variant names to annotations, mirroring how struct
-                    // fields are handled above.
-                    for (variant_name, field_override) in &plugin_output.field_overrides {
-                        if let Some(variant) =
-                            ec.variants.iter_mut().find(|v| &v.name == variant_name)
-                            && !field_override.annotations.is_empty()
-                        {
-                            for ann in &field_override.annotations {
-                                if !variant.annotations.contains(ann) {
-                                    variant.annotations.push(ann.clone());
-                                }
-                            }
-                        }
                     }
                 }
                 Err(e) => {
