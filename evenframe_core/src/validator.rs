@@ -1250,6 +1250,423 @@ impl Validator {
     }
 }
 
+/// Runtime value passed to [`Validator::matches`].
+///
+/// Mockmake builds one of these for each candidate it generates and asks every
+/// validator on the field whether it would accept the value. Validators that
+/// don't apply to the supplied variant (e.g. a `NumberValidator` against a
+/// `Str`) return `true` — they have no opinion on a value outside their
+/// domain.
+#[derive(Debug, Clone, Copy)]
+pub enum MockValue<'a> {
+    Str(&'a str),
+    Num(f64),
+    /// Lexical bigint without any suffix — e.g. `"1000000000000"`.
+    BigInt(&'a str),
+    /// Lexical bigdecimal — e.g. `"3.14159"`.
+    BigDecimal(&'a str),
+    /// Duration as nanoseconds. Mock values for SurrealDB durations are
+    /// ultimately emitted as `duration::from_nanos(...)`, so this is the
+    /// canonical unit for cross-validator comparison.
+    DurationNanos(i128),
+    Date(chrono::NaiveDate),
+    ArrayLen(usize),
+}
+
+/// Parse a SurrealDB-style duration string (`"1h"`, `"30m500ms"`, `"1d"`,
+/// `"1y"`) into nanoseconds. Returns `None` if the string is malformed.
+///
+/// Supports the same suffix set the SurrealQL parser does: `ns`, `us`, `µs`,
+/// `ms`, `s`, `m`, `h`, `d`, `w`, `y`. Mixed suffixes are summed
+/// (`"1h30m"` → 5_400 * 1e9).
+pub fn parse_duration_to_nanos(s: &str) -> Option<i128> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // ns
+    const NS: i128 = 1;
+    const US: i128 = 1_000;
+    const MS: i128 = 1_000_000;
+    const SEC: i128 = 1_000_000_000;
+    const MIN: i128 = 60 * SEC;
+    const HOUR: i128 = 60 * MIN;
+    const DAY: i128 = 24 * HOUR;
+    const WEEK: i128 = 7 * DAY;
+    // SurrealDB year = 365 days
+    const YEAR: i128 = 365 * DAY;
+
+    let mut total: i128 = 0;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // parse digits
+        let num_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == num_start {
+            return None;
+        }
+        let num: i128 = s[num_start..i].parse().ok()?;
+        // parse suffix
+        let suf_start = i;
+        // µs has a multibyte char; handle that first
+        if s[suf_start..].starts_with("µs") {
+            total = total.checked_add(num.checked_mul(US)?)?;
+            i = suf_start + "µs".len();
+            continue;
+        }
+        while i < bytes.len() && !bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let suffix = &s[suf_start..i];
+        let mult = match suffix {
+            "ns" => NS,
+            "us" => US,
+            "ms" => MS,
+            "s" => SEC,
+            "m" => MIN,
+            "h" => HOUR,
+            "d" => DAY,
+            "w" => WEEK,
+            "y" => YEAR,
+            _ => return None,
+        };
+        total = total.checked_add(num.checked_mul(mult)?)?;
+    }
+    Some(total)
+}
+
+impl Validator {
+    /// Runtime predicate: does `value` satisfy this validator?
+    ///
+    /// Used by mockmake to verify candidate values before emitting them.
+    /// Validators that don't apply to the variant of `MockValue` return
+    /// `true` (they have no opinion). Variants that have no clean Rust check
+    /// (transformation morphs whose effect is supposed to be applied
+    /// post-hoc, or placeholders like `StringValidator::Regex` with no
+    /// pattern argument) also return `true`.
+    pub fn matches(&self, value: &MockValue) -> bool {
+        match self {
+            Validator::StringValidator(sv) => match value {
+                MockValue::Str(s) => match_string_validator(sv, s),
+                _ => true,
+            },
+            Validator::NumberValidator(nv) => match value {
+                MockValue::Num(n) => match_number_validator(nv, *n),
+                _ => true,
+            },
+            Validator::ArrayValidator(av) => match value {
+                MockValue::ArrayLen(len) => match av {
+                    ArrayValidator::MinItems(min) => *len >= *min,
+                    ArrayValidator::MaxItems(max) => *len <= *max,
+                    ArrayValidator::ItemsCount(exact) => *len == *exact,
+                },
+                _ => true,
+            },
+            Validator::DateValidator(dv) => match value {
+                MockValue::Date(d) => match_date_validator(dv, d),
+                _ => true,
+            },
+            Validator::BigIntValidator(bv) => match value {
+                MockValue::BigInt(s) => match_bigint_validator(bv, s),
+                _ => true,
+            },
+            Validator::BigDecimalValidator(bv) => match value {
+                MockValue::BigDecimal(s) => match_bigdecimal_validator(bv, s),
+                _ => true,
+            },
+            Validator::DurationValidator(dv) => match value {
+                MockValue::DurationNanos(n) => match_duration_validator(dv, *n),
+                _ => true,
+            },
+        }
+    }
+}
+
+fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
+    match sv {
+        StringValidator::String => true,
+        StringValidator::Alpha => s.chars().all(|c| c.is_alphabetic()),
+        StringValidator::Alphanumeric => s.chars().all(|c| c.is_alphanumeric()),
+        StringValidator::Hex => s.chars().all(|c| c.is_ascii_hexdigit()),
+        StringValidator::Digits => !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
+        StringValidator::Numeric => s.parse::<f64>().is_ok(),
+        StringValidator::NumericParse => s.parse::<f64>().is_ok(),
+        StringValidator::Integer => s.parse::<i64>().is_ok(),
+        StringValidator::IntegerParse => s.parse::<i64>().is_ok(),
+        StringValidator::Email => {
+            let parts: Vec<&str> = s.split('@').collect();
+            parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() && parts[1].contains('.')
+        }
+        StringValidator::Ip => s.parse::<std::net::IpAddr>().is_ok(),
+        StringValidator::IpV4 => s.parse::<std::net::Ipv4Addr>().is_ok(),
+        StringValidator::IpV6 => s.parse::<std::net::Ipv6Addr>().is_ok(),
+        StringValidator::Uuid => uuid::Uuid::parse_str(s).is_ok(),
+        StringValidator::UuidV1 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Mac)
+            .unwrap_or(false),
+        StringValidator::UuidV2 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Dce)
+            .unwrap_or(false),
+        StringValidator::UuidV3 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Md5)
+            .unwrap_or(false),
+        StringValidator::UuidV4 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Random)
+            .unwrap_or(false),
+        StringValidator::UuidV5 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Sha1)
+            .unwrap_or(false),
+        StringValidator::UuidV6 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::SortMac)
+            .unwrap_or(false),
+        StringValidator::UuidV7 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::SortRand)
+            .unwrap_or(false),
+        StringValidator::UuidV8 => uuid::Uuid::parse_str(s)
+            .ok()
+            .and_then(|u| u.get_version())
+            .map(|v| v == uuid::Version::Custom)
+            .unwrap_or(false),
+        StringValidator::Json => serde_json::from_str::<serde_json::Value>(s).is_ok(),
+        StringValidator::JsonParse => serde_json::from_str::<serde_json::Value>(s).is_ok(),
+        StringValidator::Date => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok(),
+        StringValidator::DateEpoch => s.parse::<i64>().is_ok(),
+        StringValidator::DateEpochParse => s.parse::<i64>().is_ok(),
+        StringValidator::DateIso => chrono::DateTime::parse_from_rfc3339(s).is_ok(),
+        StringValidator::DateIsoParse => chrono::DateTime::parse_from_rfc3339(s).is_ok(),
+        StringValidator::DateParse => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok(),
+        StringValidator::CreditCard => {
+            let digits: Vec<u32> = s
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .filter_map(|c| c.to_digit(10))
+                .collect();
+            if !(13..=19).contains(&digits.len()) {
+                return false;
+            }
+            let parity = digits.len() % 2;
+            let sum: u32 = digits
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let mut d = *d;
+                    if i % 2 != parity {
+                        d *= 2;
+                        if d > 9 {
+                            d -= 9;
+                        }
+                    }
+                    d
+                })
+                .sum();
+            sum % 10 == 0
+        }
+        StringValidator::Literal(literal) => s == literal,
+        StringValidator::Length(len_str) => match len_str.parse::<usize>() {
+            Ok(expected) => s.chars().count() == expected,
+            Err(_) => true,
+        },
+        StringValidator::MinLength(min) => s.chars().count() >= *min,
+        StringValidator::MaxLength(max) => s.chars().count() <= *max,
+        StringValidator::NonEmpty => !s.is_empty(),
+        StringValidator::StartsWith(prefix) => s.starts_with(prefix.as_str()),
+        StringValidator::EndsWith(suffix) => s.ends_with(suffix.as_str()),
+        StringValidator::Includes(needle) => s.contains(needle.as_str()),
+        StringValidator::Trimmed | StringValidator::TrimPreformatted => s == s.trim(),
+        StringValidator::Trim => s == s.trim(),
+        StringValidator::Lowercased | StringValidator::LowerPreformatted | StringValidator::Lower => {
+            !s.chars().any(|c| c.is_alphabetic() && !c.is_lowercase())
+        }
+        StringValidator::Uppercased | StringValidator::UpperPreformatted | StringValidator::Upper => {
+            !s.chars().any(|c| c.is_alphabetic() && !c.is_uppercase())
+        }
+        StringValidator::Capitalized | StringValidator::CapitalizePreformatted | StringValidator::Capitalize => {
+            let mut chars = s.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            if !first.is_uppercase() {
+                return false;
+            }
+            !chars.any(|c| c.is_alphabetic() && !c.is_lowercase())
+        }
+        StringValidator::Uncapitalized => {
+            let Some(first) = s.chars().next() else {
+                return false;
+            };
+            first.is_lowercase()
+        }
+        StringValidator::RegexLiteral(format_variant) => {
+            let re = format_variant.clone().into_regex();
+            re.is_match(s)
+        }
+        // Variants without an attached pattern or with no clean Rust check —
+        // mockmake's constraint generator will produce values that satisfy
+        // them, and the retry loop has no way to second-guess them, so
+        // accept by default.
+        StringValidator::Regex
+        | StringValidator::StringEmbedded(_)
+        | StringValidator::Base64
+        | StringValidator::Base64Url
+        | StringValidator::Url
+        | StringValidator::UrlParse
+        | StringValidator::Semver
+        | StringValidator::Normalize
+        | StringValidator::NormalizeNFC
+        | StringValidator::NormalizeNFCPreformatted
+        | StringValidator::NormalizeNFD
+        | StringValidator::NormalizeNFDPreformatted
+        | StringValidator::NormalizeNFKC
+        | StringValidator::NormalizeNFKCPreformatted
+        | StringValidator::NormalizeNFKD
+        | StringValidator::NormalizeNFKDPreformatted => true,
+    }
+}
+
+fn match_number_validator(nv: &NumberValidator, n: f64) -> bool {
+    match nv {
+        NumberValidator::GreaterThan(min) => n > min.0,
+        NumberValidator::GreaterThanOrEqualTo(min) => n >= min.0,
+        NumberValidator::LessThan(max) => n < max.0,
+        NumberValidator::LessThanOrEqualTo(max) => n <= max.0,
+        NumberValidator::Between(min, max) => n >= min.0 && n <= max.0,
+        NumberValidator::Int => n.is_finite() && n.fract() == 0.0,
+        NumberValidator::NonNaN => !n.is_nan(),
+        NumberValidator::Finite => n.is_finite(),
+        NumberValidator::Positive => n > 0.0,
+        NumberValidator::NonNegative => n >= 0.0,
+        NumberValidator::Negative => n < 0.0,
+        NumberValidator::NonPositive => n <= 0.0,
+        NumberValidator::MultipleOf(divisor) => {
+            let d = divisor.0;
+            d != 0.0 && (n % d).abs() < f64::EPSILON
+        }
+        NumberValidator::Uint8 => n >= 0.0 && n <= 255.0 && n.fract() == 0.0,
+    }
+}
+
+fn match_date_validator(dv: &DateValidator, d: &chrono::NaiveDate) -> bool {
+    match dv {
+        DateValidator::ValidDate => true,
+        DateValidator::GreaterThanDate(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(other) => *d > other,
+            Err(_) => true,
+        },
+        DateValidator::GreaterThanOrEqualToDate(s) => {
+            match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                Ok(other) => *d >= other,
+                Err(_) => true,
+            }
+        }
+        DateValidator::LessThanDate(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(other) => *d < other,
+            Err(_) => true,
+        },
+        DateValidator::LessThanOrEqualToDate(s) => {
+            match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                Ok(other) => *d <= other,
+                Err(_) => true,
+            }
+        }
+        DateValidator::BetweenDate(start, end) => {
+            let lo = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d");
+            let hi = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d");
+            match (lo, hi) {
+                (Ok(lo), Ok(hi)) => *d >= lo && *d <= hi,
+                _ => true,
+            }
+        }
+    }
+}
+
+fn match_bigint_validator(bv: &BigIntValidator, s: &str) -> bool {
+    let n: i128 = match s.parse() {
+        Ok(n) => n,
+        Err(_) => return true,
+    };
+    let parse = |x: &str| x.parse::<i128>().ok();
+    match bv {
+        BigIntValidator::GreaterThanBigInt(b) => parse(b).map(|b| n > b).unwrap_or(true),
+        BigIntValidator::GreaterThanOrEqualToBigInt(b) => parse(b).map(|b| n >= b).unwrap_or(true),
+        BigIntValidator::LessThanBigInt(b) => parse(b).map(|b| n < b).unwrap_or(true),
+        BigIntValidator::LessThanOrEqualToBigInt(b) => parse(b).map(|b| n <= b).unwrap_or(true),
+        BigIntValidator::BetweenBigInt(lo, hi) => match (parse(lo), parse(hi)) {
+            (Some(lo), Some(hi)) => n >= lo && n <= hi,
+            _ => true,
+        },
+        BigIntValidator::PositiveBigInt => n > 0,
+        BigIntValidator::NonNegativeBigInt => n >= 0,
+        BigIntValidator::NegativeBigInt => n < 0,
+        BigIntValidator::NonPositiveBigInt => n <= 0,
+    }
+}
+
+fn match_bigdecimal_validator(bv: &BigDecimalValidator, s: &str) -> bool {
+    let n: f64 = match s.parse() {
+        Ok(n) => n,
+        Err(_) => return true,
+    };
+    let parse = |x: &str| x.parse::<f64>().ok();
+    match bv {
+        BigDecimalValidator::GreaterThanBigDecimal(b) => parse(b).map(|b| n > b).unwrap_or(true),
+        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(b) => {
+            parse(b).map(|b| n >= b).unwrap_or(true)
+        }
+        BigDecimalValidator::LessThanBigDecimal(b) => parse(b).map(|b| n < b).unwrap_or(true),
+        BigDecimalValidator::LessThanOrEqualToBigDecimal(b) => {
+            parse(b).map(|b| n <= b).unwrap_or(true)
+        }
+        BigDecimalValidator::BetweenBigDecimal(lo, hi) => match (parse(lo), parse(hi)) {
+            (Some(lo), Some(hi)) => n >= lo && n <= hi,
+            _ => true,
+        },
+        BigDecimalValidator::PositiveBigDecimal => n > 0.0,
+        BigDecimalValidator::NonNegativeBigDecimal => n >= 0.0,
+        BigDecimalValidator::NegativeBigDecimal => n < 0.0,
+        BigDecimalValidator::NonPositiveBigDecimal => n <= 0.0,
+    }
+}
+
+fn match_duration_validator(dv: &DurationValidator, n: i128) -> bool {
+    match dv {
+        DurationValidator::GreaterThanDuration(s) => parse_duration_to_nanos(s)
+            .map(|other| n > other)
+            .unwrap_or(true),
+        DurationValidator::GreaterThanOrEqualToDuration(s) => parse_duration_to_nanos(s)
+            .map(|other| n >= other)
+            .unwrap_or(true),
+        DurationValidator::LessThanDuration(s) => parse_duration_to_nanos(s)
+            .map(|other| n < other)
+            .unwrap_or(true),
+        DurationValidator::LessThanOrEqualToDuration(s) => parse_duration_to_nanos(s)
+            .map(|other| n <= other)
+            .unwrap_or(true),
+        DurationValidator::BetweenDuration(start, end) => {
+            match (parse_duration_to_nanos(start), parse_duration_to_nanos(end)) {
+                (Some(lo), Some(hi)) => n >= lo && n <= hi,
+                _ => true,
+            }
+        }
+    }
+}
+
 impl ToTokens for Validator {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let variant_tokens = match self {
@@ -2188,5 +2605,183 @@ mod tests {
     fn test_array_validator_zero_items() {
         let v = ArrayValidator::MinItems(0);
         assert!(matches!(v, ArrayValidator::MinItems(0)));
+    }
+
+    // ==================== Validator::matches Tests ====================
+
+    #[test]
+    fn matches_string_min_length() {
+        let v = Validator::StringValidator(StringValidator::MinLength(5));
+        assert!(v.matches(&MockValue::Str("hello!")));
+        assert!(v.matches(&MockValue::Str("12345")));
+        assert!(!v.matches(&MockValue::Str("nope")));
+    }
+
+    #[test]
+    fn matches_string_max_length() {
+        let v = Validator::StringValidator(StringValidator::MaxLength(3));
+        assert!(v.matches(&MockValue::Str("abc")));
+        assert!(!v.matches(&MockValue::Str("abcd")));
+    }
+
+    #[test]
+    fn matches_string_email() {
+        let v = Validator::StringValidator(StringValidator::Email);
+        assert!(v.matches(&MockValue::Str("user@example.com")));
+        assert!(!v.matches(&MockValue::Str("not-an-email")));
+        assert!(!v.matches(&MockValue::Str("user@nodot")));
+    }
+
+    #[test]
+    fn matches_string_uuid() {
+        let v = Validator::StringValidator(StringValidator::Uuid);
+        assert!(v.matches(&MockValue::Str("550e8400-e29b-41d4-a716-446655440000")));
+        assert!(!v.matches(&MockValue::Str("not-a-uuid")));
+    }
+
+    #[test]
+    fn matches_string_starts_ends_includes() {
+        let starts = Validator::StringValidator(StringValidator::StartsWith("foo".into()));
+        assert!(starts.matches(&MockValue::Str("foobar")));
+        assert!(!starts.matches(&MockValue::Str("barfoo")));
+
+        let ends = Validator::StringValidator(StringValidator::EndsWith(".com".into()));
+        assert!(ends.matches(&MockValue::Str("hi.com")));
+        assert!(!ends.matches(&MockValue::Str("hi.org")));
+
+        let inc = Validator::StringValidator(StringValidator::Includes("zz".into()));
+        assert!(inc.matches(&MockValue::Str("buzzy")));
+        assert!(!inc.matches(&MockValue::Str("plain")));
+    }
+
+    #[test]
+    fn matches_string_lowercased_uppercased_capitalized() {
+        let lower = Validator::StringValidator(StringValidator::Lowercased);
+        assert!(lower.matches(&MockValue::Str("hello")));
+        assert!(!lower.matches(&MockValue::Str("Hello")));
+
+        let upper = Validator::StringValidator(StringValidator::Uppercased);
+        assert!(upper.matches(&MockValue::Str("HELLO")));
+        assert!(!upper.matches(&MockValue::Str("Hello")));
+
+        let cap = Validator::StringValidator(StringValidator::Capitalized);
+        assert!(cap.matches(&MockValue::Str("Hello")));
+        assert!(!cap.matches(&MockValue::Str("hello")));
+    }
+
+    #[test]
+    fn matches_number_between_and_positive() {
+        let between = Validator::NumberValidator(NumberValidator::Between(
+            OrderedFloat(1.0),
+            OrderedFloat(10.0),
+        ));
+        assert!(between.matches(&MockValue::Num(5.0)));
+        assert!(between.matches(&MockValue::Num(1.0)));
+        assert!(between.matches(&MockValue::Num(10.0)));
+        assert!(!between.matches(&MockValue::Num(0.0)));
+        assert!(!between.matches(&MockValue::Num(11.0)));
+
+        let positive = Validator::NumberValidator(NumberValidator::Positive);
+        assert!(positive.matches(&MockValue::Num(0.001)));
+        assert!(!positive.matches(&MockValue::Num(0.0)));
+        assert!(!positive.matches(&MockValue::Num(-1.0)));
+    }
+
+    #[test]
+    fn matches_number_int_uint8_multiple_of() {
+        let int_v = Validator::NumberValidator(NumberValidator::Int);
+        assert!(int_v.matches(&MockValue::Num(42.0)));
+        assert!(!int_v.matches(&MockValue::Num(3.5)));
+
+        let uint8 = Validator::NumberValidator(NumberValidator::Uint8);
+        assert!(uint8.matches(&MockValue::Num(0.0)));
+        assert!(uint8.matches(&MockValue::Num(255.0)));
+        assert!(!uint8.matches(&MockValue::Num(256.0)));
+        assert!(!uint8.matches(&MockValue::Num(-1.0)));
+
+        let mult = Validator::NumberValidator(NumberValidator::MultipleOf(OrderedFloat(5.0)));
+        assert!(mult.matches(&MockValue::Num(15.0)));
+        assert!(!mult.matches(&MockValue::Num(7.0)));
+    }
+
+    #[test]
+    fn matches_array() {
+        let min_v = Validator::ArrayValidator(ArrayValidator::MinItems(3));
+        assert!(min_v.matches(&MockValue::ArrayLen(3)));
+        assert!(!min_v.matches(&MockValue::ArrayLen(2)));
+
+        let exact = Validator::ArrayValidator(ArrayValidator::ItemsCount(5));
+        assert!(exact.matches(&MockValue::ArrayLen(5)));
+        assert!(!exact.matches(&MockValue::ArrayLen(4)));
+    }
+
+    #[test]
+    fn matches_date_between() {
+        let v = Validator::DateValidator(DateValidator::BetweenDate(
+            "2024-01-01".into(),
+            "2024-12-31".into(),
+        ));
+        let inside = chrono::NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
+        let before = chrono::NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
+        let after = chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        assert!(v.matches(&MockValue::Date(inside)));
+        assert!(!v.matches(&MockValue::Date(before)));
+        assert!(!v.matches(&MockValue::Date(after)));
+    }
+
+    #[test]
+    fn matches_bigint() {
+        let v = Validator::BigIntValidator(BigIntValidator::BetweenBigInt("0".into(), "100".into()));
+        assert!(v.matches(&MockValue::BigInt("50")));
+        assert!(!v.matches(&MockValue::BigInt("101")));
+
+        let pos = Validator::BigIntValidator(BigIntValidator::PositiveBigInt);
+        assert!(pos.matches(&MockValue::BigInt("1")));
+        assert!(!pos.matches(&MockValue::BigInt("0")));
+    }
+
+    #[test]
+    fn matches_bigdecimal() {
+        let v = Validator::BigDecimalValidator(BigDecimalValidator::PositiveBigDecimal);
+        assert!(v.matches(&MockValue::BigDecimal("0.001")));
+        assert!(!v.matches(&MockValue::BigDecimal("-0.001")));
+    }
+
+    #[test]
+    fn matches_duration() {
+        // 30 minutes between 1m and 1h: should match.
+        let v = Validator::DurationValidator(DurationValidator::BetweenDuration(
+            "1m".into(),
+            "1h".into(),
+        ));
+        let thirty_min_ns: i128 = 30 * 60 * 1_000_000_000;
+        assert!(v.matches(&MockValue::DurationNanos(thirty_min_ns)));
+        let two_hours_ns: i128 = 2 * 60 * 60 * 1_000_000_000;
+        assert!(!v.matches(&MockValue::DurationNanos(two_hours_ns)));
+    }
+
+    #[test]
+    fn matches_validators_outside_their_domain_return_true() {
+        // A NumberValidator on a string mock value is irrelevant — return true
+        // so the retry loop doesn't reject perfectly fine string candidates
+        // when the user mis-attached a validator.
+        let nv = Validator::NumberValidator(NumberValidator::Positive);
+        assert!(nv.matches(&MockValue::Str("hello")));
+
+        let sv = Validator::StringValidator(StringValidator::Email);
+        assert!(sv.matches(&MockValue::Num(42.0)));
+    }
+
+    #[test]
+    fn parse_duration_to_nanos_basic() {
+        assert_eq!(super::parse_duration_to_nanos("1s"), Some(1_000_000_000));
+        assert_eq!(super::parse_duration_to_nanos("1m"), Some(60 * 1_000_000_000));
+        assert_eq!(
+            super::parse_duration_to_nanos("1h30m"),
+            Some(90 * 60 * 1_000_000_000)
+        );
+        assert_eq!(super::parse_duration_to_nanos("500ms"), Some(500_000_000));
+        assert_eq!(super::parse_duration_to_nanos("garbage"), None);
+        assert_eq!(super::parse_duration_to_nanos(""), None);
     }
 }

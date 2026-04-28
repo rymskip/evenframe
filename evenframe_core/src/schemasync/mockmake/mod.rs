@@ -9,6 +9,8 @@ pub mod plugin;
 pub mod plugin_types;
 #[cfg(feature = "schemasync")]
 pub mod regex_val_gen;
+#[cfg(feature = "schemasync")]
+pub mod validator_gen;
 
 #[cfg(feature = "surrealdb")]
 use crate::{

@@ -142,13 +142,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn override_skips_struct_at_top_level_iteration() {
-        // Literal-override semantics: a struct with `output_override` set is
-        // an alias marker — "as if the original was never scanned in".
-        // typesync skips it entirely; the override target is expected to
-        // appear under its own registry key. Plugin writers who want
-        // partial behavior (preserve body, swap annotations) must encode
-        // that in the override they emit.
+    fn override_replaces_struct_body_at_top_level_iteration() {
+        // Literal-override semantics: an `output_override` replaces the
+        // scanned form wholesale. Consumers (typesync, schemasync, mockmake,
+        // …) read via `.effective()`, so the override's body, derives, and
+        // annotations are emitted instead of the originals. The original
+        // fields are NOT carried over — plugin writers who want
+        // self-augmentation must include the original fields in their
+        // override.
         let override_config = StructConfig {
             struct_name: "Site".to_string(),
             fields: vec![],
@@ -178,9 +179,13 @@ mod tests {
             ],
         );
 
-        output.assert_not_contains("export interface Site");
-        output.assert_not_contains("@overview");
+        // Override is rendered (not skipped), with its own annotations and derives.
+        output.assert_contains("export interface Site");
+        output.assert_contains("@overview");
+        output.assert_contains("Gigaform");
+        // Original fields do not bleed through — the override has fields: vec![].
         output.assert_not_contains("id: string");
+        output.assert_not_contains("name: string");
     }
 
     #[test]

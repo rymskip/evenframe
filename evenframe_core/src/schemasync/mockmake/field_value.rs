@@ -3,7 +3,9 @@ use crate::{
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::coordinate::CoordinationId,
     schemasync::mockmake::format::Format,
+    schemasync::mockmake::validator_gen,
     types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructField, VariantData},
+    validator::{MockValue, Validator},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -160,11 +162,18 @@ impl<'a> FieldValueGenerator<'a> {
                         value_stack.push(coordinated_value.to_string());
                     } else if let Some(format) = &ctx.field.format {
                         value_stack.push(self.handle_format(format));
+                    } else if let Some(value) = validator_gen::generate_with_validators(
+                        ctx.field_type,
+                        &ctx.field.validators,
+                        &mut rng,
+                    ) {
+                        value_stack.push(value);
                     } else {
                         match ctx.field_type {
-                            FieldType::String => {
-                                value_stack.push(format!("'{}'", Mockmaker::random_string(8)))
-                            }
+                            FieldType::String => value_stack.push(generate_string_with_retry(
+                                &ctx.field.validators,
+                                &ctx.field_path,
+                            )),
                             FieldType::Char => value_stack
                                 .push(format!("'{}'", rng.random_range(32u8..=126u8) as char)),
                             FieldType::Bool => {
@@ -172,23 +181,29 @@ impl<'a> FieldValueGenerator<'a> {
                             }
                             FieldType::Unit => value_stack.push("NONE".to_string()),
                             FieldType::F32 | FieldType::F64 => {
-                                value_stack.push(format!("{:.2}f", rng.random_range(0.0..100.0)))
+                                value_stack.push(generate_float_with_retry(
+                                    &ctx.field.validators,
+                                    &ctx.field_path,
+                                    &mut rng,
+                                ))
                             }
                             FieldType::I8
                             | FieldType::I16
                             | FieldType::I32
                             | FieldType::I64
                             | FieldType::I128
-                            | FieldType::Isize => {
-                                value_stack.push(format!("{}", rng.random_range(0..100)))
-                            }
-                            FieldType::U8
+                            | FieldType::Isize
+                            | FieldType::U8
                             | FieldType::U16
                             | FieldType::U32
                             | FieldType::U64
                             | FieldType::U128
                             | FieldType::Usize => {
-                                value_stack.push(format!("{}", rng.random_range(0..100)))
+                                value_stack.push(generate_integer_with_retry(
+                                    &ctx.field.validators,
+                                    &ctx.field_path,
+                                    &mut rng,
+                                ))
                             }
                             FieldType::Option(inner_type) => {
                                 if rng.random_bool(0.5) {
@@ -201,7 +216,16 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                             }
                             FieldType::Vec(inner_type) => {
-                                let count = rng.random_range(2..10);
+                                let (lo, hi) = validator_gen::array_count_range(
+                                    &ctx.field.validators,
+                                    2,
+                                    9,
+                                );
+                                let count = if lo == hi {
+                                    lo
+                                } else {
+                                    rng.random_range(lo..=hi)
+                                };
                                 work_stack.push(WorkItem::AssembleVec { count });
                                 for _ in 0..count {
                                     work_stack.push(WorkItem::Generate(Frame {
@@ -796,4 +820,78 @@ impl<'a> FieldValueGenerator<'a> {
             format!("r'{}:{}'", table_name, &self.id_index)
         }
     }
+}
+
+/// Cap on retry attempts when the default generator produces a value that
+/// fails the field's validator set. After this many tries we emit the last
+/// candidate anyway and log — the alternative (panic / silently substitute)
+/// hides the constraint conflict from the user.
+const RETRY_ATTEMPTS: usize = 32;
+
+fn generate_string_with_retry(validators: &[Validator], field_path: &str) -> String {
+    if validators.is_empty() {
+        return format!("'{}'", Mockmaker::random_string(8));
+    }
+    let mut last = Mockmaker::random_string(8);
+    for _ in 0..RETRY_ATTEMPTS {
+        if validators.iter().all(|v| v.matches(&MockValue::Str(&last))) {
+            return format!("'{}'", last);
+        }
+        last = Mockmaker::random_string(8);
+    }
+    tracing::warn!(
+        field = %field_path,
+        attempts = RETRY_ATTEMPTS,
+        "validator-aware string generation exhausted attempts; emitting last candidate"
+    );
+    format!("'{}'", last)
+}
+
+fn generate_float_with_retry(
+    validators: &[Validator],
+    field_path: &str,
+    rng: &mut ThreadRng,
+) -> String {
+    if validators.is_empty() {
+        return format!("{:.2}f", rng.random_range(0.0..100.0));
+    }
+    let mut last = rng.random_range(0.0..100.0);
+    for _ in 0..RETRY_ATTEMPTS {
+        if validators.iter().all(|v| v.matches(&MockValue::Num(last))) {
+            return format!("{:.2}f", last);
+        }
+        last = rng.random_range(0.0..100.0);
+    }
+    tracing::warn!(
+        field = %field_path,
+        attempts = RETRY_ATTEMPTS,
+        "validator-aware float generation exhausted attempts; emitting last candidate"
+    );
+    format!("{:.2}f", last)
+}
+
+fn generate_integer_with_retry(
+    validators: &[Validator],
+    field_path: &str,
+    rng: &mut ThreadRng,
+) -> String {
+    if validators.is_empty() {
+        return format!("{}", rng.random_range(0..100));
+    }
+    let mut last: i64 = rng.random_range(0..100);
+    for _ in 0..RETRY_ATTEMPTS {
+        if validators
+            .iter()
+            .all(|v| v.matches(&MockValue::Num(last as f64)))
+        {
+            return format!("{}", last);
+        }
+        last = rng.random_range(0..100);
+    }
+    tracing::warn!(
+        field = %field_path,
+        attempts = RETRY_ATTEMPTS,
+        "validator-aware integer generation exhausted attempts; emitting last candidate"
+    );
+    format!("{}", last)
 }
