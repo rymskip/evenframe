@@ -6,6 +6,12 @@ platforms = ["osx-64"]
 version = "0.1.0"
 
 [tasks]
+# One-shot per-machine bootstrap. Installs global rustup from brads-forge if
+# missing, drops cargo/rustc/etc. symlinks into ~/.cargo/bin so the rustup
+# multicall dispatch works (pixi expose wrappers don't preserve argv[0]), and
+# appends RUSTUP_HOME to ~/.zshenv. Safe to re-run.
+"setup-rust" = "bash scripts/setup-rust.sh"
+
 verify = "cargo run -p tooling -- verify"
 verify-fast = "cargo run -p tooling -- verify --fail-fast"
 test = "cargo run -p tooling -- test"
