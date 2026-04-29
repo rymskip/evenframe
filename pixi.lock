@@ -3,5 +3,14 @@ environments:
   default:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
-    packages: {}
-packages: []
+    - url: https://prefix.dev/brads-forge/
+    packages:
+      osx-64:
+      - conda: https://prefix.dev/brads-forge/osx-64/rustup-1.29.0-he0f4bc8_4.conda
+packages:
+- conda: https://prefix.dev/brads-forge/osx-64/rustup-1.29.0-he0f4bc8_4.conda
+  sha256: ff76a15afcf63745be55089e41db4c93ce40392160a3f0327ad6d99514b37632
+  md5: 31a759116d4c97bd4913c7f8b6379e4b
+  license: MIT
+  size: 4698841
+  timestamp: 1773378043339

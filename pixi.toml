@@ -1,6 +1,6 @@
 [workspace]
 authors = ["rymskip <17lochinskij@protonmail.com>"]
-channels = ["conda-forge"]
+channels = ["conda-forge", "https://prefix.dev/brads-forge"]
 name = "evenframe"
 platforms = ["osx-64"]
 version = "0.1.0"
@@ -17,3 +17,11 @@ snapshot-review = "cargo run -p tooling -- snapshot review"
 snapshot-update = "cargo run -p tooling -- snapshot update"
 
 [dependencies]
+# Rust toolchain manager from brads-forge. The active rust version, components,
+# and targets are pinned in rust-toolchain.toml at the repo root — rustup
+# auto-installs that toolchain on first cargo invocation. RUSTUP_HOME is
+# shared with the global rustup install via [activation.env] below.
+rustup = "*"
+
+[activation.env]
+RUSTUP_HOME = "$HOME/.pixi/envs/rustup/.rustup"
