@@ -1,4 +1,7 @@
-use crate::types::{FieldType, ForeignTypeRegistry};
+use crate::registry::{get_struct_config, get_tagged_union};
+use crate::types::{
+    EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData,
+};
 use serde_json::Value;
 
 /// Convert a JSON value (already extracted from our struct) into the SurrealDB
@@ -68,6 +71,22 @@ pub fn to_surreal_string(
                     }
                     _ => to_surreal_string_inferred(value),
                 }
+            } else if let Some(tagged_union) = get_tagged_union(name) {
+                // Tagged union (e.g. an `EventKind` field). Without this
+                // branch the call falls through to
+                // `to_surreal_string_inferred`, which has no way to know
+                // that nested fields like `kind.resources` are
+                // `RecordLink<Resource>` and emits them as quoted
+                // strings — which SurrealDB then refuses to coerce to
+                // `record<resource>`. Walking the variant's struct
+                // config gives every nested field its real `FieldType`.
+                tagged_union_to_surreal_string(&tagged_union, value, registry)
+            } else if let Some(struct_config) = get_struct_config(name) {
+                // Plain (non-table) embedded struct. Same reasoning as
+                // tagged unions — walk fields with their real types so
+                // nested `RecordLink<T>` / typed primitives (datetime,
+                // decimal, etc.) survive the round trip.
+                struct_config_to_surreal_string(&struct_config, value, registry)
             } else {
                 to_surreal_string_inferred(value)
             }
@@ -204,6 +223,165 @@ pub fn to_surreal_string(
             }
         }
     }
+}
+
+/// Walk a `TaggedUnion` value with full field-type information so nested
+/// `RecordLink<T>`, datetime, decimal, etc. fields produce correct
+/// SurrealQL syntax (record refs, `d'…'`, bare numbers) instead of being
+/// emitted as quoted strings via `to_surreal_string_inferred`.
+///
+/// Honors the union's `representation`:
+/// - `ExternallyTagged`: `{ "VariantName": { …fields… } }` or `"VariantName"`
+/// - `InternallyTagged { tag }`: `{ tag: "VariantName", …fields… }`
+/// - `AdjacentlyTagged { tag, content }`: `{ tag: "VariantName", content: { …fields… } }`
+/// - `Untagged`: best-effort match against each variant's struct fields
+fn tagged_union_to_surreal_string(
+    tu: &TaggedUnion,
+    value: &Value,
+    registry: &ForeignTypeRegistry,
+) -> String {
+    let tu = tu.effective();
+
+    // Pull `(variant_name, payload_obj_or_none)` out of the value
+    // according to the union's serde representation.
+    let (variant_name, variant_obj) = match (&tu.representation, value) {
+        (EnumRepresentation::ExternallyTagged, Value::String(s)) => (s.clone(), None),
+        (EnumRepresentation::ExternallyTagged, Value::Object(obj)) => {
+            // Object should have exactly one key — the variant name —
+            // mapped to the variant's data.
+            if let Some((k, v)) = obj.iter().next() {
+                (k.clone(), Some(v.clone()))
+            } else {
+                return to_surreal_string_inferred(value);
+            }
+        }
+        (EnumRepresentation::InternallyTagged { tag }, Value::Object(obj)) => {
+            let name = obj
+                .get(tag.as_str())
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            // Strip the tag so the remaining fields are the variant data.
+            let mut without_tag = obj.clone();
+            without_tag.remove(tag.as_str());
+            (name, Some(Value::Object(without_tag)))
+        }
+        (EnumRepresentation::AdjacentlyTagged { tag, content }, Value::Object(obj)) => {
+            let name = obj
+                .get(tag.as_str())
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            (name, obj.get(content.as_str()).cloned())
+        }
+        (EnumRepresentation::Untagged, _) => {
+            // Without a discriminator we can't pick a variant
+            // structurally here. Fall back to inference.
+            return to_surreal_string_inferred(value);
+        }
+        _ => return to_surreal_string_inferred(value),
+    };
+
+    let Some(variant) = tu.variants.iter().find(|v| v.name == variant_name) else {
+        return to_surreal_string_inferred(value);
+    };
+
+    let mut pairs: Vec<String> = Vec::new();
+
+    // Re-emit the discriminator the same way it arrived.
+    match &tu.representation {
+        EnumRepresentation::InternallyTagged { tag } => {
+            pairs.push(format!("{}: '{}'", tag, escape_single_quotes(&variant_name)));
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+            pairs.push(format!("{}: '{}'", tag, escape_single_quotes(&variant_name)));
+        }
+        _ => {}
+    }
+
+    // Walk the variant's inline-struct fields (if any) with their real
+    // field types. Variants with `DataStructureRef` or no data fall
+    // through to the default case.
+    if let Some(VariantData::InlineStruct(struct_config)) =
+        variant.data.as_ref().map(|d| match d {
+            VariantData::InlineStruct(sc) => VariantData::InlineStruct(sc.clone()),
+            VariantData::DataStructureRef(ft) => VariantData::DataStructureRef(ft.clone()),
+        })
+    {
+        if let Some(payload_obj) = variant_obj.as_ref().and_then(|v| v.as_object()) {
+            for field in &struct_config.effective().fields {
+                if let Some(sub_val) = payload_obj.get(&field.field_name) {
+                    let s = to_surreal_string(&field.field_type, sub_val, registry);
+                    pairs.push(format!("{}: {}", field.field_name, s));
+                }
+            }
+        }
+    }
+
+    // Adjacently-tagged unions wrap the variant payload under `content`.
+    if let EnumRepresentation::AdjacentlyTagged { content, .. } = &tu.representation {
+        // Replace the body fields we just emitted with a nested
+        // `content: { … }` object that matches serde's adjacent shape.
+        let body_pairs: Vec<String> = pairs
+            .iter()
+            .filter(|p| !p.starts_with(&format!("{}:", content)) && !p.starts_with(&format!("{}: ", content)))
+            .cloned()
+            .collect();
+        let tag_pair = body_pairs
+            .iter()
+            .find(|p| p.contains(": '"))
+            .cloned()
+            .unwrap_or_default();
+        let inner_pairs: Vec<String> = body_pairs
+            .into_iter()
+            .filter(|p| p != &tag_pair)
+            .collect();
+        return format!(
+            "{{ {}, {}: {{ {} }} }}",
+            tag_pair,
+            content,
+            inner_pairs.join(", ")
+        );
+    }
+
+    // Externally-tagged with payload: `{ VariantName: { …fields… } }`.
+    if matches!(tu.representation, EnumRepresentation::ExternallyTagged) && variant_obj.is_some() {
+        return format!(
+            "{{ '{}': {{ {} }} }}",
+            escape_single_quotes(&variant_name),
+            pairs.join(", ")
+        );
+    }
+    // Externally-tagged unit variant: `'VariantName'`.
+    if matches!(tu.representation, EnumRepresentation::ExternallyTagged) && variant_obj.is_none() {
+        return format!("'{}'", escape_single_quotes(&variant_name));
+    }
+
+    format!("{{ {} }}", pairs.join(", "))
+}
+
+/// Walk a plain (non-table) struct value with full field-type information
+/// so nested `RecordLink<T>` and other typed primitives serialize to the
+/// right SurrealQL form. Without this, `FieldType::Other(StructName)`
+/// fell through to `to_surreal_string_inferred` and lost type info on
+/// every nested field.
+fn struct_config_to_surreal_string(
+    sc: &StructConfig,
+    value: &Value,
+    registry: &ForeignTypeRegistry,
+) -> String {
+    let sc = sc.effective();
+    let Some(obj) = value.as_object() else {
+        return to_surreal_string_inferred(value);
+    };
+    let mut pairs: Vec<String> = Vec::new();
+    for field in &sc.fields {
+        if let Some(sub_val) = obj.get(&field.field_name) {
+            let s = to_surreal_string(&field.field_type, sub_val, registry);
+            pairs.push(format!("{}: {}", field.field_name, s));
+        }
+    }
+    format!("{{ {} }}", pairs.join(", "))
 }
 
 /// Recursively convert a JSON value to SurrealQL syntax by inferring types.
