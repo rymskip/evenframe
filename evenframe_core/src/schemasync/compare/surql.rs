@@ -1079,17 +1079,40 @@ impl<'a> SchemaImporter<'a> {
         })
     }
 
-    /// Parse a DEFINE EVENT statement and extract the associated table
+    /// Parse a DEFINE EVENT statement and extract the associated table.
+    ///
+    /// SurrealDB's `DEFINE EVENT` syntax treats the `TABLE` keyword as
+    /// optional — `... ON TABLE foo ...` and `... ON foo ...` are both
+    /// valid. INFO/EXPORT round-trips strip the keyword, so the
+    /// schema-import parser has to accept both forms or it silently
+    /// drops every existing event from the loaded schema. When that
+    /// happens, the diff sees zero pre-existing events for the table,
+    /// the comparator emits no `removed_events`, and a deleted
+    /// `#[event(...)]` declaration leaves a stale event live in the DB
+    /// forever (most visibly: a previously auto-attached `track_activity`
+    /// keeps firing on tables that have since opted out, 500-ing every
+    /// PATCH against the orphaned audit edge).
     fn parse_event_definition(statement: &str) -> Option<(String, String)> {
         if !statement.starts_with("DEFINE EVENT") {
             return None;
         }
 
         let uppercase = statement.to_uppercase();
-        let on_table = " ON TABLE ";
-        let on_table_index = uppercase.find(on_table)?;
-        let after_on_table = &statement[on_table_index + on_table.len()..];
-        let mut parts = after_on_table.split_whitespace();
+        let on_index = uppercase.find(" ON ")?;
+        let after_on = &statement[on_index + " ON ".len()..];
+        let trimmed = after_on.trim_start();
+        // Skip the optional TABLE keyword (case-insensitive).
+        let after_table_kw = if trimmed
+            .get(..6)
+            .map(|s| s.eq_ignore_ascii_case("TABLE "))
+            .unwrap_or(false)
+        {
+            &trimmed[6..]
+        } else {
+            trimmed
+        };
+
+        let mut parts = after_table_kw.split_whitespace();
         let table_token = parts.next()?;
         let table_name = table_token
             .trim_matches('`')

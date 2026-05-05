@@ -618,16 +618,35 @@ impl Comparator {
             }
         }
 
-        // Compare events by statement contents
-        let old_events: BTreeSet<String> = old_table.events.iter().cloned().collect();
-        let new_events: BTreeSet<String> = new_table.events.iter().cloned().collect();
-
-        for event in new_events.difference(&old_events) {
-            table_changes.new_events.push(event.clone());
+        // Compare events by *normalized* statement contents. SurrealDB's
+        // schema export round-trips `DEFINE EVENT` with `ON <table>`,
+        // single-quoted strings, no `OVERWRITE`, and no inner trailing
+        // semicolons; emit-side statements typically include
+        // `OVERWRITE`, `ON TABLE <table>`, double-quoted strings, and
+        // trailing semicolons. A byte-exact compare classifies every
+        // semantically-identical event as both removed and added,
+        // which produces correct but noisy REMOVE+DEFINE churn each
+        // sync. Normalizing both sides makes equality reflect actual
+        // intent and keeps idempotent syncs idempotent.
+        let mut old_normalized: BTreeMap<String, String> = BTreeMap::new();
+        for stmt in &old_table.events {
+            old_normalized.insert(normalize_event_statement(stmt), stmt.clone());
+        }
+        let mut new_normalized: BTreeMap<String, String> = BTreeMap::new();
+        for stmt in &new_table.events {
+            new_normalized.insert(normalize_event_statement(stmt), stmt.clone());
         }
 
-        for event in old_events.difference(&new_events) {
-            table_changes.removed_events.push(event.clone());
+        for (key, stmt) in &new_normalized {
+            if !old_normalized.contains_key(key) {
+                table_changes.new_events.push(stmt.clone());
+            }
+        }
+
+        for (key, stmt) in &old_normalized {
+            if !new_normalized.contains_key(key) {
+                table_changes.removed_events.push(stmt.clone());
+            }
         }
 
         // Compare indexes by name. DEFINE INDEX OVERWRITE handles same-name
@@ -908,6 +927,112 @@ impl Comparator {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Canonicalize a `DEFINE EVENT` statement so two semantically equivalent
+/// statements compare equal regardless of cosmetic differences.
+///
+/// Cosmetic differences observed in practice:
+/// - SurrealDB's schema export drops `OVERWRITE` / `IF NOT EXISTS`
+///   modifiers and the optional `TABLE` keyword in `ON TABLE <name>`,
+///   while emit-side typically includes them.
+/// - SurrealDB's export round-trips quoted strings using `'...'`, while
+///   emit-side often uses `"..."` (both are equivalent in SurrealQL).
+/// - Emit-side adds inner `;` between statements in the `THEN { ... }`
+///   block; export-side strips them.
+/// - Whitespace, including line breaks, varies freely.
+///
+/// The walk preserves string-literal contents verbatim (no quote
+/// flipping inside a literal), then normalizes the surface syntax of
+/// the statement after the walk.
+fn normalize_event_statement(stmt: &str) -> String {
+    let trimmed = stmt.trim();
+    let bytes = trimmed.as_bytes();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) => {
+                // Inside a string literal — pass through, but emit a
+                // canonical `'` for the closing quote so `"foo"` and
+                // `'foo'` normalize to the same form.
+                if c == q {
+                    out.push('\'');
+                    quote = None;
+                } else {
+                    out.push(c as char);
+                }
+                i += 1;
+            }
+            None => {
+                if c == b'"' || c == b'\'' {
+                    quote = Some(c);
+                    out.push('\'');
+                    i += 1;
+                } else if c == b';' {
+                    // Drop semicolons outside string literals — they're
+                    // always optional terminators in SurrealQL events.
+                    i += 1;
+                } else if c.is_ascii_whitespace() {
+                    if !out.is_empty() && !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                    i += 1;
+                } else {
+                    out.push(c as char);
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    // Canonicalize the leading modifiers and the `ON [TABLE]` clause.
+    let mut canonical = out.trim().to_string();
+    canonical = canonical.replacen("DEFINE EVENT OVERWRITE ", "DEFINE EVENT ", 1);
+    canonical = canonical.replacen("DEFINE EVENT IF NOT EXISTS ", "DEFINE EVENT ", 1);
+    canonical = canonical.replace(" ON TABLE ", " ON ");
+    canonical
+}
+
+#[cfg(test)]
+mod normalize_event_statement_tests {
+    use super::normalize_event_statement;
+
+    #[test]
+    fn export_and_emit_forms_match() {
+        let exported = "DEFINE EVENT track_activity ON user_settings WHEN $event = 'CREATE' OR $event = 'UPDATE' THEN { IF $auth != NONE { fn::track_activity($before, $after, $event) } }";
+        let emitted = "DEFINE EVENT OVERWRITE track_activity ON TABLE user_settings WHEN $event = \"CREATE\" OR $event = \"UPDATE\" THEN { IF $auth != NONE { fn::track_activity($before, $after, $event); }; };";
+        assert_eq!(
+            normalize_event_statement(exported),
+            normalize_event_statement(emitted)
+        );
+    }
+
+    #[test]
+    fn whitespace_collapses() {
+        let a = "DEFINE EVENT foo  ON   bar  WHEN $event = 'CREATE'\n  THEN  {  }";
+        let b = "DEFINE EVENT foo ON bar WHEN $event = 'CREATE' THEN { }";
+        assert_eq!(normalize_event_statement(a), normalize_event_statement(b));
+    }
+
+    #[test]
+    fn string_contents_preserved() {
+        // Whitespace and `;` inside a string literal must stay verbatim.
+        let stmt = "DEFINE EVENT foo ON bar WHEN $name = 'hello;  world' THEN { }";
+        assert_eq!(
+            normalize_event_statement(stmt),
+            "DEFINE EVENT foo ON bar WHEN $name = 'hello;  world' THEN { }"
+        );
+    }
+
+    #[test]
+    fn distinct_statements_stay_distinct() {
+        let a = "DEFINE EVENT foo ON bar WHEN $event = 'CREATE' THEN { }";
+        let b = "DEFINE EVENT foo ON bar WHEN $event = 'UPDATE' THEN { }";
+        assert_ne!(normalize_event_statement(a), normalize_event_statement(b));
+    }
+}
 
 /// Helper function to collect object type names referenced in a field type
 pub fn collect_referenced_objects(
