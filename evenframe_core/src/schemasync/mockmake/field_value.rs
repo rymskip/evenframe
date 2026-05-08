@@ -300,13 +300,23 @@ impl<'a> FieldValueGenerator<'a> {
                                         let mut resolve_table = |name: &str,
                                                             tables: &std::collections::BTreeMap<String, crate::schemasync::table::TableConfig>,
                                                             enums: &std::collections::BTreeMap<String, crate::types::TaggedUnion>,
+                                                            objects: &std::collections::BTreeMap<String, crate::types::StructConfig>,
                                         | -> Option<String> {
                                             // 1) Direct match: type name corresponds to a table
                                             let snake = name.to_case(Case::Snake);
                                             if tables.contains_key(&snake) {
                                                 return Some(snake);
                                             }
-                                            // 2) Enum (persistable struct union): pick a variant that maps to a table
+                                            // 2) Synthetic projection: object whose `output_override`
+                                            //    redirects to a real table (e.g. PartialUser → User)
+                                            if let Some(sc) = objects.get(name) {
+                                                let effective_snake =
+                                                    sc.effective().struct_name.to_case(Case::Snake);
+                                                if tables.contains_key(&effective_snake) {
+                                                    return Some(effective_snake);
+                                                }
+                                            }
+                                            // 3) Enum (persistable struct union): pick a variant that maps to a table
                                             if let Some(tagged) = enums.get(name) {
                                                 // Collect candidate table names from variants
                                                 let mut candidates: Vec<String> = Vec::new();
@@ -343,6 +353,7 @@ impl<'a> FieldValueGenerator<'a> {
                                             type_name,
                                             self.mockmaker.tables,
                                             self.mockmaker.enums,
+                                            self.mockmaker.objects,
                                         ) {
                                             // Generate a record ID for the resolved table
                                             if let Some(possible_ids) =

@@ -476,12 +476,65 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 #deserialize_impl
             }
         } else {
-            // For app structs, we only generate deserialization if needed
-            // The derive macro itself serves as the marker
-            if has_field_validators {
-                deserialize_impl
-            } else {
-                quote! {}
+            // App (non-table) struct. Generate a `static_struct_config()` method
+            // and submit it to OBJECT_REGISTRY so the runtime value-emission path
+            // can walk fields with their real `FieldType`s. Without this,
+            // `get_struct_config(name)` returns `None`, and embedded structs
+            // fall through to `to_surreal_string_inferred` — which doesn't know
+            // a `RecordLink<T>` field is anything other than a generic string,
+            // so it emits `'product:1'` (quoted) instead of `product:1` (record).
+            let struct_config_impl = quote! {
+                impl #ident {
+                    pub fn static_struct_config() -> ::evenframe::types::StructConfig {
+                        ::evenframe::types::StructConfig {
+                            struct_name: #struct_name.to_owned(),
+                            fields: vec![ #(#table_field_tokens),* ],
+                            validators: #table_validators_tokens,
+                            doccom: None,
+                            macroforge_derives: #macroforge_derives_tokens,
+                            annotations: #struct_annotations_tokens,
+                            pipeline: #pipeline_tokens,
+                            rust_derives: #rust_derives_tokens,
+                            output_override: None,
+                            raw_attributes: std::collections::BTreeMap::new(),
+                        }
+                    }
+                }
+            };
+
+            let registry_var_name = syn::Ident::new(
+                &format!("{}_OBJECT_REGISTRY_ENTRY", ident.to_string().to_uppercase()),
+                ident.span(),
+            );
+            let registry_submission = quote! {
+                #[::evenframe::linkme::distributed_slice(::evenframe::registry::OBJECT_REGISTRY_ENTRIES)]
+                static #registry_var_name: ::evenframe::registry::ObjectRegistryEntry = ::evenframe::registry::ObjectRegistryEntry {
+                    type_name: #struct_name,
+                    struct_config_fn: || #ident::static_struct_config(),
+                    pipeline: #pipeline_tokens,
+                };
+            };
+
+            // App structs only need `StructField`/`FieldType` and the registry
+            // distributed-slice. Avoid pulling in the full table import block
+            // (convert_case, schemasync) — consumer crates that derive only on
+            // app structs (e.g. `Typesync`) may not depend on those.
+            let app_imports = quote! {
+                use ::evenframe::types::{StructConfig, StructField, FieldType};
+                use ::evenframe::registry;
+                use ::evenframe::prelude::linkme;
+            };
+
+            quote! {
+                const _: () = {
+                    #app_imports
+
+                    #struct_config_impl
+
+                    #registry_submission
+                };
+
+                #deserialize_impl
             }
         }
     } else {

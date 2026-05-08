@@ -44,7 +44,7 @@ use uuid::Uuid;
 pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
     pub(super) tables: &'a BTreeMap<String, TableConfig>,
-    objects: &'a BTreeMap<String, StructConfig>,
+    pub(super) objects: &'a BTreeMap<String, StructConfig>,
     enums: &'a BTreeMap<String, TaggedUnion>,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     pub comparator: Option<SurrealdbComparator<'a>>,

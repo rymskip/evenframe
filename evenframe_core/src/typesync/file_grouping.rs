@@ -53,15 +53,19 @@ pub fn compute_file_grouping(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
 ) -> FileOutputPlan {
-    // 1. Collect all type names in PascalCase. Use `effective()` so the
-    //    override, when set, replaces the scanned type.
+    // 1. Collect all type names in PascalCase by their own struct/enum name.
+    //    Don't follow `effective()` here: a synthetic projection whose
+    //    override redirects to a different parent struct is still its own
+    //    TS interface and needs its own file group. Schema-resolution paths
+    //    that map projections back to a parent table follow `effective()`
+    //    elsewhere.
     let all_types: BTreeSet<String> = structs
         .values()
-        .map(|s| s.effective().struct_name.to_case(Case::Pascal))
+        .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(
             enums
                 .values()
-                .map(|e| e.effective().enum_name.to_case(Case::Pascal)),
+                .map(|e| e.enum_name.to_case(Case::Pascal)),
         )
         .collect();
 

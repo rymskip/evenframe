@@ -14,6 +14,37 @@ use convert_case::{Case, Casing};
 use macroforge_ts::macros::ts_template;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Pick the StructConfig view to emit fields and metadata from.
+///
+/// `output_override` has two distinct producers in the wild:
+///
+/// 1. Rule-plugin overrides preserve the struct name and only carry extra
+///    metadata (annotations, derives) — `effective()` returns a same-named
+///    config and we want its content for the emitted interface.
+/// 2. Synthetic projections (partials) redirect to a different struct
+///    entirely — `effective()` returns the parent, but the partial still
+///    needs its own TS interface with its own fields. Following the
+///    redirect would emit the parent's content under the partial's name.
+///
+/// Use `effective()` only when the redirect preserves the struct name.
+fn struct_view(struct_config: &StructConfig) -> &StructConfig {
+    let effective = struct_config.effective();
+    if effective.struct_name == struct_config.struct_name {
+        effective
+    } else {
+        struct_config
+    }
+}
+
+fn enum_view(enum_def: &TaggedUnion) -> &TaggedUnion {
+    let effective = enum_def.effective();
+    if effective.enum_name == enum_def.enum_name {
+        effective
+    } else {
+        enum_def
+    }
+}
+
 /// Main entry point for generating Macroforge TypeScript interfaces.
 pub fn generate_macroforge_type_string(
     structs: &BTreeMap<String, StructConfig>,
@@ -28,46 +59,25 @@ pub fn generate_macroforge_type_string(
         "Generating Macroforge TypeScript interfaces"
     );
 
-    // Use `effective()` so the override, when set, replaces the scanned
-    // type. Deduplicate by PascalCase name.
-    let mut seen_structs = BTreeSet::new();
-    let mut unique_structs: Vec<&StructConfig> = structs
-        .values()
-        .filter(|s| {
-            let name = s.effective().struct_name.to_case(Case::Pascal);
-            if seen_structs.contains(&name) {
-                false
-            } else {
-                seen_structs.insert(name);
-                true
-            }
-        })
-        .collect();
-    unique_structs.sort_by_key(|s| s.effective().struct_name.to_case(Case::Pascal));
+    // The maps are already keyed by struct/enum name, so each entry is
+    // unique by its own name. Synthetic projections (partials whose
+    // `output_override` redirects to a different parent struct) are
+    // intentionally kept as separate entries so they get their own TS
+    // interface.
+    let mut unique_structs: Vec<&StructConfig> = structs.values().collect();
+    unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    let mut seen_enums = BTreeSet::new();
-    let mut unique_enums: Vec<&TaggedUnion> = enums
-        .values()
-        .filter(|e| {
-            let name = e.effective().enum_name.to_case(Case::Pascal);
-            if seen_enums.contains(&name) {
-                false
-            } else {
-                seen_enums.insert(name);
-                true
-            }
-        })
-        .collect();
-    unique_enums.sort_by_key(|e| e.effective().enum_name.to_case(Case::Pascal));
+    let mut unique_enums: Vec<&TaggedUnion> = enums.values().collect();
+    unique_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
 
     // Collect all type names for effect import computation
     let all_type_names: Vec<String> = unique_structs
         .iter()
-        .map(|s| s.effective().struct_name.to_case(Case::Pascal))
+        .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(
             unique_enums
                 .iter()
-                .map(|e| e.effective().enum_name.to_case(Case::Pascal)),
+                .map(|e| e.enum_name.to_case(Case::Pascal)),
         )
         .collect();
 
@@ -104,37 +114,20 @@ pub fn generate_macroforge_for_types(
 ) -> String {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
-    // Use `effective()` so the override, when set, replaces the scanned
-    // type. Filter to requested types and deduplicate by PascalCase name.
-    let mut seen_structs = BTreeSet::new();
+    // Filter to requested types by the entry's own name (each entry is
+    // unique by struct/enum name in the input maps). See the full-output
+    // path above for the rationale on not deduping by `effective()`.
     let mut filtered_structs: Vec<&StructConfig> = structs
         .values()
-        .filter(|s| {
-            let name = s.effective().struct_name.to_case(Case::Pascal);
-            if !type_set.contains(&name) || seen_structs.contains(&name) {
-                false
-            } else {
-                seen_structs.insert(name);
-                true
-            }
-        })
+        .filter(|s| type_set.contains(&s.struct_name.to_case(Case::Pascal)))
         .collect();
-    filtered_structs.sort_by_key(|s| s.effective().struct_name.to_case(Case::Pascal));
+    filtered_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    let mut seen_enums = BTreeSet::new();
     let mut filtered_enums: Vec<&TaggedUnion> = enums
         .values()
-        .filter(|e| {
-            let name = e.effective().enum_name.to_case(Case::Pascal);
-            if !type_set.contains(&name) || seen_enums.contains(&name) {
-                false
-            } else {
-                seen_enums.insert(name);
-                true
-            }
-        })
+        .filter(|e| type_set.contains(&e.enum_name.to_case(Case::Pascal)))
         .collect();
-    filtered_enums.sort_by_key(|e| e.effective().enum_name.to_case(Case::Pascal));
+    filtered_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
 
     let mut parts: Vec<String> = Vec::new();
     for struct_config in &filtered_structs {
@@ -152,23 +145,24 @@ fn generate_struct_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Resolve `output_override` literally — every read below comes from the
-    // effective config. Plugin writers carry over anything they want
-    // preserved when constructing the override.
-    let struct_config = struct_config.effective();
+    // Always emit the interface under the entry's own struct_name; pull
+    // body content (fields, derives, annotations) from `struct_view` so a
+    // same-name override (rule plugin) is honored while a redirect
+    // override (synthetic projection) leaves the partial's own body intact.
     let name = struct_config.struct_name.to_case(Case::Pascal);
+    let view = struct_view(struct_config);
     let mut lines: Vec<String> = Vec::new();
 
-    let derive_line = format_derive_line(&struct_config.macroforge_derives);
-    if let Some(ref desc) = struct_config.doccom {
+    let derive_line = format_derive_line(&view.macroforge_derives);
+    if let Some(ref desc) = view.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &struct_config.annotations {
+    for ann in &view.annotations {
         lines.push(format!("/** {} */", ann));
     }
     lines.push(format!("export interface {} {{", name));
-    for field in &struct_config.fields {
+    for field in &view.fields {
         lines.push(render_field_block(field, array_style, registry));
     }
     lines.push("}".to_string());
@@ -182,23 +176,25 @@ fn generate_enum_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Resolve `output_override` literally — see [`generate_struct_block`].
-    let enum_def = enum_def.effective();
+    // Same approach as [`generate_struct_block`]: emit under the entry's own
+    // enum_name, pull body from `enum_view` so same-name overrides are
+    // applied while redirect overrides leave the entry's own body intact.
     let name = enum_def.enum_name.to_case(Case::Pascal);
+    let view = enum_view(enum_def);
     let mut lines: Vec<String> = Vec::new();
 
-    let derive_line = format_derive_line(&enum_def.macroforge_derives);
-    if let Some(ref desc) = enum_def.doccom {
+    let derive_line = format_derive_line(&view.macroforge_derives);
+    if let Some(ref desc) = view.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
     lines.push(derive_line);
-    for ann in &enum_def.annotations {
+    for ann in &view.annotations {
         lines.push(format!("/** {} */", ann));
     }
 
     // Emit @serde annotation for tagged representations so the macroforge
     // type registry knows how to parse/stringify these unions at runtime.
-    match &enum_def.representation {
+    match &view.representation {
         EnumRepresentation::InternallyTagged { tag } => {
             lines.push(format!("/** @serde({{ tag: \"{}\" }}) */", tag));
         }
@@ -216,10 +212,10 @@ fn generate_enum_block(
         }
     }
 
-    let variant_parts: Vec<String> = enum_def
+    let variant_parts: Vec<String> = view
         .variants
         .iter()
-        .map(|variant| render_variant(variant, &enum_def.representation, array_style, registry))
+        .map(|variant| render_variant(variant, &view.representation, array_style, registry))
         .collect();
 
     lines.push(format!(
@@ -488,7 +484,7 @@ fn field_type_to_typescript(
             {:case FieldType::RecordLink(inner)}
                 RecordLink<@{field_type_to_typescript(inner, array_style, registry).trim()}>
             {:case FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value)}
-                { [key: @{field_type_to_typescript(key, array_style, registry)}]: @{field_type_to_typescript(value, array_style, registry)} }
+                Record<@{field_type_to_typescript(key, array_style, registry)}, @{field_type_to_typescript(value, array_style, registry)}>
             {:case FieldType::Other(type_name)}
                 @{type_name.to_case(Case::Pascal)}
         {/match}
@@ -645,11 +641,14 @@ pub fn compute_macro_import_line(
     let mut extra_derives: Vec<String> = Vec::new();
     let mut seen = BTreeSet::new();
 
+    // Match the entry by its own (PascalCase) name and read the derives from
+    // `struct_view` so the import line lines up with what `generate_struct_block`
+    // actually emits in the `@derive(...)` JSDoc.
     for s in structs.values() {
-        let s = s.effective();
         let name = s.struct_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            for d in &s.macroforge_derives {
+            let view = struct_view(s);
+            for d in &view.macroforge_derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -658,10 +657,10 @@ pub fn compute_macro_import_line(
     }
 
     for e in enums.values() {
-        let e = e.effective();
         let name = e.enum_name.to_case(Case::Pascal);
         if type_set.contains(&name) {
-            for d in &e.macroforge_derives {
+            let view = enum_view(e);
+            for d in &view.macroforge_derives {
                 if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
                     extra_derives.push(d.clone());
                 }
@@ -758,10 +757,13 @@ pub fn compute_extra_imports(
         collect_foreign_imports_recursive(ft, registry, fi);
     };
 
+    // Match by own struct/enum name, walk fields via `*_view` so the imports
+    // line up with the body that `generate_struct_block` / `generate_enum_block`
+    // actually emit.
     for s in structs.values() {
-        let s = s.effective();
         if type_set.contains(&s.struct_name.to_case(Case::Pascal)) {
-            for field in &s.fields {
+            let view = struct_view(s);
+            for field in &view.fields {
                 let field = field.effective();
                 check_field_type(
                     &field.field_type,
@@ -773,9 +775,9 @@ pub fn compute_extra_imports(
     }
 
     for e in enums.values() {
-        let e = e.effective();
         if type_set.contains(&e.enum_name.to_case(Case::Pascal)) {
-            for variant in &e.variants {
+            let view = enum_view(e);
+            for variant in &view.variants {
                 let variant = variant.effective();
                 if let Some(data) = &variant.data {
                     match data {

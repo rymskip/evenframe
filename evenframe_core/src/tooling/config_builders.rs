@@ -66,8 +66,6 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         table_configs.len()
     );
 
-    resolve_relation_endpoints(&mut table_configs, &enum_configs);
-
     // Apply output rule plugins to enrich configs with convention-based defaults
     #[cfg(feature = "wasm-plugins")]
     {
@@ -103,10 +101,13 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
             &mut struct_configs,
             &mut enum_configs,
         )?;
-        // Re-run relation endpoint resolution so any synthetic relation
-        // tables get their from/to resolved from their `in`/`out` fields.
-        resolve_relation_endpoints(&mut table_configs, &enum_configs);
     }
+
+    // Resolve relation `from`/`to` from `in`/`out` field types. Done once,
+    // after every plugin has finished mutating the configs, so resolution
+    // sees the final picture (synthetic projections registered, output_rule
+    // overrides applied).
+    resolve_relation_endpoints(&mut table_configs, &enum_configs, &struct_configs);
 
     Ok((enum_configs, table_configs, struct_configs))
 }
@@ -166,19 +167,23 @@ pub fn build_all_configs_default() -> AllConfigs {
         table_configs.len()
     );
 
-    resolve_relation_endpoints(&mut table_configs, &enum_configs);
+    resolve_relation_endpoints(&mut table_configs, &enum_configs, &struct_configs);
 
     (enum_configs, table_configs, struct_configs)
 }
 
 /// Resolves `from`/`to` on relation tables by inspecting `in`/`out` field types.
 ///
-/// For each table with a relation config that has empty `from`/`to`, this looks at
-/// the `in` and `out` fields' `RecordLink<T>` types and resolves `T` to table names.
-/// If `T` is a persistable_union enum, all variant table names are collected.
+/// Walks the `in` and `out` fields' `RecordLink<T>` types and resolves `T` to
+/// the set of table names it references. If `T` is a persistable_union, every
+/// variant's struct name is run through `effective()` so synthetic projections
+/// resolve to the parent table; `from`/`to` are unconditionally rewritten with
+/// whatever the resolver finds, which is correct because this runs once after
+/// every plugin has finished mutating the configs.
 fn resolve_relation_endpoints(
     table_configs: &mut BTreeMap<String, TableConfig>,
     enum_configs: &BTreeMap<String, TaggedUnion>,
+    struct_configs: &BTreeMap<String, crate::types::StructConfig>,
 ) {
     // Snapshot table names to avoid borrow conflicts
     let known_tables: std::collections::BTreeSet<String> = table_configs.keys().cloned().collect();
@@ -193,29 +198,26 @@ fn resolve_relation_endpoints(
             relation.edge_name = table_config.table_name.clone();
         }
 
-        // Resolve from/to from in/out field types
-        if relation.from.is_empty()
-            && let Some(tables) = resolve_field_to_tables(
-                &table_config.struct_config,
-                "in",
-                enum_configs,
-                &known_tables,
-            )
-        {
+        if let Some(tables) = resolve_field_to_tables(
+            &table_config.struct_config,
+            "in",
+            enum_configs,
+            struct_configs,
+            &known_tables,
+        ) {
             debug!(
                 "Auto-resolved relation.from for '{}': {:?}",
                 table_config.table_name, tables
             );
             relation.from = tables;
         }
-        if relation.to.is_empty()
-            && let Some(tables) = resolve_field_to_tables(
-                &table_config.struct_config,
-                "out",
-                enum_configs,
-                &known_tables,
-            )
-        {
+        if let Some(tables) = resolve_field_to_tables(
+            &table_config.struct_config,
+            "out",
+            enum_configs,
+            struct_configs,
+            &known_tables,
+        ) {
             debug!(
                 "Auto-resolved relation.to for '{}': {:?}",
                 table_config.table_name, tables
@@ -225,11 +227,29 @@ fn resolve_relation_endpoints(
     }
 }
 
+/// Resolve a variant's struct reference back to the underlying table name.
+///
+/// A union variant may reference a synthetic projection whose own snake-case
+/// name doesn't match a real table. Walk `effective()` so plugins can declare
+/// such redirects via `output_override` and have schema generation follow
+/// them to the parent struct's table.
+fn variant_table_name(
+    variant_struct_name: &str,
+    struct_configs: &BTreeMap<String, crate::types::StructConfig>,
+) -> String {
+    if let Some(sc) = struct_configs.get(variant_struct_name) {
+        sc.effective().struct_name.to_case(Case::Snake)
+    } else {
+        variant_struct_name.to_case(Case::Snake)
+    }
+}
+
 /// Resolves a relation field (`in` or `out`) to the table names it references.
 fn resolve_field_to_tables(
     struct_config: &crate::types::StructConfig,
     field_name: &str,
     enum_configs: &BTreeMap<String, TaggedUnion>,
+    struct_configs: &BTreeMap<String, crate::types::StructConfig>,
     known_tables: &std::collections::BTreeSet<String>,
 ) -> Option<Vec<String>> {
     let field = struct_config
@@ -246,10 +266,17 @@ fn resolve_field_to_tables(
         _ => return None,
     };
 
-    // Try direct table match
+    // Try direct table match — first by literal snake_case, then via the
+    // struct's `effective()` so a synthetic projection whose
+    // `output_override` points at another struct still resolves to the
+    // parent's table.
     let snake = inner_type_name.to_case(Case::Snake);
     if known_tables.contains(&snake) {
         return Some(vec![snake]);
+    }
+    let effective_snake = variant_table_name(&inner_type_name, struct_configs);
+    if known_tables.contains(&effective_snake) {
+        return Some(vec![effective_snake]);
     }
 
     // Try enum variant resolution
@@ -262,7 +289,7 @@ fn resolve_field_to_tables(
                     VariantData::DataStructureRef(FieldType::Other(name)) => name,
                     _ => continue,
                 };
-                let t = struct_name.to_case(Case::Snake);
+                let t = variant_table_name(struct_name, struct_configs);
                 if known_tables.contains(&t) {
                     tables.push(t);
                 }
