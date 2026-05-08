@@ -300,8 +300,8 @@ fn tagged_union_to_surreal_string(
     }
 
     // Walk the variant's inline-struct fields (if any) with their real
-    // field types. Variants with `DataStructureRef` or no data fall
-    // through to the default case.
+    // field types. `DataStructureRef` (newtype / single-payload tuple
+    // variants) is handled separately below.
     if let Some(VariantData::InlineStruct(struct_config)) =
         variant.data.as_ref().map(|d| match d {
             VariantData::InlineStruct(sc) => VariantData::InlineStruct(sc.clone()),
@@ -316,6 +316,39 @@ fn tagged_union_to_surreal_string(
                 }
             }
         }
+    }
+
+    // Newtype variants carry one typed payload (e.g.
+    // `Service(Box<RecordLink<Service>>)`). Format the payload with the
+    // variant's `FieldType` and emit it under the discriminator shape so
+    // record links / typed primitives survive the round trip — without
+    // this, the ExternallyTagged branch below saw empty `pairs` and
+    // emitted `{ Variant: {} }`, dropping the payload.
+    if let Some(VariantData::DataStructureRef(ft)) = variant.data.as_ref()
+        && let Some(payload) = variant_obj.as_ref()
+    {
+        let payload_str = to_surreal_string(ft, payload, registry);
+        return match &tu.representation {
+            EnumRepresentation::ExternallyTagged => format!(
+                "{{ '{}': {} }}",
+                escape_single_quotes(&variant_name),
+                payload_str
+            ),
+            EnumRepresentation::AdjacentlyTagged { tag, content } => format!(
+                "{{ {}: '{}', {}: {} }}",
+                tag,
+                escape_single_quotes(&variant_name),
+                content,
+                payload_str
+            ),
+            EnumRepresentation::InternallyTagged { tag } => format!(
+                "{{ {}: '{}', value: {} }}",
+                tag,
+                escape_single_quotes(&variant_name),
+                payload_str
+            ),
+            EnumRepresentation::Untagged => payload_str,
+        };
     }
 
     // Adjacently-tagged unions wrap the variant payload under `content`.
