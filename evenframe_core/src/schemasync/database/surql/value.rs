@@ -57,13 +57,22 @@ pub fn to_surreal_string(
                         }
                     }
                     "decimal_number" => {
-                        if value.is_string() {
+                        // Emit with the `dec` suffix so SurrealDB stores the value
+                        // as a `decimal` type. Without the suffix, SurrealQL
+                        // interprets `10` as `int` and `10.0` as `float`, which
+                        // round-trip back as JSON-number rather than the
+                        // string-encoded decimal Rust's `Decimal::deserialize`
+                        // expects — even though the field's DEFINE FIELD type
+                        // is `decimal`, CONTENT-form CREATE/UPDATE doesn't
+                        // coerce on the way in.
+                        let raw = if value.is_string() {
                             value.as_str().unwrap_or("0.0").to_string()
                         } else if value.is_number() {
                             value.to_string()
                         } else {
                             "0.0".to_string()
-                        }
+                        };
+                        format!("{}dec", raw)
                     }
                     "record_id" => {
                         let id_string = value.as_str().unwrap_or_default();
