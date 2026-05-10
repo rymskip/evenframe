@@ -707,6 +707,13 @@ fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -
 ///   TS import is declared in the passed `registry` (built from the user's
 ///   `[general.foreign_types]` config — no foreign types are hardcoded);
 /// - a single `RecordLink` utility import if any field in the types uses it.
+///
+/// Recurses through referenced structs and tagged unions even when those
+/// referenced types live in other type groups: the macroforge Gigaform
+/// expansion inlines variant payloads (e.g. `BigDecimal.BigDecimal` inside
+/// `CommissionRule::FlatAmount`) into the parent's controller getters and
+/// setters, so the parent file needs the foreign-type import even though
+/// it never names the foreign type at the surface level.
 pub fn compute_extra_imports(
     type_names: &[String],
     structs: &BTreeMap<String, StructConfig>,
@@ -720,41 +727,102 @@ pub fn compute_extra_imports(
     fn collect_foreign_imports_recursive(
         ft: &FieldType,
         registry: &crate::types::ForeignTypeRegistry,
+        structs: &BTreeMap<String, StructConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
+        visited: &mut BTreeSet<String>,
         fi: &mut BTreeMap<String, bool>,
+        rl: &mut bool,
     ) {
-        if let FieldType::Other(name) = ft
-            && let Some(ftc) = registry.lookup(name)
-            && !ftc.ts_import.is_empty()
-        {
-            fi.insert(ftc.ts_import.name.clone(), ftc.ts_import.is_type_only);
+        if let FieldType::RecordLink(_) = ft {
+            *rl = true;
+        }
+        if let FieldType::Other(name) = ft {
+            if let Some(ftc) = registry.lookup(name) {
+                if !ftc.ts_import.is_empty() {
+                    fi.insert(ftc.ts_import.name.clone(), ftc.ts_import.is_type_only);
+                }
+            } else if visited.insert(name.clone()) {
+                // Follow the reference into the locally-defined struct or
+                // enum so foreign types reachable through nested variant
+                // payloads bubble up to the importing file.
+                let pascal = name.to_case(Case::Pascal);
+                if let Some(referenced) = structs.get(name).or_else(|| structs.get(&pascal)) {
+                    let view = struct_view(referenced);
+                    for field in &view.fields {
+                        let field = field.effective();
+                        collect_foreign_imports_recursive(
+                            &field.field_type,
+                            registry,
+                            structs,
+                            enums,
+                            visited,
+                            fi,
+                            rl,
+                        );
+                    }
+                } else if let Some(referenced) =
+                    enums.get(name).or_else(|| enums.get(&pascal))
+                {
+                    let view = enum_view(referenced);
+                    for variant in &view.variants {
+                        let variant = variant.effective();
+                        if let Some(data) = &variant.data {
+                            match data {
+                                VariantData::InlineStruct(enum_struct) => {
+                                    for field in &enum_struct.fields {
+                                        collect_foreign_imports_recursive(
+                                            &field.field_type,
+                                            registry,
+                                            structs,
+                                            enums,
+                                            visited,
+                                            fi,
+                                            rl,
+                                        );
+                                    }
+                                }
+                                VariantData::DataStructureRef(inner_ft) => {
+                                    collect_foreign_imports_recursive(
+                                        inner_ft, registry, structs, enums, visited, fi, rl,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         match ft {
             FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-                collect_foreign_imports_recursive(inner, registry, fi)
+                collect_foreign_imports_recursive(
+                    inner, registry, structs, enums, visited, fi, rl,
+                )
             }
             FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-                collect_foreign_imports_recursive(k, registry, fi);
-                collect_foreign_imports_recursive(v, registry, fi);
+                collect_foreign_imports_recursive(k, registry, structs, enums, visited, fi, rl);
+                collect_foreign_imports_recursive(v, registry, structs, enums, visited, fi, rl);
             }
             FieldType::Tuple(items) => {
                 for item in items {
-                    collect_foreign_imports_recursive(item, registry, fi);
+                    collect_foreign_imports_recursive(
+                        item, registry, structs, enums, visited, fi, rl,
+                    );
                 }
             }
             FieldType::Struct(fields) => {
                 for (_, inner_ft) in fields {
-                    collect_foreign_imports_recursive(inner_ft, registry, fi);
+                    collect_foreign_imports_recursive(
+                        inner_ft, registry, structs, enums, visited, fi, rl,
+                    );
                 }
             }
             _ => {}
         }
     }
 
-    let check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut BTreeMap<String, bool>| {
-        if field_type_contains(ft, &|f| matches!(f, FieldType::RecordLink(_))) {
-            *rl = true;
-        }
-        collect_foreign_imports_recursive(ft, registry, fi);
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    let mut check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut BTreeMap<String, bool>| {
+        collect_foreign_imports_recursive(ft, registry, structs, enums, &mut visited, fi, rl);
     };
 
     // Match by own struct/enum name, walk fields via `*_view` so the imports
