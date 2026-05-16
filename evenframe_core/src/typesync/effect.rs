@@ -531,7 +531,7 @@ fn field_type_to_effect_schema(
                 let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
                 let assignments: Vec<String> = field_names
                     .into_iter()
-                    .zip(values.into_iter())
+                    .zip(values)
                     .map(|(name, value)| format!("{}: {}", name, value))
                     .collect();
                 value_stack.push(format!("Schema.Struct({{ {} }})", assignments.join(", ")));
@@ -668,7 +668,7 @@ fn field_type_to_ts_encoded(
                 let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
                 let assignments: Vec<String> = field_names
                     .into_iter()
-                    .zip(values.into_iter())
+                    .zip(values)
                     .map(|(name, value)| format!("  readonly {}: {};", name, value))
                     .collect();
                 value_stack.push(format!("{{\n{}\n}}", assignments.join("\n")));

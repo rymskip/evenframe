@@ -704,7 +704,7 @@ impl<'a> FieldValueGenerator<'a> {
                     let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
                     let assignments: Vec<String> = field_names
                         .into_iter()
-                        .zip(values.into_iter())
+                        .zip(values)
                         .map(|(name, value)| format!("{}: {}", name, value))
                         .collect();
                     value_stack.push(format!("{{ {} }}", assignments.join(", ")));
@@ -739,7 +739,7 @@ impl<'a> FieldValueGenerator<'a> {
                     let mut assignments: Vec<String> =
                         vec![format!("{}: '{}'", tag_key, tag_value)];
                     for (name, value) in
-                        field_names.into_iter().skip(1).zip(data_values.into_iter())
+                        field_names.into_iter().skip(1).zip(data_values)
                     {
                         assignments.push(format!("{}: {}", name, value));
                     }

@@ -678,28 +678,6 @@ pub fn compute_macro_import_line(
     }
 }
 
-/// Checks whether a FieldType tree contains a specific variant (recursively).
-fn field_type_contains(ft: &FieldType, predicate: &dyn Fn(&FieldType) -> bool) -> bool {
-    if predicate(ft) {
-        return true;
-    }
-    match ft {
-        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-            field_type_contains(inner, predicate)
-        }
-        FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-            field_type_contains(k, predicate) || field_type_contains(v, predicate)
-        }
-        FieldType::Tuple(items) => items
-            .iter()
-            .any(|item| field_type_contains(item, predicate)),
-        FieldType::Struct(fields) => fields
-            .iter()
-            .any(|(_, ft)| field_type_contains(ft, predicate)),
-        _ => false,
-    }
-}
-
 /// Computes extra import lines needed for a set of types.
 ///
 /// Emits:

@@ -236,9 +236,7 @@ fn generate_string(validators: &[Validator], rng: &mut ThreadRng) -> Option<Stri
     }
 
     for _ in 0..STRING_GEN_ATTEMPTS {
-        let Some(candidate) = build_string_candidate(&c, rng) else {
-            return None;
-        };
+        let candidate = build_string_candidate(&c, rng)?;
         if validators
             .iter()
             .all(|v| v.matches(&MockValue::Str(&candidate)))
@@ -294,10 +292,10 @@ fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<
 
     // 3. Re-clamp to length bounds. We may have grown past max_len after
     // splicing; truncate by chars (not bytes) to stay valid UTF-8.
-    if let Some(max) = effective_max_len(c) {
-        if s.chars().count() > max {
-            s = s.chars().take(max).collect();
-        }
+    if let Some(max) = effective_max_len(c)
+        && s.chars().count() > max
+    {
+        s = s.chars().take(max).collect();
     }
     if let Some(min) = effective_min_len(c) {
         let cur = s.chars().count();

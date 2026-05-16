@@ -1476,7 +1476,7 @@ fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
                     d
                 })
                 .sum();
-            sum % 10 == 0
+            sum.is_multiple_of(10)
         }
         StringValidator::Literal(literal) => s == literal,
         StringValidator::Length(len_str) => match len_str.parse::<usize>() {
@@ -1558,7 +1558,7 @@ fn match_number_validator(nv: &NumberValidator, n: f64) -> bool {
             let d = divisor.0;
             d != 0.0 && (n % d).abs() < f64::EPSILON
         }
-        NumberValidator::Uint8 => n >= 0.0 && n <= 255.0 && n.fract() == 0.0,
+        NumberValidator::Uint8 => (0.0..=255.0).contains(&n) && n.fract() == 0.0,
     }
 }
 

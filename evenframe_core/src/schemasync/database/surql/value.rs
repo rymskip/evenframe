@@ -311,18 +311,13 @@ fn tagged_union_to_surreal_string(
     // Walk the variant's inline-struct fields (if any) with their real
     // field types. `DataStructureRef` (newtype / single-payload tuple
     // variants) is handled separately below.
-    if let Some(VariantData::InlineStruct(struct_config)) =
-        variant.data.as_ref().map(|d| match d {
-            VariantData::InlineStruct(sc) => VariantData::InlineStruct(sc.clone()),
-            VariantData::DataStructureRef(ft) => VariantData::DataStructureRef(ft.clone()),
-        })
+    if let Some(VariantData::InlineStruct(struct_config)) = variant.data.as_ref()
+        && let Some(payload_obj) = variant_obj.as_ref().and_then(|v| v.as_object())
     {
-        if let Some(payload_obj) = variant_obj.as_ref().and_then(|v| v.as_object()) {
-            for field in &struct_config.effective().fields {
-                if let Some(sub_val) = payload_obj.get(&field.field_name) {
-                    let s = to_surreal_string(&field.field_type, sub_val, registry);
-                    pairs.push(format!("{}: {}", field.field_name, s));
-                }
+        for field in &struct_config.effective().fields {
+            if let Some(sub_val) = payload_obj.get(&field.field_name) {
+                let s = to_surreal_string(&field.field_type, sub_val, registry);
+                pairs.push(format!("{}: {}", field.field_name, s));
             }
         }
     }

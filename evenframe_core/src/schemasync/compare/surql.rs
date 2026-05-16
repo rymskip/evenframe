@@ -589,21 +589,21 @@ impl<'a> SchemaImporter<'a> {
                     '}' => brace_count -= 1,
                     '<' => bracket_count += 1,
                     '>' => bracket_count -= 1,
-                    '|' if brace_count == 0 && bracket_count == 0 => {
+                    '|' if brace_count == 0
+                        && bracket_count == 0
                         // Check if this is part of " | "
-                        if i > 0
-                            && i < chars.len() - 1
-                            && chars[i - 1] == ' '
-                            && chars[i + 1] == ' '
-                        {
-                            // Add the part before this union separator
-                            let part = &type_str[current_start..i - 1];
-                            if !part.trim().is_empty() {
-                                parts.push(part.trim());
-                            }
-                            current_start = i + 2; // Skip past " | "
-                            i += 1; // Extra increment to skip the space after |
+                        && i > 0
+                        && i < chars.len() - 1
+                        && chars[i - 1] == ' '
+                        && chars[i + 1] == ' ' =>
+                    {
+                        // Add the part before this union separator
+                        let part = &type_str[current_start..i - 1];
+                        if !part.trim().is_empty() {
+                            parts.push(part.trim());
                         }
+                        current_start = i + 2; // Skip past " | "
+                        i += 1; // Extra increment to skip the space after |
                     }
                     _ => {}
                 }

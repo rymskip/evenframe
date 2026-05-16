@@ -88,7 +88,6 @@ pub fn compute_file_grouping(
                 .insert(from.clone());
         }
     }
-
     // 4. Analyse recursion to find SCCs.
     let rec = analyse_recursion(structs, enums);
 
