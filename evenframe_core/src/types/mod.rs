@@ -104,7 +104,17 @@ where
         let value = Value::deserialize(deserializer)?;
 
         if value.is_string() {
-            // If it's a string, it can only be an Id
+            // If it's a string, it can only be an Id, and it must be a
+            // well-formed record id: `table:id` with a non-empty table and a
+            // non-empty key. An empty or partial string is not a valid link.
+            let raw = value.as_str().unwrap_or_default();
+            let (table, key) = raw.split_once(':').unwrap_or(("", ""));
+            if table.is_empty() || key.is_empty() {
+                return Err(serde::de::Error::custom(format!(
+                    "RecordLink<{}> expects a 'table:id' record link with a non-empty table and id, got {raw:?}",
+                    std::any::type_name::<T>()
+                )));
+            }
             EvenframeRecordId::deserialize(value)
                 .map(RecordLink::Id)
                 .map_err(|e| {
@@ -121,18 +131,23 @@ where
             match (id_attempt, obj_attempt) {
                 (Ok(id), Err(_)) => Ok(RecordLink::Id(id)),
                 (Err(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
-                (Ok(_), Ok(_)) => Err(serde::de::Error::custom(
-                    "Ambiguous object: it can be deserialized as both RecordLink::Id and RecordLink::Object",
-                )),
+                // SurrealQL FETCH returns the full record with its `id` field
+                // intact, so both Id (via the embedded `id: "table:key"`) and
+                // Object (because every field is present) succeed. The caller
+                // asked for a fetch — prefer the richer Object form. Bare-id
+                // responses still resolve via the (Ok, Err) arm above.
+                (Ok(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
                 (Err(err_id), Err(err_obj)) => Err(serde::de::Error::custom(format!(
                     "Failed to deserialize object as RecordLink: {:#?}. Tried Id variant: {}. Tried Object variant: {}.",
                     value, err_id, err_obj
                 ))),
             }
         } else {
-            Err(serde::de::Error::custom(
-                "RecordLink must be a string or an object",
-            ))
+            Err(serde::de::Error::custom(format!(
+                "RecordLink<{}> must be a string or an object — got {:#?}",
+                std::any::type_name::<T>(),
+                value
+            )))
         }
     }
 }

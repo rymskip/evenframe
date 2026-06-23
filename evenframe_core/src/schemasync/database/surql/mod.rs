@@ -484,16 +484,19 @@ impl DatabaseProvider for SurrealdbProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to SurrealDB"))?;
 
+        let from_ref = record_ref(from_id);
+        let to_ref = record_ref(to_id);
+
         let query = if let Some(data) = data {
             format!(
                 "RELATE {}->{}->{} CONTENT {}",
-                from_id,
+                from_ref,
                 edge_table,
-                to_id,
+                to_ref,
                 serde_json::to_string(data).unwrap_or_default()
             )
         } else {
-            format!("RELATE {}->{}->{}", from_id, edge_table, to_id)
+            format!("RELATE {}->{}->{}", from_ref, edge_table, to_ref)
         };
 
         let mut response = client
@@ -522,7 +525,9 @@ impl DatabaseProvider for SurrealdbProvider {
     ) -> Result<()> {
         let query = format!(
             "DELETE {} WHERE in = {} AND out = {}",
-            edge_table, from_id, to_id
+            edge_table,
+            record_ref(from_id),
+            record_ref(to_id)
         );
         self.execute(&query).await?;
         Ok(())
@@ -534,17 +539,18 @@ impl DatabaseProvider for SurrealdbProvider {
         record_id: &str,
         direction: RelationshipDirection,
     ) -> Result<Vec<Relationship>> {
+        let id_ref = record_ref(record_id);
         let query = match direction {
             RelationshipDirection::Outgoing => {
-                format!("SELECT * FROM {} WHERE in = {}", edge_table, record_id)
+                format!("SELECT * FROM {} WHERE in = {}", edge_table, id_ref)
             }
             RelationshipDirection::Incoming => {
-                format!("SELECT * FROM {} WHERE out = {}", edge_table, record_id)
+                format!("SELECT * FROM {} WHERE out = {}", edge_table, id_ref)
             }
             RelationshipDirection::Both => {
                 format!(
                     "SELECT * FROM {} WHERE in = {} OR out = {}",
-                    edge_table, record_id, record_id
+                    edge_table, id_ref, id_ref
                 )
             }
         };
@@ -581,4 +587,20 @@ impl DatabaseProvider for SurrealdbProvider {
         // when we refactor the comparator to use the provider abstraction
         Ok(None)
     }
+}
+
+/// Wrap a record-id string in `type::record('…')` so SurrealDB parses
+/// it through the dedicated record-id grammar rather than splicing it
+/// raw into the query. Bare interpolation collapses the moment an ID
+/// contains a colon, backtick, or other special character: a record
+/// stored as `` user:`user:test_sso` `` would become
+/// `WHERE in = user:user:test_sso`, which the parser either rejects
+/// outright or silently truncates to `user:user` — far worse than a
+/// loud failure. `type::record` accepts the full string verbatim and
+/// resolves it back into a proper record reference.
+fn record_ref(id: &str) -> String {
+    // Single quotes inside the id need to be escaped or the closing
+    // `'` will terminate the string literal early.
+    let escaped = id.replace('\'', "\\'");
+    format!("type::record('{}')", escaped)
 }

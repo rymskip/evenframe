@@ -438,7 +438,19 @@ impl EvenframeConfig {
     /// `config_file_path` and `resolved`) are preserved across the round-trip.
     fn substitute_all_env_vars(config: &mut EvenframeConfig) -> Result<()> {
         let config_file_path = config.config_file_path.clone();
-        let resolved = config.schemasync.database.resolved.clone();
+        let mut resolved = config.schemasync.database.resolved.clone();
+
+        // The TOML round-trip below only substitutes vars that appear in
+        // config string fields; it can't reach surql content loaded from
+        // disk into `resolved`. Substitute those explicitly so DDL like
+        // `WITH JWT URL '${OIDC_JWKS_URL:-…}'` reaches SurrealDB resolved
+        // — SurrealDB itself does no env-var expansion.
+        if let Some(ref surql) = resolved.access_surql {
+            resolved.access_surql = Some(Self::substitute_env_vars(surql)?);
+        }
+        if let Some(ref surql) = resolved.functions_surql {
+            resolved.functions_surql = Some(Self::substitute_env_vars(surql)?);
+        }
 
         let toml_string = toml::to_string(&config).map_err(|e| {
             EvenframeError::config(format!(

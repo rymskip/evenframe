@@ -78,6 +78,29 @@ pub fn to_surreal_string(
                         let id_string = value.as_str().unwrap_or_default();
                         id_string.replace('`', "")
                     }
+                    "uuid_literal" => {
+                        if let Some(s) = value.as_str() {
+                            format!("u'{}'", escape_single_quotes(s))
+                        } else {
+                            "rand::uuid::v7()".to_string()
+                        }
+                    }
+                    "bytes_literal" => {
+                        // SurrealDB's `bytes` column expects a typed literal —
+                        // `b"deadbeef"` for hex or `b64"..."` for base64.
+                        // The JSON wire format is base64.
+                        if let Some(s) = value.as_str() {
+                            format!("b64\"{}\"", s)
+                        } else {
+                            "b64\"\"".to_string()
+                        }
+                    }
+                    "geometry_literal" => {
+                        // SurrealDB geometry: pass through GeoJSON object as a
+                        // SurrealQL object literal. The `geometry` type coerces
+                        // a `{ type, coordinates }` object.
+                        to_surreal_string_inferred(value)
+                    }
                     _ => to_surreal_string_inferred(value),
                 }
             } else if let Some(tagged_union) = get_tagged_union(name) {
@@ -202,15 +225,30 @@ pub fn to_surreal_string(
             }
         }
         FieldType::RecordLink(inner_ftype) => {
+            // Wrap every record-link string in `type::record('…')` so
+            // SurrealDB parses it via the dedicated record-id grammar
+            // instead of injecting it raw into the query. Bare
+            // injection breaks the moment an ID contains a colon,
+            // backtick, or other character that needs quoting — e.g.
+            // a record stored as `user:⟨user:test_sso⟩` becomes
+            // `WHERE owner = user:user:test_sso` after backtick-strip,
+            // which is invalid SurrealQL. `type::record` accepts the
+            // full string verbatim and resolves to the right record.
             if value.is_string() {
                 let link_string = value
                     .as_str()
                     .expect("Record link value should not be None");
-                link_string.replace('`', "")
+                format!(
+                    "type::record('{}')",
+                    escape_single_quotes(link_string)
+                )
             } else if let Some(obj) = value.as_object() {
                 if let Some(id_value) = obj.get("Id") {
                     if let Some(id_str) = id_value.as_str() {
-                        format!("r{id_str}")
+                        format!(
+                            "type::record('{}')",
+                            escape_single_quotes(id_str)
+                        )
                     } else {
                         "null".to_string()
                     }
@@ -218,7 +256,10 @@ pub fn to_surreal_string(
                     // When the record was FETCHed, the full object is present
                     // with a lowercase "id" field. Extract just the ID.
                     if let Some(id_str) = id_value.as_str() {
-                        id_str.replace('`', "")
+                        format!(
+                            "type::record('{}')",
+                            escape_single_quotes(id_str)
+                        )
                     } else {
                         "null".to_string()
                     }

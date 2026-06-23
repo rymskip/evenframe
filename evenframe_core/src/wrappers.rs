@@ -96,12 +96,52 @@ impl<'de> Deserialize<'de> for EvenframeRecordId {
                 self.visit_str(&value)
             }
 
-            fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
             where
                 M: MapAccess<'de>,
             {
-                // fall back to deserializing a full RecordId struct/map
-                let record_id = RecordId::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                // SurrealQL FETCH returns partial records as `{ id: "table:key",
+                // ...other selected fields }`. The standard `RecordId` map shape
+                // is `{ table: "...", id: ... }` and rejects extra keys, so
+                // before falling through to `RecordId::deserialize` we look for
+                // a string `id` containing `:` and parse it directly. This
+                // makes RecordLink<T> deserialization succeed for fetched
+                // partials by collapsing the partial back to its Id form.
+                let mut buffered: Vec<(String, serde_value::Value)> = Vec::new();
+                let mut id_string: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "id" && id_string.is_none() {
+                        let raw = map.next_value::<serde_value::Value>()?;
+                        match &raw {
+                            serde_value::Value::String(s) if s.contains(':') => {
+                                id_string = Some(s.clone());
+                            }
+                            _ => {
+                                buffered.push((key, raw));
+                            }
+                        }
+                    } else {
+                        let raw = map.next_value::<serde_value::Value>()?;
+                        buffered.push((key, raw));
+                    }
+                }
+                if let Some(s) = id_string {
+                    let mut parts = s.splitn(2, ':');
+                    let table = parts.next().unwrap_or("");
+                    let key = parts.next().unwrap_or("").replace(['⟨', '⟩', '`'], "");
+                    return Ok(EvenframeRecordId(RecordId::new(table, key)));
+                }
+                // Fall back to RecordId::deserialize for the canonical
+                // `{ table, id }` shape (or any other variant RecordId accepts).
+                let buffered_map: std::collections::BTreeMap<
+                    serde_value::Value,
+                    serde_value::Value,
+                > = buffered
+                    .into_iter()
+                    .map(|(k, v)| (serde_value::Value::String(k), v))
+                    .collect();
+                let record_id = RecordId::deserialize(serde_value::Value::Map(buffered_map))
+                    .map_err(de::Error::custom)?;
                 Ok(EvenframeRecordId(record_id))
             }
 
