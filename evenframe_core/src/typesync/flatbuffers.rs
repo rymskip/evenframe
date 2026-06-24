@@ -37,6 +37,10 @@ pub fn generate_flatbuffers_schema_string(
     let unique_structs: Vec<&StructConfig> = structs
         .values()
         .filter(|s| {
+            // `resolve_only` types are registered for resolution but not emitted.
+            if s.resolve_only {
+                return false;
+            }
             let name = s.struct_name.to_case(Case::Pascal);
             if seen_structs.contains(&name) {
                 false
@@ -52,6 +56,9 @@ pub fn generate_flatbuffers_schema_string(
     let unique_enums: Vec<&TaggedUnion> = enums
         .values()
         .filter(|e| {
+            if e.resolve_only {
+                return false;
+            }
             let name = e.enum_name.to_case(Case::Pascal);
             if seen_enums.contains(&name) {
                 false
@@ -728,6 +735,7 @@ mod tests {
         structs.insert(
             "user".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "user".to_string(),
                 fields: vec![
                     StructField {
@@ -788,6 +796,7 @@ mod tests {
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
+                resolve_only: false,
                 enum_name: "Status".to_string(),
                 variants: vec![
                     Variant {
@@ -850,6 +859,7 @@ mod tests {
         structs.insert(
             "user_registration_form".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "user_registration_form".to_string(),
                 fields: vec![
                     StructField {
@@ -904,6 +914,7 @@ mod tests {
         enums.insert(
             "Role".to_string(),
             TaggedUnion {
+                resolve_only: false,
                 enum_name: "Role".to_string(),
                 variants: vec![
                     Variant {

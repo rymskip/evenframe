@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "clap",
  "convert_case 0.11.0",
@@ -1677,12 +1677,14 @@ dependencies = [
  "toml 1.0.6+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
  "walkdir",
 ]
 
 [[package]]
 name = "evenframe_core"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1728,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "convert_case 0.11.0",
  "evenframe_core",

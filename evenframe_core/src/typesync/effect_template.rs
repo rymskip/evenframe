@@ -632,6 +632,7 @@ mod tests {
         structs.insert(
             "User".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "User".to_string(),
                 fields: vec![
                     StructField {

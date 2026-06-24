@@ -95,7 +95,7 @@ mod tests {
         let roles = vec![Role::Admin, Role::Moderator, Role::User, Role::Guest];
         let expected = vec!["Admin", "Moderator", "User", "Guest"];
 
-        for (role, expected_str) in roles.into_iter().zip(expected.into_iter()) {
+        for (role, expected_str) in roles.into_iter().zip(expected) {
             let json = serde_json::to_string(&role).unwrap();
             assert_eq!(json, format!("\"{}\"", expected_str));
         }

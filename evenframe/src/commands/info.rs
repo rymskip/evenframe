@@ -143,8 +143,10 @@ apply_aliases: {:?}"#,
 
 fn show_types(format: &InfoFormat) -> Result<()> {
     let config = EvenframeConfig::new()?;
+    let extra_files = config.resolved_include_files();
     let scanner =
-        WorkspaceScanner::new(config.general.apply_aliases, config.general.expand_macros)?;
+        WorkspaceScanner::new(config.general.apply_aliases, config.general.expand_macros)?
+            .with_extra_files(extra_files);
     let types = scanner.scan_for_evenframe_types()?;
 
     match format {

@@ -18,11 +18,11 @@
 #![cfg(feature = "wasm-plugins")]
 
 use evenframe_core::config::OutputRulePluginConfig;
+use evenframe_core::types::{FieldType, StructConfig, StructField};
 use evenframe_core::typesync::plugin::OutputRulePluginManager;
-use evenframe_core::typesync::plugin_types::{
-    OutputRulePluginFieldInfo, OutputRulePluginInput, OutputRulePluginOutput, TypeKind,
-};
-use std::collections::HashMap;
+use evenframe_core::typesync::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
+use evenframe_core::validator::{StringValidator, Validator};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn playground_root() -> PathBuf {
@@ -30,7 +30,7 @@ fn playground_root() -> PathBuf {
 }
 
 fn mgr() -> OutputRulePluginManager {
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "complex".to_string(),
         OutputRulePluginConfig {
@@ -41,87 +41,89 @@ fn mgr() -> OutputRulePluginManager {
         .expect("failed to load complex_rule plugin")
 }
 
-fn f(name: &str, ty: &str) -> OutputRulePluginFieldInfo {
-    OutputRulePluginFieldInfo {
+fn f(name: &str, ty: &str) -> StructField {
+    StructField {
         field_name: name.to_string(),
-        field_type: ty.to_string(),
-        annotations: vec![],
-        validators: vec![],
-        is_optional: ty.starts_with("Option"),
-        record_link_target: None,
-        vec_inner_type: None,
-        has_explicit_format: false,
-        existing_format: None,
-        has_explicit_define: false,
+        field_type: FieldType::Other(ty.to_string()),
+        ..Default::default()
     }
 }
 
-fn f_ann(name: &str, ty: &str, anns: Vec<&str>) -> OutputRulePluginFieldInfo {
+fn f_ann(name: &str, ty: &str, anns: Vec<&str>) -> StructField {
     let mut out = f(name, ty);
     out.annotations = anns.into_iter().map(|s| s.to_string()).collect();
     out
 }
 
-fn f_val(name: &str, ty: &str, vals: Vec<&str>) -> OutputRulePluginFieldInfo {
+fn f_val(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
     let mut out = f(name, ty);
-    out.validators = vals.into_iter().map(|s| s.to_string()).collect();
+    out.validators = vals
+        .into_iter()
+        .map(|s| Validator::StringValidator(StringValidator::StringEmbedded(s.to_string())))
+        .collect();
     out
 }
 
-/// Fluent builder for `OutputRulePluginInput` — keeps the test setup
+/// Fluent builder for `OutputRulePluginInput::Struct` — keeps the test setup
 /// concise without a megadose positional helper.
 struct Builder {
-    inner: OutputRulePluginInput,
+    name: String,
+    derives: Vec<String>,
+    annotations: Vec<String>,
+    pipeline: String,
+    generator: String,
+    fields: Vec<StructField>,
 }
 
 impl Builder {
     fn new(name: &str) -> Self {
         Self {
-            inner: OutputRulePluginInput {
-                type_name: name.to_string(),
-                kind: TypeKind::Struct,
-                rust_derives: vec![],
-                annotations: vec![],
-                pipeline: "Both".to_string(),
-                generator: "effect".to_string(),
-                fields: vec![],
-                table_name: String::new(),
-                is_relation: false,
-                has_explicit_permissions: false,
-                has_explicit_events: false,
-                has_explicit_mock_data: false,
-                existing_macroforge_derives: vec![],
-            },
+            name: name.to_string(),
+            derives: vec![],
+            annotations: vec![],
+            pipeline: "Both".to_string(),
+            generator: "effect".to_string(),
+            fields: vec![],
         }
     }
 
     fn derives(mut self, d: Vec<&str>) -> Self {
-        self.inner.rust_derives = d.into_iter().map(|s| s.to_string()).collect();
+        self.derives = d.into_iter().map(|s| s.to_string()).collect();
         self
     }
 
     fn annotations(mut self, a: Vec<&str>) -> Self {
-        self.inner.annotations = a.into_iter().map(|s| s.to_string()).collect();
+        self.annotations = a.into_iter().map(|s| s.to_string()).collect();
         self
     }
 
     fn pipeline(mut self, p: &str) -> Self {
-        self.inner.pipeline = p.to_string();
+        self.pipeline = p.to_string();
         self
     }
 
     fn generator(mut self, g: &str) -> Self {
-        self.inner.generator = g.to_string();
+        self.generator = g.to_string();
         self
     }
 
-    fn fields(mut self, f: Vec<OutputRulePluginFieldInfo>) -> Self {
-        self.inner.fields = f;
+    fn fields(mut self, f: Vec<StructField>) -> Self {
+        self.fields = f;
         self
     }
 
     fn build(self) -> OutputRulePluginInput {
-        self.inner
+        OutputRulePluginInput::Struct {
+            pipeline: self.pipeline,
+            generator: self.generator,
+            config: StructConfig {
+                struct_name: self.name,
+                fields: self.fields,
+                rust_derives: self.derives,
+                annotations: self.annotations,
+                ..Default::default()
+            },
+        }
     }
 }
 

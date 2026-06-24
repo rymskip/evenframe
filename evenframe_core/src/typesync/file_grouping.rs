@@ -59,12 +59,16 @@ pub fn compute_file_grouping(
     //    TS interface and needs its own file group. Schema-resolution paths
     //    that map projections back to a parent table follow `effective()`
     //    elsewhere.
+    //    `resolve_only` types are registered for resolution but never emitted,
+    //    so they get no file group of their own.
     let all_types: BTreeSet<String> = structs
         .values()
+        .filter(|s| !s.resolve_only)
         .map(|s| s.struct_name.to_case(Case::Pascal))
         .chain(
             enums
                 .values()
+                .filter(|e| !e.resolve_only)
                 .map(|e| e.enum_name.to_case(Case::Pascal)),
         )
         .collect();
@@ -237,6 +241,7 @@ mod tests {
 
     fn make_struct(name: &str, fields: Vec<(&str, FieldType)>) -> StructConfig {
         StructConfig {
+            resolve_only: false,
             struct_name: name.to_string(),
             fields: fields
                 .into_iter()

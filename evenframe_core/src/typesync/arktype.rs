@@ -256,6 +256,11 @@ pub fn generate_arktype_type_string(
     // First, process all enums. Use `effective()` so overrides replace
     // the scanned type.
     for schema_enum in enums.values() {
+        // `resolve_only` types are kept in the maps for reference resolution
+        // (below) but are not emitted as their own interface.
+        if schema_enum.resolve_only {
+            continue;
+        }
         let schema_enum = schema_enum.effective();
         // Write doc comment if present
         if let Some(ref doc) = schema_enum.doccom {
@@ -306,6 +311,11 @@ pub fn generate_arktype_type_string(
     // the scanned type.
     tracing::debug!("Processing structs for Arktype");
     for struct_config in structs.values() {
+        // `resolve_only` types are kept in the maps for reference resolution
+        // but are not emitted as their own interface.
+        if struct_config.resolve_only {
+            continue;
+        }
         let struct_config = struct_config.effective();
         tracing::trace!(struct_name = %struct_config.struct_name, "Processing struct");
         let type_name = struct_config.struct_name.to_case(Case::Pascal);

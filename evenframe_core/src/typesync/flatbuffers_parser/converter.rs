@@ -145,6 +145,7 @@ fn convert_enum(enum_def: &EnumDef) -> TaggedUnion {
         .collect();
 
     TaggedUnion {
+        resolve_only: false,
         enum_name: enum_def.name.clone(),
         variants,
         representation: EnumRepresentation::default(),
@@ -180,6 +181,7 @@ fn convert_union(union_def: &UnionDef) -> TaggedUnion {
         .collect();
 
     TaggedUnion {
+        resolve_only: false,
         enum_name: union_def.name.clone(),
         variants,
         representation: EnumRepresentation::default(),

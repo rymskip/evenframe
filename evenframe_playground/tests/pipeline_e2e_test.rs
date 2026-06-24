@@ -549,8 +549,11 @@ fn test_merge_tables_and_objects_preserves_pipeline() {
     let (_enums, tables, objects) = build_all_configs(&config).unwrap();
     let merged = merge_tables_and_objects(&tables, &objects);
 
-    assert_eq!(merged["TypesyncTable"].pipeline, Pipeline::Typesync);
-    assert_eq!(merged["SchemasyncTable"].pipeline, Pipeline::Schemasync);
+    // `merge_tables_and_objects` keys tables by their snake_case table name
+    // (dropping the PascalCase duplicate); objects stay under their PascalCase
+    // struct name.
+    assert_eq!(merged["typesync_table"].pipeline, Pipeline::Typesync);
+    assert_eq!(merged["schemasync_table"].pipeline, Pipeline::Schemasync);
     assert_eq!(merged["TypesyncObject"].pipeline, Pipeline::Typesync);
 }
 

@@ -1,5 +1,6 @@
 //! The most complex output-rule rule possible, ported to the current
-//! `OutputRulePluginOutput` API (annotations-only, no type substitution).
+//! `TypeContext` / `OutputRulePluginOutput` API (annotations-only, no type
+//! substitution).
 //!
 //! Rule: "Branded Monetary Type via annotations"
 //!
@@ -26,7 +27,49 @@
 //!   - Field with >2 validators → `@heavily_validated` on that field
 //!   - @internal field → `@skip_internal` marker on that field
 
-use evenframe_plugin::{FieldOverride, OutputRulePluginOutput, define_output_rule_plugin};
+use evenframe_plugin::{
+    FieldOverride, OutputRulePluginOutput, TypeContext, TypeFieldInfo, define_output_rule_plugin,
+    serde_json,
+};
+
+/// The struct/enum-level `rust_derives` declared in the Rust source.
+fn rust_derives(ctx: &TypeContext) -> Vec<String> {
+    let cfg = match ctx {
+        TypeContext::Struct { config, .. } | TypeContext::Enum { config, .. } => config,
+        TypeContext::Table { struct_config, .. } => struct_config,
+    };
+    cfg.get("rust_derives")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A field's `FieldType` rendered back to its source-type string.
+fn field_type_str(f: &TypeFieldInfo) -> String {
+    match f.node.get("field_type") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Object(o)) => o
+            .values()
+            .next()
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Number of validators declared on a field.
+fn validator_count(f: &TypeFieldInfo) -> usize {
+    f.node
+        .get("validators")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
 
 define_output_rule_plugin!(|ctx: &TypeContext| {
     let mut output = OutputRulePluginOutput::default();
@@ -44,33 +87,39 @@ define_output_rule_plugin!(|ctx: &TypeContext| {
             .push(annotation);
     }
 
+    let fields = ctx.fields();
+    let type_name = ctx.type_name().unwrap_or("").to_string();
+    let derives = rust_derives(ctx);
+
     // ===== Gate: check all preconditions =====
 
-    let has_serialize = ctx.rust_derives.iter().any(|d| d == "Serialize");
-    let has_deserialize = ctx.rust_derives.iter().any(|d| d == "Deserialize");
-    let has_monetary_annotation = ctx.annotations.iter().any(|a| a.contains("@monetary"));
-    let is_effect = ctx.generator == "effect";
-    let is_macroforge = ctx.generator == "macroforge";
+    let has_serialize = derives.iter().any(|d| d == "Serialize");
+    let has_deserialize = derives.iter().any(|d| d == "Deserialize");
+    let has_monetary_annotation = ctx.annotations().iter().any(|a| a.contains("@monetary"));
+    let is_effect = ctx.generator() == "effect";
+    let is_macroforge = ctx.generator() == "macroforge";
     let valid_generator = is_effect || is_macroforge;
-    let valid_pipeline = ctx.pipeline == "Both" || ctx.pipeline == "Typesync";
+    let valid_pipeline = ctx.pipeline() == "Both" || ctx.pipeline() == "Typesync";
 
-    let currency_field = ctx
-        .fields
+    let currency_field_name: Option<String> = fields
         .iter()
-        .find(|f| f.field_name.contains("currency") && f.field_type == "String");
+        .find(|f| {
+            f.field_name().unwrap_or("").contains("currency") && field_type_str(f) == "String"
+        })
+        .map(|f| f.field_name().unwrap_or("").to_string());
 
     let monetary_types = ["Decimal", "f64", "i64"];
-    let has_monetary_field = ctx.fields.iter().any(|f| {
-        monetary_types.iter().any(|mt| f.field_type == *mt)
-            && !f.annotations.iter().any(|a| a.contains("@raw"))
+    let has_monetary_field = fields.iter().any(|f| {
+        let ft = field_type_str(f);
+        monetary_types.iter().any(|mt| ft == *mt)
+            && !f.annotations().iter().any(|a| a.contains("@raw"))
     });
 
     // Collect struct-like type names for cross-field Vec detection.
-    let struct_type_names: Vec<String> = ctx
-        .fields
+    let struct_type_names: Vec<String> = fields
         .iter()
         .filter_map(|f| {
-            let ft = &f.field_type;
+            let ft = field_type_str(f);
             if ft.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
                 && !["String", "Decimal", "Uuid", "DateTime", "Url", "Duration"]
                     .contains(&ft.as_str())
@@ -78,7 +127,7 @@ define_output_rule_plugin!(|ctx: &TypeContext| {
                 && !ft.starts_with("Vec<")
                 && !ft.starts_with("HashMap<")
             {
-                Some(ft.clone())
+                Some(ft)
             } else {
                 None
             }
@@ -87,33 +136,28 @@ define_output_rule_plugin!(|ctx: &TypeContext| {
 
     // ===== Always-on rules (no gate) =====
 
-    for field in &ctx.fields {
+    for field in &fields {
+        let name = field.field_name().unwrap_or("").to_string();
+        let ft = field_type_str(field);
+
         // Vec<X> where X is another field's struct type
-        if let Some(rest) = field.field_type.strip_prefix("Vec<")
+        if let Some(rest) = ft.strip_prefix("Vec<")
             && let Some(inner) = rest.strip_suffix('>')
             && struct_type_names.iter().any(|st| st == inner)
         {
             push_field_annotation(
                 &mut output,
-                &field.field_name,
+                &name,
                 format!("@nested_collection({{ type: \"{}\" }})", inner),
             );
         }
 
-        if field.validators.len() > 2 {
-            push_field_annotation(
-                &mut output,
-                &field.field_name,
-                "@heavily_validated".to_string(),
-            );
+        if validator_count(field) > 2 {
+            push_field_annotation(&mut output, &name, "@heavily_validated".to_string());
         }
 
-        if field.annotations.iter().any(|a| a.contains("@internal")) {
-            push_field_annotation(
-                &mut output,
-                &field.field_name,
-                "@skip_internal".to_string(),
-            );
+        if field.annotations().iter().any(|a| a.contains("@internal")) {
+            push_field_annotation(&mut output, &name, "@skip_internal".to_string());
         }
     }
 
@@ -125,19 +169,19 @@ define_output_rule_plugin!(|ctx: &TypeContext| {
         || !valid_generator
         || !valid_pipeline
         || !has_monetary_field
-        || currency_field.is_none()
+        || currency_field_name.is_none()
     {
         return output;
     }
 
-    let currency_field_name = currency_field.unwrap().field_name.clone();
+    let currency_field_name = currency_field_name.unwrap();
 
     // Rename type via annotation if it doesn't already end with "Monetary".
-    if !ctx.type_name.ends_with("Monetary") {
+    if !type_name.ends_with("Monetary") {
         output
             .type_override
             .annotations
-            .push(format!("@rename(\"{}Monetary\")", ctx.type_name));
+            .push(format!("@rename(\"{}Monetary\")", type_name));
     }
 
     // Record the active generator at the type level.
@@ -150,37 +194,32 @@ define_output_rule_plugin!(|ctx: &TypeContext| {
     // Process each monetary field.
     let mut monetary_count: u32 = 0;
 
-    for field in &ctx.fields {
+    for field in &fields {
+        let name = field.field_name().unwrap_or("").to_string();
+
         // Skip raw-annotated fields.
-        if field.annotations.iter().any(|a| a.contains("@raw")) {
+        if field.annotations().iter().any(|a| a.contains("@raw")) {
             continue;
         }
 
         // Mark raw_amount as skipped.
-        if field.field_name == "raw_amount" {
-            push_field_annotation(
-                &mut output,
-                &field.field_name,
-                "@skip_raw_amount".to_string(),
-            );
+        if name == "raw_amount" {
+            push_field_annotation(&mut output, &name, "@skip_raw_amount".to_string());
             continue;
         }
 
-        let is_monetary = monetary_types.iter().any(|mt| field.field_type == *mt);
+        let ft = field_type_str(field);
+        let is_monetary = monetary_types.iter().any(|mt| ft == *mt);
         if !is_monetary {
             continue;
         }
 
         monetary_count += 1;
 
+        push_field_annotation(&mut output, &name, "@brand(\"MonetaryAmount\")".to_string());
         push_field_annotation(
             &mut output,
-            &field.field_name,
-            "@brand(\"MonetaryAmount\")".to_string(),
-        );
-        push_field_annotation(
-            &mut output,
-            &field.field_name,
+            &name,
             format!("@monetary({{ currency_field: \"{}\" }})", currency_field_name),
         );
     }

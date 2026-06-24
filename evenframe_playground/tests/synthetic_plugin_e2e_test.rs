@@ -9,7 +9,7 @@ use evenframe_core::schemasync::table::TableConfig;
 use evenframe_core::types::{FieldType, Pipeline, StructConfig, StructField, TaggedUnion, Variant};
 use evenframe_core::typesync::synthetic_plugin::SyntheticItemPluginManager;
 use evenframe_core::typesync::synthetic_plugin_types::SyntheticPluginInput;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -65,7 +65,7 @@ fn playground_root() -> PathBuf {
 fn load_manager() -> SyntheticItemPluginManager {
     let _ = build_synthetic_test_plugin();
 
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "synthetic_test".to_string(),
         SyntheticItemPluginConfig {
@@ -84,13 +84,8 @@ fn make_struct(name: &str, fields: Vec<StructField>) -> StructConfig {
     StructConfig {
         struct_name: name.to_string(),
         fields,
-        validators: vec![],
-        doccom: None,
-        macroforge_derives: vec![],
-        annotations: vec![],
         pipeline: Pipeline::Both,
-        rust_derives: vec![],
-        output_override: None,
+        ..Default::default()
     }
 }
 
@@ -103,13 +98,13 @@ fn make_field(name: &str, ft: FieldType) -> StructField {
 }
 
 fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
-    let mut structs = HashMap::new();
+    let mut structs = BTreeMap::new();
     structs.insert(
         name.to_string(),
         make_struct(name, vec![make_field("id", FieldType::String)]),
     );
 
-    let mut enums = HashMap::new();
+    let mut enums = BTreeMap::new();
     enums.insert(
         "Status".to_string(),
         TaggedUnion {
@@ -121,6 +116,8 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
+                    raw_attributes: Default::default(),
+                    is_default: false,
                 },
                 Variant {
                     name: "Inactive".to_string(),
@@ -128,6 +125,8 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
                     doccom: None,
                     annotations: vec![],
                     output_override: None,
+                    raw_attributes: Default::default(),
+                    is_default: false,
                 },
             ],
             representation: Default::default(),
@@ -137,10 +136,12 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
             pipeline: Pipeline::Both,
             rust_derives: vec![],
             output_override: None,
+            resolve_only: false,
+            raw_attributes: Default::default(),
         },
     );
 
-    let mut tables = HashMap::new();
+    let mut tables = BTreeMap::new();
     tables.insert(
         "user".to_string(),
         TableConfig {
@@ -164,9 +165,9 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
 
 fn empty_input() -> SyntheticPluginInput {
     SyntheticPluginInput {
-        structs: HashMap::new(),
-        enums: HashMap::new(),
-        tables: HashMap::new(),
+        structs: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        tables: BTreeMap::new(),
     }
 }
 
@@ -317,7 +318,7 @@ fn synthetic_table_roundtrips_through_core_table_config() {
 
 #[test]
 fn synthetic_plugin_missing_wasm_fails_at_load() {
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "does_not_exist".to_string(),
         SyntheticItemPluginConfig {

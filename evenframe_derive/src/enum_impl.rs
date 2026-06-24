@@ -125,6 +125,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 rust_derives: vec![],
                                 output_override: None,
                                 raw_attributes: std::collections::BTreeMap::new(),
+                                resolve_only: false,
                             }))
                         }
                     }
@@ -170,6 +171,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             rust_derives: vec![],
                             output_override: None,
                             raw_attributes: std::collections::BTreeMap::new(),
+                            resolve_only: false,
                         }))
                     }
                 }
@@ -228,6 +230,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             pipeline: #pipeline_tokens,
                             rust_derives: rust_derives_val,
                             output_override: None,
+                            resolve_only: false,
                             raw_attributes: std::collections::BTreeMap::new(),
                         }
                     }

@@ -417,6 +417,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                                 pipeline: #pipeline_tokens,
                                 rust_derives: #rust_derives_tokens,
                                 output_override: None,
+                                resolve_only: false,
                                 raw_attributes: std::collections::BTreeMap::new(),
                             },
                             relation: #relation_tokens,
@@ -496,6 +497,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                             pipeline: #pipeline_tokens,
                             rust_derives: #rust_derives_tokens,
                             output_override: None,
+                            resolve_only: false,
                             raw_attributes: std::collections::BTreeMap::new(),
                         }
                     }

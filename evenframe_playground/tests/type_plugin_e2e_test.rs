@@ -9,11 +9,10 @@
 #![cfg(feature = "wasm-plugins")]
 
 use evenframe_core::config::OutputRulePluginConfig;
+use evenframe_core::types::{FieldType, StructConfig, StructField};
 use evenframe_core::typesync::plugin::OutputRulePluginManager;
-use evenframe_core::typesync::plugin_types::{
-    OutputRulePluginFieldInfo, OutputRulePluginInput, TypeKind,
-};
-use std::collections::HashMap;
+use evenframe_core::typesync::plugin_types::OutputRulePluginInput;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn playground_root() -> PathBuf {
@@ -21,7 +20,7 @@ fn playground_root() -> PathBuf {
 }
 
 fn create_plugin_manager() -> OutputRulePluginManager {
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "decimal_override".to_string(),
         OutputRulePluginConfig {
@@ -32,46 +31,30 @@ fn create_plugin_manager() -> OutputRulePluginManager {
         .expect("failed to load decimal_override plugin")
 }
 
-fn field(name: &str, ty: &str) -> OutputRulePluginFieldInfo {
-    OutputRulePluginFieldInfo {
+fn field(name: &str, ty: &str) -> StructField {
+    StructField {
         field_name: name.to_string(),
-        field_type: ty.to_string(),
-        annotations: vec![],
-        validators: vec![],
-        is_optional: ty.starts_with("Option"),
-        record_link_target: None,
-        vec_inner_type: None,
-        has_explicit_format: false,
-        existing_format: None,
-        has_explicit_define: false,
+        field_type: FieldType::Other(ty.to_string()),
+        ..Default::default()
     }
 }
 
-fn field_with_annotation(name: &str, ty: &str, annotation: &str) -> OutputRulePluginFieldInfo {
+fn field_with_annotation(name: &str, ty: &str, annotation: &str) -> StructField {
     let mut f = field(name, ty);
     f.annotations.push(annotation.to_string());
     f
 }
 
-fn struct_input(
-    type_name: &str,
-    derives: Vec<&str>,
-    fields: Vec<OutputRulePluginFieldInfo>,
-) -> OutputRulePluginInput {
-    OutputRulePluginInput {
-        type_name: type_name.to_string(),
-        kind: TypeKind::Struct,
-        rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
-        annotations: vec![],
+fn struct_input(type_name: &str, derives: Vec<&str>, fields: Vec<StructField>) -> OutputRulePluginInput {
+    OutputRulePluginInput::Struct {
         pipeline: "Both".to_string(),
         generator: "macroforge".to_string(),
-        fields,
-        table_name: String::new(),
-        is_relation: false,
-        has_explicit_permissions: false,
-        has_explicit_events: false,
-        has_explicit_mock_data: false,
-        existing_macroforge_derives: vec![],
+        config: StructConfig {
+            struct_name: type_name.to_string(),
+            fields,
+            rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        },
     }
 }
 
@@ -86,7 +69,7 @@ fn decimal_override_plugin_loads() {
 
 #[test]
 fn decimal_override_missing_wasm_errors_at_load() {
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "missing".to_string(),
         OutputRulePluginConfig {

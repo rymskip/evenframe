@@ -44,6 +44,7 @@ pub fn generate_struct_with_override(
     fields: Vec<StructField>,
 ) -> GeneratedOutput {
     let mut struct_config = StructConfig {
+        resolve_only: false,
         struct_name: name.to_string(),
         fields,
         validators: vec![],
@@ -89,6 +90,7 @@ pub fn generate_enum_with_override(
     override_config: Option<Box<TaggedUnion>>,
 ) -> GeneratedOutput {
     let enum_config = TaggedUnion {
+        resolve_only: false,
         enum_name: name.to_string(),
         variants: vec![],
         representation: crate::types::EnumRepresentation::default(),
@@ -151,6 +153,7 @@ mod tests {
         // self-augmentation must include the original fields in their
         // override.
         let override_config = StructConfig {
+            resolve_only: false,
             struct_name: "Site".to_string(),
             fields: vec![],
             validators: vec![],

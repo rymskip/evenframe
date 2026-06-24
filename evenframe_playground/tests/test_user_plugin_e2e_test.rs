@@ -10,7 +10,7 @@ mod tests {
     use evenframe_core::schemasync::config::PluginConfig;
     use evenframe_core::schemasync::mockmake::plugin::PluginManager;
     use evenframe_core::schemasync::mockmake::plugin_types::PluginFieldInput;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn playground_root() -> PathBuf {
@@ -18,7 +18,7 @@ mod tests {
     }
 
     fn create_plugin_manager() -> PluginManager {
-        let mut plugins = HashMap::new();
+        let mut plugins = BTreeMap::new();
         plugins.insert(
             "test_user".to_string(),
             PluginConfig {

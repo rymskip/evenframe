@@ -95,7 +95,8 @@ async fn warm() -> Result<()> {
     info!("Warming expansion cache for all workspace crates");
     println!("Warming expansion cache...");
 
-    let scanner = WorkspaceScanner::with_path(config.scan_path, config.apply_aliases, true);
+    let scanner = WorkspaceScanner::with_path(config.scan_path, config.apply_aliases, true)
+        .with_extra_files(config.include_files);
     let types = scanner.scan_for_evenframe_types()?;
 
     println!("Cache warmed: {} types discovered.", types.len());

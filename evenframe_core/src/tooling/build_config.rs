@@ -64,6 +64,10 @@ pub struct BuildConfig {
     /// Synthetic-item WASM plugin configurations. These plugins add new
     /// structs/enums/tables derived from the scanner results.
     pub synthetic_item_plugins: BTreeMap<String, crate::config::SyntheticItemPluginConfig>,
+
+    /// Files outside the scan subtree to additionally parse for Evenframe types.
+    /// Paths are already resolved (absolute) relative to the project root.
+    pub include_files: Vec<super::IncludeFile>,
 }
 
 impl Default for BuildConfig {
@@ -86,6 +90,7 @@ impl Default for BuildConfig {
             foreign_types: BTreeMap::new(),
             output_rule_plugins: BTreeMap::new(),
             synthetic_item_plugins: BTreeMap::new(),
+            include_files: Vec::new(),
         }
     }
 }
@@ -154,6 +159,9 @@ impl BuildConfig {
 
         let mut config = Self::default();
 
+        // Captured from [general] but resolved below, once `project_root` is known.
+        let mut include_specs: Vec<crate::config::IncludeFileSpec> = Vec::new();
+
         // Parse [general] section
         if let Some(general) = value.get("general") {
             let general_config: crate::config::GeneralConfig =
@@ -166,6 +174,7 @@ impl BuildConfig {
             config.foreign_types = general_config.foreign_types;
             config.output_rule_plugins = general_config.output_rule_plugins;
             config.synthetic_item_plugins = general_config.synthetic_item_plugins;
+            include_specs = general_config.include_files;
         }
 
         // Derive project root: for .evenframe/config.toml go up one more level
@@ -176,6 +185,23 @@ impl BuildConfig {
         } else {
             config_dir
         };
+
+        // Resolve `include_files` paths relative to the project root (absolute as-is).
+        config.include_files = include_specs
+            .iter()
+            .map(|spec| {
+                let p = PathBuf::from(spec.path());
+                let path = if p.is_absolute() {
+                    p
+                } else {
+                    project_root.join(p)
+                };
+                super::IncludeFile {
+                    path,
+                    resolve_only: spec.resolve_only(),
+                }
+            })
+            .collect();
 
         // Parse [typesync] section
         if let Some(typesync) = value.get("typesync").and_then(|v| v.as_table()) {
@@ -500,5 +526,39 @@ should_generate_effect_types = true
         assert!(config.arktype);
         assert!(config.effect);
         assert_eq!(config.apply_aliases, vec!["MyMacro".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_toml_include_files() {
+        // Both the bare-string and the `{ path, resolve_only }` table forms,
+        // resolved relative to the project root (parent of `.evenframe/`).
+        let toml_content = r#"
+[general]
+include_files = [
+  "../idp/src/lib/policy.rs",
+  { path = "/abs/shared/ids.rs", resolve_only = true },
+]
+
+[typesync]
+output_path = "./generated/"
+"#;
+
+        let config =
+            BuildConfig::parse_toml(toml_content, Path::new("/proj/.evenframe/config.toml"))
+                .expect("Should parse successfully");
+
+        assert_eq!(config.include_files.len(), 2);
+        // Relative path joined to project root (/proj); `.evenframe/` stripped.
+        assert_eq!(
+            config.include_files[0].path,
+            PathBuf::from("/proj/../idp/src/lib/policy.rs")
+        );
+        assert!(!config.include_files[0].resolve_only);
+        // Absolute path used as-is; `resolve_only` carried through.
+        assert_eq!(
+            config.include_files[1].path,
+            PathBuf::from("/abs/shared/ids.rs")
+        );
+        assert!(config.include_files[1].resolve_only);
     }
 }

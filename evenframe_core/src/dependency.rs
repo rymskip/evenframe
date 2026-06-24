@@ -933,6 +933,7 @@ mod tests {
 
     fn create_struct_config(name: &str, fields: Vec<StructField>) -> StructConfig {
         StructConfig {
+            resolve_only: false,
             struct_name: name.to_string(),
             fields,
             validators: Vec::new(),
@@ -1132,6 +1133,7 @@ mod tests {
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
+                resolve_only: false,
                 enum_name: "Status".to_string(),
                 variants: vec![
                     Variant {
@@ -1622,6 +1624,7 @@ mod tests {
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
+                resolve_only: false,
                 enum_name: "Status".to_string(),
                 variants: vec![Variant {
                     name: "WithData".to_string(),

@@ -136,6 +136,7 @@ mod tests {
 
     fn make_struct(name: &str, fields: Vec<(&str, FieldType)>) -> StructConfig {
         StructConfig {
+            resolve_only: false,
             struct_name: name.to_string(),
             fields: fields
                 .into_iter()

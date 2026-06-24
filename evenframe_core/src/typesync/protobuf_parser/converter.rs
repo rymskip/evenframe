@@ -219,6 +219,7 @@ fn convert_enum(enum_type: &EnumDescriptorProto) -> TaggedUnion {
         .collect();
 
     TaggedUnion {
+        resolve_only: false,
         enum_name: enum_type.name().to_string(),
         variants,
         representation: EnumRepresentation::default(),

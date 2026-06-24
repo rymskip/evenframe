@@ -64,10 +64,14 @@ pub fn generate_macroforge_type_string(
     // `output_override` redirects to a different parent struct) are
     // intentionally kept as separate entries so they get their own TS
     // interface.
-    let mut unique_structs: Vec<&StructConfig> = structs.values().collect();
+    // `resolve_only` types are registered for resolution but not emitted as
+    // their own interface (the owning run emits them / the consumer imports).
+    let mut unique_structs: Vec<&StructConfig> =
+        structs.values().filter(|s| !s.resolve_only).collect();
     unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    let mut unique_enums: Vec<&TaggedUnion> = enums.values().collect();
+    let mut unique_enums: Vec<&TaggedUnion> =
+        enums.values().filter(|e| !e.resolve_only).collect();
     unique_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
 
     // Collect all type names for effect import computation
@@ -1322,6 +1326,7 @@ mod tests {
         structs.insert(
             "user_registration_form".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "user_registration_form".to_string(),
                 fields: vec![
                     StructField {
@@ -1434,6 +1439,7 @@ mod tests {
         structs.insert(
             "account".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "account".to_string(),
                 fields: vec![
                     StructField {
@@ -1474,6 +1480,7 @@ mod tests {
         enums.insert(
             "Status".to_string(),
             TaggedUnion {
+                resolve_only: false,
                 enum_name: "Status".to_string(),
                 variants: vec![
                     Variant {
@@ -1564,6 +1571,7 @@ mod tests {
         structs.insert(
             "simple".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "simple".to_string(),
                 fields: vec![],
                 validators: vec![],
@@ -1673,6 +1681,7 @@ mod tests {
         structs.insert(
             "event".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "event".to_string(),
                 fields: vec![StructField {
                     field_name: "starts_at".to_string(),
@@ -1705,6 +1714,7 @@ mod tests {
         structs.insert(
             "payment".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "payment".to_string(),
                 fields: vec![StructField {
                     field_name: "amount".to_string(),
@@ -1741,6 +1751,7 @@ mod tests {
         structs.insert(
             "order".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "order".to_string(),
                 fields: vec![
                     StructField {
@@ -1783,6 +1794,7 @@ mod tests {
         structs.insert(
             "user".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "user".to_string(),
                 fields: vec![StructField {
                     field_name: "name".to_string(),
@@ -1811,6 +1823,7 @@ mod tests {
         structs.insert(
             "order".to_string(),
             StructConfig {
+                resolve_only: false,
                 struct_name: "order".to_string(),
                 fields: vec![StructField {
                     field_name: "amount".to_string(),

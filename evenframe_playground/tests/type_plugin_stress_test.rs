@@ -13,11 +13,12 @@
 #![cfg(feature = "wasm-plugins")]
 
 use evenframe_core::config::OutputRulePluginConfig;
+use evenframe_core::schemasync::table::TableConfig;
+use evenframe_core::types::{FieldType, Pipeline, StructConfig, StructField, TaggedUnion, Variant};
 use evenframe_core::typesync::plugin::OutputRulePluginManager;
-use evenframe_core::typesync::plugin_types::{
-    OutputRulePluginFieldInfo, OutputRulePluginInput, TypeKind,
-};
-use std::collections::HashMap;
+use evenframe_core::typesync::plugin_types::OutputRulePluginInput;
+use evenframe_core::validator::{StringValidator, Validator};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn playground_root() -> PathBuf {
@@ -25,7 +26,7 @@ fn playground_root() -> PathBuf {
 }
 
 fn stress_manager() -> OutputRulePluginManager {
-    let mut plugins = HashMap::new();
+    let mut plugins = BTreeMap::new();
     plugins.insert(
         "stress".to_string(),
         OutputRulePluginConfig {
@@ -36,109 +37,171 @@ fn stress_manager() -> OutputRulePluginManager {
         .expect("failed to load stress_test plugin")
 }
 
-fn field(name: &str, ty: &str) -> OutputRulePluginFieldInfo {
-    OutputRulePluginFieldInfo {
+fn field(name: &str, ty: &str) -> StructField {
+    StructField {
         field_name: name.to_string(),
-        field_type: ty.to_string(),
-        annotations: vec![],
-        validators: vec![],
-        is_optional: ty.starts_with("Option"),
-        record_link_target: None,
-        vec_inner_type: None,
-        has_explicit_format: false,
-        existing_format: None,
-        has_explicit_define: false,
+        field_type: FieldType::Other(ty.to_string()),
+        ..Default::default()
     }
 }
 
-fn field_with_annotations(
-    name: &str,
-    ty: &str,
-    anns: Vec<&str>,
-) -> OutputRulePluginFieldInfo {
+fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> StructField {
     let mut f = field(name, ty);
     f.annotations = anns.into_iter().map(|s| s.to_string()).collect();
     f
 }
 
-fn field_with_validators(
-    name: &str,
-    ty: &str,
-    vals: Vec<&str>,
-) -> OutputRulePluginFieldInfo {
+fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
     let mut f = field(name, ty);
-    f.validators = vals.into_iter().map(|s| s.to_string()).collect();
+    f.validators = vals
+        .into_iter()
+        .map(|s| Validator::StringValidator(StringValidator::StringEmbedded(s.to_string())))
+        .collect();
     f
+}
+
+/// Which `OutputRulePluginInput` variant the builder produces. A `Struct`
+/// with a `table_name` set becomes the `Table` variant.
+#[derive(Clone, Copy)]
+enum BuilderKind {
+    Struct,
+    Enum,
 }
 
 /// Fluent builder for `OutputRulePluginInput` to keep test setup readable
 /// without a gigantic positional `input()` helper.
 struct InputBuilder {
-    inner: OutputRulePluginInput,
+    name: String,
+    kind: BuilderKind,
+    derives: Vec<String>,
+    annotations: Vec<String>,
+    pipeline: String,
+    generator: String,
+    fields: Vec<StructField>,
+    table_name: Option<String>,
 }
 
 impl InputBuilder {
-    fn new(type_name: &str, kind: TypeKind) -> Self {
+    fn new(type_name: &str, kind: BuilderKind) -> Self {
         Self {
-            inner: OutputRulePluginInput {
-                type_name: type_name.to_string(),
-                kind,
-                rust_derives: vec![],
-                annotations: vec![],
-                pipeline: "Both".to_string(),
-                generator: "macroforge".to_string(),
-                fields: vec![],
-                table_name: String::new(),
-                is_relation: false,
-                has_explicit_permissions: false,
-                has_explicit_events: false,
-                has_explicit_mock_data: false,
-                existing_macroforge_derives: vec![],
-            },
+            name: type_name.to_string(),
+            kind,
+            derives: vec![],
+            annotations: vec![],
+            pipeline: "Both".to_string(),
+            generator: "macroforge".to_string(),
+            fields: vec![],
+            table_name: None,
         }
     }
 
     fn derives(mut self, ds: Vec<&str>) -> Self {
-        self.inner.rust_derives = ds.into_iter().map(|s| s.to_string()).collect();
+        self.derives = ds.into_iter().map(|s| s.to_string()).collect();
         self
     }
 
     fn type_annotations(mut self, anns: Vec<&str>) -> Self {
-        self.inner.annotations = anns.into_iter().map(|s| s.to_string()).collect();
+        self.annotations = anns.into_iter().map(|s| s.to_string()).collect();
         self
     }
 
     fn pipeline(mut self, p: &str) -> Self {
-        self.inner.pipeline = p.to_string();
+        self.pipeline = p.to_string();
         self
     }
 
     fn generator(mut self, g: &str) -> Self {
-        self.inner.generator = g.to_string();
+        self.generator = g.to_string();
         self
     }
 
-    fn fields(mut self, fs: Vec<OutputRulePluginFieldInfo>) -> Self {
-        self.inner.fields = fs;
+    fn fields(mut self, fs: Vec<StructField>) -> Self {
+        self.fields = fs;
         self
     }
 
     fn table_name(mut self, t: &str) -> Self {
-        self.inner.table_name = t.to_string();
+        self.table_name = Some(t.to_string());
         self
     }
 
     fn build(self) -> OutputRulePluginInput {
-        self.inner
+        match self.kind {
+            BuilderKind::Enum => {
+                // The builder's `fields` carry the variant names for enums.
+                let variants = self
+                    .fields
+                    .into_iter()
+                    .map(|f| Variant {
+                        name: f.field_name,
+                        data: None,
+                        doccom: None,
+                        annotations: f.annotations,
+                        output_override: None,
+                        raw_attributes: Default::default(),
+                        is_default: false,
+                    })
+                    .collect();
+                OutputRulePluginInput::Enum {
+                    pipeline: self.pipeline,
+                    generator: self.generator,
+                    config: TaggedUnion {
+                        enum_name: self.name,
+                        variants,
+                        representation: Default::default(),
+                        doccom: None,
+                        macroforge_derives: vec![],
+                        annotations: self.annotations,
+                        pipeline: Pipeline::default(),
+                        rust_derives: self.derives,
+                        output_override: None,
+                        resolve_only: false,
+                        raw_attributes: Default::default(),
+                    },
+                }
+            }
+            BuilderKind::Struct => {
+                let config = StructConfig {
+                    struct_name: self.name,
+                    fields: self.fields,
+                    rust_derives: self.derives,
+                    annotations: self.annotations,
+                    ..Default::default()
+                };
+                match self.table_name {
+                    // A `table_name` promotes the struct to the `Table` variant.
+                    Some(table_name) => OutputRulePluginInput::Table {
+                        pipeline: self.pipeline,
+                        generator: self.generator,
+                        struct_config: config.clone(),
+                        table_config: Box::new(TableConfig {
+                            table_name,
+                            struct_config: config,
+                            relation: None,
+                            permissions: None,
+                            mock_generation_config: None,
+                            events: vec![],
+                            indexes: vec![],
+                            output_override: None,
+                        }),
+                    },
+                    None => OutputRulePluginInput::Struct {
+                        pipeline: self.pipeline,
+                        generator: self.generator,
+                        config,
+                    },
+                }
+            }
+        }
     }
 }
 
 fn struct_of(type_name: &str) -> InputBuilder {
-    InputBuilder::new(type_name, TypeKind::Struct)
+    InputBuilder::new(type_name, BuilderKind::Struct)
 }
 
 fn enum_of(type_name: &str) -> InputBuilder {
-    InputBuilder::new(type_name, TypeKind::Enum)
+    InputBuilder::new(type_name, BuilderKind::Enum)
 }
 
 fn field_annotations(
@@ -597,7 +660,7 @@ fn single_decimal_field_struct() {
 #[test]
 fn plugin_handles_100_fields() {
     let mut pm = stress_manager();
-    let fields: Vec<OutputRulePluginFieldInfo> = (0..100)
+    let fields: Vec<StructField> = (0..100)
         .map(|i| {
             if i % 3 == 0 {
                 field(&format!("decimal_{}", i), "Decimal")
@@ -630,7 +693,7 @@ fn plugin_handles_100_fields() {
 #[test]
 fn plugin_handles_500_fields() {
     let mut pm = stress_manager();
-    let fields: Vec<OutputRulePluginFieldInfo> = (0..500)
+    let fields: Vec<StructField> = (0..500)
         .map(|i| field(&format!("f_{}", i), "String"))
         .collect();
 

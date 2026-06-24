@@ -837,6 +837,7 @@ mod tests {
 
     fn tagged_union(name: &str, variants: Vec<Variant>) -> TaggedUnion {
         TaggedUnion {
+            resolve_only: false,
             enum_name: name.to_string(),
             variants,
             representation: EnumRepresentation::Untagged,

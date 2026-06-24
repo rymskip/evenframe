@@ -82,6 +82,11 @@ pub struct TaggedUnion {
     pub rust_derives: Vec<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    /// When true, this enum is registered for field-type resolution only and is
+    /// skipped at every emission site (typesync interface output). Set for types
+    /// from a `resolve_only` `include_files` entry.
+    #[serde(default)]
+    pub resolve_only: bool,
     #[serde(default)]
     pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
@@ -871,6 +876,12 @@ pub struct StructConfig {
     pub rust_derives: Vec<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
+    /// When true, this struct is registered for field-type resolution only and
+    /// is skipped at every emission site (schemasync `DEFINE TABLE`/mock/diff,
+    /// typesync interface output). Set for types from a `resolve_only`
+    /// `include_files` entry.
+    #[serde(default)]
+    pub resolve_only: bool,
     /// Every attribute on this item that evenframe doesn't natively parse,
     /// keyed by attribute name. Each value is one occurrence's raw token
     /// body (the part inside the parens). Multiple uses of the same
@@ -921,6 +932,7 @@ mod tests {
     #[test]
     fn test_tagged_union_equality() {
         let tu1 = TaggedUnion {
+            resolve_only: false,
             enum_name: "Status".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -933,6 +945,7 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         };
         let tu2 = TaggedUnion {
+            resolve_only: false,
             enum_name: "Status".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -950,6 +963,7 @@ mod tests {
     #[test]
     fn test_tagged_union_with_variants() {
         let tu = TaggedUnion {
+            resolve_only: false,
             enum_name: "Status".to_string(),
             variants: vec![
                 Variant {
@@ -987,6 +1001,7 @@ mod tests {
     #[test]
     fn test_tagged_union_serialize_deserialize() {
         let tu = TaggedUnion {
+            resolve_only: false,
             enum_name: "Color".to_string(),
             variants: vec![Variant {
                 name: "Red".to_string(),
@@ -1014,6 +1029,7 @@ mod tests {
     #[test]
     fn test_tagged_union_distinctness() {
         let tu1 = TaggedUnion {
+            resolve_only: false,
             enum_name: "A".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -1026,6 +1042,7 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         };
         let tu2 = TaggedUnion {
+            resolve_only: false,
             enum_name: "B".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -1079,6 +1096,7 @@ mod tests {
     #[test]
     fn test_variant_with_inline_struct() {
         let struct_config = StructConfig {
+            resolve_only: false,
             struct_name: "InnerData".to_string(),
             fields: vec![],
             validators: vec![],
@@ -1115,6 +1133,7 @@ mod tests {
     fn test_variant_data_inline_struct_vs_ref() {
         let vd1 = VariantData::DataStructureRef(FieldType::String);
         let vd2 = VariantData::InlineStruct(StructConfig {
+            resolve_only: false,
             struct_name: "Test".to_string(),
             fields: vec![],
             validators: vec![],
@@ -1178,6 +1197,7 @@ mod tests {
     #[test]
     fn test_struct_config_empty() {
         let sc = StructConfig {
+            resolve_only: false,
             struct_name: "Empty".to_string(),
             fields: vec![],
             validators: vec![],
@@ -1195,6 +1215,7 @@ mod tests {
     #[test]
     fn test_struct_config_with_fields() {
         let sc = StructConfig {
+            resolve_only: false,
             struct_name: "User".to_string(),
             fields: vec![
                 StructField {
@@ -1243,6 +1264,7 @@ mod tests {
     #[test]
     fn test_struct_config_serialize_deserialize() {
         let sc = StructConfig {
+            resolve_only: false,
             struct_name: "Test".to_string(),
             fields: vec![],
             validators: vec![],
@@ -1372,6 +1394,7 @@ mod tests {
     #[test]
     fn test_empty_struct_config() {
         let sc = StructConfig {
+            resolve_only: false,
             struct_name: "".to_string(),
             fields: vec![],
             validators: vec![],
@@ -1480,6 +1503,7 @@ mod tests {
     #[test]
     fn test_tagged_union_effective_returns_override() {
         let real_enum = TaggedUnion {
+            resolve_only: false,
             enum_name: "Real".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -1492,6 +1516,7 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         };
         let aliased = TaggedUnion {
+            resolve_only: false,
             enum_name: "Aliased".to_string(),
             variants: vec![],
             representation: EnumRepresentation::default(),
@@ -1570,6 +1595,7 @@ mod tests {
 
         // Synthetic struct: PartialUser overrides to User
         let partial_user = StructConfig {
+            resolve_only: false,
             struct_name: "PartialUser".to_string(),
             fields: vec![],
             validators: vec![],

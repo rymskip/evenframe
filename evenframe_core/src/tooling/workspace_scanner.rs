@@ -28,6 +28,23 @@ pub struct EvenframeType {
     pub has_id_field: bool,
     /// Which pipeline(s) this type participates in.
     pub pipeline: crate::types::Pipeline,
+    /// When true, this type is registered for field-type resolution only and is
+    /// skipped at every emission site (schemasync `DEFINE TABLE`/mock/diff,
+    /// typesync interface output). Set for types from a `resolve_only`
+    /// `include_files` entry. Defaults to false for normal scanned types.
+    #[serde(default)]
+    pub resolve_only: bool,
+}
+
+/// A file outside the scan subtree to additionally parse for Evenframe types,
+/// with its path already resolved to absolute. See
+/// [`crate::config::IncludeFileSpec`] for the config-facing form.
+#[derive(Debug, Clone)]
+pub struct IncludeFile {
+    /// Absolute path to the `.rs` file to parse.
+    pub path: PathBuf,
+    /// Register the file's types for resolution only (do not emit tables/TS).
+    pub resolve_only: bool,
 }
 
 impl EvenframeType {
@@ -94,6 +111,7 @@ impl CrateScanState {
                     kind: p.kind,
                     has_id_field: p.has_id_field,
                     pipeline: pipe,
+                    resolve_only: false,
                 })
             })
             .collect()
@@ -105,6 +123,9 @@ pub struct WorkspaceScanner {
     start_path: PathBuf,
     apply_aliases: Vec<String>,
     expand_macros: bool,
+    /// Files outside the scan subtree to additionally parse after the directory
+    /// walk. See [`Self::with_extra_files`].
+    extra_files: Vec<IncludeFile>,
 }
 
 impl WorkspaceScanner {
@@ -132,7 +153,19 @@ impl WorkspaceScanner {
             start_path,
             apply_aliases,
             expand_macros,
+            extra_files: Vec::new(),
         }
+    }
+
+    /// Adds files outside the scan subtree to parse after the directory walk.
+    ///
+    /// Each file is raw-parsed (never `cargo expand`ed) and its Evenframe types
+    /// are appended to the scan results. Types from an entry with
+    /// `resolve_only = true` are tagged so they are registered for field-type
+    /// resolution but skipped at every emission site.
+    pub fn with_extra_files(mut self, files: Vec<IncludeFile>) -> Self {
+        self.extra_files = files;
+        self
     }
 
     /// Scans for Rust workspaces and collects all Evenframe types within them.
@@ -174,7 +207,7 @@ impl WorkspaceScanner {
         // - In the raw-source path, there's no cargo contention and one
         //   broken manifest shouldn't kill the whole scan. Keep the legacy
         //   parallel + log-and-continue behavior.
-        let types: Vec<EvenframeType> = if self.expand_macros {
+        let mut types: Vec<EvenframeType> = if self.expand_macros {
             let mut all = Vec::new();
             for manifest_path in &manifests {
                 let v = self.process_manifest(manifest_path).map_err(|e| {
@@ -202,6 +235,20 @@ impl WorkspaceScanner {
                 .collect()
         };
 
+        // Parse any `include_files` entries — files outside the scan subtree
+        // whose types are registered so referencing fields resolve. Always
+        // raw-parsed (never expanded); a bad path is surfaced as an error.
+        for extra in &self.extra_files {
+            let found = self.scan_extra_file(extra)?;
+            debug!(
+                "Included file {:?} contributed {} Evenframe types (resolve_only={})",
+                extra.path,
+                found.len(),
+                extra.resolve_only
+            );
+            types.extend(found);
+        }
+
         info!(
             "Workspace scan complete. Found {} Evenframe types",
             types.len()
@@ -213,6 +260,33 @@ impl WorkspaceScanner {
         );
 
         Ok(types)
+    }
+
+    /// Parses a single included file (outside the scan subtree) and returns its
+    /// Evenframe types, each tagged with `extra.resolve_only`. The path is
+    /// canonicalized to absolute so [`process_types`](super::process_types) can
+    /// re-read it; the module path is derived from the file stem (it is not
+    /// consumed by typesync output).
+    fn scan_extra_file(&self, extra: &IncludeFile) -> Result<Vec<EvenframeType>> {
+        let abs = fs::canonicalize(&extra.path).map_err(|e| {
+            EvenframeError::WorkspaceScan(format!(
+                "include_files: cannot read {:?}: {}",
+                extra.path, e
+            ))
+        })?;
+        let module_path = abs
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("include")
+            .to_string();
+
+        let mut state = CrateScanState::default();
+        self.scan_rust_file_into(&abs, &mut state, &module_path)?;
+        let mut found = state.finalize();
+        for t in &mut found {
+            t.resolve_only = extra.resolve_only;
+        }
+        Ok(found)
     }
 
     /// Processes a Cargo.toml file, determines if it's a workspace or a single
@@ -1015,6 +1089,7 @@ mod tests {
     #[test]
     fn test_evenframe_type_creation() {
         let ef_type = EvenframeType {
+            resolve_only: false,
             name: "User".to_string(),
             module_path: "my_crate::models".to_string(),
             file_path: "/path/to/file.rs".to_string(),
@@ -1033,6 +1108,7 @@ mod tests {
     #[test]
     fn test_evenframe_type_qualified_name() {
         let ef_type = EvenframeType {
+            resolve_only: false,
             name: "User".to_string(),
             module_path: "my_crate::models".to_string(),
             file_path: "/path/to/file.rs".to_string(),
@@ -1047,6 +1123,7 @@ mod tests {
     #[test]
     fn test_evenframe_type_display() {
         let ef_type = EvenframeType {
+            resolve_only: false,
             name: "User".to_string(),
             module_path: "my_crate::models".to_string(),
             file_path: "/path/to/file.rs".to_string(),
@@ -1061,6 +1138,7 @@ mod tests {
     #[test]
     fn test_evenframe_type_clone() {
         let ef_type = EvenframeType {
+            resolve_only: false,
             name: "Order".to_string(),
             module_path: "crate::orders".to_string(),
             file_path: "/orders.rs".to_string(),
@@ -1080,6 +1158,7 @@ mod tests {
     #[test]
     fn test_evenframe_type_debug() {
         let ef_type = EvenframeType {
+            resolve_only: false,
             name: "Test".to_string(),
             module_path: "crate".to_string(),
             file_path: "/test.rs".to_string(),
@@ -1333,6 +1412,7 @@ mod tests {
     #[test]
     fn test_get_unique_modules_single() {
         let types = vec![EvenframeType {
+            resolve_only: false,
             name: "User".to_string(),
             module_path: "crate::models".to_string(),
             file_path: "/path.rs".to_string(),
@@ -1350,6 +1430,7 @@ mod tests {
     fn test_get_unique_modules_duplicates() {
         let types = vec![
             EvenframeType {
+                resolve_only: false,
                 name: "User".to_string(),
                 module_path: "crate::models".to_string(),
                 file_path: "/path1.rs".to_string(),
@@ -1358,6 +1439,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
+                resolve_only: false,
                 name: "Order".to_string(),
                 module_path: "crate::models".to_string(),
                 file_path: "/path2.rs".to_string(),
@@ -1376,6 +1458,7 @@ mod tests {
     fn test_get_unique_modules_different_modules() {
         let types = vec![
             EvenframeType {
+                resolve_only: false,
                 name: "User".to_string(),
                 module_path: "crate::models::user".to_string(),
                 file_path: "/path1.rs".to_string(),
@@ -1384,6 +1467,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
+                resolve_only: false,
                 name: "Order".to_string(),
                 module_path: "crate::models::order".to_string(),
                 file_path: "/path2.rs".to_string(),
@@ -1392,6 +1476,7 @@ mod tests {
                 pipeline: crate::types::Pipeline::Both,
             },
             EvenframeType {
+                resolve_only: false,
                 name: "Status".to_string(),
                 module_path: "crate::enums".to_string(),
                 file_path: "/path3.rs".to_string(),
@@ -2307,5 +2392,78 @@ mod tests {
         let mut names: Vec<_> = files.iter().map(|f| f.rel_path.clone()).collect();
         names.sort();
         assert_eq!(names, vec!["lib.rs".to_string(), "utils.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_scan_extra_files_registers_external_types_with_resolve_only() {
+        // Scan root is an empty dir with no manifest, so the only types come
+        // from `include_files`. The external file lives OUTSIDE the scan root.
+        let scan_root = TempDir::new().unwrap();
+        let external_dir = TempDir::new().unwrap();
+
+        let external_content = r#"
+            #[derive(Debug, Clone, Evenframe)]
+            pub struct AuthPolicy {
+                pub password_mode: PasswordMode,
+                pub max_sessions: i32,
+            }
+
+            #[derive(Debug, Clone, Evenframe)]
+            pub enum PasswordMode {
+                Disabled,
+                Required,
+            }
+        "#;
+        create_rust_file(external_dir.path(), "policy.rs", external_content).unwrap();
+        let external_file = external_dir.path().join("policy.rs");
+
+        // resolve_only = true: external types register, tagged resolve_only.
+        let scanner = WorkspaceScanner::with_path(scan_root.path().to_path_buf(), vec![], false)
+            .with_extra_files(vec![IncludeFile {
+                path: external_file.clone(),
+                resolve_only: true,
+            }]);
+        let types = scanner.scan_for_evenframe_types().unwrap();
+
+        let auth_policy = types
+            .iter()
+            .find(|t| t.name == "AuthPolicy")
+            .expect("AuthPolicy from include_files should be registered");
+        assert_eq!(auth_policy.kind, TypeKind::Struct);
+        assert!(auth_policy.resolve_only);
+        // No `id` field → never materialized as a table.
+        assert!(!auth_policy.has_id_field);
+
+        let password_mode = types
+            .iter()
+            .find(|t| t.name == "PasswordMode")
+            .expect("PasswordMode from include_files should be registered");
+        assert_eq!(password_mode.kind, TypeKind::Enum);
+        assert!(password_mode.resolve_only);
+
+        // resolve_only = false: same types register, but NOT tagged resolve_only.
+        let scanner = WorkspaceScanner::with_path(scan_root.path().to_path_buf(), vec![], false)
+            .with_extra_files(vec![IncludeFile {
+                path: external_file,
+                resolve_only: false,
+            }]);
+        let types = scanner.scan_for_evenframe_types().unwrap();
+        assert!(
+            types
+                .iter()
+                .any(|t| t.name == "AuthPolicy" && !t.resolve_only)
+        );
+    }
+
+    #[test]
+    fn test_scan_extra_file_missing_path_errors() {
+        // A typo'd include_files path must surface as an error, not be skipped.
+        let scan_root = TempDir::new().unwrap();
+        let scanner = WorkspaceScanner::with_path(scan_root.path().to_path_buf(), vec![], false)
+            .with_extra_files(vec![IncludeFile {
+                path: scan_root.path().join("does_not_exist.rs"),
+                resolve_only: false,
+            }]);
+        assert!(scanner.scan_for_evenframe_types().is_err());
     }
 }

@@ -176,6 +176,7 @@ mod tests {
         let table_config = TableConfig {
             table_name: "user".to_string(),
             struct_config: StructConfig {
+                resolve_only: false,
                 struct_name: "User".to_string(),
                 fields: Vec::new(),
                 validators: Vec::new(),
@@ -369,6 +370,7 @@ mod tests {
         let table_config = TableConfig {
             table_name: "user".to_string(),
             struct_config: StructConfig {
+                resolve_only: false,
                 struct_name: "User".to_string(),
                 fields: vec![
                     StructField {
@@ -508,6 +510,7 @@ mod tests {
         let table_config = TableConfig {
             table_name: "reaction".to_string(),
             struct_config: StructConfig {
+                resolve_only: false,
                 struct_name: "Reaction".to_string(),
                 fields: vec![
                     make_field("user"),

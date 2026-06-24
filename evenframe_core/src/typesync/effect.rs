@@ -74,6 +74,20 @@ pub fn generate_effect_schema_string(
                 continue; // Skip if already processed
             }
 
+            // `resolve_only` types stay in the maps for reference resolution
+            // (field conversion below) but are not emitted as their own schema
+            // class/interface.
+            let resolve_only = enums
+                .values()
+                .any(|e| e.resolve_only && e.enum_name.to_case(Case::Pascal) == name)
+                || structs
+                    .values()
+                    .any(|s| s.resolve_only && s.struct_name.to_case(Case::Pascal) == name);
+            if resolve_only {
+                processed.insert(name);
+                continue;
+            }
+
             if let Some(e) = enums
                 .values()
                 .find(|e| e.enum_name.to_case(Case::Pascal) == name)

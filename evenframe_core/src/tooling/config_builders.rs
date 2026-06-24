@@ -46,7 +46,8 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         config.scan_path.clone(),
         config.apply_aliases.clone(),
         config.expand_macros,
-    );
+    )
+    .with_extra_files(config.include_files.clone());
 
     let types = scanner.scan_for_evenframe_types()?;
     info!("Found {} Evenframe types", types.len());
@@ -374,6 +375,7 @@ fn process_types(
                         debug!("Found Evenframe struct: {:?}", item_struct.ident);
                         if let Some(mut struct_config) = parse_struct_config(&item_struct) {
                             struct_config.pipeline = evenframe_type.pipeline;
+                            struct_config.resolve_only = evenframe_type.resolve_only;
                             // Check for name collision
                             if let Some(existing_file) =
                                 struct_origins.get(&struct_config.struct_name)
@@ -414,7 +416,11 @@ fn process_types(
                             struct_configs
                                 .insert(struct_config.struct_name.clone(), struct_config.clone());
 
-                            if evenframe_type.has_id_field {
+                            // A `resolve_only` struct is registered for resolution
+                            // (kept in `struct_configs` above, so referencing fields
+                            // inline its shape) but is never materialized as a managed
+                            // table — no `DEFINE TABLE`, mock, or diff in this database.
+                            if evenframe_type.has_id_field && !evenframe_type.resolve_only {
                                 let table_name = struct_config.struct_name.to_case(Case::Snake);
                                 debug!(
                                     "Building table config for: {} (snake_case: {})",
@@ -490,6 +496,7 @@ fn process_types(
                         debug!("Found Evenframe enum: {}", item_enum.ident);
                         if let Some(mut tagged_union) = parse_enum_config(&item_enum) {
                             tagged_union.pipeline = evenframe_type.pipeline;
+                            tagged_union.resolve_only = evenframe_type.resolve_only;
                             // Check for name collision
                             if let Some(existing_file) = enum_origins.get(&tagged_union.enum_name) {
                                 match collision_strategy {
@@ -636,6 +643,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
         pipeline: crate::types::Pipeline::default(),
         rust_derives,
         output_override: None,
+        resolve_only: false,
         raw_attributes,
     })
 }
@@ -734,6 +742,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         pipeline: crate::types::Pipeline::default(),
         rust_derives: enum_rust_derives,
         output_override: None,
+        resolve_only: false,
         raw_attributes: enum_raw_attributes,
     })
 }
