@@ -9,6 +9,7 @@ pub mod database;
 pub mod define_config;
 pub mod edge;
 pub mod event;
+pub mod lint;
 pub mod mockmake;
 pub mod permissions;
 pub mod table;
@@ -63,7 +64,7 @@ use crate::{
 #[cfg(feature = "surrealdb")]
 use std::collections::BTreeMap;
 #[cfg(feature = "surrealdb")]
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[cfg(feature = "surrealdb")]
 use surrealdb::{
@@ -286,6 +287,22 @@ impl<'a> Schemasync<'a> {
             objects.len(),
             enums.len()
         );
+
+        // Surface `#[define_field_statement(...)]` annotations on embedded-struct
+        // fields that are silently discarded: evenframe inlines embedded structs
+        // into the parent table field, so per-subfield settings are never emitted.
+        for finding in crate::schemasync::lint::lint_discarded_field_annotations(objects) {
+            warn!(
+                struct_name = %finding.struct_name,
+                field = %finding.field_name,
+                discarded = ?finding.discarded,
+                "`#[define_field_statement]` on embedded struct field `{}.{}` is ignored: \
+                 evenframe inlines embedded structs into the parent field, so per-subfield \
+                 settings {:?} are never emitted. Gate the parent field instead, or promote \
+                 this struct to its own table.",
+                finding.struct_name, finding.field_name, finding.discarded,
+            );
+        }
 
         Ok((db, tables, objects, enums, config))
     }
