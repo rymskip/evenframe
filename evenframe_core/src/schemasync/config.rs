@@ -154,6 +154,23 @@ pub struct SchemasyncMockGenConfig {
     pub coordination_groups: Vec<CoordinationGroup>,
 
     pub full_refresh_mode: bool,
+
+    /// Controls how field validators that have no native SurrealQL equivalent
+    /// (credit-card/Luhn, JSON parseability, Unicode normalization, finiteness,
+    /// capitalization) are turned into `DEFINE FIELD ... ASSERT` clauses.
+    ///
+    /// When `true` (the default) they are emitted as embedded-JavaScript
+    /// `ASSERT function($value) { ... }` clauses, which require the SurrealDB
+    /// server to run with `--allow-scripting`. When `false`, those validators
+    /// contribute no assertion (every native assertion is still emitted), so
+    /// the generated schema remains applicable on servers without scripting.
+    #[serde(default = "default_scripting_asserts")]
+    #[builder(default = true)]
+    pub scripting_asserts: bool,
+}
+
+fn default_scripting_asserts() -> bool {
+    true
 }
 
 impl Default for DatabaseConfig {

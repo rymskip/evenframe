@@ -126,7 +126,10 @@ pub struct SchemaDefinition {
 
 impl SchemaDefinition {
     /// Create from TableConfig HashMap (for code-based schema generation)
-    pub fn from_table_configs(tables: &BTreeMap<String, TableConfig>) -> Result<Self> {
+    pub fn from_table_configs(
+        tables: &BTreeMap<String, TableConfig>,
+        allow_scripting: bool,
+    ) -> Result<Self> {
         tracing::debug!(
             table_count = tables.len(),
             "Creating SchemaDefinition from TableConfigs"
@@ -138,7 +141,7 @@ impl SchemaDefinition {
             let table_def = TableDefinition {
                 name: name.clone(),
                 schema_type: SchemaType::Schemafull,
-                fields: Self::extract_fields_from_config(config)?,
+                fields: Self::extract_fields_from_config(config, allow_scripting)?,
                 array_wildcard_fields: BTreeMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
                 indexes: {
@@ -191,6 +194,7 @@ impl SchemaDefinition {
 
     fn extract_fields_from_config(
         config: &TableConfig,
+        allow_scripting: bool,
     ) -> Result<BTreeMap<String, FieldDefinition>> {
         let mut fields = BTreeMap::new();
 
@@ -215,9 +219,7 @@ impl SchemaDefinition {
                 required: is_required,
                 default_value,
                 assertions: field
-                    .define_config
-                    .as_ref()
-                    .and_then(|dc| dc.assert.clone())
+                    .merged_assert(allow_scripting)
                     .map(|a| vec![a])
                     .unwrap_or_default(),
                 parent_array_field: None,

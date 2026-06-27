@@ -92,8 +92,8 @@ fn scanner_threads_struct_level_index_into_define_statements() {
                 &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
-                false,
                 &registry,
+                true,
             )
         },
     );
@@ -200,7 +200,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
     };
     let (_e1, before_tables, _o1) = build_all_configs(&before_cfg).expect("build before");
     let before_schema =
-        SchemaDefinition::from_table_configs(&before_tables).expect("schema before");
+        SchemaDefinition::from_table_configs(&before_tables, true).expect("schema before");
 
     // Pass 2: `created_at` index removed from the struct.
     let tmp_after = TempDir::new().unwrap();
@@ -234,7 +234,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         ..BuildConfig::default()
     };
     let (_e2, after_tables, _o2) = build_all_configs(&after_cfg).expect("build after");
-    let after_schema = SchemaDefinition::from_table_configs(&after_tables).expect("schema after");
+    let after_schema = SchemaDefinition::from_table_configs(&after_tables, true).expect("schema after");
 
     // Compare "old" (before) vs "new" (after) — simulates a database whose
     // indexes were last synced under the old schema.

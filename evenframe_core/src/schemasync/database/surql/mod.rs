@@ -424,8 +424,8 @@ impl DatabaseProvider for SurrealdbProvider {
             all_tables,
             objects,
             enums,
-            false, // full_refresh_mode
             &default_registry,
+            true, // allow_scripting (no config in this secondary path; default on)
         )
     }
 

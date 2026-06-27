@@ -23,6 +23,57 @@ pub enum QueryErrorType {
     UnknownError,
 }
 
+/// Split a block of SurrealQL into individual statements on top-level `;`,
+/// ignoring semicolons inside `{...}`/`(...)`/`[...]` groups (e.g. embedded
+/// JavaScript `ASSERT function(){…}` bodies) and inside string literals.
+///
+/// Returned slices include their trailing `;` (matching `split_inclusive(';')`),
+/// and a trailing fragment without a `;` is still returned. A naive
+/// `split(';')` truncates DEFINE FIELD statements whose ASSERT is an embedded
+/// JS function, so any code that routes/counts individual statements must use
+/// this instead.
+pub fn split_surql_statements(block: &str) -> Vec<&str> {
+    let bytes = block.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut depth: i32 = 0;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) => {
+                if c == b'\\' {
+                    // Skip the escaped character.
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                b'"' | b'\'' | b'`' => quote = Some(c),
+                b'{' | b'(' | b'[' => depth += 1,
+                b'}' | b')' | b']' => depth = depth.saturating_sub(1),
+                b';' if depth == 0 => {
+                    out.push(&block[start..=i]);
+                    start = i + 1;
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    if start < block.len() {
+        let tail = &block[start..];
+        if !tail.trim().is_empty() {
+            out.push(tail);
+        }
+    }
+    out
+}
+
 /// Validates a SurrealDB response and panics if any errors are found
 /// This includes checking for:
 /// - Parse errors
@@ -40,9 +91,11 @@ pub async fn validate_surql_response(
     let mut results = Vec::new();
     debug!("Initialized validation state");
 
-    // Split statements for error reporting
-    let statement_lines: Vec<&str> = statements
-        .split(';')
+    // Split statements for error reporting. Brace/string-aware so embedded
+    // JavaScript function bodies (which contain their own `;`) aren't split
+    // mid-statement and miscounted against the response.
+    let statement_lines: Vec<&str> = split_surql_statements(statements)
+        .into_iter()
         .filter(|s| !s.trim().is_empty())
         .collect();
 
@@ -296,4 +349,47 @@ async fn import_via_cli(
     );
 
     Ok(vec![])
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_surql_statements;
+
+    #[test]
+    fn splits_simple_statements() {
+        let parts = split_surql_statements(
+            "DEFINE FIELD a ON t TYPE string;\nDEFINE FIELD b ON t TYPE int;\n",
+        );
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains("FIELD a"));
+        assert!(parts[1].contains("FIELD b"));
+    }
+
+    #[test]
+    fn does_not_split_inside_js_function_body() {
+        // The embedded JS body has its own `;` — they must not split the
+        // DEFINE FIELD statement (regression for the playground apply failure).
+        let block = "DEFINE FIELD card ON t TYPE string ASSERT function($value) { const v = arguments[0]; if (v) { return true; } return false; };\nDEFINE FIELD next ON t TYPE int;\n";
+        let parts = split_surql_statements(block);
+        assert_eq!(parts.len(), 2, "JS body semicolons split the statement: {parts:?}");
+        assert!(parts[0].contains("return false; }"));
+        assert!(parts[1].contains("FIELD next"));
+    }
+
+    #[test]
+    fn does_not_split_inside_string_literals() {
+        let parts = split_surql_statements(
+            "DEFINE FIELD a ON t TYPE string ASSERT $value = \"x;y\";\nDEFINE FIELD b ON t TYPE int;\n",
+        );
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains("\"x;y\""));
+    }
+
+    #[test]
+    fn handles_escaped_quote_in_string() {
+        let parts = split_surql_statements(
+            "DEFINE FIELD a ON t TYPE string ASSERT string::starts_with($value, \"a\\\";b\");\n",
+        );
+        assert_eq!(parts.len(), 1);
+    }
 }

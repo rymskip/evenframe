@@ -252,6 +252,86 @@ impl StructField {
             .as_deref()
             .map_or(self, Self::effective)
     }
+    /// Combine the manually-specified `#[define_field_statement(assert(...))]`
+    /// clause with the assertions derived from this field's validators into a
+    /// single ASSERT expression. Returns `None` when neither is present.
+    ///
+    /// The manual clause is preserved verbatim when it is the only part (so
+    /// existing schemas don't churn); manual and validator parts are each
+    /// parenthesized when combined to keep operator precedence intact.
+    #[cfg(feature = "surrealdb")]
+    pub fn merged_assert(&self, allow_scripting: bool) -> Option<String> {
+        use crate::schemasync::database::surql::assert::generate_assert_from_validators;
+
+        let manual = self
+            .define_config
+            .as_ref()
+            .and_then(|d| d.assert.as_ref())
+            .map(|a| a.trim())
+            .filter(|a| !a.is_empty());
+
+        let generated = generate_assert_from_validators(&self.validators, "$value", allow_scripting);
+        let generated = if generated.is_empty() {
+            None
+        } else if matches!(self.field_type, FieldType::Option(_)) {
+            // Optional fields are emitted as `null | T` with `DEFAULT NULL`, so an
+            // unset value is NULL. The inner assertions (e.g. `string::len($value)`)
+            // error on NULL, so only apply them when the value is present.
+            Some(format!("$value = NULL OR ({generated})"))
+        } else {
+            Some(generated)
+        };
+
+        match (manual, generated) {
+            (Some(m), None) => Some(m.to_string()),
+            (None, Some(g)) => Some(g),
+            (Some(m), Some(g)) => Some(format!("({m}) AND ({g})")),
+            (None, None) => None,
+        }
+    }
+
+    /// The value SurrealDB's auto-generated fallback `DEFAULT` represents, as a
+    /// [`crate::validator::MockValue`], for the field types that receive a
+    /// zero/empty default (`''`, `0`, `[]`). Returns `None` for types whose
+    /// default cannot conflict with validators: optionals default to `NULL`
+    /// (guarded by [`Self::merged_assert`]) and the rest have no overlapping
+    /// validator family.
+    #[cfg(feature = "surrealdb")]
+    fn auto_default_mock_value(&self) -> Option<crate::validator::MockValue<'static>> {
+        use crate::validator::MockValue;
+        match self.field_type {
+            FieldType::String | FieldType::Char => Some(MockValue::Str("")),
+            FieldType::F32
+            | FieldType::F64
+            | FieldType::I8
+            | FieldType::I16
+            | FieldType::I32
+            | FieldType::I64
+            | FieldType::I128
+            | FieldType::Isize
+            | FieldType::U8
+            | FieldType::U16
+            | FieldType::U32
+            | FieldType::U64
+            | FieldType::U128
+            | FieldType::Usize => Some(MockValue::Num(0.0)),
+            FieldType::Vec(_) => Some(MockValue::ArrayLen(0)),
+            _ => None,
+        }
+    }
+
+    /// Whether the auto-generated fallback `DEFAULT` would satisfy this field's
+    /// validators. A default that the validators reject (`''` under `NonEmpty`,
+    /// `0` under `Positive`, `[]` under `MinItems`) makes the field
+    /// unsatisfiable — the default itself fails the `ASSERT` — so the caller
+    /// omits the default and the field becomes required instead.
+    #[cfg(feature = "surrealdb")]
+    fn auto_default_satisfies_validators(&self) -> bool {
+        self.auto_default_mock_value()
+            .map(|mv| self.validators.iter().all(|v| v.matches(&mv)))
+            .unwrap_or(true)
+    }
+
     #[cfg(feature = "surrealdb")]
     pub fn generate_define_statement(
         &self,
@@ -260,6 +340,7 @@ impl StructField {
         persistable_structs: BTreeMap<String, TableConfig>,
         table_name: &String,
         registry: &ForeignTypeRegistry,
+        allow_scripting: bool,
     ) -> Result<String> {
         evenframe_log!(
             format!(
@@ -793,7 +874,7 @@ impl StructField {
                     ""
                 };
                 stmt.push_str(&format!(" DEFAULT{} {}", always, def_val));
-            } else {
+            } else if self.auto_default_satisfies_validators() {
                 use crate::default::field_type_to_surql_default;
                 stmt.push_str(&format!(
                     " DEFAULT {}",
@@ -808,6 +889,8 @@ impl StructField {
                     )
                 ));
             }
+            // else: the fallback default would violate the field's validators,
+            // so omit it — the field becomes required rather than unsatisfiable.
 
             if def.readonly.unwrap_or(false) {
                 stmt.push_str(" READONLY");
@@ -817,8 +900,8 @@ impl StructField {
                 stmt.push_str(&format!(" VALUE {}", val));
             }
 
-            if let Some(ref assert_val) = def.assert {
-                stmt.push_str(&format!(" ASSERT {}", assert_val));
+            if let Some(assert_clause) = self.merged_assert(allow_scripting) {
+                stmt.push_str(&format!(" ASSERT {}", assert_clause));
             }
         }
 
@@ -1639,6 +1722,7 @@ mod tests {
                 tables,
                 &"errand_channel".to_string(),
                 &ForeignTypeRegistry::default(),
+                true,
             )
             .expect("generate_define_statement should succeed");
 
@@ -1698,6 +1782,7 @@ mod tests {
                 BTreeMap::new(),
                 &"errand_channel".to_string(),
                 &ForeignTypeRegistry::default(),
+                true,
             )
             .expect("generate_define_statement should succeed");
 

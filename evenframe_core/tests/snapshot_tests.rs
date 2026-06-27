@@ -144,8 +144,8 @@ mod surrealql {
                 &fixture.query_details,
                 &fixture.server_only,
                 &fixture.enums,
-                false,
                 &registry,
+                true,
             );
         let name = std::path::Path::new(spec_input_file)
             .file_stem()

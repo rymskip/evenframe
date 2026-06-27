@@ -722,6 +722,12 @@ impl Comparator {
             changed = true;
         }
 
+        // Check assertion change (validator-derived or manual ASSERT clauses).
+        // Normalized so cosmetic reformatting by SurrealDB doesn't cause churn.
+        if normalize_assert(&old_field.assertions) != normalize_assert(&new_field.assertions) {
+            changed = true;
+        }
+
         if changed { Some(basic_change) } else { None }
     }
 
@@ -995,6 +1001,77 @@ fn normalize_event_statement(stmt: &str) -> String {
     canonical
 }
 
+/// Normalize an ASSERT expression for churn-free comparison between the
+/// locally-generated schema and the form SurrealDB stores and returns.
+///
+/// SurrealDB rewrites assertions on store: it drops redundant parentheses
+/// (e.g. `$value = NULL OR (string::len($value) <= 5)` becomes
+/// `$value = NULL OR string::len($value) <= 5`) and canonicalizes string
+/// literals to single quotes (`"@"` becomes `'@'`). To avoid re-emitting an
+/// unchanged field every sync, this neutralizes those differences: it joins
+/// multiple clauses with ` AND `, drops `(`/`)`, maps `"`/`` ` `` to `'`,
+/// collapses whitespace runs to a single space, and trims a trailing `;`.
+/// Empty input normalizes to the empty string, so unasserted fields never
+/// report a change.
+fn normalize_assert(assertions: &[String]) -> String {
+    let joined = assertions.join(" AND ");
+    let mut out = String::with_capacity(joined.len());
+    let mut prev_space = false;
+    for c in joined.chars() {
+        match c {
+            '(' | ')' => {}
+            '"' | '`' => {
+                out.push('\'');
+                prev_space = false;
+            }
+            c if c.is_whitespace() => {
+                if !out.is_empty() && !prev_space {
+                    out.push(' ');
+                    prev_space = true;
+                }
+            }
+            c => {
+                out.push(c);
+                prev_space = false;
+            }
+        }
+    }
+    out.trim().trim_end_matches(';').trim().to_string()
+}
+
+#[cfg(test)]
+mod normalize_assert_tests {
+    use super::normalize_assert;
+
+    #[test]
+    fn paren_and_quote_insensitive() {
+        // Desired (as emitted) vs stored (as SurrealDB returns it) must match.
+        let desired = vec!["$value = NULL OR (string::len($value) <= 5)".to_string()];
+        let stored = vec!["$value = NULL OR string::len($value) <= 5".to_string()];
+        assert_eq!(normalize_assert(&desired), normalize_assert(&stored));
+
+        let desired = vec!["string::starts_with($value, \"@\")".to_string()];
+        let stored = vec!["string::starts_with($value, '@')".to_string()];
+        assert_eq!(normalize_assert(&desired), normalize_assert(&stored));
+    }
+
+    #[test]
+    fn empty_is_empty_and_whitespace_collapses() {
+        assert_eq!(normalize_assert(&[]), "");
+        assert_eq!(
+            normalize_assert(&["  string::len($value)   >  0 ;".to_string()]),
+            "string::len$value > 0"
+        );
+    }
+
+    #[test]
+    fn genuinely_different_asserts_differ() {
+        let a = vec!["string::len($value) <= 5".to_string()];
+        let b = vec!["string::len($value) <= 6".to_string()];
+        assert_ne!(normalize_assert(&a), normalize_assert(&b));
+    }
+}
+
 #[cfg(test)]
 mod normalize_event_statement_tests {
     use super::normalize_event_statement;
@@ -1135,7 +1212,10 @@ impl<'a> Merger<'a> {
             table_count = tables.len(),
             "Generating schema from Rust structs"
         );
-        let schema = SchemaDefinition::from_table_configs(tables)?;
+        let schema = SchemaDefinition::from_table_configs(
+            tables,
+            self.default_mock_gen_config.scripting_asserts,
+        )?;
         tracing::debug!(
             tables = schema.tables.len(),
             edges = schema.edges.len(),

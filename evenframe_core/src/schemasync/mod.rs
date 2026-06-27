@@ -58,7 +58,8 @@ use crate::{
     error::{EvenframeError, Result},
     schemasync::compare::SchemaChanges,
     schemasync::database::surql::{
-        define::generate_define_statements, execute::execute_and_validate,
+        define::generate_define_statements,
+        execute::{execute_and_validate, split_surql_statements},
     },
 };
 #[cfg(feature = "surrealdb")]
@@ -199,14 +200,19 @@ impl<'a> Schemasync<'a> {
         );
         trace!("Database name: {}", config.schemasync.database.database);
 
-        let db = Surreal::new::<Http>(&config.schemasync.database.url)
-            .await
-            .map_err(|e| {
-                EvenframeError::database(format!(
-                    "There was a problem creating the HTTP surrealdb client: {e}"
-                ))
-            })
-            .unwrap();
+        // The HTTP engine wants a bare `host:port`; tolerate a configured
+        // `http(s)://` scheme (as shipped in .env.example) by stripping it.
+        let endpoint = config
+            .schemasync
+            .database
+            .url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let db = Surreal::new::<Http>(endpoint).await.map_err(|e| {
+            EvenframeError::database(format!(
+                "There was a problem creating the HTTP surrealdb client: {e}"
+            ))
+        })?;
         debug!("Created SurrealDB connection");
 
         let username = std::env::var("SURREALDB_USER")
@@ -314,10 +320,11 @@ impl<'a> Schemasync<'a> {
         enums: &BTreeMap<String, TaggedUnion>,
         full_refresh_mode: bool,
         registry: &crate::types::ForeignTypeRegistry,
+        allow_scripting: bool,
     ) -> (BTreeMap<&'b String, String>, String) {
         debug!(
-            "Generating table and field definition statements (full_refresh_mode: {})",
-            full_refresh_mode
+            "Generating table and field definition statements (full_refresh_mode: {}, allow_scripting: {})",
+            full_refresh_mode, allow_scripting
         );
         let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
         for (table_name, table) in tables {
@@ -330,8 +337,8 @@ impl<'a> Schemasync<'a> {
                     tables,
                     objects,
                     enums,
-                    full_refresh_mode,
                     registry,
+                    allow_scripting,
                 ),
             );
         }
@@ -363,6 +370,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
+            config.mock_gen_config.scripting_asserts,
         );
 
         let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
@@ -428,6 +436,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
+            config.mock_gen_config.scripting_asserts,
         );
 
         let mut mockmaker =
@@ -463,6 +472,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
+            config.mock_gen_config.scripting_asserts,
         );
 
         evenframe_log!("", "all_statements.surql");
@@ -632,7 +642,7 @@ impl<'a> Schemasync<'a> {
             for (table_name, define_stmt) in &define_statments {
                 debug!("Defining table (full refresh): {}", table_name);
                 // TABLE and FIELD are single-line statements, safe to split by ';'
-                for stmt in define_stmt.split_inclusive(';') {
+                for stmt in split_surql_statements(define_stmt) {
                     let trimmed = stmt.trim_start();
                     if trimmed.starts_with("DEFINE TABLE")
                         || trimmed.starts_with("DEFINE FIELD")
@@ -655,7 +665,7 @@ impl<'a> Schemasync<'a> {
             for table_name in &schema_changes.new_tables {
                 if let Some(define_stmt) = define_statments.get(table_name) {
                     debug!("Defining new table: {}", table_name);
-                    for stmt in define_stmt.split_inclusive(';') {
+                    for stmt in split_surql_statements(define_stmt) {
                         let trimmed = stmt.trim_start();
                         if trimmed.starts_with("DEFINE TABLE")
                             || trimmed.starts_with("DEFINE FIELD")
@@ -684,7 +694,7 @@ impl<'a> Schemasync<'a> {
                     debug!("Processing modified table: {}", table_name);
 
                     // Always redefine the table itself if it has changes
-                    for stmt in define_stmt.split_inclusive(';') {
+                    for stmt in split_surql_statements(define_stmt) {
                         let trimmed = stmt.trim_start();
                         if trimmed.starts_with("DEFINE TABLE") {
                             debug!("Redefining table structure for: {}", table_name);
@@ -703,7 +713,7 @@ impl<'a> Schemasync<'a> {
                             table_name
                         );
 
-                        for stmt in define_stmt.split_inclusive(';') {
+                        for stmt in split_surql_statements(define_stmt) {
                             let trimmed = stmt.trim_start();
                             if trimmed.starts_with("DEFINE FIELD") {
                                 // Extract field name from the statement, handling optional OVERWRITE
@@ -746,7 +756,7 @@ impl<'a> Schemasync<'a> {
                     }
 
                     // Always redefine indexes for modified tables (idempotent with OVERWRITE)
-                    for stmt in define_stmt.split_inclusive(';') {
+                    for stmt in split_surql_statements(define_stmt) {
                         let trimmed = stmt.trim_start();
                         if trimmed.starts_with("DEFINE INDEX") {
                             execute(table_name, stmt).await?;
