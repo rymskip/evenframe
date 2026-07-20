@@ -9,6 +9,11 @@ use tracing::{debug, trace};
 pub struct PluginConfig {
     /// Path to the `.wasm` file, relative to project root.
     pub path: String,
+    /// Free-form string parameters forwarded to the plugin on every call
+    /// (available as `params` on the plugin-side context). Values go through
+    /// the same `${VAR}` env substitution as the rest of the config.
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
 }
 
 /// Configuration for Schemasync operations (database synchronization)

@@ -29,6 +29,10 @@ pub struct FieldContext {
     pub record_index: usize,
     pub total_records: usize,
     pub record_id: String,
+    /// Host-config parameters (`plugins = { name = { path = ..., params = {...} } }`).
+    /// Empty when the host predates params or none are configured.
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]

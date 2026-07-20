@@ -15,6 +15,17 @@ struct LoadedPlugin {
     store: Store<()>,
     instance: Instance,
     memory: Memory,
+    /// Config-supplied parameters forwarded to the plugin on every call.
+    params: BTreeMap<String, String>,
+}
+
+/// Wrapper that attaches the plugin's config `params` to the serialized
+/// input so plugins can vary output without a host ABI change per use case.
+#[derive(serde::Serialize)]
+struct WithParams<'a, T: serde::Serialize> {
+    #[serde(flatten)]
+    input: &'a T,
+    params: &'a BTreeMap<String, String>,
 }
 
 impl LoadedPlugin {
@@ -191,6 +202,7 @@ impl PluginManager {
                     store,
                     instance,
                     memory,
+                    params: config.params.clone(),
                 },
             );
         }
@@ -213,8 +225,11 @@ impl PluginManager {
             .get_mut(plugin_name)
             .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
 
-        let input_json = serde_json::to_vec(input)
-            .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
+        let input_json = serde_json::to_vec(&WithParams {
+            input,
+            params: &plugin.params,
+        })
+        .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
 
         let output_str = plugin.call_plugin_fn("generate_field", &input_json)?;
 
@@ -251,8 +266,11 @@ impl PluginManager {
             .get_mut(plugin_name)
             .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
 
-        let input_json = serde_json::to_vec(input)
-            .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
+        let input_json = serde_json::to_vec(&WithParams {
+            input,
+            params: &plugin.params,
+        })
+        .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
 
         let output_str = plugin.call_plugin_fn("generate_table", &input_json)?;
 
