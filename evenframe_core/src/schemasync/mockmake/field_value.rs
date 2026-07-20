@@ -161,7 +161,11 @@ impl<'a> FieldValueGenerator<'a> {
                     ) {
                         value_stack.push(coordinated_value.to_string());
                     } else if let Some(format) = &ctx.field.format {
-                        value_stack.push(self.handle_format(format));
+                        value_stack.push(self.handle_format(
+                            format,
+                            ctx.field_type,
+                            &ctx.field.validators,
+                        ));
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
                         &ctx.field.validators,
@@ -200,6 +204,7 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::U128
                             | FieldType::Usize => {
                                 value_stack.push(generate_integer_with_retry(
+                                    ctx.field_type,
                                     &ctx.field.validators,
                                     &ctx.field_path,
                                     &mut rng,
@@ -756,16 +761,74 @@ impl<'a> FieldValueGenerator<'a> {
         value_stack.pop().unwrap()
     }
 
-    pub fn handle_format(&self, format: &Format) -> String {
+    pub fn handle_format(
+        &self,
+        format: &Format,
+        target: &FieldType,
+        validators: &[Validator],
+    ) -> String {
+        let mut scalar = target;
+        while let FieldType::Option(inner) = scalar {
+            scalar = inner;
+        }
+
+        // Currency and percentage formats describe string presentation
+        // ("$12.34", "42.5%"). When the declared field type is numeric the
+        // schema stores a bare number (with ASSERTs built from the
+        // validators), so the type wins: generate through the validator
+        // path, falling back to a bounded bare number.
+        if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
+            let mut rng = rand::rng();
+            if let Some(value) = validator_gen::generate_with_validators(scalar, validators, &mut rng)
+            {
+                return value;
+            }
+            return match format {
+                Format::CurrencyAmount => format!("{:.2}", rng.random_range(0.0..1000.0)),
+                _ => format!("{:.1}", rng.random_range(0.0..100.0)),
+            };
+        }
+
         let generated = format.generate_formatted_value();
+
+        // A format hint can contradict the field's validators, and the
+        // validators are what the database enforces (they become ASSERT
+        // clauses). Check the value in the domain the database will see —
+        // numeric fields as numbers, everything else as strings — and
+        // regenerate through the validator path on a mismatch.
+        if !validators.is_empty() {
+            let satisfied = if scalar.is_numeric() {
+                match generated.parse::<f64>() {
+                    Ok(n) => validators.iter().all(|v| v.matches(&MockValue::Num(n))),
+                    Err(_) => false,
+                }
+            } else {
+                validators
+                    .iter()
+                    .all(|v| v.matches(&MockValue::Str(&generated)))
+            };
+            if !satisfied {
+                let mut rng = rand::rng();
+                if let Some(value) =
+                    validator_gen::generate_with_validators(scalar, validators, &mut rng)
+                {
+                    return value;
+                }
+            }
+        }
+
         match format {
-            Format::Percentage
-            | Format::Latitude
-            | Format::Longitude
-            | Format::CurrencyAmount
-            | Format::AppointmentDurationNs => generated,
+            Format::CurrencyAmount | Format::Percentage => format!("'{}'", generated),
+            Format::Latitude | Format::Longitude | Format::AppointmentDurationNs => generated,
             Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
-                format!("d'{}'", generated)
+                // A Rust `String` field maps to surql TYPE string, where a
+                // d'…' datetime literal fails coercion — only datetime-typed
+                // fields (foreign types like chrono) take the literal form.
+                if matches!(scalar, FieldType::String) {
+                    format!("'{}'", generated)
+                } else {
+                    format!("d'{}'", generated)
+                }
             }
             _ => format!("'{}'", generated),
         }
@@ -866,6 +929,16 @@ fn generate_float_with_retry(
     if validators.is_empty() {
         return format!("{:.2}f", rng.random_range(0.0..100.0));
     }
+    // The validator-driven generator derives its sample range from the
+    // validators themselves, so constraints a fixed 0..100 loop can never
+    // hit (Negative, GreaterThan(1000), …) still converge.
+    for _ in 0..RETRY_ATTEMPTS {
+        if let Some(value) =
+            validator_gen::generate_with_validators(&FieldType::F64, validators, rng)
+        {
+            return value;
+        }
+    }
     let mut last = rng.random_range(0.0..100.0);
     for _ in 0..RETRY_ATTEMPTS {
         if validators.iter().all(|v| v.matches(&MockValue::Num(last))) {
@@ -882,12 +955,21 @@ fn generate_float_with_retry(
 }
 
 fn generate_integer_with_retry(
+    field_type: &FieldType,
     validators: &[Validator],
     field_path: &str,
     rng: &mut ThreadRng,
 ) -> String {
     if validators.is_empty() {
         return format!("{}", rng.random_range(0..100));
+    }
+    // The validator-driven generator derives its sample range from the
+    // validators themselves, so constraints a fixed 0..100 loop can never
+    // hit (Negative, GreaterThan(1000), …) still converge.
+    for _ in 0..RETRY_ATTEMPTS {
+        if let Some(value) = validator_gen::generate_with_validators(field_type, validators, rng) {
+            return value;
+        }
     }
     let mut last: i64 = rng.random_range(0..100);
     for _ in 0..RETRY_ATTEMPTS {

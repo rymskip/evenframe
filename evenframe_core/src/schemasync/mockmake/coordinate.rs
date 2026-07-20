@@ -483,8 +483,13 @@ impl Mockmaker<'_> {
         } else {
             // For non-percentage fields, use the original logic
             for (field, value) in fields.iter().zip(generated_values.iter()) {
+                // Coordinated values are interpolated into SurrealQL verbatim,
+                // so the declared field type decides the shape: numeric fields
+                // get a bare number, string fields a quoted "$…" literal.
                 let formatted_value = match &field.format {
-                    Some(Format::CurrencyAmount) => format!("${:.2}", value),
+                    Some(Format::CurrencyAmount) if !field.field_type.is_numeric() => {
+                        format!("'${:.2}'", value)
+                    }
                     _ => format!("{:.2}", value),
                 };
                 values.insert(field.field_name.clone(), formatted_value);

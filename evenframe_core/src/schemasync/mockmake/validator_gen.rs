@@ -340,7 +340,9 @@ fn pick_target_len(c: &StringConstraints, rng: &mut ThreadRng) -> Option<usize> 
     if let Some(n) = c.exact_len {
         return Some(n);
     }
-    let lo = effective_min_len(c).unwrap_or(0);
+    // Character-class shapes (alpha, digits, hex, …) reject the empty
+    // string on the database side, so shaped candidates need length >= 1.
+    let lo = effective_min_len(c).unwrap_or(if c.shape.is_some() { 1 } else { 0 });
     let hi = effective_max_len(c).unwrap_or(lo.max(16));
     if hi < lo {
         return Some(lo);
@@ -528,11 +530,13 @@ fn generate_integer(
     let mut r = collect_numeric_range(validators);
     r.require_int = true;
     let (default_lo, default_hi) = integer_field_default_range(field_type);
+    // Default an unbounded side relative to the bounded one — a plain
+    // default can contradict it (e.g. Negative: hi < 0 with default lo 0).
     if r.lo == f64::NEG_INFINITY {
-        r.lo = default_lo;
+        r.lo = if r.hi < default_lo { r.hi - 100.0 } else { default_lo };
     }
     if r.hi == f64::INFINITY {
-        r.hi = default_hi;
+        r.hi = if r.lo > default_hi { r.lo + 100.0 } else { default_hi };
     }
     let value = sample_numeric(&r, rng)?;
     let int_value = value as i128;
@@ -548,11 +552,14 @@ fn generate_integer(
 
 fn generate_float(validators: &[Validator], rng: &mut ThreadRng) -> Option<String> {
     let mut r = collect_numeric_range(validators);
+    // Default an unbounded side relative to the bounded one — a plain
+    // default can contradict it (e.g. Negative: hi < 0 with default lo 0,
+    // or GreaterThan(1000) with default hi 100).
     if r.lo == f64::NEG_INFINITY {
-        r.lo = 0.0;
+        r.lo = if r.hi < 0.0 { r.hi - 100.0 } else { 0.0 };
     }
     if r.hi == f64::INFINITY {
-        r.hi = 100.0;
+        r.hi = if r.lo > 100.0 { r.lo + 100.0 } else { 100.0 };
     }
     let value = sample_numeric(&r, rng)?;
     // Round to the same precision used in the emitted literal so the matches

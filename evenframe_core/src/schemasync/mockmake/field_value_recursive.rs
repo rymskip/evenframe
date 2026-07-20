@@ -2,10 +2,12 @@ use crate::{
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::format::Format,
+    schemasync::mockmake::validator_gen,
     types::{
         EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion,
         VariantData,
     },
+    validator::{MockValue, Validator},
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -27,7 +29,7 @@ pub struct FieldValueGenerator<'a> {
 impl<'a> FieldValueGenerator<'a> {
     pub fn run(&self) -> String {
         if let Some(format) = &self.field.format {
-            return self.handle_format(format);
+            return self.handle_format(format, &self.field.field_type, &self.field.validators);
         }
         self.generate_field_value(&self.field.field_type)
     }
@@ -84,23 +86,75 @@ impl<'a> FieldValueGenerator<'a> {
         }
     }
 
-    pub fn handle_format(&self, format: &Format) -> String {
+    pub fn handle_format(
+        &self,
+        format: &Format,
+        target: &FieldType,
+        validators: &[Validator],
+    ) -> String {
+        let mut scalar = target;
+        while let FieldType::Option(inner) = scalar {
+            scalar = inner;
+        }
+
+        // Currency and percentage formats describe string presentation
+        // ("$12.34", "42.5%"). When the declared field type is numeric the
+        // schema stores a bare number (with ASSERTs built from the
+        // validators), so the type wins: generate through the validator
+        // path, falling back to a bounded bare number.
+        if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
+            let mut rng = rand::rng();
+            if let Some(value) = validator_gen::generate_with_validators(scalar, validators, &mut rng)
+            {
+                return value;
+            }
+            return match format {
+                Format::CurrencyAmount => format!("{:.2}", rng.random_range(0.0..1000.0)),
+                _ => format!("{:.1}", rng.random_range(0.0..100.0)),
+            };
+        }
+
         let generated = format.generate_formatted_value();
 
-        // Check if format generates numeric or boolean values that shouldn't be quoted
-        match format {
-            // These formats generate numeric values, don't quote
-            Format::Percentage
-            | Format::Latitude
-            | Format::Longitude
-            | Format::CurrencyAmount
-            | Format::AppointmentDurationNs => generated,
-
-            Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
-                format!("d'{}'", generated)
+        // A format hint can contradict the field's validators, and the
+        // validators are what the database enforces (they become ASSERT
+        // clauses). Check the value in the domain the database will see —
+        // numeric fields as numbers, everything else as strings — and
+        // regenerate through the validator path on a mismatch.
+        if !validators.is_empty() {
+            let satisfied = if scalar.is_numeric() {
+                match generated.parse::<f64>() {
+                    Ok(n) => validators.iter().all(|v| v.matches(&MockValue::Num(n))),
+                    Err(_) => false,
+                }
+            } else {
+                validators
+                    .iter()
+                    .all(|v| v.matches(&MockValue::Str(&generated)))
+            };
+            if !satisfied {
+                let mut rng = rand::rng();
+                if let Some(value) =
+                    validator_gen::generate_with_validators(scalar, validators, &mut rng)
+                {
+                    return value;
+                }
             }
+        }
 
-            // Most formats generate strings, quote them
+        match format {
+            Format::CurrencyAmount | Format::Percentage => format!("'{}'", generated),
+            Format::Latitude | Format::Longitude | Format::AppointmentDurationNs => generated,
+            Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
+                // A Rust `String` field maps to surql TYPE string, where a
+                // d'…' datetime literal fails coercion — only datetime-typed
+                // fields (foreign types like chrono) take the literal form.
+                if matches!(scalar, FieldType::String) {
+                    format!("'{}'", generated)
+                } else {
+                    format!("d'{}'", generated)
+                }
+            }
             _ => format!("'{}'", generated),
         }
     }

@@ -1388,9 +1388,11 @@ impl Validator {
 fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
     match sv {
         StringValidator::String => true,
-        StringValidator::Alpha => s.chars().all(|c| c.is_alphabetic()),
-        StringValidator::Alphanumeric => s.chars().all(|c| c.is_alphanumeric()),
-        StringValidator::Hex => s.chars().all(|c| c.is_ascii_hexdigit()),
+        // SurrealDB's string::is_alpha/is_alphanum/is_hexadecimal are false
+        // for the empty string, so the vacuous .all() alone is not enough.
+        StringValidator::Alpha => !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
+        StringValidator::Alphanumeric => !s.is_empty() && s.chars().all(|c| c.is_alphanumeric()),
+        StringValidator::Hex => !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()),
         StringValidator::Digits => !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
         StringValidator::Numeric => s.parse::<f64>().is_ok(),
         StringValidator::NumericParse => s.parse::<f64>().is_ok(),

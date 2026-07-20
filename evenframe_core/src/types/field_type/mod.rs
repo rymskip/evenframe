@@ -34,6 +34,31 @@ pub enum FieldType {
     Other(String),
 }
 
+impl FieldType {
+    /// True when the field stores a number (float or integer), looking
+    /// through `Option` layers.
+    pub fn is_numeric(&self) -> bool {
+        match self {
+            FieldType::Option(inner) => inner.is_numeric(),
+            FieldType::F32
+            | FieldType::F64
+            | FieldType::I8
+            | FieldType::I16
+            | FieldType::I32
+            | FieldType::I64
+            | FieldType::I128
+            | FieldType::Isize
+            | FieldType::U8
+            | FieldType::U16
+            | FieldType::U32
+            | FieldType::U64
+            | FieldType::U128
+            | FieldType::Usize => true,
+            _ => false,
+        }
+    }
+}
+
 impl ToTokens for FieldType {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         match self {
