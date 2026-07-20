@@ -52,7 +52,7 @@ impl quote::ToTokens for PreservationMode {
 }
 
 // Schemasync orchestrator: requires surrealdb at runtime
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
@@ -62,26 +62,26 @@ use crate::{
         execute::{execute_and_validate, split_surql_statements},
     },
 };
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use std::collections::BTreeMap;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use tracing::{debug, error, info, trace, warn};
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use surrealdb::{
     Surreal,
     engine::remote::http::{Client, Http},
     opt::auth::Root,
 };
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::{
     evenframe_log,
     schemasync::mockmake::Mockmaker,
     types::{StructConfig, TaggedUnion},
 };
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 #[derive(Default)]
 pub struct Schemasync<'a> {
     // Input parameters - set via builder methods
@@ -99,7 +99,7 @@ pub struct Schemasync<'a> {
 
 /// Check database connectivity by loading config, connecting, authenticating,
 /// and selecting the configured namespace/database.
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 pub async fn check_database_connectivity() -> Result<()> {
     let config = EvenframeConfig::new()?;
 
@@ -144,7 +144,7 @@ pub async fn check_database_connectivity() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 impl<'a> Schemasync<'a> {
     /// Create a new empty Schemasync instance
     pub fn new() -> Self {
@@ -294,20 +294,56 @@ impl<'a> Schemasync<'a> {
             enums.len()
         );
 
-        // Surface `#[define_field_statement(...)]` annotations on embedded-struct
-        // fields that are silently discarded: evenframe inlines embedded structs
-        // into the parent table field, so per-subfield settings are never emitted.
-        for finding in crate::schemasync::lint::lint_discarded_field_annotations(objects) {
-            warn!(
-                struct_name = %finding.struct_name,
-                field = %finding.field_name,
-                discarded = ?finding.discarded,
-                "`#[define_field_statement]` on embedded struct field `{}.{}` is ignored: \
-                 evenframe inlines embedded structs into the parent field, so per-subfield \
-                 settings {:?} are never emitted. Gate the parent field instead, or promote \
-                 this struct to its own table.",
-                finding.struct_name, finding.field_name, finding.discarded,
-            );
+        // Surface `#[define_field_statement(...)]` settings that schema
+        // generation silently discards. Structs materialized as tables are
+        // exempt (their DEFINE FIELDs honor every setting); see the lint
+        // module docs for the exact classification rules.
+        use crate::schemasync::lint::DiscardedContext;
+        for finding in
+            crate::schemasync::lint::lint_discarded_field_annotations(tables, objects, enums)
+        {
+            match &finding.context {
+                DiscardedContext::EmbeddedObject => warn!(
+                    struct_name = %finding.struct_name,
+                    field = %finding.field_name,
+                    discarded = ?finding.discarded,
+                    "`#[define_field_statement]` on embedded struct field `{}.{}` is ignored: \
+                     evenframe inlines embedded structs into the parent field, so per-subfield \
+                     settings {:?} are never emitted. Gate the parent field instead, or promote \
+                     this struct to its own table.",
+                    finding.struct_name, finding.field_name, finding.discarded,
+                ),
+                DiscardedContext::EnumVariantPayload { enum_name } => warn!(
+                    enum_name = %enum_name,
+                    variant = %finding.struct_name,
+                    field = %finding.field_name,
+                    discarded = ?finding.discarded,
+                    "`#[define_field_statement]` on enum variant payload field `{}::{}.{}` is \
+                     ignored: variant payloads are inlined into the enum's literal type, so \
+                     settings {:?} are never emitted (a payload `default` only takes effect on \
+                     the enum's default variant). Extract the payload into its own table, or \
+                     gate the parent field.",
+                    enum_name, finding.struct_name, finding.field_name, finding.discarded,
+                ),
+                DiscardedContext::ResolveOnlyTable => {
+                    if config.lint.silence_unverifiable_annotations {
+                        continue;
+                    }
+                    warn!(
+                        struct_name = %finding.struct_name,
+                        field = %finding.field_name,
+                        discarded = ?finding.discarded,
+                        "`#[define_field_statement]` on `{}.{}` has no effect in this run: \
+                         `{}` comes from a resolve_only include, so this project inlines it \
+                         as an embedded object and discards {:?}. Whether the project that \
+                         owns `{}` materializes the table and honors these settings cannot \
+                         be determined from this run. Silence with \
+                         `silence_unverifiable_annotations = true` under `[schemasync.lint]`.",
+                        finding.struct_name, finding.field_name, finding.struct_name,
+                        finding.discarded, finding.struct_name,
+                    );
+                }
+            }
         }
 
         Ok((db, tables, objects, enums, config))

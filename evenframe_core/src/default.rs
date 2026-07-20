@@ -377,15 +377,19 @@ pub fn field_type_to_surql_default(
                     .unwrap_or(&enum_schema.variants[0]);
                 if let Some(variant_data) = &chosen_variant.data {
                     let inner_default = match variant_data {
-                        VariantData::InlineStruct(enum_struct) => field_type_to_surql_default(
-                            field_name,
-                            table_name,
-                            &FieldType::Other(enum_struct.struct_name.clone()),
-                            enums,
-                            app_structs,
-                            persistable_structs,
-                            registry,
-                        ),
+                        // An inline payload is anonymous — it is never registered
+                        // in `app_structs`, so it cannot be resolved by name.
+                        // Build the object from its own fields.
+                        VariantData::InlineStruct(enum_struct) => {
+                            struct_fields_to_surql_default_object(
+                                &enum_struct.fields,
+                                table_name,
+                                enums,
+                                app_structs,
+                                persistable_structs,
+                                registry,
+                            )
+                        }
                         VariantData::DataStructureRef(field_type) => field_type_to_surql_default(
                             field_name,
                             table_name,
@@ -446,31 +450,14 @@ pub fn field_type_to_surql_default(
                     name,
                     struct_config.fields.len()
                 );
-                let fields_str = struct_config
-                    .fields
-                    .iter()
-                    .map(|table_field| {
-                        let value = table_field
-                            .define_config
-                            .as_ref()
-                            .and_then(|dc| dc.default.as_deref())
-                            .map(|d| d.to_string())
-                            .unwrap_or_else(|| {
-                                field_type_to_surql_default(
-                                    &table_field.field_name,
-                                    table_name,
-                                    &table_field.field_type,
-                                    enums,
-                                    app_structs,
-                                    persistable_structs,
-                                    registry,
-                                )
-                            });
-                        format!("{}: {}", table_field.field_name.to_case(Case::Snake), value)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{ {} }}", fields_str)
+                struct_fields_to_surql_default_object(
+                    &struct_config.fields,
+                    table_name,
+                    enums,
+                    app_structs,
+                    persistable_structs,
+                    registry,
+                )
             }
             // Check if it's a persistable struct (table reference)
             else if persistable_structs.get(name).is_some() {
@@ -485,6 +472,45 @@ pub fn field_type_to_surql_default(
     };
     trace!("Generated SURQL default: {}", result);
     result
+}
+
+/// Build the `{ field: default, ... }` object literal for a struct's fields:
+/// each subfield's `define_config.default` when present, the type-derived
+/// fallback otherwise. Used for both registered embedded structs and inline
+/// enum-variant payloads.
+#[cfg(feature = "surrealdb")]
+fn struct_fields_to_surql_default_object(
+    fields: &[StructField],
+    table_name: &String,
+    enums: &BTreeMap<String, TaggedUnion>,
+    app_structs: &BTreeMap<String, StructConfig>,
+    persistable_structs: &BTreeMap<String, TableConfig>,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    let fields_str = fields
+        .iter()
+        .map(|table_field| {
+            let value = table_field
+                .define_config
+                .as_ref()
+                .and_then(|dc| dc.default.as_deref())
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| {
+                    field_type_to_surql_default(
+                        &table_field.field_name,
+                        table_name,
+                        &table_field.field_type,
+                        enums,
+                        app_structs,
+                        persistable_structs,
+                        registry,
+                    )
+                });
+            format!("{}: {}", table_field.field_name.to_case(Case::Snake), value)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {} }}", fields_str)
 }
 
 #[cfg(feature = "surrealdb")]
@@ -835,6 +861,36 @@ mod tests {
         }
     }
 
+    fn inline_struct_variant(name: &str, is_default: bool, payload: StructConfig) -> Variant {
+        Variant {
+            data: Some(VariantData::InlineStruct(payload)),
+            ..variant(name, is_default)
+        }
+    }
+
+    /// Payload with one explicit `#[define_field_statement(default(10))]` field
+    /// and one field relying on the type-derived fallback.
+    fn threshold_payload(variant_name: &str) -> StructConfig {
+        StructConfig {
+            struct_name: variant_name.to_string(),
+            fields: vec![
+                StructField {
+                    field_name: "threshold".to_string(),
+                    field_type: FieldType::U32,
+                    define_config: Some(base_define_config(Some("10"))),
+                    ..Default::default()
+                },
+                StructField {
+                    field_name: "tags".to_string(),
+                    field_type: FieldType::Vec(Box::new(FieldType::String)),
+                    define_config: None,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
     fn tagged_union(name: &str, variants: Vec<Variant>) -> TaggedUnion {
         TaggedUnion {
             resolve_only: false,
@@ -972,5 +1028,74 @@ mod tests {
             result,
             "{ row_height: \"Medium\", card_or_row: 'Table', per_page: 10, column_configs: [] }"
         );
+    }
+
+    #[test]
+    fn inline_variant_payload_defaults_are_used_in_default_literal() {
+        // An inline (anonymous) variant payload is not registered in
+        // `app_structs`, so it must be built from its own fields — each
+        // subfield's define_config default first, type-derived fallback
+        // otherwise — exactly like an embedded struct.
+        let enum_name = "Strategy".to_string();
+        let strategy = tagged_union(
+            &enum_name,
+            vec![
+                variant("Fixed", false),
+                inline_struct_variant("Custom", true, threshold_payload("Custom")),
+            ],
+        );
+        let mut enums = BTreeMap::new();
+        enums.insert(enum_name.clone(), strategy);
+        let app_structs = BTreeMap::new();
+        let persistable_structs = BTreeMap::new();
+        let registry = ForeignTypeRegistry::default();
+
+        let result = field_type_to_surql_default(
+            &"strategy".to_string(),
+            &"job".to_string(),
+            &FieldType::Other(enum_name),
+            &enums,
+            &app_structs,
+            &persistable_structs,
+            &registry,
+        );
+
+        // Untagged representation: the default is the payload object itself.
+        assert_eq!(result, "{ threshold: 10, tags: [] }");
+    }
+
+    #[test]
+    fn inline_variant_payload_defaults_merge_with_internal_tag() {
+        let enum_name = "Strategy".to_string();
+        let strategy = TaggedUnion {
+            representation: EnumRepresentation::InternallyTagged {
+                tag: "kind".to_string(),
+            },
+            ..tagged_union(
+                &enum_name,
+                vec![inline_struct_variant(
+                    "Custom",
+                    true,
+                    threshold_payload("Custom"),
+                )],
+            )
+        };
+        let mut enums = BTreeMap::new();
+        enums.insert(enum_name.clone(), strategy);
+        let app_structs = BTreeMap::new();
+        let persistable_structs = BTreeMap::new();
+        let registry = ForeignTypeRegistry::default();
+
+        let result = field_type_to_surql_default(
+            &"strategy".to_string(),
+            &"job".to_string(),
+            &FieldType::Other(enum_name),
+            &enums,
+            &app_structs,
+            &persistable_structs,
+            &registry,
+        );
+
+        assert_eq!(result, "{ kind: 'Custom', threshold: 10, tags: [] }");
     }
 }

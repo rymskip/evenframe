@@ -4,17 +4,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use try_from_expr::TryFromExpr;
 use uuid::Uuid;
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::error::EvenframeError;
 #[cfg(feature = "schemasync")]
 use crate::schemasync::mockmake::field_value::FieldValueGenerator;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::schemasync::mockmake::{Mockmaker, format::Format};
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::types::{FieldType, StructField};
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use rand::RngExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, Builder)]
@@ -23,7 +23,7 @@ pub struct CoordinationId {
     pub field_name: String,
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 impl CoordinationId {
     /// Parse a field path like "recurrence_rule.recurrence_begins" into (table_name, struct_name) for Mockmaker extraction
     fn parse_field_path(&self, mockmaker: &Mockmaker<'_>) -> (String, String) {
@@ -763,7 +763,7 @@ pub enum Coordination {
     OneToOne(String),
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 impl Coordination {
     /// Validate that this coordination can be applied to the given fields
     pub fn validate(
@@ -1155,7 +1155,7 @@ impl Coordination {
 }
 
 // Helper functions for type checking
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     match (type1, type2) {
         (FieldType::Option(inner1), FieldType::Option(inner2)) => {
@@ -1168,7 +1168,7 @@ fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     }
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn is_numeric_type(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::F32
@@ -1191,12 +1191,12 @@ fn is_numeric_type(field_type: &FieldType) -> bool {
 }
 
 /// Check if a type name represents a datetime-like type (used for foreign types that replaced FieldType::DateTime)
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn is_datetime_like(name: &str) -> bool {
     name == "DateTime" || name.contains("DateTime")
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn is_string_like(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::String | FieldType::Char => true,
@@ -1205,7 +1205,7 @@ fn is_string_like(field_type: &FieldType) -> bool {
     }
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn validate_string_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1232,7 +1232,7 @@ fn validate_string_field(
     Ok(())
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn validate_numeric_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1259,7 +1259,7 @@ fn validate_numeric_field(
     Ok(())
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 fn validate_datetime_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,

@@ -2,7 +2,7 @@ mod field_type;
 pub mod foreign_type_registry;
 
 pub use crate::types::field_type::FieldType;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
 use crate::{
     schemasync::mockmake::format::Format,
@@ -11,13 +11,13 @@ use crate::{
     validator::Validator,
     wrappers::EvenframeRecordId,
 };
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use convert_case::{Case, Casing};
 pub use foreign_type_registry::ForeignTypeRegistry;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use std::collections::HashSet;
 
 /// Which pipeline(s) a type participates in.
@@ -259,7 +259,7 @@ impl StructField {
     /// The manual clause is preserved verbatim when it is the only part (so
     /// existing schemas don't churn); manual and validator parts are each
     /// parenthesized when combined to keep operator precedence intact.
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     pub fn merged_assert(&self, allow_scripting: bool) -> Option<String> {
         use crate::schemasync::database::surql::assert::generate_assert_from_validators;
 
@@ -296,7 +296,7 @@ impl StructField {
     /// default cannot conflict with validators: optionals default to `NULL`
     /// (guarded by [`Self::merged_assert`]) and the rest have no overlapping
     /// validator family.
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     fn auto_default_mock_value(&self) -> Option<crate::validator::MockValue<'static>> {
         use crate::validator::MockValue;
         match self.field_type {
@@ -325,14 +325,14 @@ impl StructField {
     /// `0` under `Positive`, `[]` under `MinItems`) makes the field
     /// unsatisfiable — the default itself fails the `ASSERT` — so the caller
     /// omits the default and the field becomes required instead.
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     fn auto_default_satisfies_validators(&self) -> bool {
         self.auto_default_mock_value()
             .map(|mv| self.validators.iter().all(|v| v.matches(&mv)))
             .unwrap_or(true)
     }
 
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     pub fn generate_define_statement(
         &self,
         enums: BTreeMap<String, TaggedUnion>,
@@ -1637,7 +1637,7 @@ mod tests {
         assert_eq!(aliased.effective().name, "Real");
     }
 
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     #[test]
     fn test_generate_define_statement_resolves_record_link_override() {
         // Models the dealdraft `partial_route` synthetic plugin scenario:
@@ -1736,7 +1736,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "surrealdb")]
+    #[cfg(feature = "schemasync")]
     #[test]
     fn test_generate_define_statement_no_override_emits_literal_name() {
         // Regression guard: without `output_override`, the historical

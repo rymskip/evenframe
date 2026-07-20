@@ -31,6 +31,22 @@ pub struct SchemasyncConfig {
     #[serde(default)]
     #[builder(default)]
     pub plugins: BTreeMap<String, PluginConfig>,
+    /// Lint pass configuration
+    #[serde(default)]
+    #[builder(default)]
+    pub lint: LintConfig,
+}
+
+/// Configuration for the schemasync lint pass, under `[schemasync.lint]`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct LintConfig {
+    /// Silence warnings for `#[define_field_statement(...)]` settings whose
+    /// effect cannot be determined from this run's data: settings on a
+    /// `resolve_only` type that has an `id` field. This run inlines such a
+    /// type (discarding the settings), but the project that owns it may
+    /// materialize the table and honor them.
+    #[serde(default)]
+    pub silence_unverifiable_annotations: bool,
 }
 
 /// Database provider type for configuration

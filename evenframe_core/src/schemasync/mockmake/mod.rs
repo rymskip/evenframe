@@ -12,7 +12,7 @@ pub mod regex_val_gen;
 #[cfg(feature = "schemasync")]
 pub mod validator_gen;
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use crate::{
     dependency::sort_tables_by_dependencies,
     evenframe_log,
@@ -26,20 +26,20 @@ use crate::{
     types::{StructConfig, StructField, TaggedUnion},
     wrappers::EvenframeRecordId,
 };
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use rand::RngExt;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use surrealdb::Surreal;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use surrealdb::engine::local::Db;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use surrealdb::engine::remote::http::Client;
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 use uuid::Uuid;
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 #[derive(Debug)]
 pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
@@ -60,7 +60,7 @@ pub struct Mockmaker<'a> {
     pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
 
-#[cfg(feature = "surrealdb")]
+#[cfg(feature = "schemasync")]
 impl<'a> Mockmaker<'a> {
     pub fn new(
         db: &'a Surreal<Client>,
@@ -763,12 +763,13 @@ impl<'a> Mockmaker<'a> {
     }
 }
 
-// Import for MockGenerationConfig (always available, but avoid duplicates with surrealdb imports)
-#[cfg(not(feature = "surrealdb"))]
+// Import for MockGenerationConfig (always available, but avoid duplicates with
+// the schemasync-gated engine imports above)
+#[cfg(not(feature = "schemasync"))]
 use crate::schemasync::PreservationMode;
-#[cfg(not(feature = "surrealdb"))]
+#[cfg(not(feature = "schemasync"))]
 use crate::schemasync::mockmake::format::Format;
-#[cfg(not(feature = "surrealdb"))]
+#[cfg(not(feature = "schemasync"))]
 use crate::types::StructField;
 
 /// Unified configuration for mock data generation
