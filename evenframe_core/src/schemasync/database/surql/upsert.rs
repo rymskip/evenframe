@@ -107,6 +107,12 @@ impl Mockmaker<'_> {
 
             // Then, process remaining fields that weren't coordinated
             for table_field in &table_config.struct_config.fields {
+                // Skip explicit 'id': the record id is already pinned in the
+                // UPSERT target (plugin override > id_map > fallback), and a
+                // generated `id` in CONTENT would conflict with it.
+                if table_field.field_name == "id" {
+                    continue;
+                }
                 if table_field.edge_config.is_none()
                     && (table_field.define_config.is_some()
                         && !table_field.define_config.as_ref().unwrap().should_skip
