@@ -1,6 +1,7 @@
 //! Schemasync command - synchronizes database schema.
 
 use crate::cli::{Cli, DiffFormat, SchemasyncArgs, SchemasyncCommands};
+use std::path::PathBuf;
 use crate::config_builders;
 use evenframe_core::{error::Result, schemasync::Schemasync};
 use tracing::{debug, error, info};
@@ -113,6 +114,67 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                     .mock_only(mock_args.count, mock_args.tables)
                     .await?;
                 info!("Mock data generation completed");
+            }
+            SchemasyncCommands::Dump(dump_args) => {
+                info!("Dumping resolved schema DDL (offline)...");
+
+                // Load config purely for the foreign-type registry and the
+                // scripting-asserts flag. This path opens no database
+                // connection — it only reads the local config and emits DDL.
+                let config = evenframe_core::config::EvenframeConfig::new()?;
+                let registry = evenframe_core::types::ForeignTypeRegistry::from_config(
+                    &config.general.foreign_types,
+                );
+                let allow_scripting = config.schemasync.mock_gen_config.scripting_asserts;
+
+                // Mirror Schemasync's per-table define-statement loop, resolving
+                // each table's `output_override` via `effective()` and passing
+                // the full table/object/enum context as query details.
+                let mut blocks: Vec<String> = Vec::with_capacity(tables.len());
+                for (table_name, table) in &tables {
+                    blocks.push(
+                        evenframe_core::schemasync::database::surql::define::generate_define_statements(
+                            table_name,
+                            table.effective(),
+                            &tables,
+                            &objects,
+                            &enums,
+                            &registry,
+                            allow_scripting,
+                        ),
+                    );
+                }
+                let ddl = blocks.join("\n");
+                let statement_count = ddl
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with("DEFINE"))
+                    .count();
+
+                let output_path = dump_args
+                    .output
+                    .unwrap_or_else(|| PathBuf::from(".evenframe/surql/schema.surql"));
+
+                if let Some(parent) = output_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        evenframe_core::error::EvenframeError::config(format!(
+                            "Failed to create output directory {}: {e}",
+                            parent.display()
+                        ))
+                    })?;
+                }
+
+                std::fs::write(&output_path, &ddl).map_err(|e| {
+                    evenframe_core::error::EvenframeError::config(format!(
+                        "Failed to write schema dump to {}: {e}",
+                        output_path.display()
+                    ))
+                })?;
+
+                println!(
+                    "Wrote {statement_count} DEFINE statements across {} tables to {}",
+                    tables.len(),
+                    output_path.display()
+                );
             }
         }
         return Ok(());

@@ -240,6 +240,9 @@ pub enum SchemasyncCommands {
 
     /// Generate mock data only (skip schema sync)
     Mock(MockArgs),
+
+    /// Dump the resolved schema DDL to a file (offline, no DB connection)
+    Dump(DumpArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -279,6 +282,13 @@ pub struct MockArgs {
     /// Specific tables to generate mocks for (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub tables: Option<Vec<String>>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DumpArgs {
+    /// Output file path (default: .evenframe/surql/schema.surql)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 // ============================================================================

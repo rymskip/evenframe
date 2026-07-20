@@ -22,6 +22,13 @@ default_preservation_mode = "Smart"
 default_batch_size = 100
 full_refresh_mode = false
 coordination_groups = []
+# Emit embedded-JavaScript ASSERTs for field validators that have no native
+# SurrealQL equivalent (credit-card/Luhn, JSON, Unicode normalization,
+# finiteness, capitalization). These require the SurrealDB server to run with
+# --allow-scripting. Set to false to skip them — every native assertion still
+# applies — so the generated schema stays applicable on servers without
+# scripting. Default: true.
+scripting_asserts = true
 
 [schemasync.performance]
 embedded_db_memory_limit = "1GB"
