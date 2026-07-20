@@ -16,6 +16,7 @@ pub struct User {
     pub id: String,
 
     /// Email address - validated as email format, min 5 chars, max 255 chars
+    #[unique]
     #[format(Email)]
     #[validators(
         StringValidator::Email,

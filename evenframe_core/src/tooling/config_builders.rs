@@ -770,6 +770,11 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
 
         let field_raw_attributes = collect_raw_attributes(&field.attrs);
 
+        let unique = field
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("unique"));
+
         struct_fields.push(StructField {
             field_name,
             field_type,
@@ -780,7 +785,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             always_regenerate: false,
             doccom,
             annotations,
-            unique: false,
+            unique,
             mock_plugin: None,
             output_override: None,
             raw_attributes: field_raw_attributes,
@@ -1387,4 +1392,38 @@ fn merge_synthetic_output(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_struct_fields_parses_unique_attribute() {
+        let item_struct: ItemStruct = syn::parse_str(
+            r#"
+            struct User {
+                #[unique]
+                email: String,
+                name: String,
+            }
+            "#,
+        )
+        .expect("failed to parse test struct");
+
+        let config = parse_struct_config(&item_struct).expect("expected a struct config");
+        let email = config
+            .fields
+            .iter()
+            .find(|f| f.field_name == "email")
+            .expect("email field missing");
+        let name = config
+            .fields
+            .iter()
+            .find(|f| f.field_name == "name")
+            .expect("name field missing");
+
+        assert!(email.unique, "#[unique] field should be marked unique");
+        assert!(!name.unique, "unannotated field should not be marked unique");
+    }
 }
