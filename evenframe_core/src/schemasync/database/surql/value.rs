@@ -324,9 +324,35 @@ fn tagged_union_to_surreal_string(
                 .to_string();
             (name, obj.get(content.as_str()).cloned())
         }
+        (EnumRepresentation::Untagged, Value::Object(obj)) => {
+            // No discriminator — match structurally: the variant whose
+            // inline-struct field names cover every key of the object,
+            // preferring the largest overlap. Without this, a nested
+            // `RecordLink` inside an untagged variant (e.g.
+            // `EmployeeIdentity::LinkedUser { user }`) falls into
+            // inference and is emitted as a quoted string, which fails
+            // the schema's `record<>` coercion.
+            let mut best: Option<(String, usize)> = None;
+            for candidate in &tu.variants {
+                if let Some(VariantData::InlineStruct(sc)) = candidate.data.as_ref() {
+                    let sc = sc.effective();
+                    let names: std::collections::HashSet<&str> =
+                        sc.fields.iter().map(|f| f.field_name.as_str()).collect();
+                    if obj.keys().all(|k| names.contains(k.as_str()))
+                        && best.as_ref().is_none_or(|(_, n)| obj.len() > *n)
+                    {
+                        best = Some((candidate.name.clone(), obj.len()));
+                    }
+                }
+            }
+            match best {
+                Some((name, _)) => (name, Some(value.clone())),
+                None => return to_surreal_string_inferred(value),
+            }
+        }
         (EnumRepresentation::Untagged, _) => {
-            // Without a discriminator we can't pick a variant
-            // structurally here. Fall back to inference.
+            // Non-object untagged payloads (unit strings, scalars) carry
+            // no structure to match — inference is already correct.
             return to_surreal_string_inferred(value);
         }
         _ => return to_surreal_string_inferred(value),
