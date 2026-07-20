@@ -384,6 +384,20 @@ impl EvenframeConfig {
         ))
     }
 
+    /// Locates the project root by the same ancestor walk as config loading,
+    /// but without parsing the config — usable before env substitution can
+    /// succeed (e.g. for process locking). `None` when no config file exists
+    /// in the current directory or any ancestor.
+    pub fn find_project_root() -> Option<PathBuf> {
+        let config_path = Self::find_config_file().ok()?;
+        let parent = config_path.parent()?;
+        if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
+            parent.parent().map(Path::to_path_buf)
+        } else {
+            Some(parent.to_path_buf())
+        }
+    }
+
     /// Returns the project root directory based on config file location.
     /// - For `evenframe.toml` → parent dir
     /// - For `.evenframe/config.toml` → grandparent dir

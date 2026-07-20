@@ -24,6 +24,15 @@ async fn main() -> Result<()> {
 
     info!("Starting Evenframe");
 
+    // Serialize concurrent runs against the same project — schema sync, type
+    // generation, and the .evenframe caches all mutate shared state, so a
+    // second process waits for the first instead of interleaving with it.
+    // Held until process exit; released by the OS even on a crash. No lock
+    // when no project exists yet (e.g. `evenframe init`).
+    let _lock = EvenframeConfig::find_project_root()
+        .map(|root| evenframe_core::lock::ProcessLock::acquire(&root))
+        .transpose()?;
+
     // Dispatch to appropriate command handler
     let result = match &cli.command {
         Some(Commands::Typesync(args)) => commands::typesync::run(&cli, args.clone()).await,

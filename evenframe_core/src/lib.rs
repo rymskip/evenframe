@@ -6,6 +6,7 @@ pub mod default;
 pub mod dependency;
 pub mod derive;
 pub mod error;
+pub mod lock;
 pub mod log;
 pub mod registry;
 pub mod tooling;
