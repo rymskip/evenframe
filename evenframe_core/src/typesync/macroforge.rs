@@ -52,6 +52,7 @@ pub fn generate_macroforge_type_string(
     _print_types: bool,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
+    import_style: crate::typesync::config::ImportExtensionStyle,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -86,7 +87,8 @@ pub fn generate_macroforge_type_string(
         .collect();
 
     let mut result = String::new();
-    let extra_imports = compute_extra_imports(&all_type_names, structs, enums, registry);
+    let extra_imports =
+        compute_extra_imports(&all_type_names, structs, enums, registry, import_style);
     if !extra_imports.is_empty() {
         result.push_str(&extra_imports.join("\n"));
         result.push_str("\n\n");
@@ -701,6 +703,7 @@ pub fn compute_extra_imports(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
+    import_style: crate::typesync::config::ImportExtensionStyle,
 ) -> Vec<String> {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
     let mut needs_record_link = false;
@@ -861,9 +864,16 @@ pub fn compute_extra_imports(
         }
     }
 
-    // RecordLink from local index
+    // RecordLink from local index. The barrel is a plain `.ts` module, so
+    // the resolvable-specifier style points at its built `.js`.
     if needs_record_link {
-        lines.push("import type { RecordLink } from './index';".to_string());
+        let index_suffix = match import_style {
+            crate::typesync::config::ImportExtensionStyle::Bare => "",
+            crate::typesync::config::ImportExtensionStyle::Js => ".js",
+        };
+        lines.push(format!(
+            "import type {{ RecordLink }} from './index{index_suffix}';"
+        ));
     }
 
     lines
@@ -1375,6 +1385,7 @@ mod tests {
             true,
             ArrayStyle::default(),
             &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
         );
 
         assert!(output.contains("/** @derive(Deserialize) */"));
@@ -1524,6 +1535,7 @@ mod tests {
             true,
             ArrayStyle::default(),
             &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
         );
 
         // Struct: custom derives
@@ -1592,6 +1604,7 @@ mod tests {
             true,
             ArrayStyle::default(),
             &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert!(
             output.contains("/** @derive(Deserialize) */"),

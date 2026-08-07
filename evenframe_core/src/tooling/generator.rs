@@ -292,6 +292,7 @@ impl TypeGenerator {
             false,
             self.config.output.array_style,
             registry,
+            self.config.output.import_extension,
         );
 
         let path = self

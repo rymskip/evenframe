@@ -8,7 +8,7 @@ use evenframe_core::{
     types::ForeignTypeRegistry,
     typesync::{
         arktype::generate_arktype_type_string,
-        config::{FileNamingConvention, OutputMode},
+        config::{FileNamingConvention, ImportExtensionStyle, OutputMode},
         effect::{generate_effect_schema_for_types, generate_effect_schema_string},
         file_grouping::{FileOutputPlan, compute_file_grouping},
         flatbuffers::generate_flatbuffers_schema_string,
@@ -67,6 +67,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let file_naming = config.typesync.output.file_naming;
     let file_extension = &config.typesync.output.file_extension;
     let array_style = config.typesync.output.array_style;
+    let import_style = config.typesync.output.import_extension;
 
     // Handle subcommands for specific formats
     if let Some(cmd) = args.command {
@@ -100,6 +101,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         naming: file_naming,
                         file_ext: file_extension,
+                        import_style,
                         registry: &registry,
                     })?,
                 }
@@ -111,7 +113,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
                     OutputMode::Single => {
-                        generate_macroforge(&structs, &enums, &output_path, array_style, &registry)?
+                        generate_macroforge(&structs, &enums, &output_path, array_style, &registry, import_style)?
                     }
                     OutputMode::PerFile => generate_macroforge_per_file(MacroforgePerFileArgs {
                         structs: &structs,
@@ -120,6 +122,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         naming: file_naming,
                         file_ext: file_extension,
+                        import_style,
                         array_style,
                         registry: &registry,
                     })?,
@@ -227,6 +230,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         naming: file_naming,
                         file_ext: file_extension,
+                        import_style,
                         registry: &registry,
                     })?;
                 }
@@ -234,7 +238,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
             TypeFormat::Macroforge => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}macroforge.ts", config.typesync.output_path);
-                    generate_macroforge(&structs, &enums, &path, array_style, &registry)?;
+                    generate_macroforge(&structs, &enums, &path, array_style, &registry, import_style)?;
                 }
                 OutputMode::PerFile => {
                     generate_macroforge_per_file(MacroforgePerFileArgs {
@@ -244,6 +248,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                         barrel_file,
                         naming: file_naming,
                         file_ext: file_extension,
+                        import_style,
                         array_style,
                         registry: &registry,
                     })?;
@@ -319,6 +324,7 @@ struct EffectPerFileArgs<'a> {
     barrel_file: bool,
     naming: FileNamingConvention,
     file_ext: &'a str,
+    import_style: ImportExtensionStyle,
     registry: &'a ForeignTypeRegistry,
 }
 
@@ -331,6 +337,7 @@ fn generate_effect_per_file(args: EffectPerFileArgs<'_>) -> Result<()> {
         barrel_file,
         naming,
         file_ext,
+        import_style,
         registry,
     } = args;
 
@@ -346,7 +353,7 @@ fn generate_effect_per_file(args: EffectPerFileArgs<'_>) -> Result<()> {
     );
 
     for group in &plan.groups {
-        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
+        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext, import_style);
         let type_names = group.all_types();
         let body = generate_effect_schema_for_types(&type_names, structs, enums, registry);
 
@@ -367,7 +374,7 @@ fn generate_effect_per_file(args: EffectPerFileArgs<'_>) -> Result<()> {
     }
 
     if barrel_file {
-        let barrel_content = generate_barrel_file(&plan, naming, file_ext);
+        let barrel_content = generate_barrel_file(&plan, naming, file_ext, import_style);
         let barrel_path = dir.join(barrel_filename(file_ext));
         std::fs::write(&barrel_path, barrel_content)?;
         debug!("Written barrel file {}", barrel_path.display());
@@ -383,9 +390,11 @@ fn generate_macroforge(
     output_path: &str,
     array_style: evenframe_core::typesync::config::ArrayStyle,
     registry: &ForeignTypeRegistry,
+    import_style: ImportExtensionStyle,
 ) -> Result<()> {
     info!("Generating Macroforge types to {}", output_path);
-    let content = generate_macroforge_type_string(structs, enums, false, array_style, registry);
+    let content =
+        generate_macroforge_type_string(structs, enums, false, array_style, registry, import_style);
     std::fs::write(output_path, content)?;
     debug!("Macroforge types written successfully");
     Ok(())
@@ -398,6 +407,7 @@ struct MacroforgePerFileArgs<'a> {
     barrel_file: bool,
     naming: FileNamingConvention,
     file_ext: &'a str,
+    import_style: ImportExtensionStyle,
     array_style: evenframe_core::typesync::config::ArrayStyle,
     registry: &'a ForeignTypeRegistry,
 }
@@ -410,6 +420,7 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
         barrel_file,
         naming,
         file_ext,
+        import_style,
         array_style,
         registry,
     } = args;
@@ -425,7 +436,7 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
     );
 
     for group in &plan.groups {
-        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext);
+        let imports = resolve_imports(group, &plan, structs, enums, naming, file_ext, import_style);
         let type_names = group.all_types();
         let body =
             generate_macroforge_for_types(&type_names, structs, enums, array_style, registry);
@@ -439,7 +450,7 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
         }
 
         // Add extra imports (effect types, RecordLink)
-        let extra_imports = compute_extra_imports(&type_names, structs, enums, registry);
+        let extra_imports = compute_extra_imports(&type_names, structs, enums, registry, import_style);
         for import_line in &extra_imports {
             file_content.push_str(import_line);
             file_content.push('\n');
@@ -462,7 +473,7 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
     }
 
     if barrel_file {
-        let barrel_content = generate_barrel_file(&plan, naming, file_ext);
+        let barrel_content = generate_barrel_file(&plan, naming, file_ext, import_style);
         let barrel_path = dir.join(barrel_filename(file_ext));
         std::fs::write(&barrel_path, barrel_content)?;
         debug!("Written barrel file {}", barrel_path.display());

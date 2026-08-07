@@ -57,6 +57,7 @@ pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
             false,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
+            evenframe_core::typesync::config::ImportExtensionStyle::default(),
         );
         entry["generated_typesync"] = serde_json::Value::String(generated);
 
@@ -108,6 +109,7 @@ pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
             false,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
+            evenframe_core::typesync::config::ImportExtensionStyle::default(),
         );
         entry["generated_typesync"] = serde_json::Value::String(generated);
 

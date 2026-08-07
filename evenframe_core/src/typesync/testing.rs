@@ -78,6 +78,7 @@ pub fn generate_struct_with_override(
         false,
         crate::typesync::config::ArrayStyle::default(),
         &registry,
+        crate::typesync::config::ImportExtensionStyle::default(),
     );
     GeneratedOutput {
         full_output: output,
@@ -114,6 +115,7 @@ pub fn generate_enum_with_override(
         false,
         crate::typesync::config::ArrayStyle::default(),
         &registry,
+        crate::typesync::config::ImportExtensionStyle::default(),
     );
     GeneratedOutput {
         full_output: output,

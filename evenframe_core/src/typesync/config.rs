@@ -37,6 +37,23 @@ pub enum FileNamingConvention {
     Camel,
 }
 
+/// Extension policy for the relative import specifiers in generated files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportExtensionStyle {
+    /// Extensionless specifiers (`./user.svelte`) — resolvable only by
+    /// lenient resolvers (TypeScript `bundler` mode, Deno sloppy-imports).
+    /// Default, matching the historical output.
+    #[default]
+    Bare,
+    /// Emit the extension the file has after transpilation
+    /// (`./user.svelte.js`), so a packaged `dist/` resolves under strict
+    /// node/Vite resolution with no post-processing. TypeScript maps the
+    /// `.js` specifier back to the `.ts` source, so the same specifier
+    /// works pre- and post-build.
+    Js,
+}
+
 /// How to handle type name collisions across different source files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +86,11 @@ pub struct OutputConfig {
     /// Set to `generic` for `Array<Type>` syntax.
     #[serde(default)]
     pub array_style: ArrayStyle,
+    /// Extension policy for relative import specifiers (default: `bare`).
+    /// Set to `js` when the generated tree is consumed as a packaged
+    /// `dist/` so its imports resolve without post-processing.
+    #[serde(default)]
+    pub import_extension: ImportExtensionStyle,
 }
 
 fn default_file_extension() -> String {

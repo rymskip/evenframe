@@ -5,7 +5,7 @@
 
 use crate::dependency::deps_of;
 use crate::types::{StructConfig, TaggedUnion};
-use crate::typesync::config::FileNamingConvention;
+use crate::typesync::config::{FileNamingConvention, ImportExtensionStyle};
 use crate::typesync::file_grouping::{FileOutputPlan, TypeFileGroup};
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,17 +30,33 @@ pub fn type_name_to_filename(type_name: &str, naming: FileNamingConvention) -> S
 }
 
 /// Computes the import specifier suffix from a file extension.
-/// For `.ts` → no suffix (TypeScript resolves extensionless imports).
-/// For `.svelte.ts` → `.svelte` (strip trailing `.ts`).
-/// For other compound extensions → strip trailing `.ts`/`.js` if present.
-pub fn import_specifier_suffix(file_extension: &str) -> &str {
-    if file_extension == ".ts" || file_extension == ".js" {
-        ""
-    } else {
-        file_extension
-            .strip_suffix(".ts")
-            .or_else(|| file_extension.strip_suffix(".js"))
-            .unwrap_or(file_extension)
+///
+/// `Bare`: for `.ts` → no suffix (lenient resolvers accept extensionless
+/// imports); for `.svelte.ts` → `.svelte` (strip trailing `.ts`); for
+/// other compound extensions → strip trailing `.ts`/`.js` if present.
+///
+/// `Js`: the extension the file has after transpilation — `.ts` → `.js`,
+/// `.svelte.ts` → `.svelte.js` — so the specifier resolves under strict
+/// node/Vite resolution in a packaged `dist/` and maps back to the `.ts`
+/// source pre-build.
+pub fn import_specifier_suffix(file_extension: &str, style: ImportExtensionStyle) -> String {
+    match style {
+        ImportExtensionStyle::Bare => {
+            if file_extension == ".ts" || file_extension == ".js" {
+                String::new()
+            } else {
+                file_extension
+                    .strip_suffix(".ts")
+                    .or_else(|| file_extension.strip_suffix(".js"))
+                    .unwrap_or(file_extension)
+                    .to_string()
+            }
+        }
+        ImportExtensionStyle::Js => match file_extension.strip_suffix(".ts") {
+            Some(stem) => format!("{stem}.js"),
+            // Already `.js`, or an extension that is served verbatim.
+            None => file_extension.to_string(),
+        },
     }
 }
 
@@ -56,9 +72,10 @@ pub fn resolve_imports(
     enums: &BTreeMap<String, TaggedUnion>,
     naming: FileNamingConvention,
     file_extension: &str,
+    style: ImportExtensionStyle,
 ) -> Vec<ImportStatement> {
     let group_types: BTreeSet<String> = group.all_types().into_iter().collect();
-    let suffix = import_specifier_suffix(file_extension);
+    let suffix = import_specifier_suffix(file_extension, style);
 
     // Collect all external dependencies from all types in this group.
     let mut external_deps: BTreeSet<String> = BTreeSet::new();
@@ -113,8 +130,9 @@ pub fn generate_barrel_file(
     plan: &FileOutputPlan,
     naming: FileNamingConvention,
     file_extension: &str,
+    style: ImportExtensionStyle,
 ) -> String {
-    let suffix = import_specifier_suffix(file_extension);
+    let suffix = import_specifier_suffix(file_extension, style);
     let mut lines: Vec<String> = Vec::new();
     for group in &plan.groups {
         let filename = type_name_to_filename(&group.primary_type, naming);
@@ -216,12 +234,35 @@ mod tests {
             &enums,
             FileNamingConvention::Kebab,
             ".ts",
+            ImportExtensionStyle::Bare,
         );
 
         // User group (User + Address) should import Role from ./role
         assert_eq!(imports.len(), 1);
         assert!(imports[0].type_names.contains(&"Role".to_string()));
         assert_eq!(imports[0].from_path, "./role");
+
+        let js_imports = resolve_imports(
+            user_group,
+            &plan,
+            &structs,
+            &enums,
+            FileNamingConvention::Kebab,
+            ".ts",
+            ImportExtensionStyle::Js,
+        );
+        assert_eq!(js_imports[0].from_path, "./role.js");
+    }
+
+    #[test]
+    fn test_import_specifier_suffix_styles() {
+        use ImportExtensionStyle::{Bare, Js};
+        assert_eq!(import_specifier_suffix(".ts", Bare), "");
+        assert_eq!(import_specifier_suffix(".svelte.ts", Bare), ".svelte");
+        assert_eq!(import_specifier_suffix(".js", Bare), "");
+        assert_eq!(import_specifier_suffix(".ts", Js), ".js");
+        assert_eq!(import_specifier_suffix(".svelte.ts", Js), ".svelte.js");
+        assert_eq!(import_specifier_suffix(".js", Js), ".js");
     }
 
     #[test]
@@ -262,7 +303,12 @@ mod tests {
             type_to_group: BTreeMap::new(),
         };
 
-        let barrel = generate_barrel_file(&plan, FileNamingConvention::Kebab, ".ts");
+        let barrel = generate_barrel_file(
+            &plan,
+            FileNamingConvention::Kebab,
+            ".ts",
+            ImportExtensionStyle::Bare,
+        );
         assert!(barrel.contains("export * from \"./user\";"));
         assert!(barrel.contains("export * from \"./post\";"));
         assert!(barrel.contains("export * from \"./role\";"));
