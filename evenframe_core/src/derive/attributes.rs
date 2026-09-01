@@ -332,9 +332,9 @@ pub fn parse_index_attributes(
                     content.parse_terminated(Ident::parse, Token![,])?;
                 let collected: Vec<Ident> = parsed.into_iter().collect();
                 if collected.is_empty() {
-                    return Err(meta.error(
-                        "`fields(...)` must list at least one struct field identifier",
-                    ));
+                    return Err(
+                        meta.error("`fields(...)` must list at least one struct field identifier")
+                    );
                 }
                 fields = Some(collected);
                 Ok(())
@@ -342,8 +342,7 @@ pub fn parse_index_attributes(
                 unique = true;
                 Ok(())
             } else {
-                Err(meta
-                    .error("expected `fields(<ident>, ...)` or `unique` inside #[index(...)]"))
+                Err(meta.error("expected `fields(<ident>, ...)` or `unique` inside #[index(...)]"))
             }
         })?;
 

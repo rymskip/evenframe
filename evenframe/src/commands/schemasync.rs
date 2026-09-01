@@ -1,9 +1,9 @@
 //! Schemasync command - synchronizes database schema.
 
 use crate::cli::{Cli, DiffFormat, SchemasyncArgs, SchemasyncCommands};
-use std::path::PathBuf;
 use crate::config_builders;
 use evenframe_core::{error::Result, schemasync::Schemasync};
+use std::path::PathBuf;
 use tracing::{debug, error, info};
 
 /// Runs the schemasync command.

@@ -14,9 +14,7 @@
 
 use crate::schemasync::mockmake::{Mockmaker, regex_val_gen::RegexValGen};
 use crate::types::FieldType;
-use crate::validator::{
-    ArrayValidator, MockValue, NumberValidator, StringValidator, Validator,
-};
+use crate::validator::{ArrayValidator, MockValue, NumberValidator, StringValidator, Validator};
 use rand::{RngExt, rngs::ThreadRng};
 
 /// Cap on how many times we'll regenerate a string when it doesn't satisfy
@@ -169,9 +167,9 @@ fn collect_string_constraints(validators: &[Validator]) -> StringConstraints {
             StringValidator::Upper
             | StringValidator::UpperPreformatted
             | StringValidator::Uppercased => c.to_upper = true,
-            StringValidator::Trim | StringValidator::TrimPreformatted | StringValidator::Trimmed => {
-                c.to_trim = true
-            }
+            StringValidator::Trim
+            | StringValidator::TrimPreformatted
+            | StringValidator::Trimmed => c.to_trim = true,
             StringValidator::Capitalize
             | StringValidator::CapitalizePreformatted
             | StringValidator::Capitalized => c.to_capitalize = true,
@@ -193,9 +191,7 @@ fn collect_string_constraints(validators: &[Validator]) -> StringConstraints {
             StringValidator::IpV6 => c.shape = c.shape.or(Some(StringShape::IpV6)),
             StringValidator::Hex => c.shape = c.shape.or(Some(StringShape::Hex)),
             StringValidator::Alpha => c.shape = c.shape.or(Some(StringShape::Alpha)),
-            StringValidator::Alphanumeric => {
-                c.shape = c.shape.or(Some(StringShape::Alphanumeric))
-            }
+            StringValidator::Alphanumeric => c.shape = c.shape.or(Some(StringShape::Alphanumeric)),
             StringValidator::Digits => c.shape = c.shape.or(Some(StringShape::Digits)),
             StringValidator::Numeric | StringValidator::NumericParse => {
                 c.shape = c.shape.or(Some(StringShape::Numeric))
@@ -257,9 +253,7 @@ fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<
     // 1. Seed value from the shape/regex/length pipeline.
     let mut s = if let Some(fmt) = &c.regex_format {
         let mut maker = RegexValGen::new();
-        maker
-            .generate(fmt.clone().into_regex().as_str())
-            .ok()?
+        maker.generate(fmt.clone().into_regex().as_str()).ok()?
     } else if let Some(shape) = c.shape {
         gen_shape(shape, target_len, rng)?
     } else {
@@ -281,11 +275,7 @@ fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<
         if !s.contains(needle.as_str()) {
             // Insert in the middle to avoid colliding with starts_with/ends_with.
             let mid = s.chars().count() / 2;
-            let split: usize = s
-                .char_indices()
-                .nth(mid)
-                .map(|(i, _)| i)
-                .unwrap_or(s.len());
+            let split: usize = s.char_indices().nth(mid).map(|(i, _)| i).unwrap_or(s.len());
             s.insert_str(split, needle);
         }
     }
@@ -391,11 +381,9 @@ fn gen_shape(shape: StringShape, target_len: Option<usize>, rng: &mut ThreadRng)
             format_via(Format::HexString(len))
         }
         StringShape::Alpha => Some(random_from_alphabet(target_len.unwrap_or(8), ALPHA, rng)),
-        StringShape::Alphanumeric => Some(random_from_alphabet(
-            target_len.unwrap_or(8),
-            ALPHANUM,
-            rng,
-        )),
+        StringShape::Alphanumeric => {
+            Some(random_from_alphabet(target_len.unwrap_or(8), ALPHANUM, rng))
+        }
         StringShape::Digits => Some(random_from_alphabet(target_len.unwrap_or(8), DIGITS, rng)),
         StringShape::Numeric => {
             let int_part: u64 = rng.random_range(0u64..=99_999);
@@ -533,10 +521,18 @@ fn generate_integer(
     // Default an unbounded side relative to the bounded one — a plain
     // default can contradict it (e.g. Negative: hi < 0 with default lo 0).
     if r.lo == f64::NEG_INFINITY {
-        r.lo = if r.hi < default_lo { r.hi - 100.0 } else { default_lo };
+        r.lo = if r.hi < default_lo {
+            r.hi - 100.0
+        } else {
+            default_lo
+        };
     }
     if r.hi == f64::INFINITY {
-        r.hi = if r.lo > default_hi { r.lo + 100.0 } else { default_hi };
+        r.hi = if r.lo > default_hi {
+            r.lo + 100.0
+        } else {
+            default_hi
+        };
     }
     let value = sample_numeric(&r, rng)?;
     let int_value = value as i128;
@@ -735,11 +731,7 @@ mod tests {
                 .expect("should produce an integer");
             let n: f64 = lit.parse().expect("integer literal");
             assert!(n > 0.0, "got non-positive {}", n);
-            assert!(
-                (n % 5.0).abs() < f64::EPSILON,
-                "{} not a multiple of 5",
-                n
-            );
+            assert!((n % 5.0).abs() < f64::EPSILON, "{} not a multiple of 5", n);
         }
     }
 
@@ -790,4 +782,3 @@ mod tests {
         assert!(generate_with_validators(&FieldType::Bool, &validators, &mut rng).is_none());
     }
 }
-

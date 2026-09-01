@@ -270,7 +270,8 @@ impl StructField {
             .map(|a| a.trim())
             .filter(|a| !a.is_empty());
 
-        let generated = generate_assert_from_validators(&self.validators, "$value", allow_scripting);
+        let generated =
+            generate_assert_from_validators(&self.validators, "$value", allow_scripting);
         let generated = if generated.is_empty() {
             None
         } else if matches!(self.field_type, FieldType::Option(_)) {
@@ -424,7 +425,8 @@ impl StructField {
                                         // the underlying table name. Falls back to
                                         // the literal name when no registered struct
                                         // or table matches.
-                                        let resolved = if let Some(sc) = app_structs.get(type_name) {
+                                        let resolved = if let Some(sc) = app_structs.get(type_name)
+                                        {
                                             sc.effective().struct_name.to_case(Case::Snake)
                                         } else if let Some(tc) =
                                             persistable_structs.get(&type_name.to_case(Case::Snake))
@@ -433,7 +435,11 @@ impl StructField {
                                         } else {
                                             type_name.to_case(Case::Snake)
                                         };
-                                        value_stack.push((format!("record<{}>", resolved), false, None));
+                                        value_stack.push((
+                                            format!("record<{}>", resolved),
+                                            false,
+                                            None,
+                                        ));
                                     } else {
                                         work_stack.push(WorkItem::Process(inner));
                                     }
@@ -623,7 +629,11 @@ impl StructField {
                                             ));
                                         } else {
                                             if visited_types.contains(name) {
-                                                value_stack.push(("object".to_string(), false, None));
+                                                value_stack.push((
+                                                    "object".to_string(),
+                                                    false,
+                                                    None,
+                                                ));
                                                 continue;
                                             }
                                             work_stack.push(WorkItem::LeaveStructScope {
@@ -639,8 +649,9 @@ impl StructField {
                                                 names,
                                             });
                                             for field in app_struct.fields.iter().rev() {
-                                                work_stack
-                                                    .push(WorkItem::Process(&field.effective().field_type));
+                                                work_stack.push(WorkItem::Process(
+                                                    &field.effective().field_type,
+                                                ));
                                             }
                                             work_stack.push(WorkItem::EnterStructScope {
                                                 name: name.clone(),

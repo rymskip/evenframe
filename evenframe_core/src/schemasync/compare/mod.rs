@@ -284,8 +284,7 @@ impl SchemaChanges {
                 ));
             }
             if !table.new_indexes.is_empty() {
-                let names: Vec<&str> =
-                    table.new_indexes.iter().map(|i| i.name.as_str()).collect();
+                let names: Vec<&str> = table.new_indexes.iter().map(|i| i.name.as_str()).collect();
                 summary.push(format!(
                     "New indexes on {}: {}",
                     table.table_name,

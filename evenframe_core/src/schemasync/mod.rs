@@ -449,22 +449,22 @@ impl<'a> Schemasync<'a> {
 
         // Apply table filter if specified
         let owned_filtered: BTreeMap<String, TableConfig>;
-        let effective_tables: &BTreeMap<String, TableConfig> = if let Some(ref filter) = table_filter
-        {
-            owned_filtered = tables
-                .iter()
-                .filter(|(name, _)| filter.contains(name))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            if owned_filtered.is_empty() {
-                return Err(EvenframeError::config(
-                    "No tables match the specified filter",
-                ));
-            }
-            &owned_filtered
-        } else {
-            tables
-        };
+        let effective_tables: &BTreeMap<String, TableConfig> =
+            if let Some(ref filter) = table_filter {
+                owned_filtered = tables
+                    .iter()
+                    .filter(|(name, _)| filter.contains(name))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                if owned_filtered.is_empty() {
+                    return Err(EvenframeError::config(
+                        "No tables match the specified filter",
+                    ));
+                }
+                &owned_filtered
+            } else {
+                tables
+            };
 
         let (_, define_statements_string) = Self::generate_all_define_statements(
             effective_tables,

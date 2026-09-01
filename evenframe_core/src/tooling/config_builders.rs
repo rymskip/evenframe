@@ -446,11 +446,7 @@ fn process_types(
                                     struct_config
                                         .fields
                                         .iter()
-                                        .map(|f| {
-                                            f.field_name
-                                                .trim_start_matches("r#")
-                                                .to_string()
-                                        })
+                                        .map(|f| f.field_name.trim_start_matches("r#").to_string())
                                         .collect();
                                 let indexes = parse_index_attributes(
                                     &item_struct.attrs,
@@ -714,10 +710,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
         };
 
         let variant_raw_attributes = collect_raw_attributes(&variant.attrs);
-        let is_default_variant = variant
-            .attrs
-            .iter()
-            .any(|a| a.path().is_ident("default"));
+        let is_default_variant = variant.attrs.iter().any(|a| a.path().is_ident("default"));
 
         variants.push(Variant {
             name: variant_name,
@@ -1424,6 +1417,9 @@ mod tests {
             .expect("name field missing");
 
         assert!(email.unique, "#[unique] field should be marked unique");
-        assert!(!name.unique, "unannotated field should not be marked unique");
+        assert!(
+            !name.unique,
+            "unannotated field should not be marked unique"
+        );
     }
 }

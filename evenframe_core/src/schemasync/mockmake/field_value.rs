@@ -21,7 +21,7 @@ struct Frame<'a> {
     field: &'a StructField,
     table_config: &'a TableConfig,
     field_type: &'a FieldType,
-    field_path: String,             // Track the full path for nested fields
+    field_path: String,              // Track the full path for nested fields
     visited_types: BTreeSet<String>, // Track visited types to avoid infinite recursion
 }
 
@@ -202,14 +202,12 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::U32
                             | FieldType::U64
                             | FieldType::U128
-                            | FieldType::Usize => {
-                                value_stack.push(generate_integer_with_retry(
-                                    ctx.field_type,
-                                    &ctx.field.validators,
-                                    &ctx.field_path,
-                                    &mut rng,
-                                ))
-                            }
+                            | FieldType::Usize => value_stack.push(generate_integer_with_retry(
+                                ctx.field_type,
+                                &ctx.field.validators,
+                                &ctx.field_path,
+                                &mut rng,
+                            )),
                             FieldType::Option(inner_type) => {
                                 if rng.random_bool(0.5) {
                                     value_stack.push("null".to_string());
@@ -221,11 +219,8 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
                             }
                             FieldType::Vec(inner_type) => {
-                                let (lo, hi) = validator_gen::array_count_range(
-                                    &ctx.field.validators,
-                                    2,
-                                    9,
-                                );
+                                let (lo, hi) =
+                                    validator_gen::array_count_range(&ctx.field.validators, 2, 9);
                                 let count = if lo == hi {
                                     lo
                                 } else {
@@ -743,9 +738,7 @@ impl<'a> FieldValueGenerator<'a> {
                         .collect();
                     let mut assignments: Vec<String> =
                         vec![format!("{}: '{}'", tag_key, tag_value)];
-                    for (name, value) in
-                        field_names.into_iter().skip(1).zip(data_values)
-                    {
+                    for (name, value) in field_names.into_iter().skip(1).zip(data_values) {
                         assignments.push(format!("{}: {}", name, value));
                     }
                     value_stack.push(format!("{{ {} }}", assignments.join(", ")));
@@ -779,7 +772,8 @@ impl<'a> FieldValueGenerator<'a> {
         // path, falling back to a bounded bare number.
         if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
             let mut rng = rand::rng();
-            if let Some(value) = validator_gen::generate_with_validators(scalar, validators, &mut rng)
+            if let Some(value) =
+                validator_gen::generate_with_validators(scalar, validators, &mut rng)
             {
                 return value;
             }

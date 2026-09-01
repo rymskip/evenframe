@@ -238,17 +238,11 @@ pub fn to_surreal_string(
                 let link_string = value
                     .as_str()
                     .expect("Record link value should not be None");
-                format!(
-                    "type::record('{}')",
-                    escape_single_quotes(link_string)
-                )
+                format!("type::record('{}')", escape_single_quotes(link_string))
             } else if let Some(obj) = value.as_object() {
                 if let Some(id_value) = obj.get("Id") {
                     if let Some(id_str) = id_value.as_str() {
-                        format!(
-                            "type::record('{}')",
-                            escape_single_quotes(id_str)
-                        )
+                        format!("type::record('{}')", escape_single_quotes(id_str))
                     } else {
                         "null".to_string()
                     }
@@ -256,10 +250,7 @@ pub fn to_surreal_string(
                     // When the record was FETCHed, the full object is present
                     // with a lowercase "id" field. Extract just the ID.
                     if let Some(id_str) = id_value.as_str() {
-                        format!(
-                            "type::record('{}')",
-                            escape_single_quotes(id_str)
-                        )
+                        format!("type::record('{}')", escape_single_quotes(id_str))
                     } else {
                         "null".to_string()
                     }
@@ -367,10 +358,18 @@ fn tagged_union_to_surreal_string(
     // Re-emit the discriminator the same way it arrived.
     match &tu.representation {
         EnumRepresentation::InternallyTagged { tag } => {
-            pairs.push(format!("{}: '{}'", tag, escape_single_quotes(&variant_name)));
+            pairs.push(format!(
+                "{}: '{}'",
+                tag,
+                escape_single_quotes(&variant_name)
+            ));
         }
         EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-            pairs.push(format!("{}: '{}'", tag, escape_single_quotes(&variant_name)));
+            pairs.push(format!(
+                "{}: '{}'",
+                tag,
+                escape_single_quotes(&variant_name)
+            ));
         }
         _ => {}
     }
@@ -428,7 +427,10 @@ fn tagged_union_to_surreal_string(
         // `content: { … }` object that matches serde's adjacent shape.
         let body_pairs: Vec<String> = pairs
             .iter()
-            .filter(|p| !p.starts_with(&format!("{}:", content)) && !p.starts_with(&format!("{}: ", content)))
+            .filter(|p| {
+                !p.starts_with(&format!("{}:", content))
+                    && !p.starts_with(&format!("{}: ", content))
+            })
             .cloned()
             .collect();
         let tag_pair = body_pairs
@@ -436,10 +438,7 @@ fn tagged_union_to_surreal_string(
             .find(|p| p.contains(": '"))
             .cloned()
             .unwrap_or_default();
-        let inner_pairs: Vec<String> = body_pairs
-            .into_iter()
-            .filter(|p| p != &tag_pair)
-            .collect();
+        let inner_pairs: Vec<String> = body_pairs.into_iter().filter(|p| p != &tag_pair).collect();
         return format!(
             "{{ {}, {}: {{ {} }} }}",
             tag_pair,

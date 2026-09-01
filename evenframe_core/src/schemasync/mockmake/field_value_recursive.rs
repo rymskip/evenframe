@@ -104,7 +104,8 @@ impl<'a> FieldValueGenerator<'a> {
         // path, falling back to a bounded bare number.
         if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
             let mut rng = rand::rng();
-            if let Some(value) = validator_gen::generate_with_validators(scalar, validators, &mut rng)
+            if let Some(value) =
+                validator_gen::generate_with_validators(scalar, validators, &mut rng)
             {
                 return value;
             }

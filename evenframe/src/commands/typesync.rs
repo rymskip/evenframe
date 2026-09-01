@@ -112,9 +112,14 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}macroforge.ts", config.typesync.output_path));
                 match output_mode {
-                    OutputMode::Single => {
-                        generate_macroforge(&structs, &enums, &output_path, array_style, &registry, import_style)?
-                    }
+                    OutputMode::Single => generate_macroforge(
+                        &structs,
+                        &enums,
+                        &output_path,
+                        array_style,
+                        &registry,
+                        import_style,
+                    )?,
                     OutputMode::PerFile => generate_macroforge_per_file(MacroforgePerFileArgs {
                         structs: &structs,
                         enums: &enums,
@@ -238,7 +243,14 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
             TypeFormat::Macroforge => match output_mode {
                 OutputMode::Single => {
                     let path = format!("{}macroforge.ts", config.typesync.output_path);
-                    generate_macroforge(&structs, &enums, &path, array_style, &registry, import_style)?;
+                    generate_macroforge(
+                        &structs,
+                        &enums,
+                        &path,
+                        array_style,
+                        &registry,
+                        import_style,
+                    )?;
                 }
                 OutputMode::PerFile => {
                     generate_macroforge_per_file(MacroforgePerFileArgs {
@@ -450,7 +462,8 @@ fn generate_macroforge_per_file(args: MacroforgePerFileArgs<'_>) -> Result<()> {
         }
 
         // Add extra imports (effect types, RecordLink)
-        let extra_imports = compute_extra_imports(&type_names, structs, enums, registry, import_style);
+        let extra_imports =
+            compute_extra_imports(&type_names, structs, enums, registry, import_style);
         for import_line in &extra_imports {
             file_content.push_str(import_line);
             file_content.push('\n');

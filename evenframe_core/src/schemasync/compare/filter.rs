@@ -31,7 +31,10 @@ impl Mockmaker<'_> {
         objects: &BTreeMap<String, StructConfig>,
         enums: &BTreeMap<String, TaggedUnion>,
         record_diffs: &BTreeMap<String, i32>,
-    ) -> (BTreeMap<String, TableConfig>, BTreeMap<String, StructConfig>) {
+    ) -> (
+        BTreeMap<String, TableConfig>,
+        BTreeMap<String, StructConfig>,
+    ) {
         tracing::debug!("Filtering changed tables and objects");
 
         let mut filtered_tables = BTreeMap::new();

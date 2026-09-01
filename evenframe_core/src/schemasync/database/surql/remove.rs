@@ -28,7 +28,10 @@ pub fn generate_remove_index_statements(schema_changes: &SchemaChanges) -> Strin
 /// Extract the event name from a `DEFINE EVENT <name> ON TABLE ...` statement.
 /// Returns `None` for statements that do not begin with `DEFINE EVENT`.
 fn extract_event_name(statement: &str) -> Option<String> {
-    let rest = statement.trim_start().strip_prefix("DEFINE EVENT")?.trim_start();
+    let rest = statement
+        .trim_start()
+        .strip_prefix("DEFINE EVENT")?
+        .trim_start();
     let rest = rest
         .strip_prefix("OVERWRITE")
         .or_else(|| rest.strip_prefix("IF NOT EXISTS"))

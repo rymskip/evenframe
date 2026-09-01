@@ -71,8 +71,7 @@ pub fn generate_macroforge_type_string(
         structs.values().filter(|s| !s.resolve_only).collect();
     unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
 
-    let mut unique_enums: Vec<&TaggedUnion> =
-        enums.values().filter(|e| !e.resolve_only).collect();
+    let mut unique_enums: Vec<&TaggedUnion> = enums.values().filter(|e| !e.resolve_only).collect();
     unique_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
 
     // Collect all type names for effect import computation
@@ -745,9 +744,7 @@ pub fn compute_extra_imports(
                             rl,
                         );
                     }
-                } else if let Some(referenced) =
-                    enums.get(name).or_else(|| enums.get(&pascal))
-                {
+                } else if let Some(referenced) = enums.get(name).or_else(|| enums.get(&pascal)) {
                     let view = enum_view(referenced);
                     for variant in &view.variants {
                         let variant = variant.effective();
@@ -779,9 +776,7 @@ pub fn compute_extra_imports(
         }
         match ft {
             FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-                collect_foreign_imports_recursive(
-                    inner, registry, structs, enums, visited, fi, rl,
-                )
+                collect_foreign_imports_recursive(inner, registry, structs, enums, visited, fi, rl)
             }
             FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
                 collect_foreign_imports_recursive(k, registry, structs, enums, visited, fi, rl);

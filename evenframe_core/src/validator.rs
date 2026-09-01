@@ -1400,7 +1400,10 @@ fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
         StringValidator::IntegerParse => s.parse::<i64>().is_ok(),
         StringValidator::Email => {
             let parts: Vec<&str> = s.split('@').collect();
-            parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() && parts[1].contains('.')
+            parts.len() == 2
+                && !parts[0].is_empty()
+                && !parts[1].is_empty()
+                && parts[1].contains('.')
         }
         StringValidator::Ip => s.parse::<std::net::IpAddr>().is_ok(),
         StringValidator::IpV4 => s.parse::<std::net::Ipv4Addr>().is_ok(),
@@ -1493,13 +1496,15 @@ fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
         StringValidator::Includes(needle) => s.contains(needle.as_str()),
         StringValidator::Trimmed | StringValidator::TrimPreformatted => s == s.trim(),
         StringValidator::Trim => s == s.trim(),
-        StringValidator::Lowercased | StringValidator::LowerPreformatted | StringValidator::Lower => {
-            !s.chars().any(|c| c.is_alphabetic() && !c.is_lowercase())
-        }
-        StringValidator::Uppercased | StringValidator::UpperPreformatted | StringValidator::Upper => {
-            !s.chars().any(|c| c.is_alphabetic() && !c.is_uppercase())
-        }
-        StringValidator::Capitalized | StringValidator::CapitalizePreformatted | StringValidator::Capitalize => {
+        StringValidator::Lowercased
+        | StringValidator::LowerPreformatted
+        | StringValidator::Lower => !s.chars().any(|c| c.is_alphabetic() && !c.is_lowercase()),
+        StringValidator::Uppercased
+        | StringValidator::UpperPreformatted
+        | StringValidator::Upper => !s.chars().any(|c| c.is_alphabetic() && !c.is_uppercase()),
+        StringValidator::Capitalized
+        | StringValidator::CapitalizePreformatted
+        | StringValidator::Capitalize => {
             let mut chars = s.chars();
             let Some(first) = chars.next() else {
                 return false;
@@ -1567,7 +1572,8 @@ fn match_number_validator(nv: &NumberValidator, n: f64) -> bool {
 fn match_date_validator(dv: &DateValidator, d: &chrono::NaiveDate) -> bool {
     match dv {
         DateValidator::ValidDate => true,
-        DateValidator::GreaterThanDate(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        DateValidator::GreaterThanDate(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        {
             Ok(other) => *d > other,
             Err(_) => true,
         },
@@ -2733,7 +2739,8 @@ mod tests {
 
     #[test]
     fn matches_bigint() {
-        let v = Validator::BigIntValidator(BigIntValidator::BetweenBigInt("0".into(), "100".into()));
+        let v =
+            Validator::BigIntValidator(BigIntValidator::BetweenBigInt("0".into(), "100".into()));
         assert!(v.matches(&MockValue::BigInt("50")));
         assert!(!v.matches(&MockValue::BigInt("101")));
 
@@ -2777,7 +2784,10 @@ mod tests {
     #[test]
     fn parse_duration_to_nanos_basic() {
         assert_eq!(super::parse_duration_to_nanos("1s"), Some(1_000_000_000));
-        assert_eq!(super::parse_duration_to_nanos("1m"), Some(60 * 1_000_000_000));
+        assert_eq!(
+            super::parse_duration_to_nanos("1m"),
+            Some(60 * 1_000_000_000)
+        );
         assert_eq!(
             super::parse_duration_to_nanos("1h30m"),
             Some(90 * 60 * 1_000_000_000)

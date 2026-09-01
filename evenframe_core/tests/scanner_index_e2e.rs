@@ -234,7 +234,8 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         ..BuildConfig::default()
     };
     let (_e2, after_tables, _o2) = build_all_configs(&after_cfg).expect("build after");
-    let after_schema = SchemaDefinition::from_table_configs(&after_tables, true).expect("schema after");
+    let after_schema =
+        SchemaDefinition::from_table_configs(&after_tables, true).expect("schema after");
 
     // Compare "old" (before) vs "new" (after) — simulates a database whose
     // indexes were last synced under the old schema.

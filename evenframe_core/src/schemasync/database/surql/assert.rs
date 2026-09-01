@@ -557,11 +557,15 @@ mod tests {
     #[test]
     fn string_preformatted_and_base64_and_uuid() {
         assert_eq!(
-            gen_assert(Validator::StringValidator(StringValidator::LowerPreformatted)),
+            gen_assert(Validator::StringValidator(
+                StringValidator::LowerPreformatted
+            )),
             "$value = string::lowercase($value)"
         );
         assert_eq!(
-            gen_assert(Validator::StringValidator(StringValidator::TrimPreformatted)),
+            gen_assert(Validator::StringValidator(
+                StringValidator::TrimPreformatted
+            )),
             "$value = string::trim($value)"
         );
         assert_eq!(
@@ -588,8 +592,14 @@ mod tests {
         );
 
         // Disabling scripting drops the JS-only assertions entirely.
-        assert_eq!(gen_assert_no_js(Validator::StringValidator(StringValidator::CreditCard)), "");
-        assert_eq!(gen_assert_no_js(Validator::StringValidator(StringValidator::Json)), "");
+        assert_eq!(
+            gen_assert_no_js(Validator::StringValidator(StringValidator::CreditCard)),
+            ""
+        );
+        assert_eq!(
+            gen_assert_no_js(Validator::StringValidator(StringValidator::Json)),
+            ""
+        );
         assert_eq!(
             gen_assert_no_js(Validator::StringValidator(StringValidator::Capitalized)),
             ""

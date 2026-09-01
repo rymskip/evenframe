@@ -67,10 +67,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
 
             // Presence of `#[default]` (the stdlib attribute used by
             // `#[derive(Default)]` on enums) marks this as the default variant.
-            let is_default_variant = variant
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("default"));
+            let is_default_variant = variant.attrs.iter().any(|a| a.path().is_ident("default"));
 
             let variant_data = match &variant.fields {
                 Fields::Unit => {

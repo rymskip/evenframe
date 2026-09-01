@@ -371,7 +371,11 @@ mod split_tests {
         // DEFINE FIELD statement (regression for the playground apply failure).
         let block = "DEFINE FIELD card ON t TYPE string ASSERT function($value) { const v = arguments[0]; if (v) { return true; } return false; };\nDEFINE FIELD next ON t TYPE int;\n";
         let parts = split_surql_statements(block);
-        assert_eq!(parts.len(), 2, "JS body semicolons split the statement: {parts:?}");
+        assert_eq!(
+            parts.len(),
+            2,
+            "JS body semicolons split the statement: {parts:?}"
+        );
         assert!(parts[0].contains("return false; }"));
         assert!(parts[1].contains("FIELD next"));
     }

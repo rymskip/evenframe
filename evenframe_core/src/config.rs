@@ -441,10 +441,7 @@ impl EvenframeConfig {
     /// If `general.env_path` is set, resolves it relative to the config file's directory.
     /// Otherwise defaults to `<project_root>/.env`.
     pub fn resolve_env_path(&self) -> PathBuf {
-        let config_dir = self
-            .config_file_path
-            .parent()
-            .unwrap_or(Path::new("."));
+        let config_dir = self.config_file_path.parent().unwrap_or(Path::new("."));
         let raw = match &self.general.env_path {
             Some(custom) => config_dir.join(custom),
             None => self.project_root().join(".env"),

@@ -18,7 +18,10 @@ use std::path::PathBuf;
 use tracing::{debug, info};
 
 /// Typesync-filtered configs: (enums, merged structs).
-type TypesyncConfigs = (BTreeMap<String, TaggedUnion>, BTreeMap<String, StructConfig>);
+type TypesyncConfigs = (
+    BTreeMap<String, TaggedUnion>,
+    BTreeMap<String, StructConfig>,
+);
 
 /// The type of generator used to create a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

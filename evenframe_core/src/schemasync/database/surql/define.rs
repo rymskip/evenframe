@@ -653,7 +653,12 @@ mod tests {
 
         // A scripting-only validator is emitted as embedded JS when allowed and
         // omitted entirely when scripting is disabled.
-        let cc = || make(vec![Validator::StringValidator(StringValidator::CreditCard)], None);
+        let cc = || {
+            make(
+                vec![Validator::StringValidator(StringValidator::CreditCard)],
+                None,
+            )
+        };
         assert!(
             gen_stmt(cc(), true).contains("ASSERT function($value)"),
             "JS ASSERT missing when scripting enabled"
@@ -762,7 +767,9 @@ mod tests {
         };
 
         // NonEmpty rejects the `''` fallback default -> no DEFAULT (field required).
-        let s = gen_stmt(make(vec![Validator::StringValidator(StringValidator::NonEmpty)]));
+        let s = gen_stmt(make(vec![Validator::StringValidator(
+            StringValidator::NonEmpty,
+        )]));
         assert!(!s.contains("DEFAULT"), "default should be omitted: {s}");
         assert!(s.contains("ASSERT string::len($value) > 0"));
 

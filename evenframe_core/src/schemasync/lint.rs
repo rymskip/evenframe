@@ -149,8 +149,7 @@ pub fn lint_discarded_field_annotations(
         }
         // Table-ness is a property of the source (`id` field presence), so the
         // raw scanned fields decide what the owning project's scanner would see.
-        let context = if object.resolve_only && object.fields.iter().any(|f| f.field_name == "id")
-        {
+        let context = if object.resolve_only && object.fields.iter().any(|f| f.field_name == "id") {
             DiscardedContext::ResolveOnlyTable
         } else {
             DiscardedContext::EmbeddedObject
@@ -416,8 +415,10 @@ mod tests {
                 ..base()
             }),
         );
-        original.output_override =
-            Some(Box::new(field_with("secret", Some(no_annotation_default()))));
+        original.output_override = Some(Box::new(field_with(
+            "secret",
+            Some(no_annotation_default()),
+        )));
 
         let mut objects = BTreeMap::new();
         objects.insert(
@@ -429,9 +430,7 @@ mod tests {
             },
         );
 
-        assert!(
-            lint_discarded_field_annotations(&no_tables(), &objects, &no_enums()).is_empty()
-        );
+        assert!(lint_discarded_field_annotations(&no_tables(), &objects, &no_enums()).is_empty());
     }
 
     #[test]
@@ -581,8 +580,7 @@ mod tests {
             ),
         );
 
-        let findings =
-            lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
+        let findings = lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].struct_name, "Custom");
         assert_eq!(findings[0].field_name, "threshold");
@@ -616,8 +614,7 @@ mod tests {
             ),
         );
 
-        let findings =
-            lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
+        let findings = lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].discarded, vec!["assert", "default"]);
     }
@@ -639,8 +636,7 @@ mod tests {
             union_with("Strategy", vec![plain_variant("Fixed", None), chosen]),
         );
 
-        let findings =
-            lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
+        let findings = lint_discarded_field_annotations(&no_tables(), &BTreeMap::new(), &enums);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].discarded, vec!["assert"]);
     }
@@ -671,9 +667,9 @@ mod tests {
                 "Wrapper",
                 vec![plain_variant(
                     "Data",
-                    Some(VariantData::DataStructureRef(crate::types::FieldType::Other(
-                        "Payload".to_string(),
-                    ))),
+                    Some(VariantData::DataStructureRef(
+                        crate::types::FieldType::Other("Payload".to_string()),
+                    )),
                 )],
             ),
         );
