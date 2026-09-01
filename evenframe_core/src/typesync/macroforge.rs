@@ -1707,8 +1707,13 @@ mod tests {
             },
         );
 
-        let imports =
-            compute_extra_imports(&["Event".to_string()], &structs, &BTreeMap::new(), &registry);
+        let imports = compute_extra_imports(
+            &["Event".to_string()],
+            &structs,
+            &BTreeMap::new(),
+            &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
+        );
         assert_eq!(
             imports,
             vec!["import type { DateTime } from 'effect';".to_string()]
@@ -1745,6 +1750,7 @@ mod tests {
             &structs,
             &BTreeMap::new(),
             &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert_eq!(
             imports,
@@ -1784,8 +1790,13 @@ mod tests {
             },
         );
 
-        let imports =
-            compute_extra_imports(&["Order".to_string()], &structs, &BTreeMap::new(), &registry);
+        let imports = compute_extra_imports(
+            &["Order".to_string()],
+            &structs,
+            &BTreeMap::new(),
+            &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
+        );
         assert_eq!(
             imports,
             vec![
@@ -1820,8 +1831,13 @@ mod tests {
             },
         );
 
-        let imports =
-            compute_extra_imports(&["User".to_string()], &structs, &BTreeMap::new(), &registry);
+        let imports = compute_extra_imports(
+            &["User".to_string()],
+            &structs,
+            &BTreeMap::new(),
+            &registry,
+            crate::typesync::config::ImportExtensionStyle::default(),
+        );
         assert!(imports.is_empty());
     }
 
