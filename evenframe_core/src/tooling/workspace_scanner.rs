@@ -262,11 +262,12 @@ impl WorkspaceScanner {
         Ok(types)
     }
 
-    /// Parses a single included file (outside the scan subtree) and returns its
-    /// Evenframe types, each tagged with `extra.resolve_only`. The path is
-    /// canonicalized to absolute so [`process_types`](super::process_types) can
-    /// re-read it; the module path is derived from the file stem (it is not
-    /// consumed by typesync output).
+    /// Parses a single included file — or a directory, scanned recursively like
+    /// a crate `src` tree — outside the scan subtree, and returns its Evenframe
+    /// types, each tagged with `extra.resolve_only`. The path is canonicalized to
+    /// absolute so [`process_types`](super::process_types) can re-read it; the
+    /// module path is derived from the file stem (it is not consumed by typesync
+    /// output).
     fn scan_extra_file(&self, extra: &IncludeFile) -> Result<Vec<EvenframeType>> {
         let abs = fs::canonicalize(&extra.path).map_err(|e| {
             EvenframeError::WorkspaceScan(format!(
@@ -281,7 +282,14 @@ impl WorkspaceScanner {
             .to_string();
 
         let mut state = CrateScanState::default();
-        self.scan_rust_file_into(&abs, &mut state, &module_path)?;
+        if abs.is_dir() {
+            // A directory entry is scanned recursively like a crate `src` tree,
+            // so a whole sibling crate can join typesync with one entry instead
+            // of enumerating every file.
+            self.scan_directory_into(&abs, &mut state, &module_path, 0)?;
+        } else {
+            self.scan_rust_file_into(&abs, &mut state, &module_path)?;
+        }
         let mut found = state.finalize();
         for t in &mut found {
             t.resolve_only = extra.resolve_only;
