@@ -585,7 +585,7 @@ impl EvenframeConfig {
                 }
                 Err(_) => match default_value {
                     Some(default) => {
-                        warn!(
+                        debug!(
                             "Environment variable {} not set, using default: {}",
                             var_name, default
                         );
