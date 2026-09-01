@@ -34,9 +34,17 @@ pub fn generate_define_statements(
                 to = ?relation.to,
                 "Table is a relation."
             );
-            let from_clause = relation.from.join(" | ");
-            let to_clause = relation.to.join(" | ");
-            format!("RELATION FROM {} TO {}", from_clause, to_clause)
+            if relation.from.is_empty() && relation.to.is_empty() {
+                // Unconstrained relation edge: SurrealDB accepts `TYPE RELATION`
+                // with no `FROM … TO …` clause, letting the edge connect any
+                // tables. Used by audit edges (e.g. `did`) that link every
+                // entity across every product and cannot enumerate them.
+                "RELATION".to_string()
+            } else {
+                let from_clause = relation.from.join(" | ");
+                let to_clause = relation.to.join(" | ");
+                format!("RELATION FROM {} TO {}", from_clause, to_clause)
+            }
         } else {
             debug!(table_name = %table_name, "Table is normal type");
             "NORMAL".to_string()
