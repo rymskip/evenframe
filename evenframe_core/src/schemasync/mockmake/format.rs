@@ -244,7 +244,10 @@ impl From<Format> for Regex {
             Format::FullName => {
                 r"^(James|Mary|John|Patricia|Robert|Jennifer|Michael|Linda|William|Elizabeth|David|Barbara|Richard|Susan|Joseph|Jessica|Thomas|Sarah|Charles|Karen|Christopher|Nancy|Daniel|Lisa|Matthew|Betty|Anthony|Dorothy|Mark|Sandra|Donald|Ashley|Steven|Kimberly|Kenneth|Emily|Joshua|Michelle|Kevin|Carol|Brian|Amanda|George|Melissa|Edward|Deborah|Ronald|Stephanie|Timothy|Rebecca|Jason|Sharon|Jeffrey|Laura|Ryan|Cynthia|Jacob|Amy|Gary|Kathleen|Nicholas|Angela|Eric|Helen|Jonathan|Anna|Stephen|Brenda|Larry|Pamela|Justin|Nicole|Scott|Emma|Brandon|Samantha|Benjamin|Katherine|Samuel|Christine|Gregory|Catherine|Frank|Debra|Alexander|Rachel|Raymond|Carolyn|Patrick|Janet|Jack|Virginia|Dennis|Maria|Jerry|Heather|Tyler|Diane|Aaron|Ruth|Jose|Julie|Nathan|Olivia|Adam|Joyce|Harold|Victoria|Peter|Kelly|Henry|Christina|Zachary|Lauren|Douglas|Joan|Carl|Evelyn|Arthur|Judith|Albert|Megan|Willie|Cheryl|Austin|Martha|Jesse|Andrea|Gerald|Frances|Roger|Hannah|Keith|Jacqueline|Jeremy|Ann|Terry|Gloria|Lawrence|Jean|Sean|Kathryn|Christian|Alice|Ethan|Teresa|Bryan|Sara|Joe|Janice|Louis|Doris|Eugene|Madison|Russell|Julia|Gabriel|Grace|Bruce|Judy|Logan|Beverly|Juan|Denise|Elijah|Marilyn|Harry|Charlotte|Aaron|Marie|Willie|Abigail|Albert|Sophia|Jordan|Mia|Ralph|Isabella|Roy|Amber|Noah|Danielle|Mason|Brittany|Kyle|Rose|Francis|Diana|Russell|Natalie|Philip|Lori|Randy|Kayla|Vincent|Alexis|Billy|Lilly) (Smith|Johnson|Williams|Brown|Jones|Garcia|Miller|Davis|Rodriguez|Martinez|Hernandez|Lopez|Gonzalez|Wilson|Anderson|Thomas|Taylor|Moore|Jackson|Martin|Lee|Perez|Thompson|White|Harris|Sanchez|Clark|Ramirez|Lewis|Robinson|Walker|Young|Allen|King|Wright|Scott|Torres|Nguyen|Hill|Flores|Green|Adams|Nelson|Baker|Hall|Rivera|Campbell|Mitchell|Carter|Roberts|Gomez|Phillips|Evans|Turner|Diaz|Parker|Cruz|Edwards|Collins|Reyes|Stewart|Morris|Morales|Murphy|Cook|Rogers|Gutierrez|Ortiz|Morgan|Cooper|Peterson|Bailey|Reed|Kelly|Howard|Ramos|Kim|Cox|Ward|Richardson|Watson|Brooks|Chavez|Wood|James|Bennett|Gray|Mendoza|Ruiz|Hughes|Price|Alvarez|Castillo|Sanders|Patel|Myers|Long|Ross|Foster|Jimenez|Powell|Jenkins|Perry|Russell|Sullivan|Bell|Coleman|Butler|Henderson|Barnes|Gonzales|Fisher|Vasquez|Simmons|Romero|Jordan|Patterson|Alexander|Hamilton|Graham|Reynolds|Griffin|Wallace|Moreno|West|Cole|Hayes|Bryant|Herrera|Gibson|Ellis|Tran|Medina|Aguilar|Stevens|Murray|Ford|Castro|Marshall|Owens|Harrison|Fernandez|Mcdonald|Woods|Washington|Kennedy|Wells|Vargas|Henry|Chen|Freeman|Webb|Tucker|Guzman|Burns|Crawford|Olson|Simpson|Porter|Hunter|Gordon|Mendez|Silva|Shaw|Snyder|Mason|Dixon|Munoz|Hunt|Hicks|Holmes|Palmer|Wagner|Black|Robertson|Boyd|Rose|Stone|Salazar|Fox|Warren|Mills|Meyer|Rice|Schmidt|Garza|Daniels|Ferguson|Nichols|Stephens|Soto|Weaver|Ryan|Gardner|Payne|Grant|Dunn|Kelley|Spencer|Hawkins|Arnold|Pierce|Vazquez|Hansen|Peters|Santos|Hart|Bradley|Knight|Elliott|Cunningham|Duncan|Armstrong|Hudson|Carroll|Lane|Riley|Andrews|Alvarado|Ray|Delgado|Berry|Perkins|Hoffman|Johnston|Matthews|Pena|Richards|Contreras|Willis|Carpenter|Lawrence|Sandoval|Guerrero|George|Chapman|Rios|Estrada|Ortega|Watkins|Greene|Nunez|Wheeler|Valdez|Harper|Burke|Larson|Santiago|Maldonado|Morrison|Franklin|Carlson|Austin|Dominguez|Carr|Lawson|Jacobs|Obrien|Lynch|Singh|Vega|Bishop|Montgomery|Oliver|Jensen|Harvey|Williamson|Gilbert|Dean|Sims|Espinoza|Howell|Li|Wong|Reid|Hanson|Le|Mccoy|Garrett|Burton|Fuller|Wang|Weber|Welch|Rojas|Lucas|Marquez|Fields|Park|Yang|Little|Banks|Padilla|Day|Walsh|Bowman|Schultz|Luna|Fowler|Mejia)$"
             }
-            Format::PhoneNumber => r"^(\+\d{1,2}\s)?(\(\d{3}\)\s?|\d{3})[\.\-]?\d{3}[\.\-]?\d{4}$",
+            // Each gap takes at most one separator: `.`, `-`, or a single space.
+            Format::PhoneNumber => {
+                r"^(\+\d{1,2}\s)?(\(\d{3}\)\s?[\.\-]?|\d{3}[\.\- ]?)\d{3}[\.\- ]?\d{4}$"
+            }
             Format::Iso8601DurationString => {
                 // ISO 8601 duration: P[nY][nM][nW][nD][T[nH][nM][nS]]
                 // Structured as alternation to guarantee at least one component.
@@ -446,6 +449,40 @@ impl ToTokens for Format {
         };
 
         tokens.extend(variant_tokens);
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    #[test]
+    fn phone_number_allows_one_space_per_gap() {
+        let regex = Format::PhoneNumber.into_regex();
+        for ok in [
+            "+1 555 010 2000",
+            "+1 555-010-2000",
+            "+1 555.010.2000",
+            "555 010 2000",
+            "5550102000",
+            "(555) 010 2000",
+            "(555) 010-2000",
+            "(555)010-2000",
+            "(555) -010-2000",
+        ] {
+            assert!(regex.is_match(ok), "expected {ok:?} to match");
+        }
+        for bad in [
+            "+1  555 010 2000",
+            "555  010 2000",
+            "555 010  2000",
+            "(555)  010 2000",
+            "555 -010 2000",
+            "555- 010 2000",
+            "555\t010\t2000",
+        ] {
+            assert!(!regex.is_match(bad), "expected {bad:?} to be rejected");
+        }
     }
 }
 
