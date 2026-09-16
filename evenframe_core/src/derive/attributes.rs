@@ -9,7 +9,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::{
     schemasync::{
-        Direction, EdgeConfig, IndexConfig,
+        Bm25, Direction, EdgeConfig, IndexConfig, IndexKind, VectorDistance, VectorType,
         mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
     },
     types::{EnumRepresentation, StructField},
@@ -307,10 +307,312 @@ pub fn parse_event_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::E
     Ok(events)
 }
 
-/// Parses every `#[index(fields(a, b, ...), unique?)]` attribute on a struct
-/// into a `Vec<IndexConfig>`, validating that each ident inside `fields(...)`
-/// names a real struct field (`known_fields` is the snake-cased field name set
-/// with any `r#` prefix stripped).
+/// One entry of `fields(...)` in `#[index(...)]`: a struct field identifier
+/// (`user`) or a string path rooted at a struct field (`"tags.*"`).
+enum IndexFieldEntry {
+    Ident(Ident),
+    Path(LitStr),
+}
+
+impl Parse for IndexFieldEntry {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        if input.peek(LitStr) {
+            input.parse().map(IndexFieldEntry::Path)
+        } else {
+            input.parse().map(IndexFieldEntry::Ident)
+        }
+    }
+}
+
+const INDEX_ATTR_HELP: &str = "expected one of `fields(...)`, `unique`, `count`, `fulltext(...)`, \
+     `hnsw(...)`, `diskann(...)`, `name = \"...\"`, `comment = \"...\"` or `concurrently` \
+     inside #[index(...)]";
+
+fn index_lit_str(meta: &syn::meta::ParseNestedMeta) -> syn::Result<LitStr> {
+    meta.value()?.parse::<LitStr>()
+}
+
+fn index_int<T>(meta: &syn::meta::ParseNestedMeta) -> syn::Result<(T, proc_macro2::Span)>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let lit = meta.value()?.parse::<syn::LitInt>()?;
+    Ok((lit.base10_parse::<T>()?, lit.span()))
+}
+
+fn index_float(meta: &syn::meta::ParseNestedMeta) -> syn::Result<f64> {
+    let lit = meta.value()?.parse::<Lit>()?;
+    match &lit {
+        Lit::Float(f) => f.base10_parse::<f64>(),
+        Lit::Int(i) => i.base10_parse::<f64>(),
+        _ => Err(syn::Error::new(lit.span(), "expected a number")),
+    }
+}
+
+fn index_distance(meta: &syn::meta::ParseNestedMeta) -> syn::Result<(VectorDistance, LitStr)> {
+    let lit = index_lit_str(meta)?;
+    let dist = lit
+        .value()
+        .parse::<VectorDistance>()
+        .map_err(|e| syn::Error::new(lit.span(), e))?;
+    Ok((dist, lit))
+}
+
+fn index_vector_type(meta: &syn::meta::ParseNestedMeta) -> syn::Result<(VectorType, LitStr)> {
+    let lit = index_lit_str(meta)?;
+    let vector_type = lit
+        .value()
+        .parse::<VectorType>()
+        .map_err(|e| syn::Error::new(lit.span(), e))?;
+    Ok((vector_type, lit))
+}
+
+fn reject_duplicate<T>(
+    slot: &Option<T>,
+    meta: &syn::meta::ParseNestedMeta,
+    key: &str,
+) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(meta.error(format!("duplicate `{key}` in #[index(...)]")));
+    }
+    Ok(())
+}
+
+fn is_valid_index_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn parse_fulltext_kind(meta: &syn::meta::ParseNestedMeta) -> syn::Result<IndexKind> {
+    let mut analyzer: Option<String> = None;
+    let mut bm25: Option<Bm25> = None;
+    let mut highlights = false;
+    meta.parse_nested_meta(|inner| {
+        if inner.path.is_ident("analyzer") {
+            reject_duplicate(&analyzer, &inner, "analyzer")?;
+            let lit = index_lit_str(&inner)?;
+            if !is_valid_index_name(&lit.value()) {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "`analyzer` must be a valid SurrealQL identifier",
+                ));
+            }
+            analyzer = Some(lit.value());
+        } else if inner.path.is_ident("bm25") {
+            reject_duplicate(&bm25, &inner, "bm25")?;
+            if inner.input.peek(syn::token::Paren) {
+                let mut k1: Option<f32> = None;
+                let mut b: Option<f32> = None;
+                inner.parse_nested_meta(|param| {
+                    if param.path.is_ident("k1") {
+                        reject_duplicate(&k1, &param, "k1")?;
+                        k1 = Some(index_float(&param)? as f32);
+                    } else if param.path.is_ident("b") {
+                        reject_duplicate(&b, &param, "b")?;
+                        b = Some(index_float(&param)? as f32);
+                    } else {
+                        return Err(param.error("expected `k1 = <number>` or `b = <number>`"));
+                    }
+                    Ok(())
+                })?;
+                match (k1, b) {
+                    (Some(k1), Some(b)) => bm25 = Some(Bm25::Params { k1, b }),
+                    _ => {
+                        return Err(inner.error(
+                            "`bm25(...)` needs both `k1` and `b`, e.g. `bm25(k1 = 1.2, b = 0.75)`; \
+                             use plain `bm25` for the defaults",
+                        ));
+                    }
+                }
+            } else {
+                bm25 = Some(Bm25::Default);
+            }
+        } else if inner.path.is_ident("highlights") {
+            highlights = true;
+        } else {
+            return Err(inner.error(
+                "expected `analyzer = \"...\"`, `bm25`, `bm25(k1 = .., b = ..)` or `highlights` \
+                 inside `fulltext(...)`",
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(IndexKind::FullText {
+        analyzer,
+        bm25,
+        highlights,
+    })
+}
+
+fn parse_hnsw_kind(meta: &syn::meta::ParseNestedMeta) -> syn::Result<IndexKind> {
+    let mut dimension: Option<u16> = None;
+    let mut dist: Option<VectorDistance> = None;
+    let mut vector_type: Option<VectorType> = None;
+    let mut efc: Option<u16> = None;
+    let mut m: Option<u8> = None;
+    let mut m0: Option<u8> = None;
+    let mut lm: Option<f64> = None;
+    let mut extend_candidates = false;
+    let mut keep_pruned_connections = false;
+    let mut hashed_vector = false;
+    meta.parse_nested_meta(|inner| {
+        if inner.path.is_ident("dimension") {
+            reject_duplicate(&dimension, &inner, "dimension")?;
+            dimension = Some(index_int(&inner)?.0);
+        } else if inner.path.is_ident("dist") {
+            reject_duplicate(&dist, &inner, "dist")?;
+            dist = Some(index_distance(&inner)?.0);
+        } else if inner.path.is_ident("type") {
+            reject_duplicate(&vector_type, &inner, "type")?;
+            vector_type = Some(index_vector_type(&inner)?.0);
+        } else if inner.path.is_ident("efc") {
+            reject_duplicate(&efc, &inner, "efc")?;
+            efc = Some(index_int(&inner)?.0);
+        } else if inner.path.is_ident("m") {
+            reject_duplicate(&m, &inner, "m")?;
+            let (value, span) = index_int::<u8>(&inner)?;
+            if value > 127 {
+                return Err(syn::Error::new(span, "HNSW `m` cannot be larger than 127"));
+            }
+            m = Some(value);
+        } else if inner.path.is_ident("m0") {
+            reject_duplicate(&m0, &inner, "m0")?;
+            m0 = Some(index_int(&inner)?.0);
+        } else if inner.path.is_ident("lm") {
+            reject_duplicate(&lm, &inner, "lm")?;
+            lm = Some(index_float(&inner)?);
+        } else if inner.path.is_ident("extend_candidates") {
+            extend_candidates = true;
+        } else if inner.path.is_ident("keep_pruned_connections") {
+            keep_pruned_connections = true;
+        } else if inner.path.is_ident("hashed_vector") {
+            hashed_vector = true;
+        } else {
+            return Err(inner.error(
+                "expected one of `dimension`, `dist`, `type`, `efc`, `m`, `m0`, `lm`, \
+                 `extend_candidates`, `keep_pruned_connections` or `hashed_vector` inside `hnsw(...)`",
+            ));
+        }
+        Ok(())
+    })?;
+    let dimension = dimension.ok_or_else(|| {
+        meta.error("`hnsw(...)` requires `dimension = <n>`, e.g. `hnsw(dimension = 1536)`")
+    })?;
+    Ok(IndexKind::Hnsw {
+        dimension,
+        dist,
+        vector_type,
+        efc,
+        m,
+        m0,
+        lm,
+        extend_candidates,
+        keep_pruned_connections,
+        hashed_vector,
+    })
+}
+
+fn parse_diskann_kind(meta: &syn::meta::ParseNestedMeta) -> syn::Result<IndexKind> {
+    let mut dimension: Option<u16> = None;
+    let mut dist: Option<(VectorDistance, LitStr)> = None;
+    let mut vector_type: Option<(VectorType, LitStr)> = None;
+    let mut degree: Option<u32> = None;
+    let mut l_build: Option<u32> = None;
+    let mut alpha: Option<f64> = None;
+    let mut hashed_vector = false;
+    meta.parse_nested_meta(|inner| {
+        if inner.path.is_ident("dimension") {
+            reject_duplicate(&dimension, &inner, "dimension")?;
+            dimension = Some(index_int(&inner)?.0);
+        } else if inner.path.is_ident("dist") {
+            reject_duplicate(&dist, &inner, "dist")?;
+            let (value, lit) = index_distance(&inner)?;
+            if !value.supported_by_diskann() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "DISKANN supports `dist` euclidean, cosine, inner_product and cosine_normalized",
+                ));
+            }
+            dist = Some((value, lit));
+        } else if inner.path.is_ident("type") {
+            reject_duplicate(&vector_type, &inner, "type")?;
+            let (value, lit) = index_vector_type(&inner)?;
+            if !value.supported_by_diskann() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "DISKANN supports `type` f32, f16, i8 and u8",
+                ));
+            }
+            vector_type = Some((value, lit));
+        } else if inner.path.is_ident("degree") {
+            reject_duplicate(&degree, &inner, "degree")?;
+            let (value, span) = index_int::<u32>(&inner)?;
+            if value == 0 {
+                return Err(syn::Error::new(span, "DISKANN `degree` must be greater than 0"));
+            }
+            degree = Some(value);
+        } else if inner.path.is_ident("l_build") {
+            reject_duplicate(&l_build, &inner, "l_build")?;
+            let (value, span) = index_int::<u32>(&inner)?;
+            if value == 0 {
+                return Err(syn::Error::new(span, "DISKANN `l_build` must be greater than 0"));
+            }
+            l_build = Some(value);
+        } else if inner.path.is_ident("alpha") {
+            reject_duplicate(&alpha, &inner, "alpha")?;
+            alpha = Some(index_float(&inner)?);
+        } else if inner.path.is_ident("hashed_vector") {
+            hashed_vector = true;
+        } else {
+            return Err(inner.error(
+                "expected one of `dimension`, `dist`, `type`, `degree`, `l_build`, `alpha` or \
+                 `hashed_vector` inside `diskann(...)`",
+            ));
+        }
+        Ok(())
+    })?;
+    let dimension = dimension.ok_or_else(|| {
+        meta.error("`diskann(...)` requires `dimension = <n>`, e.g. `diskann(dimension = 1536)`")
+    })?;
+    if let (
+        Some((VectorDistance::CosineNormalized, _)),
+        Some((VectorType::I8 | VectorType::U8, lit)),
+    ) = (&dist, &vector_type)
+    {
+        return Err(syn::Error::new(
+            lit.span(),
+            "DISKANN with `dist = \"cosine_normalized\"` supports `type` f32 and f16 only",
+        ));
+    }
+    Ok(IndexKind::DiskAnn {
+        dimension,
+        dist: dist.map(|(value, _)| value),
+        vector_type: vector_type.map(|(value, _)| value),
+        degree,
+        l_build,
+        alpha,
+        hashed_vector,
+    })
+}
+
+/// Parses every `#[index(...)]` attribute on a struct into a
+/// `Vec<IndexConfig>`, validating that each entry inside `fields(...)` is
+/// rooted at a real struct field (`known_fields` is the snake-cased field name
+/// set with any `r#` prefix stripped) and that the index kind and its
+/// parameters are ones SurrealDB accepts.
+///
+/// ```ignore
+/// #[index(fields(user, message), unique)]
+/// #[index(fields("tags.*", created_at))]
+/// #[index(count(where = "active = true"))]
+/// #[index(name = "post_search", fields(body), fulltext(analyzer = "en", bm25, highlights))]
+/// #[index(fields(embedding), hnsw(dimension = 1536, dist = "cosine"), concurrently)]
+/// #[index(fields(embedding), diskann(dimension = 1536, type = "f16"), comment = "ann")]
+/// ```
 pub fn parse_index_attributes(
     attrs: &[Attribute],
     known_fields: &BTreeSet<String>,
@@ -318,67 +620,157 @@ pub fn parse_index_attributes(
     let mut indexes = Vec::new();
 
     for attr in attrs.iter().filter(|a| a.path().is_ident("index")) {
-        let mut fields: Option<Vec<Ident>> = None;
-        let mut unique = false;
+        let mut fields: Option<(Vec<IndexFieldEntry>, proc_macro2::Span)> = None;
+        let mut kind: Option<IndexKind> = None;
+        let mut name: Option<LitStr> = None;
+        let mut comment: Option<String> = None;
+        let mut concurrently = false;
 
         attr.parse_nested_meta(|meta| {
+            let is_kind = ["unique", "count", "fulltext", "hnsw", "diskann"]
+                .iter()
+                .any(|k| meta.path.is_ident(k));
+            if is_kind && kind.is_some() {
+                return Err(meta.error(
+                    "only one index kind (`unique`, `count`, `fulltext`, `hnsw`, `diskann`) \
+                     is allowed per #[index(...)]",
+                ));
+            }
+
             if meta.path.is_ident("fields") {
                 if fields.is_some() {
                     return Err(meta.error("duplicate `fields(...)` in #[index(...)]"));
                 }
+                let span = meta.path.span();
                 let content;
                 parenthesized!(content in meta.input);
-                let parsed: Punctuated<Ident, Token![,]> =
-                    content.parse_terminated(Ident::parse, Token![,])?;
-                let collected: Vec<Ident> = parsed.into_iter().collect();
+                let parsed: Punctuated<IndexFieldEntry, Token![,]> =
+                    content.parse_terminated(IndexFieldEntry::parse, Token![,])?;
+                let collected: Vec<IndexFieldEntry> = parsed.into_iter().collect();
                 if collected.is_empty() {
                     return Err(
                         meta.error("`fields(...)` must list at least one struct field identifier")
                     );
                 }
-                fields = Some(collected);
-                Ok(())
+                fields = Some((collected, span));
             } else if meta.path.is_ident("unique") {
-                unique = true;
-                Ok(())
+                kind = Some(IndexKind::Unique);
+            } else if meta.path.is_ident("count") {
+                let mut where_clause: Option<String> = None;
+                if meta.input.peek(syn::token::Paren) {
+                    meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("where") {
+                            reject_duplicate(&where_clause, &inner, "where")?;
+                            where_clause = Some(index_lit_str(&inner)?.value());
+                            Ok(())
+                        } else {
+                            Err(inner
+                                .error("expected `where = \"<condition>\"` inside `count(...)`"))
+                        }
+                    })?;
+                }
+                kind = Some(IndexKind::Count { where_clause });
+            } else if meta.path.is_ident("fulltext") {
+                kind = Some(parse_fulltext_kind(&meta)?);
+            } else if meta.path.is_ident("hnsw") {
+                kind = Some(parse_hnsw_kind(&meta)?);
+            } else if meta.path.is_ident("diskann") {
+                kind = Some(parse_diskann_kind(&meta)?);
+            } else if meta.path.is_ident("name") {
+                reject_duplicate(&name, &meta, "name")?;
+                let lit = index_lit_str(&meta)?;
+                if !is_valid_index_name(&lit.value()) {
+                    return Err(syn::Error::new(
+                        lit.span(),
+                        "index `name` must be a valid SurrealQL identifier \
+                         (letters, digits and `_`, not starting with a digit)",
+                    ));
+                }
+                name = Some(lit);
+            } else if meta.path.is_ident("comment") {
+                reject_duplicate(&comment, &meta, "comment")?;
+                comment = Some(index_lit_str(&meta)?.value());
+            } else if meta.path.is_ident("concurrently") {
+                concurrently = true;
             } else {
-                Err(meta.error("expected `fields(<ident>, ...)` or `unique` inside #[index(...)]"))
+                return Err(meta.error(INDEX_ATTR_HELP));
             }
+            Ok(())
         })?;
 
-        let fields = fields.ok_or_else(|| {
-            syn::Error::new(
-                attr.path().span(),
-                "`#[index(...)]` requires `fields(<ident>, ...)`\n\nExample: #[index(fields(user, message), unique)]",
-            )
-        })?;
+        let kind = kind.unwrap_or_default();
 
-        let mut field_names = Vec::with_capacity(fields.len());
-        for ident in &fields {
-            let raw = ident.to_string();
-            let name = raw.trim_start_matches("r#").to_string();
-            if !known_fields.contains(&name) {
-                let mut all: Vec<&String> = known_fields.iter().collect();
-                all.sort();
-                let listed = all
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+        let field_names = match (fields, &kind) {
+            (Some((_, span)), IndexKind::Count { .. }) => {
                 return Err(syn::Error::new(
-                    ident.span(),
-                    format!(
-                        "unknown field `{}` in #[index(...)]; struct has fields: {}",
-                        name, listed
-                    ),
+                    span,
+                    "`count` indexes cannot have `fields(...)`",
                 ));
             }
-            field_names.push(name);
-        }
+            (None, IndexKind::Count { .. }) => Vec::new(),
+            (None, _) => {
+                return Err(syn::Error::new(
+                    attr.path().span(),
+                    "`#[index(...)]` requires `fields(<ident>, ...)`\n\nExample: #[index(fields(user, message), unique)]",
+                ));
+            }
+            (Some((entries, span)), kind) => {
+                if kind.requires_single_field() && entries.len() != 1 {
+                    return Err(syn::Error::new(
+                        span,
+                        format!(
+                            "`fulltext`, `hnsw` and `diskann` indexes take exactly one field, found {}",
+                            entries.len()
+                        ),
+                    ));
+                }
+                let mut field_names = Vec::with_capacity(entries.len());
+                for entry in &entries {
+                    let (path, root, span) = match entry {
+                        IndexFieldEntry::Ident(ident) => {
+                            let raw = ident.to_string();
+                            let name = raw.trim_start_matches("r#").to_string();
+                            (name.clone(), name, ident.span())
+                        }
+                        IndexFieldEntry::Path(lit) => {
+                            let path = lit.value().trim().to_string();
+                            let root = path
+                                .split(['.', '['])
+                                .next()
+                                .unwrap_or_default()
+                                .trim_start_matches("r#")
+                                .to_string();
+                            (path, root, lit.span())
+                        }
+                    };
+                    if !known_fields.contains(&root) {
+                        let mut all: Vec<&String> = known_fields.iter().collect();
+                        all.sort();
+                        let listed = all
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return Err(syn::Error::new(
+                            span,
+                            format!(
+                                "unknown field `{}` in #[index(...)]; struct has fields: {}",
+                                root, listed
+                            ),
+                        ));
+                    }
+                    field_names.push(path);
+                }
+                field_names
+            }
+        };
 
         indexes.push(IndexConfig {
             fields: field_names,
-            unique,
+            name: name.map(|lit| lit.value()),
+            kind,
+            comment,
+            concurrently,
         });
     }
 

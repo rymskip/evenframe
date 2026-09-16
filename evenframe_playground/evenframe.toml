@@ -10,6 +10,11 @@ url = "${SURREALDB_URL}"
 namespace = "${SURREALDB_NS}"
 database = "${SURREALDB_DB}"
 timeout = 60
+# DEFINE ANALYZER statements (a .surql file or a directory of them), applied
+# before tables so FULLTEXT indexes can reference them. They are re-applied on
+# every sync, so use `DEFINE ANALYZER OVERWRITE`. Analyzers that disappear from
+# these files are removed from the database.
+analyzers = { path = "surql/analyzers.surql" }
 
 [[schemasync.database.accesses]]
 name = "user"

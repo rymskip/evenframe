@@ -1,0 +1,5 @@
+error: `bm25(...)` needs both `k1` and `b`, e.g. `bm25(k1 = 1.2, b = 0.75)`; use plain `bm25` for the defaults
+ --> tests/ui/fail/index_bm25_missing_b.rs:4:32
+  |
+4 | #[index(fields(body), fulltext(bm25(k1 = 1.2)))]
+  |                                ^^^^^^^^^^^^^^

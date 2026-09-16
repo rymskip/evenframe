@@ -1,0 +1,5 @@
+error: `hnsw(...)` requires `dimension = <n>`, e.g. `hnsw(dimension = 1536)`
+ --> tests/ui/fail/index_hnsw_missing_dimension.rs:4:28
+  |
+4 | #[index(fields(embedding), hnsw(dist = "cosine"))]
+  |                            ^^^^^^^^^^^^^^^^^^^^^

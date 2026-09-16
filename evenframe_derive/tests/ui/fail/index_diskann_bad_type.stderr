@@ -1,0 +1,5 @@
+error: DISKANN supports `type` f32, f16, i8 and u8
+ --> tests/ui/fail/index_diskann_bad_type.rs:4:58
+  |
+4 | #[index(fields(embedding), diskann(dimension = 3, type = "f64"))]
+  |                                                          ^^^^^

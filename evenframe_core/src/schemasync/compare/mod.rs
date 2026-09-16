@@ -20,8 +20,8 @@ pub use import::SchemaImporter;
 #[cfg(feature = "surrealdb")]
 pub use surql::SurrealdbComparator;
 pub use types::{
-    AccessDefinition, FieldDefinition, IndexDefinition, ObjectType, PermissionSet,
-    SchemaDefinition, SchemaType, TableDefinition,
+    AccessDefinition, AnalyzerDefinition, FieldDefinition, IndexDefinition, ObjectType,
+    PermissionSet, SchemaDefinition, SchemaType, TableDefinition,
 };
 
 #[cfg(feature = "surrealdb")]
@@ -141,6 +141,12 @@ pub struct SchemaChanges {
     pub new_accesses: Vec<String>,
     pub removed_accesses: Vec<String>,
     pub modified_accesses: Vec<AccessChange>,
+    #[serde(default)]
+    pub new_analyzers: Vec<String>,
+    #[serde(default)]
+    pub removed_analyzers: Vec<String>,
+    #[serde(default)]
+    pub modified_analyzers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +167,9 @@ pub struct TableChanges {
     pub removed_events: Vec<String>,
     pub new_indexes: Vec<IndexDefinition>,
     pub removed_indexes: Vec<IndexDefinition>,
+    /// Same-name indexes whose definition (kind, parameters, comment) changed.
+    #[serde(default)]
+    pub modified_indexes: Vec<IndexDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -303,6 +312,28 @@ impl SchemaChanges {
                     names.join(", ")
                 ));
             }
+            if !table.modified_indexes.is_empty() {
+                let names: Vec<&str> = table
+                    .modified_indexes
+                    .iter()
+                    .map(|i| i.name.as_str())
+                    .collect();
+                summary.push(format!(
+                    "Modified indexes on {}: {}",
+                    table.table_name,
+                    names.join(", ")
+                ));
+            }
+        }
+
+        for (label, names) in [
+            ("New analyzers", &self.new_analyzers),
+            ("Removed analyzers", &self.removed_analyzers),
+            ("Modified analyzers", &self.modified_analyzers),
+        ] {
+            if !names.is_empty() {
+                summary.push(format!("{label}: {}", names.join(", ")));
+            }
         }
 
         if !self.new_accesses.is_empty() {
@@ -351,6 +382,9 @@ impl Comparator {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
 
         // Get all table names from both schemas
@@ -470,6 +504,30 @@ impl Comparator {
             }
         }
 
+        // Compare analyzers by name and normalized statement
+        let old_analyzers: BTreeMap<&str, &AnalyzerDefinition> =
+            old.analyzers.iter().map(|a| (a.name.as_str(), a)).collect();
+        let new_analyzer_names: BTreeSet<&str> =
+            new.analyzers.iter().map(|a| a.name.as_str()).collect();
+
+        for analyzer in &new.analyzers {
+            match old_analyzers.get(analyzer.name.as_str()) {
+                None => changes.new_analyzers.push(analyzer.name.clone()),
+                Some(old_analyzer) if old_analyzer.statement != analyzer.statement => {
+                    changes.modified_analyzers.push(analyzer.name.clone());
+                }
+                Some(_) => {}
+            }
+        }
+
+        for analyzer in &old.analyzers {
+            if !new_analyzer_names.contains(analyzer.name.as_str()) {
+                changes.removed_analyzers.push(analyzer.name.clone());
+            }
+        }
+
+        Self::flag_indexes_affected_by_analyzer_changes(old, new, &mut changes);
+
         tracing::debug!(
             new_tables = changes.new_tables.len(),
             removed_tables = changes.removed_tables.len(),
@@ -477,10 +535,96 @@ impl Comparator {
             new_accesses = changes.new_accesses.len(),
             removed_accesses = changes.removed_accesses.len(),
             modified_accesses = changes.modified_accesses.len(),
+            new_analyzers = changes.new_analyzers.len(),
+            removed_analyzers = changes.removed_analyzers.len(),
+            modified_analyzers = changes.modified_analyzers.len(),
             "Schema comparison complete"
         );
 
         Ok(changes)
+    }
+
+    /// Flag FULLTEXT indexes that must be rebuilt because of analyzer changes.
+    ///
+    /// - A FULLTEXT index keeps the terms produced by the analyzer it was built
+    ///   with. `DEFINE ANALYZER OVERWRITE` does not reindex, and until the index
+    ///   is re-defined its searches silently stop matching. Indexes using a
+    ///   modified analyzer are therefore marked modified, which makes
+    ///   `define_tables` re-apply them.
+    /// - SurrealDB refuses `REMOVE ANALYZER` while an index references it. An
+    ///   index moving off a removed analyzer is therefore also listed as
+    ///   removed, so it is dropped before the analyzer and recreated with its
+    ///   new definition afterwards.
+    fn flag_indexes_affected_by_analyzer_changes(
+        old: &SchemaDefinition,
+        new: &SchemaDefinition,
+        changes: &mut SchemaChanges,
+    ) {
+        if changes.modified_analyzers.is_empty() && changes.removed_analyzers.is_empty() {
+            return;
+        }
+
+        for (table_name, new_table) in new.tables.iter().chain(new.edges.iter()) {
+            let Some(old_table) = old.tables.get(table_name).or(old.edges.get(table_name)) else {
+                // New tables are defined in full anyway
+                continue;
+            };
+
+            for index in &new_table.indexes {
+                let Some(old_index) = old_table.indexes.iter().find(|i| i.name == index.name)
+                else {
+                    continue;
+                };
+
+                let uses_modified_analyzer = fulltext_analyzer(&index.definition)
+                    .is_some_and(|a| changes.modified_analyzers.iter().any(|m| m == a));
+                let leaves_removed_analyzer = fulltext_analyzer(&old_index.definition)
+                    .is_some_and(|a| changes.removed_analyzers.iter().any(|r| r == a));
+                if !uses_modified_analyzer && !leaves_removed_analyzer {
+                    continue;
+                }
+
+                let position = changes
+                    .modified_tables
+                    .iter()
+                    .position(|t| &t.table_name == table_name);
+                let table_changes = match position {
+                    Some(position) => &mut changes.modified_tables[position],
+                    None => {
+                        changes.modified_tables.push(TableChanges {
+                            table_name: table_name.clone(),
+                            new_fields: Vec::new(),
+                            removed_fields: Vec::new(),
+                            modified_fields: Vec::new(),
+                            permission_changed: false,
+                            schema_type_changed: false,
+                            new_events: Vec::new(),
+                            removed_events: Vec::new(),
+                            new_indexes: Vec::new(),
+                            removed_indexes: Vec::new(),
+                            modified_indexes: Vec::new(),
+                        });
+                        changes.modified_tables.last_mut().unwrap()
+                    }
+                };
+
+                if leaves_removed_analyzer
+                    && !table_changes
+                        .removed_indexes
+                        .iter()
+                        .any(|i| i.name == old_index.name)
+                {
+                    table_changes.removed_indexes.push(old_index.clone());
+                }
+                if !table_changes
+                    .modified_indexes
+                    .iter()
+                    .any(|i| i.name == index.name)
+                {
+                    table_changes.modified_indexes.push(index.clone());
+                }
+            }
+        }
     }
 
     /// Compare two table definitions
@@ -500,6 +644,7 @@ impl Comparator {
             removed_events: Vec::new(),
             new_indexes: Vec::new(),
             removed_indexes: Vec::new(),
+            modified_indexes: Vec::new(),
         };
 
         // Check schema type change
@@ -648,18 +793,29 @@ impl Comparator {
             }
         }
 
-        // Compare indexes by name. DEFINE INDEX OVERWRITE handles same-name
-        // content changes idempotently, so we only diff presence here — an
-        // index present in the DB but absent from code is an orphan and must
-        // be dropped.
-        let old_index_names: BTreeSet<&str> =
-            old_table.indexes.iter().map(|i| i.name.as_str()).collect();
+        // Compare indexes by name. An index present in the DB but absent from
+        // code is an orphan and must be dropped. A same-name index whose
+        // columns or definition (kind, parameters, comment) differ is
+        // modified; it must be flagged so the table is revisited and its
+        // DEFINE INDEX OVERWRITE statements are re-applied.
+        let old_indexes: BTreeMap<&str, &IndexDefinition> = old_table
+            .indexes
+            .iter()
+            .map(|i| (i.name.as_str(), i))
+            .collect();
         let new_index_names: BTreeSet<&str> =
             new_table.indexes.iter().map(|i| i.name.as_str()).collect();
 
         for index in &new_table.indexes {
-            if !old_index_names.contains(index.name.as_str()) {
-                table_changes.new_indexes.push(index.clone());
+            match old_indexes.get(index.name.as_str()) {
+                None => table_changes.new_indexes.push(index.clone()),
+                Some(old_index)
+                    if old_index.columns != index.columns
+                        || old_index.definition != index.definition =>
+                {
+                    table_changes.modified_indexes.push(index.clone());
+                }
+                Some(_) => {}
             }
         }
 
@@ -679,6 +835,7 @@ impl Comparator {
             && table_changes.removed_events.is_empty()
             && table_changes.new_indexes.is_empty()
             && table_changes.removed_indexes.is_empty()
+            && table_changes.modified_indexes.is_empty()
         {
             Ok(None)
         } else {
@@ -1516,6 +1673,27 @@ impl<'a> Merger<'a> {
     }
 }
 
+/// The analyzer named in a `FULLTEXT ANALYZER <name> ...` index definition.
+fn fulltext_analyzer(definition: &str) -> Option<&str> {
+    let mut rest = definition.trim_start();
+    for keyword in ["FULLTEXT", "ANALYZER"] {
+        let head = rest.get(..keyword.len())?;
+        if !head.eq_ignore_ascii_case(keyword)
+            || !rest[keyword.len()..].starts_with(char::is_whitespace)
+        {
+            return None;
+        }
+        rest = rest[keyword.len()..].trim_start();
+    }
+    if let Some(quoted) = rest.strip_prefix('`') {
+        return quoted.split('`').next();
+    }
+    if let Some(quoted) = rest.strip_prefix('⟨') {
+        return quoted.split('⟩').next();
+    }
+    rest.split_whitespace().next()
+}
+
 #[cfg(test)]
 mod index_diff_tests {
     use super::*;
@@ -1538,6 +1716,16 @@ mod index_diff_tests {
             name: name.to_string(),
             columns: columns.iter().map(|c| c.to_string()).collect(),
             unique,
+            definition: if unique { "UNIQUE" } else { "" }.to_string(),
+        }
+    }
+
+    fn idx_with_definition(name: &str, columns: &[&str], definition: &str) -> IndexDefinition {
+        IndexDefinition {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            unique: false,
+            definition: definition.to_string(),
         }
     }
 
@@ -1548,7 +1736,192 @@ mod index_diff_tests {
             tables,
             edges: BTreeMap::new(),
             accesses: Vec::new(),
+            analyzers: Vec::new(),
         }
+    }
+
+    fn analyzer(name: &str, statement: &str) -> AnalyzerDefinition {
+        AnalyzerDefinition {
+            name: name.to_string(),
+            statement: statement.to_string(),
+        }
+    }
+
+    #[test]
+    fn compare_flags_index_with_changed_definition() {
+        let old = schema_with(
+            "post",
+            table_with_indexes(
+                "post",
+                vec![idx_with_definition(
+                    "post_search",
+                    &["body"],
+                    "FULLTEXT ANALYZER en BM25(1.2,0.75)",
+                )],
+            ),
+        );
+        let new = schema_with(
+            "post",
+            table_with_indexes(
+                "post",
+                vec![idx_with_definition(
+                    "post_search",
+                    &["body"],
+                    "FULLTEXT ANALYZER en BM25(1.2,0.75) HIGHLIGHTS",
+                )],
+            ),
+        );
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.modified_tables.len(), 1);
+        let tc = &changes.modified_tables[0];
+        assert!(tc.new_indexes.is_empty());
+        assert!(tc.removed_indexes.is_empty());
+        assert_eq!(tc.modified_indexes.len(), 1);
+        assert_eq!(tc.modified_indexes[0].name, "post_search");
+    }
+
+    #[test]
+    fn compare_flags_index_with_changed_columns() {
+        let old = schema_with(
+            "post",
+            table_with_indexes("post", vec![idx("idx_post_x", &["a"], false)]),
+        );
+        let new = schema_with(
+            "post",
+            table_with_indexes("post", vec![idx("idx_post_x", &["a", "b"], false)]),
+        );
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.modified_tables[0].modified_indexes.len(), 1);
+    }
+
+    #[test]
+    fn compare_diffs_analyzers() {
+        let table = table_with_indexes("post", vec![]);
+        let mut old = schema_with("post", table.clone());
+        old.analyzers = vec![
+            analyzer("same", "DEFINE ANALYZER same TOKENIZERS blank"),
+            analyzer("changed", "DEFINE ANALYZER changed TOKENIZERS blank"),
+            analyzer("gone", "DEFINE ANALYZER gone TOKENIZERS blank"),
+        ];
+        let mut new = schema_with("post", table);
+        new.analyzers = vec![
+            analyzer("same", "DEFINE ANALYZER same TOKENIZERS blank"),
+            analyzer(
+                "changed",
+                "DEFINE ANALYZER changed TOKENIZERS blank FILTERS lowercase",
+            ),
+            analyzer("added", "DEFINE ANALYZER added TOKENIZERS class"),
+        ];
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert!(changes.modified_tables.is_empty());
+        assert_eq!(changes.new_analyzers, vec!["added".to_string()]);
+        assert_eq!(changes.removed_analyzers, vec!["gone".to_string()]);
+        assert_eq!(changes.modified_analyzers, vec!["changed".to_string()]);
+    }
+
+    #[test]
+    fn modified_analyzer_flags_dependent_fulltext_index() {
+        let indexes = vec![
+            idx_with_definition(
+                "post_search",
+                &["body"],
+                "FULLTEXT ANALYZER en BM25(1.2,0.75)",
+            ),
+            idx_with_definition(
+                "post_other",
+                &["title"],
+                "FULLTEXT ANALYZER other BM25(1.2,0.75)",
+            ),
+            idx("idx_post_slug", &["slug"], true),
+        ];
+        let mut old = schema_with("post", table_with_indexes("post", indexes.clone()));
+        old.analyzers = vec![
+            analyzer("en", "DEFINE ANALYZER en TOKENIZERS blank"),
+            analyzer("other", "DEFINE ANALYZER other TOKENIZERS blank"),
+        ];
+        let mut new = schema_with("post", table_with_indexes("post", indexes));
+        new.analyzers = vec![
+            analyzer(
+                "en",
+                "DEFINE ANALYZER en TOKENIZERS blank FILTERS snowball(english)",
+            ),
+            analyzer("other", "DEFINE ANALYZER other TOKENIZERS blank"),
+        ];
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.modified_analyzers, vec!["en".to_string()]);
+        assert_eq!(changes.modified_tables.len(), 1);
+        let tc = &changes.modified_tables[0];
+        assert_eq!(tc.table_name, "post");
+        let names: Vec<&str> = tc
+            .modified_indexes
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["post_search"]);
+        assert!(tc.removed_indexes.is_empty());
+    }
+
+    #[test]
+    fn index_leaving_removed_analyzer_is_dropped_before_redefinition() {
+        let mut old = schema_with(
+            "post",
+            table_with_indexes(
+                "post",
+                vec![idx_with_definition(
+                    "post_search",
+                    &["body"],
+                    "FULLTEXT ANALYZER legacy BM25(1.2,0.75)",
+                )],
+            ),
+        );
+        old.analyzers = vec![analyzer(
+            "legacy",
+            "DEFINE ANALYZER legacy TOKENIZERS blank",
+        )];
+        let mut new = schema_with(
+            "post",
+            table_with_indexes(
+                "post",
+                vec![idx_with_definition(
+                    "post_search",
+                    &["body"],
+                    "FULLTEXT ANALYZER en BM25(1.2,0.75)",
+                )],
+            ),
+        );
+        new.analyzers = vec![analyzer("en", "DEFINE ANALYZER en TOKENIZERS class")];
+
+        let changes = Comparator::compare(&old, &new).expect("compare");
+        assert_eq!(changes.removed_analyzers, vec!["legacy".to_string()]);
+        let tc = &changes.modified_tables[0];
+        assert_eq!(tc.removed_indexes.len(), 1);
+        assert_eq!(tc.removed_indexes[0].name, "post_search");
+        assert_eq!(tc.modified_indexes.len(), 1, "flagged once, not duplicated");
+        assert_eq!(
+            tc.modified_indexes[0].definition,
+            "FULLTEXT ANALYZER en BM25(1.2,0.75)"
+        );
+    }
+
+    #[test]
+    fn extracts_fulltext_analyzer_name() {
+        assert_eq!(
+            fulltext_analyzer("FULLTEXT ANALYZER en BM25(1.2,0.75) HIGHLIGHTS"),
+            Some("en")
+        );
+        assert_eq!(
+            fulltext_analyzer("FULLTEXT ANALYZER `my az` BM25"),
+            Some("my az")
+        );
+        assert_eq!(fulltext_analyzer("fulltext analyzer en"), Some("en"));
+        assert_eq!(fulltext_analyzer("FULLTEXTANALYZER en"), None);
+        assert_eq!(fulltext_analyzer("FULLTEXT ANALYZER ⟨az⟩"), Some("az"));
+        assert_eq!(fulltext_analyzer("UNIQUE"), None);
+        assert_eq!(fulltext_analyzer(""), None);
     }
 
     #[test]

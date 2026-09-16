@@ -800,6 +800,7 @@ const KNOWN_ATTRS: &[&str] = &[
     "event",
     "fetch",
     "format",
+    "index",
     "macroforge_derive",
     "mock_data",
     "mockmake",

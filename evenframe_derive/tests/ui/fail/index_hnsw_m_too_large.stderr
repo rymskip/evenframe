@@ -1,0 +1,5 @@
+error: HNSW `m` cannot be larger than 127
+ --> tests/ui/fail/index_hnsw_m_too_large.rs:4:52
+  |
+4 | #[index(fields(embedding), hnsw(dimension = 3, m = 128))]
+  |                                                    ^^^

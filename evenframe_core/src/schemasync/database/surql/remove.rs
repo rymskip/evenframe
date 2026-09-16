@@ -25,6 +25,21 @@ pub fn generate_remove_index_statements(schema_changes: &SchemaChanges) -> Strin
     output
 }
 
+/// Generate `REMOVE ANALYZER` statements for analyzers that exist in the
+/// database but are no longer declared in the analyzers surql (orphans).
+pub fn generate_remove_analyzer_statements(schema_changes: &SchemaChanges) -> String {
+    let mut output = String::new();
+    if schema_changes.removed_analyzers.is_empty() {
+        return output;
+    }
+    output.push_str("-- Removing analyzers\n");
+    for analyzer_name in &schema_changes.removed_analyzers {
+        output.push_str(&format!("REMOVE ANALYZER IF EXISTS {};\n", analyzer_name));
+    }
+    output.push('\n');
+    output
+}
+
 /// Extract the event name from a `DEFINE EVENT <name> ON TABLE ...` statement.
 /// Returns `None` for statements that do not begin with `DEFINE EVENT`.
 fn extract_event_name(statement: &str) -> Option<String> {
@@ -207,6 +222,11 @@ impl Mockmaker<'_> {
             output.push('\n');
         }
 
+        // Process removed analyzers last: SurrealDB rejects `REMOVE ANALYZER`
+        // while any index (including those on tables removed above) still
+        // references it.
+        output.push_str(&generate_remove_analyzer_statements(schema_changes));
+
         output
     }
 }
@@ -228,6 +248,7 @@ mod tests {
             removed_events: Vec::new(),
             new_indexes: Vec::new(),
             removed_indexes: Vec::new(),
+            modified_indexes: Vec::new(),
         }
     }
 
@@ -238,6 +259,7 @@ mod tests {
             name: "idx_reaction_created_at".to_string(),
             columns: vec!["created_at".to_string()],
             unique: false,
+            definition: String::new(),
         });
 
         let changes = SchemaChanges {
@@ -247,6 +269,9 @@ mod tests {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
 
         let out = generate_remove_index_statements(&changes);
@@ -267,6 +292,9 @@ mod tests {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
         assert!(generate_remove_index_statements(&changes).is_empty());
     }
@@ -307,6 +335,9 @@ mod tests {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
 
         let out = generate_remove_event_statements(&changes);
@@ -327,7 +358,30 @@ mod tests {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
         assert!(generate_remove_event_statements(&changes).is_empty());
+    }
+
+    #[test]
+    fn emits_remove_analyzer_for_orphan() {
+        let changes = SchemaChanges {
+            new_tables: Vec::new(),
+            removed_tables: Vec::new(),
+            modified_tables: Vec::new(),
+            new_accesses: Vec::new(),
+            removed_accesses: Vec::new(),
+            modified_accesses: Vec::new(),
+            new_analyzers: vec!["kept".to_string()],
+            removed_analyzers: vec!["english".to_string()],
+            modified_analyzers: vec!["changed".to_string()],
+        };
+        let out = generate_remove_analyzer_statements(&changes);
+        assert_eq!(
+            out,
+            "-- Removing analyzers\nREMOVE ANALYZER IF EXISTS english;\n\n"
+        );
     }
 }

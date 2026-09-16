@@ -1,0 +1,49 @@
+{
+  "description": "Table with every struct-level #[index(...)] kind: fulltext, hnsw, diskann, count, array-element composite, plus name/comment/concurrently and a field-level #[unique] that collides with a struct-level index",
+  "table_name": "article",
+  "table_config": {
+    "table_name": "article",
+    "struct_config": {
+      "struct_name": "Article",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "slug", "field_type": "String", "validators": [], "always_regenerate": false, "unique": true },
+        { "field_name": "body", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "tags", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "age", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "embedding", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "active", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "relation": null,
+    "permissions": null,
+    "mock_generation_config": null,
+    "events": [],
+    "indexes": [
+      { "fields": ["slug"], "kind": { "type": "unique" }, "comment": "one slug per article" },
+      {
+        "fields": ["body"],
+        "name": "article_search",
+        "kind": { "type": "full_text", "analyzer": "english", "bm25": { "params": { "k1": 1.2, "b": 0.75 } }, "highlights": true }
+      },
+      { "fields": ["body"], "name": "article_search_like", "kind": { "type": "full_text", "bm25": "default" } },
+      {
+        "fields": ["embedding"],
+        "kind": { "type": "hnsw", "dimension": 4, "dist": "cosine", "vector_type": "f32", "efc": 150, "m": 12, "extend_candidates": true }
+      },
+      {
+        "fields": ["embedding"],
+        "name": "article_ann",
+        "kind": { "type": "disk_ann", "dimension": 4, "dist": "cosine_normalized", "vector_type": "f16", "degree": 32, "hashed_vector": true },
+        "concurrently": true
+      },
+      { "fields": ["tags.*", "age"] },
+      { "kind": { "type": "count" } },
+      { "name": "article_active_count", "kind": { "type": "count", "where_clause": "active = true" } }
+    ]
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

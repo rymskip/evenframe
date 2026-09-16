@@ -97,6 +97,10 @@ pub struct DatabaseConfig {
     /// Function definitions from .surql files
     #[serde(default)]
     pub functions: Option<FunctionsSource>,
+    /// Analyzer definitions (`DEFINE ANALYZER ...`) from .surql files.
+    /// Applied before tables so full-text indexes can reference them.
+    #[serde(default)]
+    pub analyzers: Option<AnalyzersSource>,
     /// Resolved surql content loaded from paths (set at runtime, not from TOML)
     #[serde(skip)]
     pub resolved: ResolvedDatabaseItems,
@@ -152,11 +156,18 @@ pub struct FunctionsSource {
     pub path: String,
 }
 
+/// Source for analyzer definitions: a path to .surql file(s).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AnalyzersSource {
+    pub path: String,
+}
+
 /// Resolved surql content loaded from paths at config init time.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedDatabaseItems {
     pub access_surql: Option<String>,
     pub functions_surql: Option<String>,
+    pub analyzers_surql: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
@@ -204,6 +215,7 @@ impl Default for DatabaseConfig {
             timeout: default_timeout(),
             accesses: AccessesSource::default(),
             functions: None,
+            analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
             max_connections: None,
             min_connections: None,
@@ -227,6 +239,7 @@ impl DatabaseConfig {
                 table_name: "user".to_owned(),
             }]),
             functions: None,
+            analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
             timeout: 60,
             max_connections: None,
@@ -254,6 +267,7 @@ impl DatabaseConfig {
             timeout: 60,
             accesses: AccessesSource::default(),
             functions: None,
+            analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
             max_connections: Some(5),
             min_connections: Some(1),
@@ -272,6 +286,7 @@ impl DatabaseConfig {
             timeout: 60,
             accesses: AccessesSource::default(),
             functions: None,
+            analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
             max_connections: Some(1),
             min_connections: Some(1),

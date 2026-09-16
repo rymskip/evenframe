@@ -117,6 +117,7 @@ impl<'a> SqlSchemaComparator<'a> {
             removed_events: Vec::new(),
             new_indexes: Vec::new(),
             removed_indexes: Vec::new(),
+            modified_indexes: Vec::new(),
         };
 
         // Get column names
@@ -195,6 +196,17 @@ impl<'a> SchemaComparator for SqlSchemaComparator<'a> {
         // Get current schema from database
         let current_schema = self.get_current_schema().await?;
 
+        // #[index(...)] is only applied by the SurrealDB backend
+        for (table_name, table_config) in tables {
+            if !table_config.indexes.is_empty() {
+                tracing::warn!(
+                    table = %table_name,
+                    count = table_config.indexes.len(),
+                    "#[index(...)] declarations are SurrealDB-only and are ignored by SQL backends"
+                );
+            }
+        }
+
         // Generate expected schema from Rust configs
         let expected_tables = self.generate_expected_schema(tables, objects, enums);
 
@@ -216,6 +228,9 @@ impl<'a> SchemaComparator for SqlSchemaComparator<'a> {
             new_accesses: Vec::new(),
             removed_accesses: Vec::new(),
             modified_accesses: Vec::new(),
+            new_analyzers: Vec::new(),
+            removed_analyzers: Vec::new(),
+            modified_analyzers: Vec::new(),
         };
 
         // Find new tables
