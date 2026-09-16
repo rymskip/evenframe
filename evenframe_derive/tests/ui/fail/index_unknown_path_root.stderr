@@ -1,0 +1,5 @@
+error: unknown field `nope` in #[index(...)]; struct has fields: body, embedding, id, title
+ --> tests/ui/fail/index_unknown_path_root.rs:4:16
+  |
+4 | #[index(fields("nope.*"))]
+  |                ^^^^^^^^

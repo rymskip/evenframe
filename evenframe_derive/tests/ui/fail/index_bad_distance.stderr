@@ -1,0 +1,5 @@
+error: unknown distance `cosinus`; expected one of euclidean, cosine, cosine_normalized, inner_product, manhattan, chebyshev, hamming, jaccard, pearson, minkowski <order>
+ --> tests/ui/fail/index_bad_distance.rs:4:55
+  |
+4 | #[index(fields(embedding), hnsw(dimension = 3, dist = "cosinus"))]
+  |                                                       ^^^^^^^^^

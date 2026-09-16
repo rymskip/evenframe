@@ -23,6 +23,72 @@ pub enum QueryErrorType {
     UnknownError,
 }
 
+/// Remove top-level SurrealQL comments (`-- …`, `// …`, `# …` and
+/// `/* … */`) from `block`, keeping line breaks so statements stay apart.
+///
+/// Comments are only recognised outside string literals and outside
+/// `{...}`/`(...)`/`[...]` groups: inside those, `--` or `//` can be real code
+/// (e.g. `i--` in an embedded JavaScript `ASSERT` body), and a `;` there never
+/// splits a statement anyway. Strip before [`split_surql_statements`] so a
+/// `;` inside a comment doesn't produce a phantom statement and a
+/// comment-only fragment isn't counted as one.
+pub fn strip_surql_comments(block: &str) -> String {
+    let bytes = block.as_bytes();
+    let mut out = String::with_capacity(block.len());
+    let mut copied = 0;
+    let mut depth: i32 = 0;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        let next = bytes.get(i + 1).copied();
+        let comment_end = match (c, next) {
+            _ if depth > 0 => None,
+            (b'-', Some(b'-')) | (b'/', Some(b'/')) | (b'#', _) => {
+                // Line comment: drop up to (not including) the newline
+                Some(block[i..].find('\n').map_or(block.len(), |n| i + n))
+            }
+            (b'/', Some(b'*')) => {
+                // Block comment: drop through `*/`, or to the end if unclosed
+                Some(
+                    block[i + 2..]
+                        .find("*/")
+                        .map_or(block.len(), |n| i + 2 + n + 2),
+                )
+            }
+            _ => None,
+        };
+        if let Some(end) = comment_end {
+            out.push_str(&block[copied..i]);
+            // Keep the block comment's line breaks so line structure survives
+            out.extend(block[i..end].chars().filter(|&ch| ch == '\n'));
+            copied = end;
+            i = end;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push_str(&block[copied..]);
+    out
+}
+
 /// Split a block of SurrealQL into individual statements on top-level `;`,
 /// ignoring semicolons inside `{...}`/`(...)`/`[...]` groups (e.g. embedded
 /// JavaScript `ASSERT function(){…}` bodies) and inside string literals.
@@ -31,7 +97,8 @@ pub enum QueryErrorType {
 /// and a trailing fragment without a `;` is still returned. A naive
 /// `split(';')` truncates DEFINE FIELD statements whose ASSERT is an embedded
 /// JS function, so any code that routes/counts individual statements must use
-/// this instead.
+/// this instead. It does not understand comments: run hand-written SurrealQL
+/// through [`strip_surql_comments`] first.
 pub fn split_surql_statements(block: &str) -> Vec<&str> {
     let bytes = block.as_bytes();
     let mut out = Vec::new();
@@ -93,8 +160,11 @@ pub async fn validate_surql_response(
 
     // Split statements for error reporting. Brace/string-aware so embedded
     // JavaScript function bodies (which contain their own `;`) aren't split
-    // mid-statement and miscounted against the response.
-    let statement_lines: Vec<&str> = split_surql_statements(statements)
+    // mid-statement and miscounted against the response. Comments are
+    // stripped first: SurrealDB returns no result for them, so a `;` inside a
+    // comment or a comment-only fragment would throw the count off.
+    let uncommented = strip_surql_comments(statements);
+    let statement_lines: Vec<&str> = split_surql_statements(&uncommented)
         .into_iter()
         .filter(|s| !s.trim().is_empty())
         .collect();
@@ -353,7 +423,49 @@ async fn import_via_cli(
 
 #[cfg(test)]
 mod split_tests {
-    use super::split_surql_statements;
+    use super::{split_surql_statements, strip_surql_comments};
+
+    #[test]
+    fn strips_line_and_block_comments() {
+        let block = "-- header; with a semicolon\n\
+                     DEFINE ANALYZER a TOKENIZERS blank; // trailing; note\n\
+                     # hash comment;\n\
+                     /* block;\n   comment */ DEFINE ANALYZER b TOKENIZERS class;\n\
+                     -- trailing comment only\n";
+        let stripped = strip_surql_comments(block);
+        assert!(!stripped.contains("header"), "{stripped}");
+        assert!(!stripped.contains("note"), "{stripped}");
+        assert!(!stripped.contains("hash"), "{stripped}");
+        assert!(!stripped.contains("block;"), "{stripped}");
+        assert_eq!(
+            stripped.lines().count(),
+            block.lines().count(),
+            "line structure must survive: {stripped:?}"
+        );
+
+        let parts = split_surql_statements(&stripped);
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[0].contains("ANALYZER a"));
+        assert!(parts[1].contains("ANALYZER b"));
+    }
+
+    #[test]
+    fn keeps_comment_markers_inside_strings_and_groups() {
+        let block = "DEFINE FIELD url ON t TYPE string VALUE 'http://x -- y # z';\n\
+                     DEFINE FIELD n ON t TYPE int ASSERT function($value) { let i = 1; i--; return i >= 0; };\n\
+                     DEFINE EVENT e ON t WHEN true THEN { -- inner comment stays\n CREATE log; };\n";
+        let stripped = strip_surql_comments(block);
+        assert_eq!(stripped, block);
+        assert_eq!(split_surql_statements(&stripped).len(), 3);
+    }
+
+    #[test]
+    fn strips_unclosed_block_comment_to_end() {
+        assert_eq!(
+            strip_surql_comments("DEFINE ANALYZER a; /* never closed; \n"),
+            "DEFINE ANALYZER a; \n"
+        );
+    }
 
     #[test]
     fn splits_simple_statements() {

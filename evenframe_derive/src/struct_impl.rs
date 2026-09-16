@@ -11,7 +11,9 @@ use evenframe_core::{
         },
         validator_parser::parse_field_validators,
     },
-    schemasync::{DefineConfig, EdgeConfig, PermissionsConfig},
+    schemasync::{
+        Bm25, DefineConfig, EdgeConfig, IndexKind, PermissionsConfig, VectorDistance, VectorType,
+    },
     types::FieldType,
 };
 use proc_macro2::{Span, TokenStream};
@@ -390,11 +392,17 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
         } else {
             let entries = indexes.iter().map(|idx| {
                 let field_strs = idx.fields.iter().map(|s| quote! { #s.to_string() });
-                let unique = idx.unique;
+                let name = option_tokens(&idx.name, |s| quote! { #s.to_string() });
+                let kind = index_kind_tokens(&idx.kind);
+                let comment = option_tokens(&idx.comment, |s| quote! { #s.to_string() });
+                let concurrently = idx.concurrently;
                 quote! {
                     ::evenframe::schemasync::IndexConfig {
                         fields: vec![ #(#field_strs),* ],
-                        unique: #unique,
+                        name: #name,
+                        kind: #kind,
+                        comment: #comment,
+                        concurrently: #concurrently,
                     }
                 }
             });
@@ -545,5 +553,136 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             format!("The Evenframe derive macro can only be applied to structs.\n\nYou tried to apply it to: {}\n\nExample of correct usage:\n#[derive(Evenframe)]\nstruct MyStruct {{\n    id: String,\n    // ... other fields\n}}", ident)
         )
         .to_compile_error()
+    }
+}
+
+fn option_tokens<T>(value: &Option<T>, some: impl Fn(&T) -> TokenStream) -> TokenStream {
+    match value {
+        Some(v) => {
+            let inner = some(v);
+            quote! { ::core::option::Option::Some(#inner) }
+        }
+        None => quote! { ::core::option::Option::None },
+    }
+}
+
+fn vector_distance_tokens(dist: &VectorDistance) -> TokenStream {
+    let path = quote! { ::evenframe::schemasync::VectorDistance };
+    match dist {
+        VectorDistance::Euclidean => quote! { #path::Euclidean },
+        VectorDistance::Cosine => quote! { #path::Cosine },
+        VectorDistance::CosineNormalized => quote! { #path::CosineNormalized },
+        VectorDistance::InnerProduct => quote! { #path::InnerProduct },
+        VectorDistance::Manhattan => quote! { #path::Manhattan },
+        VectorDistance::Chebyshev => quote! { #path::Chebyshev },
+        VectorDistance::Hamming => quote! { #path::Hamming },
+        VectorDistance::Jaccard => quote! { #path::Jaccard },
+        VectorDistance::Pearson => quote! { #path::Pearson },
+        VectorDistance::Minkowski(order) => quote! { #path::Minkowski(#order) },
+    }
+}
+
+fn vector_type_tokens(vector_type: &VectorType) -> TokenStream {
+    let path = quote! { ::evenframe::schemasync::VectorType };
+    match vector_type {
+        VectorType::F64 => quote! { #path::F64 },
+        VectorType::F32 => quote! { #path::F32 },
+        VectorType::F16 => quote! { #path::F16 },
+        VectorType::I64 => quote! { #path::I64 },
+        VectorType::I32 => quote! { #path::I32 },
+        VectorType::I16 => quote! { #path::I16 },
+        VectorType::I8 => quote! { #path::I8 },
+        VectorType::U8 => quote! { #path::U8 },
+    }
+}
+
+fn index_kind_tokens(kind: &IndexKind) -> TokenStream {
+    let path = quote! { ::evenframe::schemasync::IndexKind };
+    match kind {
+        IndexKind::Standard => quote! { #path::Standard },
+        IndexKind::Unique => quote! { #path::Unique },
+        IndexKind::Count { where_clause } => {
+            let where_clause = option_tokens(where_clause, |s| quote! { #s.to_string() });
+            quote! { #path::Count { where_clause: #where_clause } }
+        }
+        IndexKind::FullText {
+            analyzer,
+            bm25,
+            highlights,
+        } => {
+            let analyzer = option_tokens(analyzer, |s| quote! { #s.to_string() });
+            let bm25 = option_tokens(bm25, |b| match b {
+                Bm25::Default => quote! { ::evenframe::schemasync::Bm25::Default },
+                Bm25::Params { k1, b } => {
+                    quote! { ::evenframe::schemasync::Bm25::Params { k1: #k1, b: #b } }
+                }
+            });
+            quote! {
+                #path::FullText {
+                    analyzer: #analyzer,
+                    bm25: #bm25,
+                    highlights: #highlights,
+                }
+            }
+        }
+        IndexKind::Hnsw {
+            dimension,
+            dist,
+            vector_type,
+            efc,
+            m,
+            m0,
+            lm,
+            extend_candidates,
+            keep_pruned_connections,
+            hashed_vector,
+        } => {
+            let dist = option_tokens(dist, vector_distance_tokens);
+            let vector_type = option_tokens(vector_type, vector_type_tokens);
+            let efc = option_tokens(efc, |v| quote! { #v });
+            let m = option_tokens(m, |v| quote! { #v });
+            let m0 = option_tokens(m0, |v| quote! { #v });
+            let lm = option_tokens(lm, |v| quote! { #v });
+            quote! {
+                #path::Hnsw {
+                    dimension: #dimension,
+                    dist: #dist,
+                    vector_type: #vector_type,
+                    efc: #efc,
+                    m: #m,
+                    m0: #m0,
+                    lm: #lm,
+                    extend_candidates: #extend_candidates,
+                    keep_pruned_connections: #keep_pruned_connections,
+                    hashed_vector: #hashed_vector,
+                }
+            }
+        }
+        IndexKind::DiskAnn {
+            dimension,
+            dist,
+            vector_type,
+            degree,
+            l_build,
+            alpha,
+            hashed_vector,
+        } => {
+            let dist = option_tokens(dist, vector_distance_tokens);
+            let vector_type = option_tokens(vector_type, vector_type_tokens);
+            let degree = option_tokens(degree, |v| quote! { #v });
+            let l_build = option_tokens(l_build, |v| quote! { #v });
+            let alpha = option_tokens(alpha, |v| quote! { #v });
+            quote! {
+                #path::DiskAnn {
+                    dimension: #dimension,
+                    dist: #dist,
+                    vector_type: #vector_type,
+                    degree: #degree,
+                    l_build: #l_build,
+                    alpha: #alpha,
+                    hashed_vector: #hashed_vector,
+                }
+            }
+        }
     }
 }

@@ -66,6 +66,12 @@ pub struct Author {
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 50)]
+// `blog_english` is defined in surql/analyzers.surql (see evenframe.toml).
+#[index(
+    name = "post_content_search",
+    fields(content),
+    fulltext(analyzer = "blog_english", bm25, highlights)
+)]
 pub struct Post {
     pub id: String,
 

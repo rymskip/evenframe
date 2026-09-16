@@ -96,6 +96,19 @@ pub struct IndexDefinition {
     pub name: String,
     pub columns: Vec<String>,
     pub unique: bool,
+    /// Everything after the column list (kind clause, COMMENT, CONCURRENTLY),
+    /// e.g. `FULLTEXT ANALYZER en BM25(1.2,0.75) HIGHLIGHTS`. Compared to
+    /// detect same-name indexes whose definition changed.
+    #[serde(default)]
+    pub definition: String,
+}
+
+/// A `DEFINE ANALYZER` statement, normalized (no OVERWRITE / IF NOT EXISTS,
+/// no trailing `;`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnalyzerDefinition {
+    pub name: String,
+    pub statement: String,
 }
 
 /// Represents an access definition in a schema
@@ -122,6 +135,8 @@ pub struct SchemaDefinition {
     pub tables: BTreeMap<String, TableDefinition>,
     pub edges: BTreeMap<String, TableDefinition>,
     pub accesses: Vec<AccessDefinition>,
+    #[serde(default)]
+    pub analyzers: Vec<AnalyzerDefinition>,
 }
 
 impl SchemaDefinition {
@@ -144,25 +159,16 @@ impl SchemaDefinition {
                 fields: Self::extract_fields_from_config(config, allow_scripting)?,
                 array_wildcard_fields: BTreeMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
-                indexes: {
-                    let mut v: Vec<IndexDefinition> = config
-                        .struct_config
-                        .fields
-                        .iter()
-                        .filter(|f| f.unique)
-                        .map(|f| IndexDefinition {
-                            name: format!("idx_{}_{}", name, f.field_name),
-                            columns: vec![f.field_name.clone()],
-                            unique: true,
-                        })
-                        .collect();
-                    v.extend(config.indexes.iter().map(|idx| IndexDefinition {
-                        name: format!("idx_{}_{}", name, idx.fields.join("_")),
+                indexes: config
+                    .all_indexes(name)
+                    .iter()
+                    .map(|idx| IndexDefinition {
+                        name: idx.index_name(name),
                         columns: idx.fields.clone(),
-                        unique: idx.unique,
-                    }));
-                    v
-                },
+                        unique: idx.is_unique(),
+                        definition: idx.definition_clause(),
+                    })
+                    .collect(),
                 events: config
                     .events
                     .iter()
@@ -181,6 +187,7 @@ impl SchemaDefinition {
             tables: schema_tables.clone(),
             edges: schema_edges.clone(),
             accesses: Vec::new(),
+            analyzers: Vec::new(),
         };
 
         tracing::debug!(

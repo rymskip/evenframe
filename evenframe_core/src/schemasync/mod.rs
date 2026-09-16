@@ -20,7 +20,7 @@ pub use edge::{Direction, EdgeConfig, Subquery};
 pub use event::EventConfig;
 pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
-pub use table::{IndexConfig, TableConfig};
+pub use table::{Bm25, IndexConfig, IndexKind, TableConfig, VectorDistance, VectorType};
 
 // PreservationMode - always available (used by MockGenerationConfig data type)
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -547,8 +547,9 @@ impl<'a> Schemasync<'a> {
 
         // Execution order matters:
         // 1. Access first — defines SIGNUP/SIGNIN on the database (independent of tables)
-        // 2. Tables second — defines table schemas, fields, and events
-        // 3. Functions last — function params use typed references like `record<site>`
+        // 2. Analyzers second — FULLTEXT indexes on tables reference them
+        // 3. Tables third — defines table schemas, fields, indexes, and events
+        // 4. Functions last — function params use typed references like `record<site>`
         //    which require the referenced tables to already exist in the database
 
         info!("Executing access control setup");
@@ -557,6 +558,13 @@ impl<'a> Schemasync<'a> {
             e
         })?;
         debug!("Access control setup completed");
+
+        info!("Executing analyzer definitions");
+        self.execute_analyzers(&db, &config).await.map_err(|e| {
+            error!("Failed to execute analyzers: {}", e);
+            e
+        })?;
+        debug!("Analyzer definitions completed");
 
         let schema_changes = mockmaker
             .comparator
@@ -844,6 +852,61 @@ impl<'a> Schemasync<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Execute analyzer definitions from resolved surql on the live database.
+    ///
+    /// Analyzers must exist before tables are defined because FULLTEXT indexes
+    /// reference them. An analyzer with a `FUNCTION fn::...` preprocessor also
+    /// needs its function first, so in that case the functions surql is applied
+    /// up front as well (it is re-applied idempotently after the tables).
+    async fn execute_analyzers(
+        &self,
+        db: &Surreal<Client>,
+        config: &crate::schemasync::config::SchemasyncConfig,
+    ) -> Result<()> {
+        if let Some(ref analyzers_surql) = config.database.resolved.analyzers_surql
+            && !analyzers_surql.is_empty()
+        {
+            if crate::schemasync::compare::surql::analyzers_reference_functions(analyzers_surql)
+                && let Some(ref functions_surql) = config.database.resolved.functions_surql
+                && !functions_surql.is_empty()
+            {
+                info!("Analyzers reference functions; executing function definitions first");
+                let result = execute_and_validate(db, functions_surql, "define", "functions").await;
+                if let Err(e) = result {
+                    let error_msg = format!(
+                        "Failed to execute function definitions required by analyzers: {}\n\
+                         Functions used as analyzer preprocessors run before tables are defined. \
+                         If a function references tables, move the analyzer's helper function \
+                         into the analyzers surql file instead.",
+                        e
+                    );
+                    evenframe_log!(&error_msg, "results.log", true);
+                    return Err(EvenframeError::database(error_msg));
+                }
+            }
+
+            info!("Executing analyzer definitions from surql");
+            evenframe_log!(analyzers_surql, "analyzer_definitions.surql");
+
+            let result = execute_and_validate(db, analyzers_surql, "define", "analyzers").await;
+            match result {
+                Ok(_) => {
+                    evenframe_log!(
+                        "Successfully executed analyzer definitions",
+                        "results.log",
+                        true
+                    );
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to execute analyzer definitions: {}", e);
+                    evenframe_log!(&error_msg, "results.log", true);
+                    return Err(EvenframeError::database(error_msg));
+                }
+            }
+        }
         Ok(())
     }
 

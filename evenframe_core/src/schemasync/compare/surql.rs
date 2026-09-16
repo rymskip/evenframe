@@ -6,8 +6,8 @@
 
 use super::SchemaChanges;
 use super::types::{
-    AccessDefinition, FieldDefinition, IndexDefinition, ObjectType, SchemaDefinition, SchemaType,
-    TableDefinition,
+    AccessDefinition, AnalyzerDefinition, FieldDefinition, IndexDefinition, ObjectType,
+    SchemaDefinition, SchemaType, TableDefinition,
 };
 use crate::{
     EvenframeError, Result, evenframe_log,
@@ -75,6 +75,26 @@ impl<'a> SurrealdbComparator<'a> {
         tracing::trace!("Creating backup and in-memory schemas");
         let (remote_schema, new_schema) = setup_backup_and_schemas(self.db).await?;
         self.remote_schema = Some(remote_schema);
+
+        // Analyzers first: FULLTEXT indexes in the define statements reference them.
+        let resolved = &self.schemasync_config.database.resolved;
+        if let Some(ref analyzers_surql) = resolved.analyzers_surql
+            && !analyzers_surql.is_empty()
+        {
+            if analyzers_reference_functions(analyzers_surql)
+                && let Some(ref functions_surql) = resolved.functions_surql
+            {
+                let _ = new_schema.query(functions_surql.as_str()).await;
+            }
+            tracing::debug!("Executing analyzer surql on embedded DB");
+            let _ = new_schema
+                .query(analyzers_surql.as_str())
+                .await
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "Failed to execute analyzer surql on embedded DB");
+                });
+        }
+
         // Execute and check define statements
         let _ = new_schema.query(define_statements).await.map_err(|e| {
             EvenframeError::database(format!(
@@ -213,7 +233,7 @@ pub async fn export_schemas(
         .with_config()
         .versions(false)
         .accesses(true)
-        .analyzers(false)
+        .analyzers(true)
         .functions(false)
         .records(false)
         .params(false)
@@ -241,7 +261,7 @@ pub async fn export_schemas(
         .with_config()
         .versions(false)
         .accesses(true)
-        .analyzers(false)
+        .analyzers(true)
         .functions(false)
         .records(false)
         .params(false)
@@ -268,6 +288,137 @@ pub async fn export_schemas(
 }
 
 /// Setup backup and in-memory schemas from a remote database
+/// Keywords that end the column list of a `DEFINE INDEX` statement.
+const INDEX_CLAUSE_KEYWORDS: &[&str] = &[
+    "UNIQUE",
+    "COUNT",
+    "FULLTEXT",
+    "SEARCH",
+    "HNSW",
+    "DISKANN",
+    "COMMENT",
+    "CONCURRENTLY",
+];
+
+/// If `s` (after leading whitespace) starts with the whitespace-separated
+/// `keyword` (case-insensitive, followed by whitespace or end of input),
+/// return the remainder with leading whitespace trimmed.
+fn strip_keyword<'s>(s: &'s str, keyword: &str) -> Option<&'s str> {
+    let mut rest = s;
+    for word in keyword.split_whitespace() {
+        rest = rest.trim_start();
+        if !rest
+            .get(..word.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(word))
+        {
+            return None;
+        }
+        rest = &rest[word.len()..];
+        if !(rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+            return None;
+        }
+    }
+    Some(rest.trim_start())
+}
+
+/// Split off the first whitespace-delimited token, honouring backtick and
+/// `⟨…⟩` quoting.
+fn split_first_token(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    if s.is_empty() {
+        return None;
+    }
+    let end = if let Some(inner) = s.strip_prefix('`') {
+        inner.find('`')? + 2
+    } else if let Some(inner) = s.strip_prefix('⟨') {
+        inner.find('⟩')? + '⟨'.len_utf8() + '⟩'.len_utf8()
+    } else {
+        s.find(char::is_whitespace).unwrap_or(s.len())
+    };
+    Some((&s[..end], &s[end..]))
+}
+
+fn unquote_ident(token: &str) -> String {
+    token
+        .trim_matches('`')
+        .trim_start_matches('⟨')
+        .trim_end_matches('⟩')
+        .to_string()
+}
+
+/// Call `visit(byte_index, char)` for every char of `s` that is outside
+/// quotes and bracket nesting. `visit` returns `false` to stop early.
+fn for_each_top_level_char(s: &str, mut visit: impl FnMut(usize, char) -> bool) {
+    let mut quote: Option<char> = None;
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => quote = Some(c),
+            '⟨' => quote = Some('⟩'),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && !visit(i, c) => return,
+            _ => {}
+        }
+    }
+}
+
+/// Byte offset of the earliest top-level, whitespace-preceded occurrence of
+/// any of `keywords` (case-insensitive, whole word).
+fn find_top_level_keyword(s: &str, keywords: &[&str]) -> Option<usize> {
+    let mut found = None;
+    let mut prev_is_space = true;
+    for_each_top_level_char(s, |i, c| {
+        if prev_is_space && !c.is_whitespace() {
+            let rest = &s[i..];
+            let word_end = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            if keywords
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(&rest[..word_end]))
+            {
+                found = Some(i);
+                return false;
+            }
+        }
+        prev_is_space = c.is_whitespace();
+        true
+    });
+    found
+}
+
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for_each_top_level_char(s, |i, c| {
+        if c == ',' {
+            parts.push(&s[start..i]);
+            start = i + 1;
+        }
+        true
+    });
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Whether any `DEFINE ANALYZER` in `surql` uses a `FUNCTION fn::...`
+/// preprocessor, which must exist before the analyzer is defined.
+pub fn analyzers_reference_functions(surql: &str) -> bool {
+    surql.to_uppercase().contains("FUNCTION FN::")
+}
+
 pub async fn setup_backup_and_schemas(db: &Surreal<Client>) -> Result<(Surreal<Db>, Surreal<Db>)> {
     tracing::trace!("Creating database backup");
     let mut backup_stream = db.export(()).await.map_err(|e| {
@@ -430,6 +581,7 @@ impl<'a> SchemaImporter<'a> {
         let mut tables = BTreeMap::new();
         let edges = BTreeMap::new();
         let mut accesses = Vec::new();
+        let mut analyzers = Vec::new();
         let mut current_table: Option<String> = None;
         let mut current_table_statement: Option<String> = None;
         let mut current_fields: BTreeMap<String, FieldDefinition> = BTreeMap::new();
@@ -474,6 +626,12 @@ impl<'a> SchemaImporter<'a> {
             else if trimmed.starts_with("DEFINE ACCESS") {
                 if let Some(access_def) = Self::parse_access_definition(trimmed) {
                     accesses.push(access_def);
+                }
+            }
+            // Parse DEFINE ANALYZER statements
+            else if trimmed.starts_with("DEFINE ANALYZER") {
+                if let Some(analyzer_def) = Self::parse_analyzer_definition(trimmed) {
+                    analyzers.push(analyzer_def);
                 }
             }
             // Parse DEFINE EVENT statements
@@ -528,6 +686,7 @@ impl<'a> SchemaImporter<'a> {
             tables,
             edges,
             accesses,
+            analyzers,
         })
     }
 
@@ -1124,79 +1283,50 @@ impl<'a> SchemaImporter<'a> {
 
     /// Parse a DEFINE INDEX statement into (table_name, IndexDefinition)
     ///
-    /// Format: `DEFINE INDEX [OVERWRITE | IF NOT EXISTS] <name> ON [TABLE] <table> FIELDS|COLUMNS <col1>, <col2> [UNIQUE];`
-    fn parse_index_definition(statement: &str) -> Option<(String, IndexDefinition)> {
-        if !statement.starts_with("DEFINE INDEX") {
-            return None;
-        }
+    /// Format: `DEFINE INDEX [OVERWRITE | IF NOT EXISTS] <name> ON [TABLE] <table>
+    /// [FIELDS|COLUMNS <col1>, <col2>] [UNIQUE | COUNT .. | FULLTEXT .. | HNSW .. | DISKANN ..]
+    /// [COMMENT ..] [CONCURRENTLY];`
+    ///
+    /// Everything after the column list is kept verbatim (minus the trailing
+    /// `;`) in [`IndexDefinition::definition`]. Both sides of a comparison come
+    /// from SurrealDB exports, which normalize that clause, so a plain string
+    /// comparison detects changed index kinds and parameters.
+    pub(crate) fn parse_index_definition(statement: &str) -> Option<(String, IndexDefinition)> {
+        let statement = statement.trim().trim_end_matches(';').trim_end();
+        let after_define = strip_keyword(statement, "DEFINE INDEX")?;
+        let after_kind = strip_keyword(after_define, "OVERWRITE")
+            .or_else(|| strip_keyword(after_define, "IF NOT EXISTS"))
+            .unwrap_or(after_define);
 
-        let uppercase = statement.to_uppercase();
+        let (name_token, rest) = split_first_token(after_kind)?;
+        let index_name = unquote_ident(name_token);
 
-        // Extract index name: skip "DEFINE INDEX", then optional OVERWRITE / IF NOT EXISTS
-        let after_define = statement["DEFINE INDEX".len()..].trim();
-        let (name_and_rest, _) = if after_define.to_uppercase().starts_with("OVERWRITE") {
-            let rest = after_define["OVERWRITE".len()..].trim();
-            (rest, true)
-        } else if after_define.to_uppercase().starts_with("IF NOT EXISTS") {
-            let rest = after_define["IF NOT EXISTS".len()..].trim();
-            (rest, true)
-        } else {
-            (after_define, false)
+        let rest = strip_keyword(rest, "ON")?;
+        let rest = strip_keyword(rest, "TABLE").unwrap_or(rest);
+        let (table_token, rest) = split_first_token(rest)?;
+        let table_name = unquote_ident(table_token);
+
+        let (columns, definition) = match strip_keyword(rest, "FIELDS")
+            .or_else(|| strip_keyword(rest, "COLUMNS"))
+        {
+            Some(after_columns) => {
+                let columns_end = find_top_level_keyword(after_columns, INDEX_CLAUSE_KEYWORDS)
+                    .unwrap_or(after_columns.len());
+                let columns: Vec<String> = split_top_level_commas(&after_columns[..columns_end])
+                    .into_iter()
+                    .map(|c| c.trim().trim_matches('`').to_string())
+                    .filter(|c| !c.is_empty())
+                    .collect();
+                if columns.is_empty() {
+                    return None;
+                }
+                (columns, after_columns[columns_end..].trim())
+            }
+            // COUNT indexes have no columns
+            None => (Vec::new(), rest.trim()),
         };
 
-        let index_name = name_and_rest
-            .split_whitespace()
-            .next()?
-            .trim_matches('`')
-            .to_string();
-
-        // Extract table name after "ON TABLE" or "ON"
-        let on_pos = uppercase.find(" ON ")?;
-        let after_on = statement[on_pos + 4..].trim();
-        let after_on_upper = after_on.to_uppercase();
-        let table_part = if after_on_upper.starts_with("TABLE ") {
-            after_on["TABLE ".len()..].trim()
-        } else {
-            after_on
-        };
-        let table_name = table_part
-            .split_whitespace()
-            .next()?
-            .trim_matches('`')
-            .trim_end_matches(';')
-            .to_string();
-
-        // Extract columns after "FIELDS" or "COLUMNS"
-        let columns_keyword_pos = uppercase
-            .find(" FIELDS ")
-            .or_else(|| uppercase.find(" COLUMNS "))?;
-        let keyword_len = if uppercase[columns_keyword_pos..].starts_with(" FIELDS ") {
-            " FIELDS ".len()
-        } else {
-            " COLUMNS ".len()
-        };
-        let after_columns = statement[columns_keyword_pos + keyword_len..].trim();
-
-        // Columns end at UNIQUE, SEARCH, COMMENT, or semicolon
-        let columns_end = after_columns
-            .to_uppercase()
-            .find(" UNIQUE")
-            .or_else(|| after_columns.to_uppercase().find(" SEARCH"))
-            .or_else(|| after_columns.to_uppercase().find(" COMMENT"))
-            .unwrap_or(after_columns.len());
-        let columns_str = after_columns[..columns_end].trim().trim_end_matches(';');
-
-        let columns: Vec<String> = columns_str
-            .split(',')
-            .map(|c| c.trim().trim_matches('`').to_string())
-            .filter(|c| !c.is_empty())
-            .collect();
-
-        if columns.is_empty() {
-            return None;
-        }
-
-        let unique = uppercase.contains(" UNIQUE");
+        let unique = strip_keyword(definition, "UNIQUE").is_some();
 
         Some((
             table_name,
@@ -1204,8 +1334,31 @@ impl<'a> SchemaImporter<'a> {
                 name: index_name,
                 columns,
                 unique,
+                definition: definition.to_string(),
             },
         ))
+    }
+
+    /// Parse a DEFINE ANALYZER statement. The stored statement has the
+    /// `OVERWRITE` / `IF NOT EXISTS` modifier and trailing `;` stripped so
+    /// exports from different databases compare equal.
+    pub(crate) fn parse_analyzer_definition(statement: &str) -> Option<AnalyzerDefinition> {
+        let statement = statement.trim().trim_end_matches(';').trim_end();
+        let after_define = strip_keyword(statement, "DEFINE ANALYZER")?;
+        let after_kind = strip_keyword(after_define, "OVERWRITE")
+            .or_else(|| strip_keyword(after_define, "IF NOT EXISTS"))
+            .unwrap_or(after_define);
+        let (name_token, rest) = split_first_token(after_kind)?;
+        let rest = rest.trim();
+        let normalized = if rest.is_empty() {
+            format!("DEFINE ANALYZER {name_token}")
+        } else {
+            format!("DEFINE ANALYZER {name_token} {rest}")
+        };
+        Some(AnalyzerDefinition {
+            name: unquote_ident(name_token),
+            statement: normalized,
+        })
     }
 
     /// Parse a DEFINE ACCESS statement
@@ -1385,6 +1538,130 @@ impl<'a> SchemaImporter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_index(stmt: &str) -> (String, IndexDefinition) {
+        SchemaImporter::parse_index_definition(stmt)
+            .unwrap_or_else(|| panic!("failed to parse: {stmt}"))
+    }
+
+    #[test]
+    fn parse_index_definitions_from_surrealdb_export() {
+        // Statements as written by a SurrealDB 3.2 export.
+        let (table, idx) = parse_index(
+            "DEFINE INDEX post_search ON post FIELDS body FULLTEXT ANALYZER english \
+             BM25(1.2,0.75) HIGHLIGHTS COMMENT 'full-text search';",
+        );
+        assert_eq!(table, "post");
+        assert_eq!(idx.name, "post_search");
+        assert_eq!(idx.columns, vec!["body"]);
+        assert!(!idx.unique);
+        assert_eq!(
+            idx.definition,
+            "FULLTEXT ANALYZER english BM25(1.2,0.75) HIGHLIGHTS COMMENT 'full-text search'"
+        );
+
+        let (_, idx) = parse_index(
+            "DEFINE INDEX idx_post_embedding ON post FIELDS embedding HNSW DIMENSION 3 \
+             DIST COSINE TYPE F32 EFC 100 M 8 M0 16 LM 0.48089834696298783f;",
+        );
+        assert_eq!(idx.columns, vec!["embedding"]);
+        assert!(idx.definition.starts_with("HNSW DIMENSION 3"));
+
+        let (_, idx) = parse_index(
+            "DEFINE INDEX post_ann ON post FIELDS embedding DISKANN DIMENSION 3 DIST EUCLIDEAN \
+             TYPE F32 DEGREE 16 L_BUILD 50 ALPHA 1.2f CONCURRENTLY;",
+        );
+        assert!(idx.definition.ends_with("CONCURRENTLY"));
+
+        let (_, idx) =
+            parse_index("DEFINE INDEX idx_post_tags_created_at ON post FIELDS tags.*, created_at;");
+        assert_eq!(idx.columns, vec!["tags.*", "created_at"]);
+        assert_eq!(idx.definition, "");
+
+        let (table, idx) = parse_index("DEFINE INDEX idx_post_count ON post COUNT;");
+        assert_eq!(table, "post");
+        assert!(idx.columns.is_empty());
+        assert_eq!(idx.definition, "COUNT");
+
+        let (_, idx) =
+            parse_index("DEFINE INDEX post_published_count ON post COUNT WHERE published = true;");
+        assert!(idx.columns.is_empty());
+        assert_eq!(idx.definition, "COUNT WHERE published = true");
+
+        let (_, idx) = parse_index("DEFINE INDEX idx_post_slug ON post FIELDS slug UNIQUE;");
+        assert!(idx.unique);
+        assert_eq!(idx.definition, "UNIQUE");
+    }
+
+    #[test]
+    fn parse_index_definition_generated_forms() {
+        // OVERWRITE / IF NOT EXISTS, ON TABLE, COLUMNS, backtick-quoted names.
+        let (table, idx) = parse_index(
+            "DEFINE INDEX OVERWRITE idx_reaction_user_message ON TABLE reaction \
+             FIELDS user, message UNIQUE;",
+        );
+        assert_eq!(table, "reaction");
+        assert_eq!(idx.name, "idx_reaction_user_message");
+        assert_eq!(idx.columns, vec!["user", "message"]);
+        assert!(idx.unique);
+
+        let (table, idx) =
+            parse_index("DEFINE INDEX IF NOT EXISTS `my idx` ON `my table` COLUMNS `a`, b");
+        assert_eq!(table, "my table");
+        assert_eq!(idx.name, "my idx");
+        assert_eq!(idx.columns, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn parse_index_definition_ignores_keywords_inside_strings() {
+        // `UNIQUE` inside the comment must neither end the column list early
+        // nor mark the index unique.
+        let (_, idx) = parse_index(
+            "DEFINE INDEX idx_t_a ON t FIELDS a COMMENT 'not UNIQUE, uses FULLTEXT soon';",
+        );
+        assert_eq!(idx.columns, vec!["a"]);
+        assert!(!idx.unique);
+        assert_eq!(idx.definition, "COMMENT 'not UNIQUE, uses FULLTEXT soon'");
+
+        // A column literally named like a keyword prefix is not a keyword.
+        let (_, idx) = parse_index("DEFINE INDEX idx_t_u ON t FIELDS unique_code, counter;");
+        assert_eq!(idx.columns, vec!["unique_code", "counter"]);
+        assert!(!idx.unique);
+    }
+
+    #[test]
+    fn parse_analyzer_definitions() {
+        let a = SchemaImporter::parse_analyzer_definition(
+            "DEFINE ANALYZER english TOKENIZERS BLANK,CLASS FILTERS LOWERCASE, SNOWBALL(ENGLISH);",
+        )
+        .unwrap();
+        assert_eq!(a.name, "english");
+        assert_eq!(
+            a.statement,
+            "DEFINE ANALYZER english TOKENIZERS BLANK,CLASS FILTERS LOWERCASE, SNOWBALL(ENGLISH)"
+        );
+
+        let b = SchemaImporter::parse_analyzer_definition(
+            "DEFINE ANALYZER OVERWRITE english TOKENIZERS BLANK,CLASS FILTERS LOWERCASE, SNOWBALL(ENGLISH)",
+        )
+        .unwrap();
+        assert_eq!(a, b, "OVERWRITE and trailing `;` must not affect equality");
+
+        let bare = SchemaImporter::parse_analyzer_definition("DEFINE ANALYZER IF NOT EXISTS bare;")
+            .unwrap();
+        assert_eq!(bare.name, "bare");
+        assert_eq!(bare.statement, "DEFINE ANALYZER bare");
+    }
+
+    #[test]
+    fn detects_function_preprocessors_in_analyzers() {
+        assert!(analyzers_reference_functions(
+            "DEFINE ANALYZER a FUNCTION fn::strip TOKENIZERS blank;"
+        ));
+        assert!(!analyzers_reference_functions(
+            "DEFINE ANALYZER a TOKENIZERS blank;"
+        ));
+    }
 
     #[test]
     fn parse_computed_field_definition() {

@@ -1,0 +1,5 @@
+error: index `name` must be a valid SurrealQL identifier (letters, digits and `_`, not starting with a digit)
+ --> tests/ui/fail/index_invalid_name.rs:4:16
+  |
+4 | #[index(name = "1bad-name", fields(body))]
+  |                ^^^^^^^^^^^

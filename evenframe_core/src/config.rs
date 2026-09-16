@@ -344,6 +344,11 @@ impl EvenframeConfig {
                 Some(Self::load_surql_from_path(&project_root, &func.path)?);
         }
 
+        if let Some(ref analyzers) = config.schemasync.database.analyzers {
+            config.schemasync.database.resolved.analyzers_surql =
+                Some(Self::load_surql_from_path(&project_root, &analyzers.path)?);
+        }
+
         info!("Configuration loaded successfully");
         debug!(
             "Schemasync enabled: {}, Typesync arktype: {}, effect: {}, macroforge: {}",
@@ -537,6 +542,9 @@ impl EvenframeConfig {
         }
         if let Some(ref surql) = resolved.functions_surql {
             resolved.functions_surql = Some(Self::substitute_env_vars(surql)?);
+        }
+        if let Some(ref surql) = resolved.analyzers_surql {
+            resolved.analyzers_surql = Some(Self::substitute_env_vars(surql)?);
         }
 
         let toml_string = toml::to_string(&config).map_err(|e| {

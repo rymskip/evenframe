@@ -1,0 +1,5 @@
+error: only one index kind (`unique`, `count`, `fulltext`, `hnsw`, `diskann`) is allowed per #[index(...)]
+ --> tests/ui/fail/index_two_kinds.rs:4:31
+  |
+4 | #[index(fields(body), unique, fulltext(analyzer = "en"))]
+  |                               ^^^^^^^^

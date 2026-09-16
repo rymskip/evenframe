@@ -116,37 +116,17 @@ pub fn generate_define_statements(
         }
     }
 
-    // Generate DEFINE INDEX statements for unique fields
-    for table_field in &table_config.struct_config.fields {
-        if table_field.unique {
-            debug!(
-                table_name = %table_name,
-                field_name = %table_field.field_name,
-                "Generating unique index for field"
-            );
-            output.push_str(&format!(
-                "DEFINE INDEX OVERWRITE idx_{}_{} ON TABLE {} FIELDS {} UNIQUE;\n",
-                table_name, table_field.field_name, table_name, table_field.field_name
-            ));
-        }
-    }
-
-    // Generate DEFINE INDEX statements for struct-level #[index(...)] attributes
-    // (composite or non-unique single-column indexes).
-    for index in &table_config.indexes {
-        let joined_name = index.fields.join("_");
-        let joined_fields = index.fields.join(", ");
-        let unique_kw = if index.unique { " UNIQUE" } else { "" };
+    // Generate DEFINE INDEX statements for field-level #[unique] and
+    // struct-level #[index(...)] attributes.
+    for index in table_config.all_indexes(table_name) {
         debug!(
             table_name = %table_name,
-            fields = %joined_fields,
-            unique = index.unique,
-            "Generating struct-level index"
+            fields = ?index.fields,
+            kind = ?index.kind,
+            "Generating index"
         );
-        output.push_str(&format!(
-            "DEFINE INDEX OVERWRITE idx_{}_{} ON TABLE {} FIELDS {}{};\n",
-            table_name, joined_name, table_name, joined_fields, unique_kw
-        ));
+        output.push_str(&index.define_statement(table_name));
+        output.push('\n');
     }
 
     if !table_config.events.is_empty() {
@@ -485,7 +465,7 @@ mod tests {
     #[test]
     fn generate_define_statements_includes_composite_index() {
         dotenv::dotenv().ok();
-        use crate::schemasync::IndexConfig;
+        use crate::schemasync::{Bm25, IndexConfig, IndexKind};
 
         let make_field = |name: &str| StructField {
             field_name: name.to_string(),
@@ -543,11 +523,28 @@ mod tests {
             indexes: vec![
                 IndexConfig {
                     fields: vec!["user".to_string(), "message".to_string()],
-                    unique: true,
+                    name: None,
+                    kind: IndexKind::Unique,
+                    comment: None,
+                    concurrently: false,
                 },
                 IndexConfig {
                     fields: vec!["created_at".to_string()],
-                    unique: false,
+                    name: None,
+                    kind: IndexKind::Standard,
+                    comment: None,
+                    concurrently: false,
+                },
+                IndexConfig {
+                    fields: vec!["message".to_string()],
+                    name: Some("reaction_search".to_string()),
+                    kind: IndexKind::FullText {
+                        analyzer: Some("en".to_string()),
+                        bm25: Some(Bm25::Default),
+                        highlights: true,
+                    },
+                    comment: None,
+                    concurrently: true,
                 },
             ],
             output_override: None,
@@ -579,6 +576,13 @@ mod tests {
                 "DEFINE INDEX OVERWRITE idx_reaction_created_at ON TABLE reaction FIELDS created_at;"
             ),
             "missing single-column non-unique index line; output was:\n{}",
+            statements
+        );
+        assert!(
+            statements.contains(
+                "DEFINE INDEX OVERWRITE reaction_search ON TABLE reaction FIELDS message FULLTEXT ANALYZER en BM25 HIGHLIGHTS CONCURRENTLY;"
+            ),
+            "missing fulltext index line; output was:\n{}",
             statements
         );
     }

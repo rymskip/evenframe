@@ -19,8 +19,8 @@
     "mock_generation_config": null,
     "events": [],
     "indexes": [
-      { "fields": ["user", "message"], "unique": true },
-      { "fields": ["created_at"], "unique": false }
+      { "fields": ["user", "message"], "kind": { "type": "unique" } },
+      { "fields": ["created_at"], "kind": { "type": "standard" } }
     ]
   },
   "query_details": {},
