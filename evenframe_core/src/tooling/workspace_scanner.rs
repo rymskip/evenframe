@@ -16,14 +16,16 @@ use tracing::{debug, info, trace, warn};
 /// Every `Cargo.toml` under `root`, sorted, skipping anything a
 /// `.gitignore` excludes (such as `target/`). Like macroforge's scanner,
 /// hidden entries are walked and only the project's own `.gitignore` files
-/// apply (not the global or `.git/info/exclude` ones); unlike it, they apply
-/// even outside a git repository.
+/// apply (not the global, `.git/info/exclude`, or any above `root` — a project
+/// checked out inside another one's ignored directory scans normally); unlike
+/// it, they apply even outside a git repository.
 ///
 /// `include_files` entries don't go through this walk: they are read
 /// directly, so listing a gitignored path there still scans it.
 pub fn find_manifests(root: &Path) -> Vec<PathBuf> {
     let mut manifests: Vec<PathBuf> = WalkBuilder::new(root)
         .hidden(false)
+        .parents(false)
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
