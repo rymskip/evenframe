@@ -1,0 +1,5 @@
+error: `owner` is a graph edge (`#[edge]`), which isn't stored on the table, so it can't be indexed
+ --> tests/ui/fail/indexes_on_edge_field.rs:9:27
+  |
+9 | #[indexes(by_owner(fields(owner, title), unique))]
+  |                           ^^^^^

@@ -1,0 +1,5 @@
+error: a `fulltext` index covers exactly one path; declare one `#[indexes(...)]` entry per path
+  --> tests/ui/fail/indexes_nested_two_paths.rs:10:27
+   |
+10 | #[indexes(customer_search(fields("customer.first_name", "customer.last_name"), fulltext))]
+   |                           ^^^^^^

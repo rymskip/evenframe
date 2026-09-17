@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "evenframe_version": "0.3.0",
+  "evenframe_version": "0.3.1",
   "inputs": {
     "Cargo.toml": "e2a458370bebf7159d0ef9246d676b43508a6bbf346beddadde769ce825f9e1e",
     "evenframe.toml": "d5ff121357eac1bd85d07847f9f18a3bda860b7c3b3bcd7f5ce3e1ce2894df69",
@@ -11,8 +11,8 @@
     "src/lib.rs": "950b8d6afd7889e2879d08b3296c1f01ae654a637eae7c8d3d0336bce0184a40",
     "src/main.rs": "7b3f18f2c3a6f55655b82c34d2ad955216fb0ce85c8d1a60ecbea7943ae03c4a",
     "src/models/auth.rs": "421d496ab89f215ce1be0fcc465c9490bdb6833a408bbe3f2469d5e9529651ec",
-    "src/models/blog.rs": "dfb3a57e6fd715996b60405b40ce582e810ce7445853d63db2d3e75b3e95e906",
-    "src/models/ecommerce.rs": "1e24d835bd341f4404a737641702ef9e6be22982f6d030cb85b671cd0917bef9",
+    "src/models/blog.rs": "966cefe23f7935494280294fd70922622dd47417180272b230043e2b814d27d8",
+    "src/models/ecommerce.rs": "0bc179ea8d5f5b2a2aa1e1ecfa802f8b9552918f6fde3dd25f8019b5bff28e36",
     "src/models/edge_cases.rs": "39993f0c0dd3077f0012efdc311e7d4b9497bb4935eecda410c0822274e435c0",
     "src/models/extreme_edge_cases.rs": "4ac082049445a87da84e59a042feb00fbb3808230c4f50216a71803aa92612dc",
     "src/models/mod.rs": "c0786903cab606c87cea938f2dde1e45c59211ceaf0c2bee1cbb25b34222ac70",
@@ -10117,7 +10117,34 @@
         "plugin": null
       },
       "events": [],
-      "indexes": [],
+      "indexes": [
+        {
+          "fields": [
+            "items.*.product_id",
+            "created_at"
+          ],
+          "name": "order_items_product",
+          "kind": {
+            "type": "standard"
+          },
+          "comment": "orders containing a product, newest first",
+          "concurrently": false
+        },
+        {
+          "fields": [
+            "shipping_address.city"
+          ],
+          "name": "order_shipping_city_search",
+          "kind": {
+            "type": "full_text",
+            "analyzer": "blog_english",
+            "bm25": "default",
+            "highlights": false
+          },
+          "comment": "search orders by shipping city",
+          "concurrently": false
+        }
+      ],
       "output_override": null
     },
     "outer_with_nested_validator": {
@@ -11365,10 +11392,10 @@
       "indexes": [
         {
           "fields": [
-            "author",
-            "slug"
+            "slug",
+            "published"
           ],
-          "name": "post_author_slug",
+          "name": "post_slug_published",
           "kind": {
             "type": "unique"
           },
@@ -11377,27 +11404,14 @@
         },
         {
           "fields": [
-            "author",
             "published",
             "published_at"
           ],
-          "name": "post_author_published",
+          "name": "post_published_at",
           "kind": {
             "type": "standard"
           },
-          "comment": null,
-          "concurrently": false
-        },
-        {
-          "fields": [
-            "tags.*",
-            "created_at"
-          ],
-          "name": "post_tags_created",
-          "kind": {
-            "type": "standard"
-          },
-          "comment": "posts by tag, newest first",
+          "comment": "published posts by date",
           "concurrently": false
         },
         {

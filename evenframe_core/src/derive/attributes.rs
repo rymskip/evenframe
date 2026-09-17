@@ -14,7 +14,7 @@ use crate::{
     },
     types::{EnumRepresentation, StructField},
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::TryFrom;
 
 // Remove unused imports - these are only used in the macro implementation, not generated code
@@ -279,11 +279,62 @@ impl Parse for IndexFieldEntry {
 }
 
 const INDEX_ATTR_HELP: &str = "expected one of `fields(...)`, `unique`, `count`, \
-     `comment = \"...\"` or `concurrently` in an #[indexes(...)] entry";
+     `fulltext(...)`, `hnsw(...)`, `diskann(...)`, `comment = \"...\"` or `concurrently` \
+     in an #[indexes(...)] entry";
 
-/// Field-level index attributes. Each covers exactly one field, which is why
-/// they live on the field rather than in a struct-level `#[indexes(...)]`.
+/// Index kinds that cover exactly one field or path. On a whole field they are
+/// field attributes; on a nested path they are `#[indexes(...)]` entries.
 pub const FIELD_INDEX_ATTRIBUTES: [&str; 3] = ["fulltext", "hnsw", "diskann"];
+
+/// Where an index kind's arguments come from: a field attribute
+/// (`#[hnsw(...)]`) or a kind inside an `#[indexes(...)]` entry (`hnsw(...)`).
+enum IndexKindArgs<'a, 'b> {
+    Attribute(&'a Attribute),
+    Entry(&'a syn::meta::ParseNestedMeta<'b>),
+}
+
+impl IndexKindArgs<'_, '_> {
+    /// Written without arguments (`#[fulltext]`, `fulltext`)
+    fn is_bare(&self) -> bool {
+        match self {
+            Self::Attribute(attr) => matches!(attr.meta, Meta::Path(_)),
+            Self::Entry(meta) => !meta.input.peek(syn::token::Paren),
+        }
+    }
+
+    fn span(&self) -> proc_macro2::Span {
+        match self {
+            Self::Attribute(attr) => attr.path().span(),
+            Self::Entry(meta) => meta.path.span(),
+        }
+    }
+
+    /// The kind as written, for error messages
+    fn describe(&self, kind: &str) -> String {
+        match self {
+            Self::Attribute(_) => format!("#[{kind}(...)]"),
+            Self::Entry(_) => format!("`{kind}(...)`"),
+        }
+    }
+
+    /// An example of the kind with `args`, in backticks
+    fn example(&self, kind: &str, args: &str) -> String {
+        match self {
+            Self::Attribute(_) => format!("`#[{kind}({args})]`"),
+            Self::Entry(_) => format!("`{kind}({args})`"),
+        }
+    }
+
+    fn parse_nested(
+        &self,
+        logic: impl FnMut(syn::meta::ParseNestedMeta) -> syn::Result<()>,
+    ) -> syn::Result<()> {
+        match self {
+            Self::Attribute(attr) => attr.parse_nested_meta(logic),
+            Self::Entry(meta) => meta.parse_nested_meta(logic),
+        }
+    }
+}
 
 fn index_lit_str(meta: &syn::meta::ParseNestedMeta) -> syn::Result<LitStr> {
     meta.value()?.parse::<LitStr>()
@@ -351,11 +402,29 @@ struct IndexModifiers {
     name: Option<String>,
     comment: Option<String>,
     concurrently: bool,
+    /// Set inside an `#[indexes(...)]` entry, whose name is the index name
+    entry_name: Option<String>,
 }
 
 impl IndexModifiers {
+    /// The modifiers accepted here, for error messages
+    fn help(&self) -> &'static str {
+        if self.entry_name.is_some() {
+            "`comment = \"...\"` or `concurrently`"
+        } else {
+            "`name = \"...\"`, `comment = \"...\"` or `concurrently`"
+        }
+    }
+
     /// Consume `meta` if it is a modifier; returns whether it was one.
     fn accept(&mut self, meta: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
+        if let Some(entry_name) = &self.entry_name
+            && meta.path.is_ident("name")
+        {
+            return Err(meta.error(format!(
+                "the entry name `{entry_name}` is the index name; `name = ...` isn't needed here"
+            )));
+        }
         if meta.path.is_ident("name") {
             reject_duplicate(&self.name, meta, "name")?;
             let lit = index_lit_str(meta)?;
@@ -379,22 +448,23 @@ impl IndexModifiers {
     }
 }
 
-fn parse_fulltext_attribute(
-    attr: &Attribute,
+fn parse_fulltext_kind(
+    args: &IndexKindArgs,
     modifiers: &mut IndexModifiers,
 ) -> syn::Result<IndexKind> {
     let mut analyzer: Option<String> = None;
     let mut bm25: Option<Bm25> = None;
     let mut highlights = false;
     // A bare `#[fulltext]` uses SurrealDB's defaults
-    if matches!(attr.meta, Meta::Path(_)) {
+    if args.is_bare() {
         return Ok(IndexKind::FullText {
             analyzer,
             bm25,
             highlights,
         });
     }
-    attr.parse_nested_meta(|inner| {
+    let modifier_help = modifiers.help();
+    args.parse_nested(|inner| {
         if modifiers.accept(&inner)? {
             return Ok(());
         }
@@ -440,11 +510,11 @@ fn parse_fulltext_attribute(
         } else if inner.path.is_ident("highlights") {
             highlights = true;
         } else {
-            return Err(inner.error(
+            return Err(inner.error(format!(
                 "expected one of `analyzer = \"...\"`, `bm25`, `bm25(k1 = .., b = ..)`, \
-                 `highlights`, `name = \"...\"`, `comment = \"...\"` or `concurrently` \
-                 inside #[fulltext(...)]",
-            ));
+                 `highlights`, {modifier_help} inside {}",
+                args.describe("fulltext")
+            )));
         }
         Ok(())
     })?;
@@ -455,10 +525,7 @@ fn parse_fulltext_attribute(
     })
 }
 
-fn parse_hnsw_attribute(
-    attr: &Attribute,
-    modifiers: &mut IndexModifiers,
-) -> syn::Result<IndexKind> {
+fn parse_hnsw_kind(args: &IndexKindArgs, modifiers: &mut IndexModifiers) -> syn::Result<IndexKind> {
     let mut dimension: Option<u16> = None;
     let mut dist: Option<VectorDistance> = None;
     let mut vector_type: Option<VectorType> = None;
@@ -469,8 +536,9 @@ fn parse_hnsw_attribute(
     let mut extend_candidates = false;
     let mut keep_pruned_connections = false;
     let mut hashed_vector = false;
-    if !matches!(attr.meta, Meta::Path(_)) {
-        attr.parse_nested_meta(|inner| {
+    let modifier_help = modifiers.help();
+    if !args.is_bare() {
+        args.parse_nested(|inner| {
             if modifiers.accept(&inner)? {
                 return Ok(());
             }
@@ -506,19 +574,24 @@ fn parse_hnsw_attribute(
             } else if inner.path.is_ident("hashed_vector") {
                 hashed_vector = true;
             } else {
-                return Err(inner.error(
+                return Err(inner.error(format!(
                     "expected one of `dimension`, `dist`, `type`, `efc`, `m`, `m0`, `lm`, \
                      `extend_candidates`, `keep_pruned_connections`, `hashed_vector`, \
-                     `name = \"...\"`, `comment = \"...\"` or `concurrently` inside #[hnsw(...)]",
-                ));
+                     {modifier_help} inside {}",
+                    args.describe("hnsw")
+                )));
             }
             Ok(())
         })?;
     }
     let dimension = dimension.ok_or_else(|| {
         syn::Error::new(
-            attr.path().span(),
-            "#[hnsw(...)] requires `dimension = <n>`, e.g. `#[hnsw(dimension = 1536)]`",
+            args.span(),
+            format!(
+                "{} requires `dimension = <n>`, e.g. {}",
+                args.describe("hnsw"),
+                args.example("hnsw", "dimension = 1536")
+            ),
         )
     })?;
     Ok(IndexKind::Hnsw {
@@ -535,8 +608,8 @@ fn parse_hnsw_attribute(
     })
 }
 
-fn parse_diskann_attribute(
-    attr: &Attribute,
+fn parse_diskann_kind(
+    args: &IndexKindArgs,
     modifiers: &mut IndexModifiers,
 ) -> syn::Result<IndexKind> {
     let mut dimension: Option<u16> = None;
@@ -546,8 +619,9 @@ fn parse_diskann_attribute(
     let mut l_build: Option<u32> = None;
     let mut alpha: Option<f64> = None;
     let mut hashed_vector = false;
-    if !matches!(attr.meta, Meta::Path(_)) {
-        attr.parse_nested_meta(|inner| {
+    let modifier_help = modifiers.help();
+    if !args.is_bare() {
+        args.parse_nested(|inner| {
             if modifiers.accept(&inner)? {
                 return Ok(());
             }
@@ -594,19 +668,23 @@ fn parse_diskann_attribute(
             } else if inner.path.is_ident("hashed_vector") {
                 hashed_vector = true;
             } else {
-                return Err(inner.error(
+                return Err(inner.error(format!(
                     "expected one of `dimension`, `dist`, `type`, `degree`, `l_build`, `alpha`, \
-                     `hashed_vector`, `name = \"...\"`, `comment = \"...\"` or `concurrently` \
-                     inside #[diskann(...)]",
-                ));
+                     `hashed_vector`, {modifier_help} inside {}",
+                    args.describe("diskann")
+                )));
             }
             Ok(())
         })?;
     }
     let dimension = dimension.ok_or_else(|| {
         syn::Error::new(
-            attr.path().span(),
-            "#[diskann(...)] requires `dimension = <n>`, e.g. `#[diskann(dimension = 1536)]`",
+            args.span(),
+            format!(
+                "{} requires `dimension = <n>`, e.g. {}",
+                args.describe("diskann"),
+                args.example("diskann", "dimension = 1536")
+            ),
         )
     })?;
     if let (
@@ -651,6 +729,50 @@ fn parse_unique_attribute(
 /// A parsed index and the span its problems are reported on.
 pub type SpannedIndex = (IndexConfig, proc_macro2::Span);
 
+/// What index validation needs to know about one struct field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexableField {
+    /// `#[edge(...)]` fields are graph edges, not columns on the table
+    pub is_edge: bool,
+    /// `Option<T>` is stored as `null | T`
+    pub is_optional: bool,
+}
+
+/// The named fields of a struct keyed by name (any `r#` prefix stripped), for
+/// [`parse_index_attributes`].
+pub fn indexable_fields<'a>(
+    fields: impl IntoIterator<Item = &'a syn::Field>,
+) -> BTreeMap<String, IndexableField> {
+    fields
+        .into_iter()
+        .filter_map(|field| {
+            let name = field.ident.as_ref()?.to_string();
+            let is_optional = matches!(
+                &field.ty,
+                syn::Type::Path(path)
+                    if path.path.segments.last().is_some_and(|s| s.ident == "Option")
+            );
+            Some((
+                name.trim_start_matches("r#").to_string(),
+                IndexableField {
+                    is_edge: field.attrs.iter().any(|a| a.path().is_ident("edge")),
+                    is_optional,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn edge_index_error(span: proc_macro2::Span, field: &str) -> syn::Error {
+    syn::Error::new(
+        span,
+        format!(
+            "`{field}` is a graph edge (`#[edge]`), which isn't stored on the table, \
+             so it can't be indexed"
+        ),
+    )
+}
+
 /// Parses the field-level index attributes (`#[unique]`, `#[fulltext(...)]`,
 /// `#[hnsw(...)]`, `#[diskann(...)]`) on the field named `field_name` (with
 /// any `r#` prefix already stripped) into one `IndexConfig` each.
@@ -675,6 +797,7 @@ pub fn parse_field_index_attributes(
 ) -> Result<Vec<SpannedIndex>, syn::Error> {
     let mut indexes = Vec::new();
     let mut seen_kinds = BTreeSet::new();
+    let is_edge = attrs.iter().any(|a| a.path().is_ident("edge"));
 
     for attr in attrs {
         let Some(kind_name) = ["unique", "fulltext", "hnsw", "diskann"]
@@ -683,6 +806,9 @@ pub fn parse_field_index_attributes(
         else {
             continue;
         };
+        if is_edge {
+            return Err(edge_index_error(attr.path().span(), field_name));
+        }
         if !seen_kinds.insert(kind_name) {
             return Err(syn::Error::new(
                 attr.path().span(),
@@ -693,9 +819,9 @@ pub fn parse_field_index_attributes(
         let mut modifiers = IndexModifiers::default();
         let kind = match kind_name {
             "unique" => parse_unique_attribute(attr, &mut modifiers)?,
-            "fulltext" => parse_fulltext_attribute(attr, &mut modifiers)?,
-            "hnsw" => parse_hnsw_attribute(attr, &mut modifiers)?,
-            _ => parse_diskann_attribute(attr, &mut modifiers)?,
+            "fulltext" => parse_fulltext_kind(&IndexKindArgs::Attribute(attr), &mut modifiers)?,
+            "hnsw" => parse_hnsw_kind(&IndexKindArgs::Attribute(attr), &mut modifiers)?,
+            _ => parse_diskann_kind(&IndexKindArgs::Attribute(attr), &mut modifiers)?,
         };
 
         indexes.push((
@@ -728,29 +854,33 @@ pub fn find_duplicate_index_name(
 }
 
 const INDEXES_EXAMPLE: &str = "#[indexes(\n    user_message(fields(user, message), unique),\n    \
-     active_count(count(where = \"active = true\")),\n)]";
+     active_count(count(where = \"active = true\")),\n    \
+     customer_first_name(fields(\"customer.first_name\"), fulltext(analyzer = \"en\")),\n)]";
 
 /// Parses the struct-level `#[indexes(...)]` attribute into one
 /// `IndexConfig` per entry. Each entry is a list named after the index, and
-/// every `fields(...)` entry must be rooted at a real struct field
-/// (`known_fields` is the snake-cased field name set with any `r#` prefix
-/// stripped).
+/// every `fields(...)` entry must be rooted at a struct field stored on the
+/// table (`known_fields`, built with [`indexable_fields`]).
 ///
 /// All struct-level indexes live in one attribute, and every item sits under
 /// its (unique) index name, so `clippy::duplicated_attributes` can't fire.
-/// Single-field UNIQUE, FULLTEXT, HNSW and DISKANN indexes are declared on
-/// the field instead; see [`parse_field_index_attributes`].
+/// UNIQUE, FULLTEXT, HNSW and DISKANN indexes on a whole field are declared on
+/// the field instead; see [`parse_field_index_attributes`]. FULLTEXT, HNSW and
+/// DISKANN entries here take exactly one nested path, which a field attribute
+/// can't express.
 ///
 /// ```ignore
 /// #[indexes(
 ///     user_message(fields(user, message), unique),
 ///     recent(fields("tags.*", created_at), concurrently),
 ///     active_count(count(where = "active = true"), comment = "..."),
+///     customer_first_name(fields("customer.first_name"), fulltext(analyzer = "en", bm25)),
+///     chunk_vectors(fields("chunk.embedding"), hnsw(dimension = 768, dist = "cosine")),
 /// )]
 /// ```
 pub fn parse_index_attributes(
     attrs: &[Attribute],
-    known_fields: &BTreeSet<String>,
+    known_fields: &BTreeMap<String, IndexableField>,
 ) -> Result<Vec<SpannedIndex>, syn::Error> {
     if let Some(old) = attrs.iter().find(|a| a.path().is_ident("index")) {
         return Err(syn::Error::new(
@@ -802,31 +932,27 @@ pub fn parse_index_attributes(
 fn parse_index_entry(
     entry: &syn::meta::ParseNestedMeta,
     name: String,
-    known_fields: &BTreeSet<String>,
+    known_fields: &BTreeMap<String, IndexableField>,
 ) -> syn::Result<IndexConfig> {
     let mut fields: Option<(Vec<IndexFieldEntry>, proc_macro2::Span)> = None;
     let mut kind: Option<IndexKind> = None;
-    let mut modifiers = IndexModifiers::default();
+    let mut modifiers = IndexModifiers {
+        name: None,
+        comment: None,
+        concurrently: false,
+        entry_name: Some(name.clone()),
+    };
 
     entry.parse_nested_meta(|meta| {
-        if let Some(field_kind) = FIELD_INDEX_ATTRIBUTES
+        let is_kind = ["unique", "count"]
             .iter()
-            .find(|k| meta.path.is_ident(k))
-        {
-            return Err(meta.error(format!(
-                "`{field_kind}` indexes cover a single field and are declared on it: \
-                 move this to `#[{field_kind}(...)]` on the field"
-            )));
-        }
-        if meta.path.is_ident("name") {
-            return Err(meta.error(format!(
-                "the entry name `{name}` is the index name; `name = ...` isn't needed here"
-            )));
-        }
-        if (meta.path.is_ident("unique") || meta.path.is_ident("count")) && kind.is_some() {
-            return Err(
-                meta.error("only one index kind (`unique` or `count`) is allowed per index")
-            );
+            .chain(FIELD_INDEX_ATTRIBUTES.iter())
+            .any(|k| meta.path.is_ident(k));
+        if is_kind && kind.is_some() {
+            return Err(meta.error(
+                "only one index kind (`unique`, `count`, `fulltext`, `hnsw` or `diskann`) \
+                 is allowed per index",
+            ));
         }
         if modifiers.accept(&meta)? {
             return Ok(());
@@ -864,6 +990,21 @@ fn parse_index_entry(
                 })?;
             }
             kind = Some(IndexKind::Count { where_clause });
+        } else if meta.path.is_ident("fulltext") {
+            kind = Some(parse_fulltext_kind(
+                &IndexKindArgs::Entry(&meta),
+                &mut modifiers,
+            )?);
+        } else if meta.path.is_ident("hnsw") {
+            kind = Some(parse_hnsw_kind(
+                &IndexKindArgs::Entry(&meta),
+                &mut modifiers,
+            )?);
+        } else if meta.path.is_ident("diskann") {
+            kind = Some(parse_diskann_kind(
+                &IndexKindArgs::Entry(&meta),
+                &mut modifiers,
+            )?);
         } else {
             return Err(meta.error(INDEX_ATTR_HELP));
         }
@@ -887,6 +1028,33 @@ fn parse_index_entry(
                 ident.to_string().trim_start_matches("r#")
             ),
         ));
+    }
+
+    // Single-path kinds: a whole field is declared on the field, and each
+    // nested path gets its own entry (SurrealDB indexes one field per index)
+    if let Some(kind_name) = kind.field_level_name_suffix()
+        && let Some((entries, span)) = fields.as_ref()
+    {
+        if let [IndexFieldEntry::Ident(ident)] = entries.as_slice() {
+            let field = ident.to_string().trim_start_matches("r#").to_string();
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "a `{kind_name}` index on a whole field is declared on the field: use \
+                     `#[{kind_name}(...)]` on `{field}`; `#[indexes(...)]` entries are for \
+                     nested paths such as `fields(\"{field}.<subfield>\")`"
+                ),
+            ));
+        }
+        if entries.len() != 1 {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "a `{kind_name}` index covers exactly one path; declare one \
+                     `#[indexes(...)]` entry per path"
+                ),
+            ));
+        }
     }
 
     let field_names = match (fields, &kind) {
@@ -922,11 +1090,9 @@ fn parse_index_entry(
                         (path, root, lit.span())
                     }
                 };
-                if !known_fields.contains(&root) {
-                    let mut all: Vec<&String> = known_fields.iter().collect();
-                    all.sort();
-                    let listed = all
-                        .iter()
+                let Some(field) = known_fields.get(&root) else {
+                    let listed = known_fields
+                        .keys()
                         .map(|s| s.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -935,6 +1101,22 @@ fn parse_index_entry(
                         format!(
                             "unknown field `{}` in #[indexes(...)]; struct has fields: {}",
                             root, listed
+                        ),
+                    ));
+                };
+                if field.is_edge {
+                    return Err(edge_index_error(span, &root));
+                }
+                // On a SCHEMAFULL table, SurrealDB 3 only indexes sub-fields of a
+                // field whose type allows them; a `null` variant doesn't ("The
+                // field '...' does not exist"). evenframe tables are SCHEMAFULL.
+                if field.is_optional && path != root {
+                    return Err(syn::Error::new(
+                        span,
+                        format!(
+                            "SurrealDB can't index a path inside an optional field: `{root}` \
+                             is an `Option`, stored as `null | ...`; make `{root}` \
+                             non-optional to index `{path}`"
                         ),
                     ));
                 }

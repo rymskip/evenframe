@@ -132,6 +132,18 @@ pub struct CartItem {
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 200)]
+// `blog_english` is defined in surql/analyzers.surql (see evenframe.toml).
+#[indexes(
+    order_items_product(
+        fields("items.*.product_id", created_at),
+        comment = "orders containing a product, newest first",
+    ),
+    order_shipping_city_search(
+        fields("shipping_address.city"),
+        fulltext(analyzer = "blog_english", bm25),
+        comment = "search orders by shipping city",
+    ),
+)]
 pub struct Order {
     pub id: String,
 

@@ -7,7 +7,7 @@ pub struct Customer {
 }
 
 #[derive(Debug, Clone, Evenframe)]
-#[indexes(search(fields(title), fulltext(analyzer = "en")))]
+#[indexes(customer_vec(fields("customer.first_name"), hnsw(dist = "cosine")))]
 pub struct Deal {
     pub id: String,
     pub title: String,

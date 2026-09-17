@@ -67,9 +67,8 @@ pub struct Author {
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 50)]
 #[indexes(
-    post_author_slug(fields(author, slug), unique),
-    post_author_published(fields(author, published, published_at)),
-    post_tags_created(fields("tags.*", created_at), comment = "posts by tag, newest first"),
+    post_slug_published(fields(slug, published), unique),
+    post_published_at(fields(published, published_at), comment = "published posts by date"),
     post_published_count(count(where = "published = true")),
 )]
 pub struct Post {

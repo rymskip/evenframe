@@ -1,0 +1,5 @@
+error: `owner` is a graph edge (`#[edge]`), which isn't stored on the table, so it can't be indexed
+  --> tests/ui/fail/index_field_attr_on_edge.rs:11:7
+   |
+11 |     #[unique]
+   |       ^^^^^^

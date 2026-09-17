@@ -13,7 +13,7 @@
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::remove::generate_remove_index_statements;
-use evenframe_core::tooling::{BuildConfig, build_all_configs};
+use evenframe_core::tooling::{AllConfigs, BuildConfig, build_all_configs};
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
 use std::fs;
@@ -261,7 +261,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
     );
 }
 
-fn scan_single_file(name: &str, source: &str) -> evenframe_core::error::Result<()> {
+fn scan_single_file(name: &str, source: &str) -> evenframe_core::error::Result<AllConfigs> {
     let tmp = TempDir::new().unwrap();
     write(
         &tmp,
@@ -273,7 +273,7 @@ fn scan_single_file(name: &str, source: &str) -> evenframe_core::error::Result<(
         scan_path: tmp.path().to_path_buf(),
         ..BuildConfig::default()
     };
-    build_all_configs(&config).map(|_| ())
+    build_all_configs(&config)
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn scanner_rejects_single_field_struct_level_unique() {
 }
 
 #[test]
-fn scanner_rejects_struct_level_fulltext() {
+fn scanner_rejects_struct_level_fulltext_on_a_whole_field() {
     let err = scan_single_file(
         "scanner_struct_fulltext_fixture",
         r#"
@@ -410,10 +410,63 @@ fn scanner_rejects_struct_level_fulltext() {
             pub struct Post { pub id: String, pub body: String }
         "#,
     )
-    .expect_err("struct-level fulltext must be rejected");
+    .expect_err("struct-level fulltext on a whole field must be rejected");
     assert!(
-        err.to_string().contains("move this to `#[fulltext(...)]`"),
+        err.to_string().contains("use `#[fulltext(...)]` on `body`"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn scanner_rejects_any_index_inside_an_optional_field() {
+    let err = scan_single_file(
+        "scanner_optional_path_fixture",
+        r#"
+            #[derive(Evenframe)]
+            pub struct Contact { pub email: String }
+
+            #[derive(Evenframe)]
+            #[indexes(contact_email(fields("contact.email"), unique))]
+            pub struct Account { pub id: String, pub contact: Option<Contact> }
+        "#,
+    )
+    .expect_err("an index inside an optional field must be rejected");
+    assert!(
+        err.to_string()
+            .contains("can't index a path inside an optional field: `contact`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn scanner_accepts_struct_level_indexes_on_nested_paths() {
+    let (_enums, tables, _objects) = scan_single_file(
+        "scanner_nested_path_fixture",
+        r#"
+            #[derive(Evenframe)]
+            pub struct Author { pub name: String, pub embedding: Vec<f32> }
+
+            #[derive(Evenframe)]
+            #[indexes(
+                author_name_search(fields("author.name"), fulltext(analyzer = "en", bm25)),
+                author_ann(fields("author.embedding"), diskann(dimension = 3), concurrently),
+            )]
+            pub struct Post { pub id: String, pub author: Author }
+        "#,
+    )
+    .expect("nested-path indexes must be accepted");
+    let post = &tables["post"];
+    let statements: Vec<String> = post
+        .all_indexes("post")
+        .iter()
+        .map(|index| index.define_statement("post"))
+        .collect();
+    assert_eq!(
+        statements,
+        vec![
+            "DEFINE INDEX OVERWRITE author_name_search ON TABLE post FIELDS author.name FULLTEXT ANALYZER en BM25;",
+            "DEFINE INDEX OVERWRITE author_ann ON TABLE post FIELDS author.embedding DISKANN DIMENSION 3 CONCURRENTLY;",
+        ]
     );
 }
 

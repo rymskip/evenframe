@@ -1,0 +1,5 @@
+error: `hnsw(...)` requires `dimension = <n>`, e.g. `hnsw(dimension = 1536)`
+  --> tests/ui/fail/indexes_nested_hnsw_missing_dimension.rs:10:55
+   |
+10 | #[indexes(customer_vec(fields("customer.first_name"), hnsw(dist = "cosine")))]
+   |                                                       ^^^^

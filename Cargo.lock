@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "convert_case 0.12.0",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1930,7 +1930,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "convert_case 0.12.0",
  "evenframe",
@@ -1948,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_plugin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",

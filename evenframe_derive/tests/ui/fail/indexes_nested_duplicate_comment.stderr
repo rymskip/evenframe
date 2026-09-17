@@ -1,0 +1,5 @@
+error: duplicate `comment`
+  --> tests/ui/fail/indexes_nested_duplicate_comment.rs:10:83
+   |
+10 | #[indexes(customer_search(fields("customer.first_name"), fulltext(comment = "a"), comment = "b"))]
+   |                                                                                   ^^^^^^^

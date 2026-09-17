@@ -1,5 +1,5 @@
-error: `fulltext` indexes cover a single field and are declared on it: move this to `#[fulltext(...)]` on the field
- --> tests/ui/fail/index_fulltext_on_struct.rs:4:32
-  |
-4 | #[indexes(search(fields(body), fulltext(analyzer = "en")))]
-  |                                ^^^^^^^^
+error: a `fulltext` index on a whole field is declared on the field: use `#[fulltext(...)]` on `title`; `#[indexes(...)]` entries are for nested paths such as `fields("title.<subfield>")`
+  --> tests/ui/fail/index_fulltext_on_struct.rs:10:18
+   |
+10 | #[indexes(search(fields(title), fulltext(analyzer = "en")))]
+   |                  ^^^^^^
