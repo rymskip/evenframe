@@ -1,0 +1,5 @@
+error: only one index kind (`unique`, `count`, `fulltext`, `hnsw` or `diskann`) is allowed per index
+  --> tests/ui/fail/indexes_nested_two_kinds.rs:10:66
+   |
+10 | #[indexes(customer_search(fields("customer.first_name"), unique, fulltext))]
+   |                                                                  ^^^^^^^^

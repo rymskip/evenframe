@@ -3,6 +3,7 @@ error: `#[index(...)]` was replaced by a single `#[indexes(...)]` that names eac
        #[indexes(
            user_message(fields(user, message), unique),
            active_count(count(where = "active = true")),
+           customer_first_name(fields("customer.first_name"), fulltext(analyzer = "en")),
        )]
  --> tests/ui/fail/index_old_syntax.rs:4:3
   |

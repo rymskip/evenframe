@@ -1,0 +1,5 @@
+error: SurrealDB can't index a path inside an optional field: `customer` is an `Option`, stored as `null | ...`; make `customer` non-optional to index `customer.first_name`
+ --> tests/ui/fail/indexes_nested_in_option.rs:9:34
+  |
+9 | #[indexes(customer_search(fields("customer.first_name"), fulltext))]
+  |                                  ^^^^^^^^^^^^^^^^^^^^^

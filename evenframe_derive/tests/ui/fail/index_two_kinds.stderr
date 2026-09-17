@@ -1,4 +1,4 @@
-error: only one index kind (`unique` or `count`) is allowed per index
+error: only one index kind (`unique`, `count`, `fulltext`, `hnsw` or `diskann`) is allowed per index
  --> tests/ui/fail/index_two_kinds.rs:4:41
   |
 4 | #[indexes(by_body(fields(body), unique, count))]

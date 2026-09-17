@@ -6,10 +6,10 @@ use convert_case::{Case, Casing};
 use evenframe_core::{
     derive::{
         attributes::{
-            find_duplicate_index_name, parse_annotation_attributes, parse_event_attributes,
-            parse_field_index_attributes, parse_format_attribute, parse_index_attributes,
-            parse_macroforge_derive_attribute, parse_mock_data_attribute, parse_relation_attribute,
-            parse_rust_derives,
+            find_duplicate_index_name, indexable_fields, parse_annotation_attributes,
+            parse_event_attributes, parse_field_index_attributes, parse_format_attribute,
+            parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
+            parse_relation_attribute, parse_rust_derives,
         },
         validator_parser::parse_field_validators,
     },
@@ -127,15 +127,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // Collect known field names so we can validate #[indexes(name(fields(...)))]
         // references at parse time.
-        let known_field_names: std::collections::BTreeSet<String> = fields_named
-            .named
-            .iter()
-            .filter_map(|f| {
-                f.ident
-                    .as_ref()
-                    .map(|i| i.to_string().trim_start_matches("r#").to_string())
-            })
-            .collect();
+        let known_field_names = indexable_fields(&fields_named.named);
 
         // Parse the struct-level #[indexes(...)] attribute. Field-level
         // #[unique]/#[fulltext]/#[hnsw]/#[diskann] indexes are appended in the

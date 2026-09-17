@@ -551,3 +551,116 @@ async fn full_schema_dump_applies_top_to_bottom() {
         "full-text index from the dump missing"
     );
 }
+
+const DEAL_WITH_NESTED_SEARCH: &str = r#"
+    #[derive(Evenframe)]
+    pub struct CustomerName {
+        pub first_name: String,
+        pub last_name: String,
+        pub embedding: Vec<f32>,
+    }
+
+    #[derive(Evenframe)]
+    #[indexes(
+        deal_first_name_search(fields("customer_name.first_name"), fulltext(analyzer = "english", bm25)),
+        deal_last_name_search(fields("customer_name.last_name"), fulltext(analyzer = "english", bm25, highlights)),
+        deal_customer_vector(fields("customer_name.embedding"), hnsw(dimension = 3, dist = "cosine")),
+    )]
+    pub struct Deal {
+        pub id: String,
+        pub title: String,
+        pub customer_name: CustomerName,
+    }
+"#;
+
+#[tokio::test]
+async fn indexes_on_nested_paths_serve_searches() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"nested_index_fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("src")).unwrap();
+    fs::write(tmp.path().join("src/lib.rs"), DEAL_WITH_NESTED_SEARCH).unwrap();
+    let config = BuildConfig {
+        scan_path: tmp.path().to_path_buf(),
+        ..BuildConfig::default()
+    };
+    let (enums, tables, objects) = build_all_configs(&config).expect("build_all_configs");
+    let surql = tables_surql(
+        &tables,
+        &objects,
+        &enums,
+        &ForeignTypeRegistry::default(),
+        true,
+    );
+    assert!(
+        surql.contains(
+            "DEFINE INDEX OVERWRITE deal_first_name_search ON TABLE deal \
+             FIELDS customer_name.first_name FULLTEXT ANALYZER english BM25;"
+        ),
+        "{surql}"
+    );
+
+    let db = mem_db().await;
+    apply(&db, ANALYZERS).await;
+    apply(&db, &surql).await;
+    apply(
+        &db,
+        "CREATE deal:1 CONTENT { title: 'a', customer_name: { first_name: 'Alice', last_name: 'Johnson', embedding: [1.0, 0.0, 0.0] } };
+         CREATE deal:2 CONTENT { title: 'b', customer_name: { first_name: 'Bob', last_name: 'Alison', embedding: [0.0, 1.0, 0.0] } };
+         CREATE deal:3 CONTENT { title: 'c', customer_name: { first_name: 'Carol', last_name: 'Smith', embedding: [0.9, 0.1, 0.0] } };",
+    )
+    .await;
+
+    // Without these indexes SurrealDB rejects the search with
+    // "There was no suitable index supporting the expression"
+    let mut response = db
+        .query(
+            "SELECT VALUE id FROM deal WHERE customer_name.first_name @1@ 'alice' \
+             OR customer_name.last_name @2@ 'smith';
+             SELECT VALUE search::highlight('<b>', '</b>', 1) FROM deal \
+             WHERE customer_name.last_name @1@ 'johnson';
+             SELECT * FROM deal WHERE customer_name.first_name @1@ 'alice' EXPLAIN;
+             SELECT * FROM deal WHERE customer_name.embedding <|2,40|> [1.0, 0.0, 0.0] EXPLAIN;",
+        )
+        .await
+        .unwrap();
+    let mut ids: Vec<surrealdb::types::RecordId> = response.take(0).unwrap();
+    ids.sort_by_key(|id| format!("{id:?}"));
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    let highlights: Vec<String> = response.take(1).unwrap();
+    assert_eq!(highlights, vec!["<b>Johnson</b>".to_string()]);
+    let plan: Vec<serde_json::Value> = response.take(2).unwrap();
+    let plan = serde_json::to_string(&plan).unwrap();
+    assert!(
+        plan.contains("deal_first_name_search"),
+        "search must use the nested-path index: {plan}"
+    );
+    let knn: Vec<serde_json::Value> = response.take(3).unwrap();
+    let knn = serde_json::to_string(&knn).unwrap();
+    assert!(
+        knn.contains("deal_customer_vector"),
+        "KNN search must use the nested-path HNSW index: {knn}"
+    );
+
+    // Two databases synced from the same source must not report drift
+    let other = mem_db().await;
+    apply(&other, ANALYZERS).await;
+    apply(&other, &surql).await;
+    let (schema_a, schema_b, export) = export_and_parse(&db, &other).await;
+    let deal = &schema_b.tables["deal"];
+    let search = deal
+        .indexes
+        .iter()
+        .find(|i| i.name == "deal_last_name_search")
+        .unwrap_or_else(|| panic!("index missing from export:\n{export}"));
+    assert_eq!(search.columns, vec!["customer_name.last_name".to_string()]);
+    let changes = Comparator::compare(&schema_a, &schema_b).unwrap();
+    assert!(
+        changes.modified_tables.is_empty(),
+        "unexpected drift: {:?}",
+        changes.modified_tables
+    );
+}

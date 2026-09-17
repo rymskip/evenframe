@@ -1,0 +1,5 @@
+error: the entry name `customer_search` is the index name; `name = ...` isn't needed here
+  --> tests/ui/fail/indexes_nested_name_in_kind.rs:10:67
+   |
+10 | #[indexes(customer_search(fields("customer.first_name"), fulltext(name = "other")))]
+   |                                                                   ^^^^

@@ -2,14 +2,29 @@ use evenframe::schemasync::{Bm25, IndexKind, VectorDistance, VectorType};
 use evenframe::traits::EvenframePersistableStruct;
 use evenframe_derive::Evenframe;
 
-/// Struct exercising every index kind and modifier: struct-level composite
-/// and count indexes, field-level full-text and vector indexes (including two
-/// vector indexes on one field and a raw-identifier field).
+/// Object stored inside `Article`; its paths get struct-level indexes.
+#[derive(Debug, Clone, Evenframe)]
+pub struct Author {
+    pub first_name: String,
+    pub bio: String,
+    pub embedding: Vec<f32>,
+}
+
+/// Struct exercising every index kind and modifier: struct-level composite,
+/// count and nested-path indexes, field-level full-text and vector indexes
+/// (including two vector indexes on one field and a raw-identifier field).
 #[derive(Debug, Clone, Evenframe)]
 #[indexes(
     article_tags_created_at(fields("tags.*", created_at), comment = "tags", concurrently),
     article_count(count),
     article_active_count(count(where = "active = true")),
+    author_first_name_search(
+        fields("author.first_name"),
+        fulltext(analyzer = "english", bm25, highlights, comment = "author search"),
+        concurrently,
+    ),
+    author_bio_search(fields("author.bio"), fulltext),
+    author_embedding_ann(fields("author.embedding"), hnsw(dimension = 3, dist = "cosine")),
 )]
 pub struct Article {
     pub id: String,
@@ -61,11 +76,13 @@ pub struct Article {
     pub embedding: Vec<f32>,
 
     pub active: bool,
+
+    pub author: Author,
 }
 
 fn main() {
     let indexes = Article::static_table_config().indexes;
-    assert_eq!(indexes.len(), 9);
+    assert_eq!(indexes.len(), 12);
 
     // Struct-level indexes come first
     assert_eq!(
@@ -84,7 +101,30 @@ fn main() {
         }
     );
 
+    assert_eq!(indexes[3].fields, vec!["author.first_name".to_string()]);
+    assert_eq!(indexes[3].name.as_deref(), Some("author_first_name_search"));
+    assert_eq!(indexes[3].comment.as_deref(), Some("author search"));
+    assert!(indexes[3].concurrently);
+    assert_eq!(
+        indexes[3].kind,
+        IndexKind::FullText {
+            analyzer: Some("english".to_string()),
+            bm25: Some(Bm25::Default),
+            highlights: true,
+        }
+    );
+    assert_eq!(indexes[4].index_name("article"), "author_bio_search");
+    match &indexes[5].kind {
+        IndexKind::Hnsw { dimension, dist, .. } => {
+            assert_eq!(*dimension, 3);
+            assert_eq!(*dist, Some(VectorDistance::Cosine));
+        }
+        other => panic!("expected hnsw, got {other:?}"),
+    }
+    assert_eq!(indexes[5].fields, vec!["author.embedding".to_string()]);
+
     // Then field-level ones, in field order
+    let indexes = &indexes[3..];
     assert_eq!(indexes[3].fields, vec!["slug".to_string()]);
     assert_eq!(indexes[3].kind, IndexKind::Unique);
     assert_eq!(indexes[3].name.as_deref(), Some("article_slug"));

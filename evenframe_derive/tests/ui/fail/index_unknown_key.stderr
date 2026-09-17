@@ -1,4 +1,4 @@
-error: expected one of `fields(...)`, `unique`, `count`, `comment = "..."` or `concurrently` in an #[indexes(...)] entry
+error: expected one of `fields(...)`, `unique`, `count`, `fulltext(...)`, `hnsw(...)`, `diskann(...)`, `comment = "..."` or `concurrently` in an #[indexes(...)] entry
  --> tests/ui/fail/index_unknown_key.rs:4:33
   |
 4 | #[indexes(by_body(fields(body), search))]
