@@ -1,0 +1,5 @@
+error: another index on `Post` already uses the name `post_vector`; give one of them `name = "..."`
+ --> tests/ui/fail/index_field_name_collision.rs:7:7
+  |
+7 |     #[diskann(dimension = 3, name = "post_vector")]
+  |       ^^^^^^^

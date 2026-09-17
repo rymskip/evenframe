@@ -398,7 +398,7 @@ impl DatabaseProvider for SurrealdbProvider {
             };
 
             client
-                .query(format!("DELETE {}", record_id))
+                .query(format!("DELETE {}", record_ref(&record_id)))
                 .await
                 .map_err(|e| {
                     EvenframeError::database(format!("Failed to delete record {}: {e}", record_id))
@@ -599,8 +599,48 @@ impl DatabaseProvider for SurrealdbProvider {
 /// loud failure. `type::record` accepts the full string verbatim and
 /// resolves it back into a proper record reference.
 fn record_ref(id: &str) -> String {
-    // Single quotes inside the id need to be escaped or the closing
-    // `'` will terminate the string literal early.
-    let escaped = id.replace('\'', "\\'");
+    // Backslashes and single quotes inside the id need to be escaped or the
+    // closing `'` will terminate the string literal early. Backslashes go
+    // first so the ones added for quotes aren't doubled.
+    let escaped = id.replace('\\', "\\\\").replace('\'', "\\'");
     format!("type::record('{}')", escaped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_ref;
+    use surrealdb::Surreal;
+    use surrealdb::engine::local::Mem;
+
+    #[test]
+    fn record_ref_escapes_quotes_and_backslashes() {
+        assert_eq!(record_ref("user:1"), "type::record('user:1')");
+        assert_eq!(record_ref("user:a'b"), "type::record('user:a\\'b')");
+        assert_eq!(record_ref("user:a\\"), "type::record('user:a\\\\')");
+    }
+
+    #[tokio::test]
+    async fn record_ref_cannot_break_out_of_the_literal() {
+        let db = Surreal::new::<Mem>(()).await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        db.query("CREATE victim:1").await.unwrap().check().unwrap();
+
+        // Each id tries to close the string and comment out the rest, which
+        // would run the DELETE if escaping failed (the second one did before
+        // backslashes were escaped)
+        for id in [
+            "user:x'); DELETE victim; --",
+            "user:x\\'); DELETE victim; --",
+        ] {
+            let _ = db.query(format!("RETURN {}", record_ref(id))).await;
+        }
+
+        let mut response = db.query("SELECT VALUE id FROM victim").await.unwrap();
+        let remaining: Vec<surrealdb::types::RecordId> = response.take(0).unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "an escaped id ran an injected statement"
+        );
+    }
 }

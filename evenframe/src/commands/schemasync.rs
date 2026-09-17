@@ -1,8 +1,11 @@
 //! Schemasync command - synchronizes database schema.
 
-use crate::cli::{Cli, DiffFormat, SchemasyncArgs, SchemasyncCommands};
+use crate::cli::{Cli, DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
 use crate::config_builders;
-use evenframe_core::{error::Result, schemasync::Schemasync};
+use evenframe_core::{
+    error::Result,
+    schemasync::{Schemasync, config::ConnectionOverrides},
+};
 use std::path::PathBuf;
 use tracing::{debug, error, info};
 
@@ -12,7 +15,7 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
 
     // Build all configs and filter to schemasync-eligible types
     let build_config = config_builders::BuildConfig::from_toml()?;
-    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
+    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
     let (enums, tables, objects) = config_builders::filter_for_schemasync(enums, tables, objects);
 
     info!(
@@ -22,6 +25,12 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
         objects.len()
     );
 
+    let overrides = ConnectionOverrides {
+        url: args.url.clone(),
+        namespace: args.namespace.clone(),
+        database: args.database.clone(),
+    };
+
     // Handle subcommands
     if let Some(cmd) = args.command {
         match cmd {
@@ -29,6 +38,7 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                 info!("Running schema diff...");
 
                 let schemasync = Schemasync::new()
+                    .with_connection_overrides(overrides.clone())
                     .with_tables(&tables)
                     .with_objects(&objects)
                     .with_enums(&enums);
@@ -71,6 +81,7 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                     info!("Dry run mode - showing what would be applied...");
 
                     let schemasync = Schemasync::new()
+                        .with_connection_overrides(overrides.clone())
                         .with_tables(&tables)
                         .with_objects(&objects)
                         .with_enums(&enums);
@@ -100,12 +111,13 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                     }
                 }
 
-                run_schemasync(&enums, &tables, &objects).await?;
+                run_schemasync(&enums, &tables, &objects, overrides).await?;
             }
             SchemasyncCommands::Mock(mock_args) => {
                 info!("Generating mock data only...");
 
                 let schemasync = Schemasync::new()
+                    .with_connection_overrides(overrides.clone())
                     .with_tables(&tables)
                     .with_objects(&objects)
                     .with_enums(&enums);
@@ -116,43 +128,44 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                 info!("Mock data generation completed");
             }
             SchemasyncCommands::Dump(dump_args) => {
-                info!("Dumping resolved schema DDL (offline)...");
+                info!("Dumping resolved schema SurrealQL (offline)...");
 
-                // Load config purely for the foreign-type registry and the
-                // scripting-asserts flag. This path opens no database
-                // connection — it only reads the local config and emits DDL.
-                let config = evenframe_core::config::EvenframeConfig::new()?;
+                // This path opens no database connection, so the connection
+                // settings' env vars aren't required.
+                let config = evenframe_core::config::EvenframeConfig::new_offline()?;
                 let registry = evenframe_core::types::ForeignTypeRegistry::from_config(
                     &config.general.foreign_types,
                 );
                 let allow_scripting = config.schemasync.mock_gen_config.scripting_asserts;
 
-                // Mirror Schemasync's per-table define-statement loop, resolving
-                // each table's `output_override` via `effective()` and passing
-                // the full table/object/enum context as query details.
-                let mut blocks: Vec<String> = Vec::with_capacity(tables.len());
-                for (table_name, table) in &tables {
-                    blocks.push(
-                        evenframe_core::schemasync::database::surql::define::generate_define_statements(
-                            table_name,
-                            table.effective(),
-                            &tables,
-                            &objects,
-                            &enums,
-                            &registry,
-                            allow_scripting,
+                let tables_surql = evenframe_core::schemasync::dump::tables_surql(
+                    &tables,
+                    &objects,
+                    &enums,
+                    &registry,
+                    allow_scripting,
+                );
+                let (ddl, output_path) = match dump_args.command {
+                    Some(DumpCommands::Tables(tables_args)) => (
+                        tables_surql,
+                        tables_args
+                            .output
+                            .unwrap_or_else(|| PathBuf::from(".evenframe/surql/tables.surql")),
+                    ),
+                    None => (
+                        evenframe_core::schemasync::dump::schema_surql(
+                            &config.schemasync.database,
+                            &tables_surql,
                         ),
-                    );
-                }
-                let ddl = blocks.join("\n");
+                        dump_args
+                            .output
+                            .unwrap_or_else(|| PathBuf::from(".evenframe/surql/schema.surql")),
+                    ),
+                };
                 let statement_count = ddl
                     .lines()
                     .filter(|line| line.trim_start().starts_with("DEFINE"))
                     .count();
-
-                let output_path = dump_args
-                    .output
-                    .unwrap_or_else(|| PathBuf::from(".evenframe/surql/schema.surql"));
 
                 if let Some(parent) = output_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| {
@@ -181,15 +194,17 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
     }
 
     // Default: run full schemasync
-    run_schemasync(&enums, &tables, &objects).await
+    run_schemasync(&enums, &tables, &objects, overrides).await
 }
 
 async fn run_schemasync(
     enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
     tables: &std::collections::BTreeMap<String, evenframe_core::schemasync::table::TableConfig>,
     objects: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+    overrides: ConnectionOverrides,
 ) -> Result<()> {
     let schemasync = Schemasync::new()
+        .with_connection_overrides(overrides)
         .with_tables(tables)
         .with_objects(objects)
         .with_enums(enums);

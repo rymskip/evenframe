@@ -92,23 +92,27 @@ pub fn generate_effect_schema_string(
             {#match item}
                 {:case TypeItem::Enum(name, enum_def)}
                     {$let variant_count = enum_def.variants.len()}
+                    {$let encoded_name = format!("{name}Encoded")}
+                    {$let type_name = format!("{name}Type")}
                     export const @{name} = Schema.Union(
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
                             @{variant_to_schema(variant, &enum_def.representation, name, structs, &recursion_info, &processed, registry)}
                             {#if index + 1 != variant_count},{/if}
                         {/for}
                     ).annotations({ identifier: "@{name}" });
-                    export type {|@{name}Encoded|} =
+                    export type @{encoded_name} =
                         {#for (index, variant) in enum_def.variants.iter().enumerate()}
                             @{variant_to_encoded(variant, &enum_def.representation, registry)}
                             {#if index + 1 != variant_count} | {/if}
                         {/for}
                     ;
-                    export type {|@{name}Type|} = typeof @{name}.Type;
+                    export type @{type_name} = typeof @{name}.Type;
                     {$do processed.insert(name.clone())}
 
                 {:case TypeItem::Struct(name, struct_config)}
                     {$let field_count = struct_config.fields.len()}
+                    {$let encoded_name = format!("{name}Encoded")}
+                    {$let type_name = format!("{name}Type")}
                     export class @{name} extends Schema.Class<@{name}>("@{name}")({
                         {#for (index, field) in struct_config.fields.iter().enumerate()}
                             {$let schema = field_type_to_effect_schema(&field.field_type, structs, name, &recursion_info, &processed, registry)}
@@ -122,12 +126,12 @@ pub fn generate_effect_schema_string(
                         {/for}
                     }) {[key: string]: unknown}
 
-                    export interface {|@{name}Encoded|} {
+                    export interface @{encoded_name} {
                         {#for field in &struct_config.fields}
                             readonly @{field.field_name.to_case(Case::Camel)}: @{field_type_to_ts_encoded(&field.field_type, registry)};
                         {/for}
                     }
-                    export type {|@{name}Type|} = typeof @{name}.Type;
+                    export type @{type_name} = typeof @{name}.Type;
                     {$do processed.insert(name.clone())}
             {/match}
         {/for}
@@ -371,11 +375,13 @@ fn field_type_to_effect_schema(
                 Schema.Record({ key: @{recurse(key_type)}, value: @{recurse(val_type)} })
             {:case FieldType::Other(type_name)}
                 {$let pascal_name = type_name.to_case(Case::Pascal)}
+                {$let encoded_name = format!("{pascal_name}Encoded")}
+                {$let ref_name = format!("{pascal_name}Ref")}
                 {#if recursion_info.is_recursive_pair(current_type, &pascal_name) && !processed.contains(&pascal_name)}
                     {#if structs.values().any(|struct_config| struct_config.struct_name.to_case(Case::Pascal) == pascal_name)}
-                        Schema.suspend((): Schema.Schema<@{&pascal_name}, {|@{&pascal_name}Encoded|}> => @{&pascal_name}).annotations({ identifier: "{|@{&pascal_name}Ref|}" })
+                        Schema.suspend((): Schema.Schema<@{&pascal_name}, @{&encoded_name}> => @{&pascal_name}).annotations({ identifier: "@{&ref_name}" })
                     {:else}
-                        Schema.suspend((): Schema.Schema<typeof @{&pascal_name}.Type, {|@{&pascal_name}Encoded|}> => @{&pascal_name}).annotations({ identifier: "{|@{&pascal_name}Ref|}" })
+                        Schema.suspend((): Schema.Schema<typeof @{&pascal_name}.Type, @{&encoded_name}> => @{&pascal_name}).annotations({ identifier: "@{&ref_name}" })
                     {/if}
                 {:else}
                     @{pascal_name}
@@ -429,7 +435,7 @@ fn field_type_to_ts_encoded(field_type: &FieldType, registry: &ForeignTypeRegist
             {:case FieldType::RecordLink(inner_type)}
                 string | @{field_type_to_ts_encoded(inner_type, registry)}
             {:case FieldType::Other(type_name)}
-                {|@{type_name.to_case(Case::Pascal)}Encoded|}
+                @{format!("{}Encoded", type_name.to_case(Case::Pascal))}
         {/match}
     }.source().to_string()
 }
@@ -649,7 +655,6 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
-                        mock_plugin: None,
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                     },
@@ -664,7 +669,6 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
-                        mock_plugin: None,
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                     },
@@ -679,7 +683,6 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
-                        mock_plugin: None,
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                     },

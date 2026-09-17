@@ -224,7 +224,44 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// Command-line replacements for the database connection settings.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionOverrides {
+    pub url: Option<String>,
+    pub namespace: Option<String>,
+    pub database: Option<String>,
+}
+
 impl DatabaseConfig {
+    /// Replace the connection settings that `overrides` provides.
+    pub fn apply_connection_overrides(&mut self, overrides: &ConnectionOverrides) {
+        if let Some(url) = &overrides.url {
+            self.url = url.clone();
+        }
+        if let Some(namespace) = &overrides.namespace {
+            self.namespace = namespace.clone();
+        }
+        if let Some(database) = &overrides.database {
+            self.database = database.clone();
+        }
+    }
+
+    /// The first environment variable still referenced (`${VAR}`) by the
+    /// connection settings, i.e. one that was unset when the config was
+    /// loaded offline and wasn't replaced by an override.
+    pub fn unresolved_connection_var(&self) -> Option<String> {
+        [&self.url, &self.namespace, &self.database]
+            .into_iter()
+            .find_map(|value| {
+                let start = value.find("${")? + 2;
+                let name: String = value[start..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
+                (!name.is_empty()).then_some(name)
+            })
+    }
+
     /// Creates a database configuration suitable for testing with SurrealDB
     pub fn for_testing() -> Self {
         debug!("Creating database configuration for testing environment");
@@ -371,5 +408,40 @@ impl Default for PerformanceConfig {
             config.use_progressive_loading
         );
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_overrides_replace_unresolved_settings() {
+        let mut database = DatabaseConfig::for_testing();
+        database.url = "${SURREALDB_URL}".to_string();
+        database.namespace = "prefix_${SURREALDB_NS}".to_string();
+        assert_eq!(
+            database.unresolved_connection_var().as_deref(),
+            Some("SURREALDB_URL")
+        );
+
+        database.apply_connection_overrides(&ConnectionOverrides {
+            url: Some("http://localhost:8000".to_string()),
+            namespace: None,
+            database: None,
+        });
+        assert_eq!(database.url, "http://localhost:8000");
+        assert_eq!(
+            database.unresolved_connection_var().as_deref(),
+            Some("SURREALDB_NS")
+        );
+
+        database.apply_connection_overrides(&ConnectionOverrides {
+            url: None,
+            namespace: Some("app".to_string()),
+            database: Some("main".to_string()),
+        });
+        assert_eq!(database.unresolved_connection_var(), None);
+        assert_eq!(database.database, "main");
     }
 }

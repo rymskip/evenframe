@@ -1,38 +1,33 @@
+/// Root directory for `evenframe_log!` output: `$ABSOLUTE_PATH_TO_EVENFRAME`
+/// when set, otherwise the system temp directory. Logging never panics
+/// because the variable is missing.
+#[cfg(feature = "dev-mode")]
+#[doc(hidden)]
+pub fn log_root() -> String {
+    std::env::var("ABSOLUTE_PATH_TO_EVENFRAME")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned())
+}
+
 #[cfg(feature = "dev-mode")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __internal_log_impl {
-    // Standard variant - uses ABSOLUTE_PATH_TO_EVENFRAME env var
+    // Standard variant - rooted at `log_root()`
     ($content:expr, $log_subdir:expr, standard) => {{
         let filename = format!("{}.log", chrono::Local::now().format("%Y_%m_%d_%H_%M_%S"));
-        let logs_dir = format!(
-            "{}/{}",
-            std::env::var("ABSOLUTE_PATH_TO_EVENFRAME")
-                .expect("ABSOLUTE_PATH_TO_EVENFRAME not set"),
-            $log_subdir
-        );
+        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
 
         $crate::__internal_log_impl!($content, logs_dir, filename, false, impl);
     }};
 
     ($content:expr, $log_subdir:expr, $filename:expr, standard) => {{
-        let logs_dir = format!(
-            "{}/{}",
-            std::env::var("ABSOLUTE_PATH_TO_EVENFRAME")
-                .expect("ABSOLUTE_PATH_TO_EVENFRAME not set"),
-            $log_subdir
-        );
+        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
 
         $crate::__internal_log_impl!($content, logs_dir, $filename, false, impl);
     }};
 
     ($content:expr, $log_subdir:expr, $filename:expr, $append:expr, standard) => {{
-        let logs_dir = format!(
-            "{}/{}",
-            std::env::var("ABSOLUTE_PATH_TO_EVENFRAME")
-                .expect("ABSOLUTE_PATH_TO_EVENFRAME not set"),
-            $log_subdir
-        );
+        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
 
         $crate::__internal_log_impl!($content, logs_dir, $filename, $append, impl);
     }};

@@ -1,0 +1,5 @@
+error: expected `name = "..."`, `comment = "..."` or `concurrently` inside #[unique(...)]
+ --> tests/ui/fail/index_unique_unknown_key.rs:6:38
+  |
+6 |     #[unique(name = "account_email", fields(email))]
+  |                                      ^^^^^^

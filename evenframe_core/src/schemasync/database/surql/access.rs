@@ -1,6 +1,5 @@
 use crate::evenframe_log;
 use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource};
-use std::env;
 use surrealdb::{
     Surreal,
     engine::{local::Db, remote::http::Client},
@@ -59,12 +58,12 @@ pub fn generate_access_definition(access_config: &AccessConfig) -> String {
 pub async fn execute_access_query(
     db: &Surreal<Client>,
     access_query: &str,
+    db_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!(query_length = access_query.len(), "Executing access query");
     let access_result = db.query(access_query).await;
     match access_result {
         Ok(_) => {
-            let db_name = env::var("SURREALDB_DB").expect("SURREALDB_DB not set");
             tracing::info!(db = %db_name, "Successfully executed access statements");
             evenframe_log!(
                 &format!(
@@ -76,7 +75,6 @@ pub async fn execute_access_query(
             )
         }
         Err(e) => {
-            let db_name = env::var("SURREALDB_DB").expect("SURREALDB_DB not set");
             tracing::error!(db = %db_name, error = %e, "Failed to execute access statements");
             let error_msg = format!(
                 "Failed to execute define access statements for db {}: {}",
@@ -88,6 +86,20 @@ pub async fn execute_access_query(
     }
     Ok(())
 }
+/// The `DEFINE ACCESS` statements for the configured accesses: generated for
+/// inline configs, or the resolved surql for path-based ones.
+pub fn access_definitions_surql(database: &crate::schemasync::config::DatabaseConfig) -> String {
+    match &database.accesses {
+        AccessesSource::Inline(accesses) => accesses
+            .iter()
+            .map(generate_access_definition)
+            .filter(|statement| !statement.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        AccessesSource::Path { .. } => database.resolved.access_surql.clone().unwrap_or_default(),
+    }
+}
+
 pub async fn setup_access_definitions(
     new_schema: &Surreal<Db>,
     schemasync_config: &crate::schemasync::config::SchemasyncConfig,
@@ -105,10 +117,9 @@ pub async fn setup_access_definitions(
                 access_count = accesses.len(),
                 "Processing inline access configurations"
             );
-            let mut query = String::new();
             for access in accesses {
                 tracing::trace!(access_name = %access.name, "Processing access definition");
-                query = generate_access_definition(access);
+                let query = generate_access_definition(access);
                 if let Err(e) = new_schema.query(&query).await {
                     tracing::error!(
                         access_name = %access.name,
@@ -119,7 +130,8 @@ pub async fn setup_access_definitions(
                     tracing::debug!(access_name = %access.name, "Access created successfully");
                 }
             }
-            query
+            // Every access, not just the last one, is applied to the live DB
+            access_definitions_surql(&schemasync_config.database)
         }
         AccessesSource::Path { .. } => {
             // Path-based access: use resolved surql content
@@ -148,4 +160,49 @@ pub async fn setup_access_definitions(
 
     evenframe_log!(&access_query, "access_query.surql");
     Ok(access_query)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemasync::config::DatabaseConfig;
+
+    fn access(name: &str, access_type: AccessType) -> AccessConfig {
+        AccessConfig {
+            name: name.to_string(),
+            access_type,
+            table_name: "user".to_string(),
+        }
+    }
+
+    #[test]
+    fn inline_accesses_include_every_definition() {
+        let mut database = DatabaseConfig::for_testing();
+        database.accesses = AccessesSource::Inline(vec![
+            access("user", AccessType::Record),
+            access("system", AccessType::System),
+            access("api", AccessType::Bearer),
+        ]);
+        let surql = access_definitions_surql(&database);
+        assert!(surql.contains("DEFINE ACCESS OVERWRITE user ON DATABASE TYPE RECORD"));
+        assert!(surql.contains("DEFINE ACCESS OVERWRITE api ON DATABASE TYPE BEARER FOR RECORD;"));
+        assert!(
+            !surql.contains("system"),
+            "SYSTEM accesses aren't defined: {surql}"
+        );
+    }
+
+    #[test]
+    fn path_accesses_use_resolved_surql() {
+        let mut database = DatabaseConfig::for_testing();
+        database.accesses = AccessesSource::Path {
+            path: "surql/access.surql".to_string(),
+        };
+        assert_eq!(access_definitions_surql(&database), "");
+        database.resolved.access_surql = Some("DEFINE ACCESS a ON DATABASE TYPE JWT;".to_string());
+        assert_eq!(
+            access_definitions_surql(&database),
+            "DEFINE ACCESS a ON DATABASE TYPE JWT;"
+        );
+    }
 }

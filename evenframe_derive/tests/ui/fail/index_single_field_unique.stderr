@@ -1,0 +1,5 @@
+error: a unique index on a single field is declared on the field: use `#[unique]` on `email`
+ --> tests/ui/fail/index_single_field_unique.rs:4:20
+  |
+4 | #[indexes(by_email(fields(email), unique))]
+  |                    ^^^^^^

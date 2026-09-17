@@ -1,7 +1,7 @@
 //! SQLite Database Provider Implementation
 
 use async_trait::async_trait;
-use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{AssertSqlSafe, Row, SqlitePool, sqlite::SqlitePoolOptions};
 use std::collections::BTreeMap;
 use tracing::info;
 
@@ -11,7 +11,7 @@ use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, StructField, Ta
 
 use super::{
     JoinTableConfig, SchemaInspector, SqliteSchemaInspector, SqliteTypeMapper,
-    generate_join_table_sql,
+    generate_join_table_sql, question_placeholders, quote_identifier,
 };
 use crate::schemasync::database::TypeMapper;
 use crate::schemasync::database::{
@@ -55,6 +55,9 @@ impl Default for SqliteProvider {
         Self::new()
     }
 }
+
+/// Maximum number of ids bound into one DELETE statement
+const DELETE_CHUNK_SIZE: usize = 500;
 
 #[async_trait]
 impl DatabaseProvider for SqliteProvider {
@@ -108,7 +111,7 @@ impl DatabaseProvider for SqliteProvider {
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         for stmt in statements {
-            sqlx::query(stmt)
+            sqlx::query(AssertSqlSafe(stmt.as_str()))
                 .execute(pool)
                 .await
                 .map_err(|e| EvenframeError::database(format!("Execute failed: {e}")))?;
@@ -127,7 +130,7 @@ impl DatabaseProvider for SqliteProvider {
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         let inspector = SqliteSchemaInspector::new();
-        let rows = sqlx::query(&inspector.list_tables_query())
+        let rows = sqlx::query(AssertSqlSafe(inspector.list_tables_query()))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("List tables failed: {e}")))?;
@@ -144,7 +147,7 @@ impl DatabaseProvider for SqliteProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
-        sqlx::query(query)
+        sqlx::query(AssertSqlSafe(query))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Execute failed: {e}")))?;
@@ -170,8 +173,8 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>> {
         let query = match filter {
-            Some(f) => format!("SELECT * FROM \"{}\" WHERE {}", table, f),
-            None => format!("SELECT * FROM \"{}\"", table),
+            Some(f) => format!("SELECT * FROM {} WHERE {}", quote_identifier(table, '"'), f),
+            None => format!("SELECT * FROM {}", quote_identifier(table, '"')),
         };
         self.execute(&query).await
     }
@@ -183,11 +186,18 @@ impl DatabaseProvider for SqliteProvider {
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
         let query = match filter {
-            Some(f) => format!("SELECT COUNT(*) as count FROM \"{}\" WHERE {}", table, f),
-            None => format!("SELECT COUNT(*) as count FROM \"{}\"", table),
+            Some(f) => format!(
+                "SELECT COUNT(*) as count FROM {} WHERE {}",
+                quote_identifier(table, '"'),
+                f
+            ),
+            None => format!(
+                "SELECT COUNT(*) as count FROM {}",
+                quote_identifier(table, '"')
+            ),
         };
 
-        let row = sqlx::query(&query)
+        let row = sqlx::query(AssertSqlSafe(query.as_str()))
             .fetch_one(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Count failed: {e}")))?;
@@ -201,8 +211,19 @@ impl DatabaseProvider for SqliteProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected"))?;
 
-        for id in ids {
-            sqlx::query(&format!("DELETE FROM \"{}\" WHERE id = '{}'", table, id))
+        // Ids are bound, never spliced into the statement. Chunked to stay
+        // well under the bound-parameter limit
+        for chunk in ids.chunks(DELETE_CHUNK_SIZE) {
+            let query = format!(
+                "DELETE FROM {} WHERE id IN ({})",
+                quote_identifier(table, '"'),
+                question_placeholders(chunk.len())
+            );
+            let mut statement = sqlx::query(AssertSqlSafe(query));
+            for id in chunk {
+                statement = statement.bind(id);
+            }
+            statement
                 .execute(pool)
                 .await
                 .map_err(|e| EvenframeError::database(format!("Delete failed: {e}")))?;

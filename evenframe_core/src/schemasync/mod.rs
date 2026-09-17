@@ -7,6 +7,8 @@ pub mod config;
 #[cfg(feature = "schemasync")]
 pub mod database;
 pub mod define_config;
+#[cfg(feature = "schemasync")]
+pub mod dump;
 pub mod edge;
 pub mod event;
 pub mod lint;
@@ -57,6 +59,7 @@ use crate::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
     schemasync::compare::SchemaChanges,
+    schemasync::config::ConnectionOverrides,
     schemasync::database::surql::{
         define::generate_define_statements,
         execute::{execute_and_validate, split_surql_statements},
@@ -95,6 +98,85 @@ pub struct Schemasync<'a> {
     schemasync_config: Option<crate::schemasync::config::SchemasyncConfig>,
     /// Owned registry built from config during initialization (used when no external registry is provided)
     owned_registry: Option<crate::types::ForeignTypeRegistry>,
+    connection_overrides: ConnectionOverrides,
+}
+
+/// Load the config for a command that connects to the database: connection
+/// settings may come from `overrides` instead of environment variables, but
+/// must be fully resolved one way or the other.
+#[cfg(feature = "schemasync")]
+pub fn load_connected_config(overrides: &ConnectionOverrides) -> Result<EvenframeConfig> {
+    let mut config = EvenframeConfig::new_offline()?;
+    config
+        .schemasync
+        .database
+        .apply_connection_overrides(overrides);
+    if let Some(var) = config.schemasync.database.unresolved_connection_var() {
+        return Err(EvenframeError::EnvVarNotSet(var));
+    }
+    Ok(config)
+}
+
+#[cfg(feature = "schemasync")]
+static ACTIVE_CONNECTION: std::sync::RwLock<Option<crate::schemasync::config::DatabaseConfig>> =
+    std::sync::RwLock::new(None);
+
+/// The connection settings last used by [`connect_database`] in this
+/// process, for code that must reach the same database by other means
+/// (e.g. the `surreal import` fallback for oversized statements).
+#[cfg(feature = "schemasync")]
+pub fn active_connection() -> Option<crate::schemasync::config::DatabaseConfig> {
+    ACTIVE_CONNECTION.read().ok().and_then(|c| c.clone())
+}
+
+/// Connect to SurrealDB over HTTP, sign in as root with `SURREALDB_USER` /
+/// `SURREALDB_PASSWORD`, and select the configured namespace and database.
+#[cfg(feature = "schemasync")]
+pub async fn connect_database(
+    database: &crate::schemasync::config::DatabaseConfig,
+) -> Result<Surreal<Client>> {
+    trace!("Database URL: {}", database.url);
+    trace!("Database namespace: {}", database.namespace);
+    trace!("Database name: {}", database.database);
+
+    // The HTTP engine wants a bare `host:port`; tolerate a configured
+    // `http(s)://` scheme (as shipped in .env.example) by stripping it.
+    let endpoint = database
+        .url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let db = Surreal::new::<Http>(endpoint).await.map_err(|e| {
+        EvenframeError::database(format!(
+            "There was a problem creating the HTTP surrealdb client: {e}"
+        ))
+    })?;
+    debug!("Created SurrealDB connection");
+
+    let username = std::env::var("SURREALDB_USER")
+        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_USER".to_string()))?;
+    let password = std::env::var("SURREALDB_PASSWORD")
+        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
+    debug!("Retrieved database credentials from environment");
+
+    db.signin(Root { username, password }).await.map_err(|e| {
+        EvenframeError::database(format!("There was a problem signing in as root: {e}"))
+    })?;
+    debug!("Successfully signed in to SurrealDB");
+
+    db.use_ns(&database.namespace)
+        .use_db(&database.database)
+        .await
+        .map_err(|e| {
+            EvenframeError::database(format!("There was a problem using to the namespace: {e}"))
+        })?;
+    info!(
+        "Connected to database namespace '{}' and database '{}'",
+        database.namespace, database.database
+    );
+    if let Ok(mut active) = ACTIVE_CONNECTION.write() {
+        *active = Some(database.clone());
+    }
+    Ok(db)
 }
 
 /// Check database connectivity by loading config, connecting, authenticating,
@@ -157,6 +239,7 @@ impl<'a> Schemasync<'a> {
             db: None,
             schemasync_config: None,
             owned_registry: None,
+            connection_overrides: ConnectionOverrides::default(),
         }
     }
 
@@ -188,54 +271,19 @@ impl<'a> Schemasync<'a> {
         self
     }
 
+    /// Replace the configured connection settings (e.g. from CLI flags).
+    pub fn with_connection_overrides(mut self, overrides: ConnectionOverrides) -> Self {
+        self.connection_overrides = overrides;
+        self
+    }
+
     /// Initialize database connection and config from environment
     async fn initialize(&mut self) -> Result<()> {
         info!("Initializing Schemasync database connection and configuration");
-        let config = EvenframeConfig::new()?;
+        let config = load_connected_config(&self.connection_overrides)?;
         debug!("Loaded Evenframe configuration successfully");
-        trace!("Database URL: {}", config.schemasync.database.url);
-        trace!(
-            "Database namespace: {}",
-            config.schemasync.database.namespace
-        );
-        trace!("Database name: {}", config.schemasync.database.database);
 
-        // The HTTP engine wants a bare `host:port`; tolerate a configured
-        // `http(s)://` scheme (as shipped in .env.example) by stripping it.
-        let endpoint = config
-            .schemasync
-            .database
-            .url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://");
-        let db = Surreal::new::<Http>(endpoint).await.map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem creating the HTTP surrealdb client: {e}"
-            ))
-        })?;
-        debug!("Created SurrealDB connection");
-
-        let username = std::env::var("SURREALDB_USER")
-            .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_USER".to_string()))?;
-        let password = std::env::var("SURREALDB_PASSWORD")
-            .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
-        debug!("Retrieved database credentials from environment");
-
-        db.signin(Root { username, password }).await.map_err(|e| {
-            EvenframeError::database(format!("There was a problem signing in as root: {e}"))
-        })?;
-        debug!("Successfully signed in to SurrealDB");
-
-        db.use_ns(&config.schemasync.database.namespace)
-            .use_db(&config.schemasync.database.database)
-            .await
-            .map_err(|e| {
-                EvenframeError::database(format!("There was a problem using to the namespace: {e}"))
-            })?;
-        info!(
-            "Connected to database namespace '{}' and database '{}'",
-            config.schemasync.database.namespace, config.schemasync.database.database
-        );
+        let db = connect_database(&config.schemasync.database).await?;
 
         self.db = Some(db);
         // Build a ForeignTypeRegistry from config if no external registry was provided
@@ -436,16 +484,12 @@ impl<'a> Schemasync<'a> {
         info!("Starting mock-only generation");
         self.initialize().await?;
 
-        let (db, tables, objects, enums, mut config) = self.validate()?;
+        let (db, tables, objects, enums, config) = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
             .registry
             .or(self.owned_registry.as_ref())
             .unwrap_or(&default_registry);
-
-        if let Some(count) = count_override {
-            config.mock_gen_config.default_record_count = count;
-        }
 
         // Apply table filter if specified
         let owned_filtered: BTreeMap<String, TableConfig>;
@@ -477,6 +521,7 @@ impl<'a> Schemasync<'a> {
 
         let mut mockmaker =
             Mockmaker::new(&db, effective_tables, objects, enums, &config, registry);
+        mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
 
         if let Some(ref mut comparator) = mockmaker.comparator {
@@ -484,9 +529,62 @@ impl<'a> Schemasync<'a> {
         }
 
         mockmaker.filter_changes().await?;
+        mockmaker.generate_coordinated_values();
         mockmaker.generate_mock_data().await?;
 
         info!("Mock-only generation completed successfully");
+        Ok(())
+    }
+
+    /// Insert mock data into the selected tables (all when `table_filter` is
+    /// `None`) of a database whose schema is already in place. Unlike
+    /// [`Self::mock_only`] this never diffs or defines anything: each selected
+    /// table is brought to its record count (`count_override`, the table's
+    /// `#[mock_data(n = ...)]`, or `default_record_count`), regenerating the
+    /// records it already has and adding the rest.
+    pub async fn insert_mock_data(
+        mut self,
+        count_override: Option<usize>,
+        table_filter: Option<Vec<String>>,
+    ) -> Result<()> {
+        info!("Inserting mock data");
+        self.initialize().await?;
+
+        let (db, tables, objects, enums, mut config) = self.validate()?;
+        let default_registry = crate::types::ForeignTypeRegistry::default();
+        let registry = self
+            .registry
+            .or(self.owned_registry.as_ref())
+            .unwrap_or(&default_registry);
+
+        // Existing records must stay link targets, and this command exists
+        // to generate data.
+        config.mock_gen_config.full_refresh_mode = false;
+        config.should_generate_mocks = true;
+
+        let selected: Option<std::collections::BTreeSet<String>> = match table_filter {
+            None => None,
+            Some(names) => {
+                let unknown: Vec<&String> =
+                    names.iter().filter(|n| !tables.contains_key(*n)).collect();
+                if !unknown.is_empty() {
+                    let known: Vec<&String> = tables.keys().collect();
+                    return Err(EvenframeError::config(format!(
+                        "Unknown tables {unknown:?}; known tables: {known:?}"
+                    )));
+                }
+                Some(names.into_iter().collect())
+            }
+        };
+
+        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
+        mockmaker.count_override = count_override;
+        mockmaker.generate_ids().await?;
+        mockmaker.select_tables_for_insert(selected.as_ref())?;
+        mockmaker.generate_coordinated_values();
+        mockmaker.generate_mock_data().await?;
+
+        info!("Mock data inserted");
         Ok(())
     }
 
@@ -602,6 +700,7 @@ impl<'a> Schemasync<'a> {
 
         if config.should_generate_mocks {
             info!("Generating mock data");
+            mockmaker.generate_coordinated_values();
             mockmaker.generate_mock_data().await.map_err(|e| {
                 error!("Failed to generate mock data: {}", e);
                 e

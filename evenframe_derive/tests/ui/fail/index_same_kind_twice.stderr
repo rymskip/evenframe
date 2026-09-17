@@ -1,0 +1,5 @@
+error: only one #[hnsw] is allowed per field
+ --> tests/ui/fail/index_same_kind_twice.rs:7:7
+  |
+7 |     #[hnsw(dimension = 3, m = 8)]
+  |       ^^^^

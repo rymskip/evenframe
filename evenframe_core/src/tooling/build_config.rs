@@ -16,6 +16,9 @@ pub struct BuildConfig {
     /// Root path to scan for Rust types.
     pub scan_path: PathBuf,
 
+    /// The config file this configuration was loaded from, if any.
+    pub config_path: Option<PathBuf>,
+
     /// Output directory for generated files.
     pub output_path: PathBuf,
 
@@ -74,6 +77,7 @@ impl Default for BuildConfig {
     fn default() -> Self {
         Self {
             scan_path: PathBuf::from("."),
+            config_path: None,
             output_path: PathBuf::from("./src/generated/"),
             apply_aliases: Vec::new(),
             expand_macros: false,
@@ -157,7 +161,10 @@ impl BuildConfig {
         let value: toml::Value =
             toml::from_str(content).map_err(|e| EvenframeError::config_error(e.to_string()))?;
 
-        let mut config = Self::default();
+        let mut config = Self {
+            config_path: Some(path.to_path_buf()),
+            ..Self::default()
+        };
 
         // Captured from [general] but resolved below, once `project_root` is known.
         let mut include_specs: Vec<crate::config::IncludeFileSpec> = Vec::new();

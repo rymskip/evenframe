@@ -1,0 +1,5 @@
+error: the entry name `by_body` is the index name; `name = ...` isn't needed here
+ --> tests/ui/fail/indexes_name_option.rs:4:40
+  |
+4 | #[indexes(by_body(fields(title, body), name = "other"))]
+  |                                        ^^^^

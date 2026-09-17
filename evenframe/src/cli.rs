@@ -76,6 +76,13 @@ pub enum Commands {
     /// Synchronize database schema
     Schemasync(SchemasyncArgs),
 
+    /// Insert mock data using the scan registry (no source scan)
+    ///
+    /// Reads `.evenframe/registry.json`, written by every command that scans
+    /// the workspace, and refuses to run if the sources changed since. The
+    /// database schema must already be in place (see `schemasync`).
+    Mockmake(MockmakeArgs),
+
     /// Run full generation pipeline (typesync + schemasync)
     Generate(GenerateArgs),
 
@@ -241,8 +248,17 @@ pub enum SchemasyncCommands {
     /// Generate mock data only (skip schema sync)
     Mock(MockArgs),
 
-    /// Dump the resolved schema DDL to a file (offline, no DB connection)
+    /// Dump the resolved schema SurrealQL to a file (offline, no DB connection)
+    ///
+    /// Without a subcommand, writes everything schemasync defines, in apply
+    /// order: accesses, analyzers, tables and functions.
     Dump(DumpArgs),
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DumpCommands {
+    /// Dump only the table DDL (DEFINE TABLE/FIELD/INDEX/EVENT)
+    Tables(DumpTablesArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -284,9 +300,47 @@ pub struct MockArgs {
     pub tables: Option<Vec<String>>,
 }
 
+// ============================================================================
+// Mockmake Arguments
+// ============================================================================
+
+#[derive(Args, Debug, Clone)]
+pub struct MockmakeArgs {
+    /// Number of records per table (overrides config and #[mock_data(n)])
+    #[arg(long)]
+    pub count: Option<usize>,
+
+    /// Only insert into these tables (comma-separated); other tables are only
+    /// used as link targets through their existing records
+    #[arg(long, value_delimiter = ',')]
+    pub tables: Option<Vec<String>>,
+
+    /// Database URL override
+    #[arg(long, env = "SURREALDB_URL")]
+    pub url: Option<String>,
+
+    /// Database namespace override
+    #[arg(long, env = "SURREALDB_NS")]
+    pub namespace: Option<String>,
+
+    /// Database name override
+    #[arg(long, env = "SURREALDB_DB")]
+    pub database: Option<String>,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct DumpArgs {
+    #[command(subcommand)]
+    pub command: Option<DumpCommands>,
+
     /// Output file path (default: .evenframe/surql/schema.surql)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DumpTablesArgs {
+    /// Output file path (default: .evenframe/surql/tables.surql)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }

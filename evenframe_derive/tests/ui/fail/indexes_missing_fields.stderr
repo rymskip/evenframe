@@ -1,0 +1,5 @@
+error: `by_body` needs `fields(<ident>, ...)`, e.g. `by_body(fields(user, message), unique)`
+ --> tests/ui/fail/indexes_missing_fields.rs:4:11
+  |
+4 | #[indexes(by_body(unique))]
+  |           ^^^^^^^^^^^^^^^

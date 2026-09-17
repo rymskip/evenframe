@@ -45,7 +45,7 @@ pub async fn run(_cli: &Cli, args: TypesyncArgs) -> Result<()> {
 
     // Build all configs and filter to typesync-eligible types
     let build_config = config_builders::BuildConfig::from_toml()?;
-    let (enums, tables, objects) = config_builders::build_all_configs(&build_config)?;
+    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
     let (enums, tables, objects) = config_builders::filter_for_typesync(enums, tables, objects);
     let structs = config_builders::merge_tables_and_objects(&tables, &objects);
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);

@@ -27,10 +27,12 @@ impl TableConfig {
             .map_or(self, Self::effective)
     }
 
-    /// Every index this table declares: one unique index per field-level
-    /// `#[unique]`, followed by the struct-level `#[index(...)]` entries.
-    /// Entries resolving to the same index name are de-duplicated, with the
-    /// struct-level declaration taking precedence.
+    /// Every index this table declares: a unique index for each
+    /// `StructField::unique` field that `indexes` doesn't already cover,
+    /// followed by `indexes` (struct-level `#[indexes(...)]` and field-level
+    /// `#[unique]`/`#[fulltext]`/`#[hnsw]`/`#[diskann]` entries). Entries
+    /// resolving to the same index name are de-duplicated, with `indexes`
+    /// taking precedence.
     /// `table_name` is the name the table is defined under (index names are
     /// derived from it).
     pub fn all_indexes(&self, table_name: &str) -> Vec<IndexConfig> {
@@ -39,6 +41,13 @@ impl TableConfig {
             .fields
             .iter()
             .filter(|f| f.unique)
+            // A `#[unique(name = ...)]` entry already describes this field's
+            // unique index under its own name.
+            .filter(|f| {
+                !self.indexes.iter().any(|index| {
+                    index.is_unique() && index.fields == std::slice::from_ref(&f.field_name)
+                })
+            })
             .map(|f| IndexConfig::unique([f.field_name.clone()]))
             .collect();
         for index in &self.indexes {
@@ -50,9 +59,9 @@ impl TableConfig {
     }
 }
 
-/// A struct-level index declared via `#[index(...)]` on a
-/// `#[derive(Evenframe)]` struct, e.g. `#[index(fields(a, b), unique)]` or
-/// `#[index(fields(body), fulltext(analyzer = "en", bm25, highlights))]`.
+/// An index on a `#[derive(Evenframe)]` struct: either a struct-level
+/// `#[indexes(name(fields(a, b), unique))]` entry, or declared on a field with
+/// `#[fulltext(...)]`, `#[hnsw(...)]` or `#[diskann(...)]`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 // The pre-`kind` shape carried `unique: bool`; reject it loudly rather than
 // silently deserializing a unique index as a plain one.
@@ -277,12 +286,17 @@ impl std::str::FromStr for VectorType {
 }
 
 impl IndexKind {
-    /// Whether this kind indexes exactly one field (FULLTEXT, HNSW, DISKANN).
-    pub fn requires_single_field(&self) -> bool {
-        matches!(
-            self,
-            Self::FullText { .. } | Self::Hnsw { .. } | Self::DiskAnn { .. }
-        )
+    /// Name suffix for the single-field kinds declared on a field
+    /// (`#[fulltext]`, `#[hnsw]`, `#[diskann]`). One field can carry several of
+    /// them, so their default names must not collide with each other or with a
+    /// plain/unique index on the same field.
+    pub fn field_level_name_suffix(&self) -> Option<&'static str> {
+        match self {
+            Self::FullText { .. } => Some("fulltext"),
+            Self::Hnsw { .. } => Some("hnsw"),
+            Self::DiskAnn { .. } => Some("diskann"),
+            Self::Standard | Self::Unique | Self::Count { .. } => None,
+        }
     }
 
     /// The index-kind clause of a `DEFINE INDEX` statement, without a
@@ -419,7 +433,8 @@ impl IndexConfig {
 
     /// The index name: the explicit `name`, or `idx_{table}_{fields}` with
     /// each field path reduced to identifier characters (`tags.*` → `tags`).
-    /// Field-less (COUNT) indexes default to `idx_{table}_count`.
+    /// Field-less (COUNT) indexes default to `idx_{table}_count`, and the
+    /// field-level kinds append their kind (`idx_{table}_{field}_hnsw`).
     pub fn index_name(&self, table_name: &str) -> String {
         if let Some(name) = &self.name {
             return name.clone();
@@ -433,7 +448,10 @@ impl IndexConfig {
             .map(|f| sanitize_index_name_part(f))
             .collect::<Vec<_>>()
             .join("_");
-        format!("idx_{table_name}_{joined}")
+        match self.kind.field_level_name_suffix() {
+            Some(suffix) => format!("idx_{table_name}_{joined}_{suffix}"),
+            None => format!("idx_{table_name}_{joined}"),
+        }
     }
 
     /// Everything after the column list: kind clause, `COMMENT`, `CONCURRENTLY`.
@@ -486,7 +504,7 @@ fn sanitize_index_name_part(field: &str) -> String {
 }
 
 /// Single-quoted SurrealQL string literal with `\` and `'` escaped.
-fn surql_string_literal(s: &str) -> String {
+pub(crate) fn surql_string_literal(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
@@ -499,6 +517,47 @@ mod tests {
         assert_eq!(
             IndexConfig::unique(["user", "message"]).index_name("reaction"),
             "idx_reaction_user_message"
+        );
+    }
+
+    #[test]
+    fn field_level_kinds_get_a_kind_suffix() {
+        let with_kind = |kind| IndexConfig {
+            kind,
+            ..IndexConfig::standard(["embedding"])
+        };
+        let hnsw = with_kind(IndexKind::Hnsw {
+            dimension: 3,
+            dist: None,
+            vector_type: None,
+            efc: None,
+            m: None,
+            m0: None,
+            lm: None,
+            extend_candidates: false,
+            keep_pruned_connections: false,
+            hashed_vector: false,
+        });
+        let diskann = with_kind(IndexKind::DiskAnn {
+            dimension: 3,
+            dist: None,
+            vector_type: None,
+            degree: None,
+            l_build: None,
+            alpha: None,
+            hashed_vector: false,
+        });
+        let fulltext = with_kind(IndexKind::FullText {
+            analyzer: None,
+            bm25: None,
+            highlights: false,
+        });
+        assert_eq!(hnsw.index_name("post"), "idx_post_embedding_hnsw");
+        assert_eq!(diskann.index_name("post"), "idx_post_embedding_diskann");
+        assert_eq!(fulltext.index_name("post"), "idx_post_embedding_fulltext");
+        assert_eq!(
+            IndexConfig::unique(["embedding"]).index_name("post"),
+            "idx_post_embedding"
         );
     }
 

@@ -2,6 +2,7 @@
 
 use crate::error::{EvenframeError, Result};
 use crate::tooling::expansion_cache::{self, CRATE_LEVEL_THRESHOLD, CacheEntry, CacheManifest};
+use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -11,7 +12,33 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use syn::{Attribute, Item, ItemImpl, Meta, parse_file};
 use tracing::{debug, info, trace, warn};
-use walkdir::WalkDir;
+
+/// Every `Cargo.toml` under `root`, sorted, skipping anything a
+/// `.gitignore` excludes (such as `target/`). Like macroforge's scanner,
+/// hidden entries are walked and only the project's own `.gitignore` files
+/// apply (not the global or `.git/info/exclude` ones); unlike it, they apply
+/// even outside a git repository.
+///
+/// `include_files` entries don't go through this walk: they are read
+/// directly, so listing a gitignored path there still scans it.
+pub fn find_manifests(root: &Path) -> Vec<PathBuf> {
+    let mut manifests: Vec<PathBuf> = WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_name() == "Cargo.toml" && entry.file_type().is_some_and(|t| t.is_file())
+        })
+        .map(|entry| entry.into_path())
+        .collect();
+    manifests.sort();
+    manifests
+}
 
 /// Represents a type found with Evenframe derives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,20 +205,11 @@ impl WorkspaceScanner {
             self.start_path
         );
 
-        // First, collect all manifests we'll process. This has to be
-        // sequential because it consults a dedupe set, but it's a cheap walk.
-        let mut manifests: Vec<PathBuf> = Vec::new();
-        let mut seen: HashSet<PathBuf> = HashSet::new();
-        for entry in WalkDir::new(&self.start_path)
-            .into_iter()
-            .filter_map(|e: std::result::Result<walkdir::DirEntry, walkdir::Error>| e.ok())
-            .filter(|e: &walkdir::DirEntry| e.file_name() == "Cargo.toml")
-        {
-            let p = entry.path().to_path_buf();
-            if seen.insert(p.clone()) {
-                trace!("Found potential manifest: {:?}", p);
-                manifests.push(p);
-            }
+        // First, collect all manifests we'll process (gitignored ones are
+        // skipped; `include_files` below are read regardless).
+        let manifests = find_manifests(&self.start_path);
+        for manifest in &manifests {
+            trace!("Found potential manifest: {:?}", manifest);
         }
 
         // Processing strategy depends on whether we're running `cargo expand`:
@@ -967,7 +985,7 @@ fn detect_manual_impl(item: &ItemImpl) -> Option<(String, crate::types::Pipeline
         return None;
     }
 
-    let (_, trait_path, _) = item.trait_.as_ref()?;
+    let (trait_path, _) = item.trait_.as_ref()?;
     let trait_name = trait_path.segments.last()?.ident.to_string();
     let pipeline = match trait_name.as_str() {
         "EvenframePersistableStruct" | "EvenframeAppStruct" | "EvenframeTaggedUnion" => {

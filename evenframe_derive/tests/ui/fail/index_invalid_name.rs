@@ -1,12 +1,10 @@
 use evenframe_derive::Evenframe;
 
 #[derive(Debug, Clone, Evenframe)]
-#[index(name = "1bad-name", fields(body))]
 pub struct Post {
     pub id: String,
-    pub title: String,
+    #[fulltext(name = "1bad-name")]
     pub body: String,
-    pub embedding: Vec<f32>,
 }
 
 fn main() {}

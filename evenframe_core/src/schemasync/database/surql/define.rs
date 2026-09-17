@@ -117,7 +117,7 @@ pub fn generate_define_statements(
     }
 
     // Generate DEFINE INDEX statements for field-level #[unique] and
-    // struct-level #[index(...)] attributes.
+    // struct-level #[indexes(...)] entries.
     for index in table_config.all_indexes(table_name) {
         debug!(
             table_name = %table_name,
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn generate_computed_field_statement() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "upper_name".to_string(),
             field_type: FieldType::String,
@@ -232,7 +232,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -258,7 +257,7 @@ mod tests {
 
     #[test]
     fn generate_computed_field_with_comment() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "upper_name".to_string(),
             field_type: FieldType::String,
@@ -284,7 +283,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -306,7 +304,7 @@ mod tests {
 
     #[test]
     fn generate_regular_field_with_comment() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "email".to_string(),
             field_type: FieldType::String,
@@ -332,7 +330,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -356,7 +353,7 @@ mod tests {
 
     #[test]
     fn generate_define_statements_includes_unique_index() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let table_config = TableConfig {
             table_name: "user".to_string(),
             struct_config: StructConfig {
@@ -388,7 +385,6 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: true,
-                        mock_plugin: None,
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                     },
@@ -417,7 +413,6 @@ mod tests {
                         doccom: None,
                         annotations: vec![],
                         unique: false,
-                        mock_plugin: None,
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                     },
@@ -464,7 +459,7 @@ mod tests {
 
     #[test]
     fn generate_define_statements_includes_composite_index() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         use crate::schemasync::{Bm25, IndexConfig, IndexKind};
 
         let make_field = |name: &str| StructField {
@@ -492,7 +487,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -616,7 +610,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -713,7 +706,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -761,7 +753,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };

@@ -97,6 +97,55 @@ pub struct CoordinationGroup {
     #[builder(default)]
     pub coordination_pairs: Vec<CoordinationPair>,
 }
+/// Render a raw coordinated value as the SurrealQL literal `FieldValueGenerator`
+/// would produce for `field`: bare numbers for numeric fields (floats with an
+/// `f` suffix), `d'…'` for datetime-formatted non-string fields, and a quoted
+/// string otherwise.
+#[cfg(feature = "schemasync")]
+pub(crate) fn coordinated_literal(field: &StructField, raw: &str) -> String {
+    let mut scalar = &field.field_type;
+    while let FieldType::Option(inner) = scalar {
+        scalar = inner;
+    }
+    if scalar.is_numeric()
+        && let Ok(number) = raw.trim().parse::<f64>()
+    {
+        return match scalar {
+            FieldType::F32 | FieldType::F64 => format!("{number}f"),
+            _ => format!("{}", number.round() as i64),
+        };
+    }
+    let is_datetime_format = matches!(
+        field.format,
+        Some(
+            Format::DateTime
+                | Format::Date
+                | Format::AppointmentDateTime
+                | Format::DateWithinDays(_)
+        )
+    );
+    let escaped = raw.replace('\\', "\\\\").replace('\'', "\\'");
+    if is_datetime_format && !matches!(scalar, FieldType::String) {
+        format!("d'{escaped}'")
+    } else {
+        format!("'{escaped}'")
+    }
+}
+
+/// The raw text of a SurrealQL string or datetime literal (`'a'`, `d'…'`);
+/// other literals are returned unchanged.
+#[cfg(feature = "schemasync")]
+pub(crate) fn literal_to_raw(literal: &str) -> String {
+    let body = literal
+        .strip_prefix("d'")
+        .or_else(|| literal.strip_prefix('\''))
+        .and_then(|rest| rest.strip_suffix('\''));
+    match body {
+        Some(body) => body.replace("\\'", "'").replace("\\\\", "\\"),
+        None => literal.to_string(),
+    }
+}
+
 #[cfg(feature = "schemasync")]
 impl Mockmaker<'_> {
     pub fn generate_coordinated_values(&mut self) {
@@ -145,7 +194,7 @@ impl Mockmaker<'_> {
 
                             for coordination_id in &coordination_pair.coordinated_fields {
                                 self.coordinated_values
-                                    .insert(coordination_id.clone(), value.clone());
+                                    .insert((index, coordination_id.clone()), value.clone());
                             }
                         }
 
@@ -174,8 +223,7 @@ impl Mockmaker<'_> {
                                     .unwrap_or(&coordination_id.field_name);
 
                                 if let Some(value) = values.get(field_name) {
-                                    self.coordinated_values
-                                        .insert(coordination_id.clone(), value.clone());
+                                    self.store_raw_coordinated_value(index, coordination_id, value);
                                 }
                             }
                         }
@@ -203,8 +251,7 @@ impl Mockmaker<'_> {
                                     .unwrap_or(&coordination_id.field_name);
 
                                 if let Some(value) = values.get(field_name) {
-                                    self.coordinated_values
-                                        .insert(coordination_id.clone(), value.clone());
+                                    self.store_raw_coordinated_value(index, coordination_id, value);
                                 }
                             }
                         }
@@ -252,8 +299,9 @@ impl Mockmaker<'_> {
                                     .run();
 
                                 let field_name = field.field_name.clone();
-                                source_values_map.insert(field_name, value.clone());
-                                self.coordinated_values.insert(coord_id.clone(), value);
+                                source_values_map.insert(field_name, literal_to_raw(&value));
+                                self.coordinated_values
+                                    .insert((index, coord_id.clone()), value);
                             }
 
                             // Generate derived value using the dedicated function
@@ -270,7 +318,7 @@ impl Mockmaker<'_> {
                             if let (Some(target_id), Some(value)) =
                                 (target_coord_id, derived_values.get(target_field_name))
                             {
-                                self.coordinated_values.insert(target_id, value.clone());
+                                self.store_raw_coordinated_value(index, &target_id, value);
                             }
                         }
                         Coordination::OneToOne(_) => {
@@ -306,16 +354,18 @@ impl Mockmaker<'_> {
 
                                 // Try exact match first
                                 if let Some(value) = values.get(field_key) {
-                                    self.coordinated_values
-                                        .insert(coordination_id.clone(), value.clone());
+                                    self.store_raw_coordinated_value(index, coordination_id, value);
                                 } else {
                                     // Try to find a matching key in the values map
                                     for (key, value) in &values {
                                         if coordination_id.field_name.ends_with(key)
                                             || key == field_key
                                         {
-                                            self.coordinated_values
-                                                .insert(coordination_id.clone(), value.clone());
+                                            self.store_raw_coordinated_value(
+                                                index,
+                                                coordination_id,
+                                                value,
+                                            );
                                             break;
                                         }
                                     }
@@ -326,6 +376,21 @@ impl Mockmaker<'_> {
                 }
             }
         }
+    }
+
+    /// Store a raw (unquoted) coordinated value for record `index`, rendered
+    /// as a SurrealQL literal for its field.
+    fn store_raw_coordinated_value(
+        &mut self,
+        index: usize,
+        coordination_id: &CoordinationId,
+        raw: &str,
+    ) {
+        let field = coordination_id.get_field(self);
+        self.coordinated_values.insert(
+            (index, coordination_id.clone()),
+            coordinated_literal(&field, raw),
+        );
     }
 
     /// Generate sequential values for fields
@@ -1699,6 +1764,66 @@ pub const PRODUCT_CATALOG: &[(&str, &str, f64, &str)] = &[
 #[cfg(all(test, feature = "surrealdb"))]
 mod tests {
     use super::*;
+
+    fn field(field_type: FieldType, format: Option<Format>) -> StructField {
+        StructField {
+            field_name: "f".to_string(),
+            field_type,
+            format,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn coordinated_literals_match_field_types() {
+        assert_eq!(
+            coordinated_literal(&field(FieldType::I32, None), "41.6"),
+            "42"
+        );
+        assert_eq!(
+            coordinated_literal(
+                &field(FieldType::Option(Box::new(FieldType::F64)), None),
+                "40.7128"
+            ),
+            "40.7128f"
+        );
+        assert_eq!(
+            coordinated_literal(&field(FieldType::String, None), "O'Brien \\ Co"),
+            "'O\\'Brien \\\\ Co'"
+        );
+        assert_eq!(
+            coordinated_literal(&field(FieldType::String, Some(Format::Date)), "2024-01-08"),
+            "'2024-01-08'"
+        );
+        assert_eq!(
+            coordinated_literal(
+                &field(
+                    FieldType::Other("DateTime".to_string()),
+                    Some(Format::DateTime)
+                ),
+                "2024-01-08T00:00:00Z"
+            ),
+            "d'2024-01-08T00:00:00Z'"
+        );
+        // A non-numeric value for a numeric field falls back to a string
+        assert_eq!(
+            coordinated_literal(&field(FieldType::I32, None), "n/a"),
+            "'n/a'"
+        );
+    }
+
+    #[test]
+    fn literal_to_raw_round_trips() {
+        for raw in ["plain", "O'Brien \\ Co", ""] {
+            let literal = coordinated_literal(&field(FieldType::String, None), raw);
+            assert_eq!(literal_to_raw(&literal), raw);
+        }
+        assert_eq!(
+            literal_to_raw("d'2024-01-08T00:00:00Z'"),
+            "2024-01-08T00:00:00Z"
+        );
+        assert_eq!(literal_to_raw("42"), "42");
+    }
 
     /// Haversine distance in km between two (lat, lng) points in degrees.
     fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {

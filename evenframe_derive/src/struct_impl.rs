@@ -2,12 +2,14 @@ use crate::{
     PipelineKind, deserialization_impl::generate_custom_deserialize,
     imports::generate_struct_imports,
 };
+use convert_case::{Case, Casing};
 use evenframe_core::{
     derive::{
         attributes::{
-            parse_annotation_attributes, parse_event_attributes, parse_format_attribute,
-            parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
-            parse_mockmake_attribute, parse_relation_attribute, parse_rust_derives,
+            find_duplicate_index_name, parse_annotation_attributes, parse_event_attributes,
+            parse_field_index_attributes, parse_format_attribute, parse_index_attributes,
+            parse_macroforge_derive_attribute, parse_mock_data_attribute, parse_relation_attribute,
+            parse_rust_derives,
         },
         validator_parser::parse_field_validators,
     },
@@ -123,7 +125,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
         // Parse all Rust derives (#[derive(Serialize, Clone, ...)])
         let rust_derives = parse_rust_derives(&input.attrs);
 
-        // Collect known field names so we can validate #[index(fields(...))]
+        // Collect known field names so we can validate #[indexes(name(fields(...)))]
         // references at parse time.
         let known_field_names: std::collections::BTreeSet<String> = fields_named
             .named
@@ -135,11 +137,15 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             })
             .collect();
 
-        // Parse struct-level #[index(fields(a, b), unique)] attributes.
-        let indexes = match parse_index_attributes(&input.attrs, &known_field_names) {
-            Ok(v) => v,
-            Err(err) => return err.to_compile_error(),
-        };
+        // Parse the struct-level #[indexes(...)] attribute. Field-level
+        // #[unique]/#[fulltext]/#[hnsw]/#[diskann] indexes are appended in the
+        // field loop. `index_spans` keeps one span per index so a name
+        // collision can be reported where it was declared.
+        let (mut indexes, mut index_spans): (Vec<_>, Vec<Span>) =
+            match parse_index_attributes(&input.attrs, &known_field_names) {
+                Ok(v) => v.into_iter().unzip(),
+                Err(err) => return err.to_compile_error(),
+            };
 
         // Check if an "id" field exists.
         // Structs with an "id" field are treated as persistable entities (database tables).
@@ -260,20 +266,16 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 .iter()
                 .any(|attr| attr.path().is_ident("unique"));
 
-            // Parse mockmake plugin attribute
-            let mock_plugin = match parse_mockmake_attribute(&field.attrs) {
-                Ok(p) => p,
-                Err(err) => {
-                    return syn::Error::new(
-                        field.span(),
-                        format!(
-                            "Failed to parse mockmake attribute for field '{}': {}",
-                            field_name, err
-                        ),
-                    )
-                    .to_compile_error();
+            // Parse field-level #[fulltext]/#[hnsw]/#[diskann] index attributes
+            match parse_field_index_attributes(field_name_trim, &field.attrs) {
+                Ok(field_indexes) => {
+                    for (index, span) in field_indexes {
+                        indexes.push(index);
+                        index_spans.push(span);
+                    }
                 }
-            };
+                Err(err) => return err.to_compile_error(),
+            }
 
             // Build validators token for this field
             let validators_tokens = if field_validators.is_empty() {
@@ -288,11 +290,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 quote! { vec![#(#field_annotations.to_string()),*] }
             };
 
-            let mock_plugin_tokens = match &mock_plugin {
-                Some(name) => quote! { Some(#name.to_string()) },
-                None => quote! { None },
-            };
-
             table_field_tokens.push(quote! {
                 StructField {
                     field_name: #field_name_trim.to_string(),
@@ -305,7 +302,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     doccom: None,
                     annotations: #field_annotations_tokens,
                     unique: #is_unique,
-                    mock_plugin: #mock_plugin_tokens,
                     output_override: None,
                     raw_attributes: std::collections::BTreeMap::new(),
                 }
@@ -386,6 +382,22 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
         };
 
         let pipeline_tokens = pipeline.to_tokens();
+
+        if let Some((position, name)) =
+            find_duplicate_index_name(&ident.to_string().to_case(Case::Snake), &indexes)
+        {
+            return syn::Error::new(
+                index_spans
+                    .get(position)
+                    .copied()
+                    .unwrap_or_else(|| ident.span()),
+                format!(
+                    "another index on `{ident}` already uses the name `{name}`; \
+                     give one of them `name = \"...\"`"
+                ),
+            )
+            .to_compile_error();
+        }
 
         let indexes_tokens = if indexes.is_empty() {
             quote! { vec![] }

@@ -281,7 +281,7 @@ pub struct EvenframeConfig {
 impl EvenframeConfig {
     /// Best-effort early .env load for use before full config is parsed.
     /// Finds the config file, derives the project root, and loads `.env` from there.
-    /// Falls back to `dotenv::dotenv()` if config discovery fails.
+    /// Falls back to `dotenvy::dotenv()` if config discovery fails.
     pub fn load_env_early() {
         if let Ok(config_path) = Self::find_config_file() {
             let parent = config_path.parent().unwrap_or(Path::new("."));
@@ -291,15 +291,28 @@ impl EvenframeConfig {
             } else {
                 parent
             };
-            let _ = dotenv::from_path(project_root.join(".env"));
+            let _ = dotenvy::from_path(project_root.join(".env"));
         } else {
-            let _ = dotenv::dotenv();
+            let _ = dotenvy::dotenv();
         }
     }
 
     /// Load configuration by searching for evenframe.toml in the current
     /// directory and its ancestors.
     pub fn new() -> Result<EvenframeConfig> {
+        Self::load(true)
+    }
+
+    /// Load configuration for work that never connects to the database, such
+    /// as `schemasync dump`. The connection settings (`url`, `namespace`,
+    /// `database`) may reference environment variables that aren't set: those
+    /// references are left unresolved instead of failing. Every other setting
+    /// is resolved exactly as by [`EvenframeConfig::new`].
+    pub fn new_offline() -> Result<EvenframeConfig> {
+        Self::load(false)
+    }
+
+    fn load(require_connection_env: bool) -> Result<EvenframeConfig> {
         info!("Loading Evenframe configuration");
 
         let config_path = Self::find_config_file()?;
@@ -327,7 +340,7 @@ impl EvenframeConfig {
 
         // Process environment variable substitutions for all string fields in the config
         debug!("Substituting environment variables in configuration");
-        Self::substitute_all_env_vars(&mut config)?;
+        Self::substitute_all_env_vars(&mut config, require_connection_env)?;
 
         // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
@@ -458,13 +471,14 @@ impl EvenframeConfig {
     fn load_env_file(config: &EvenframeConfig) {
         let env_path = config.resolve_env_path();
         debug!("Loading environment variables from: {:?}", env_path);
-        match dotenv::from_path(&env_path) {
+        match dotenvy::from_path(&env_path) {
             Ok(_) => info!("Loaded environment variables from {:?}", env_path),
             Err(e) => {
                 if env_path.exists() {
                     warn!("Failed to load .env file {:?}: {}", env_path, e);
                 } else {
-                    warn!("No .env file found at {:?}, skipping", env_path);
+                    // A .env file is optional
+                    debug!("No .env file found at {:?}, skipping", env_path);
                 }
             }
         }
@@ -528,9 +542,25 @@ impl EvenframeConfig {
     /// Serializes the config to TOML, applies env var substitution to the entire
     /// string, then deserializes back. Fields marked `#[serde(skip)]` (like
     /// `config_file_path` and `resolved`) are preserved across the round-trip.
-    fn substitute_all_env_vars(config: &mut EvenframeConfig) -> Result<()> {
+    ///
+    /// With `require_connection_env` false, the database connection settings
+    /// are substituted leniently: references to unset variables stay as-is.
+    fn substitute_all_env_vars(
+        config: &mut EvenframeConfig,
+        require_connection_env: bool,
+    ) -> Result<()> {
         let config_file_path = config.config_file_path.clone();
         let mut resolved = config.schemasync.database.resolved.clone();
+
+        // Taken out of the strict round-trip below and substituted leniently
+        let connection = (!require_connection_env).then(|| {
+            let database = &mut config.schemasync.database;
+            (
+                std::mem::take(&mut database.url),
+                std::mem::take(&mut database.namespace),
+                std::mem::take(&mut database.database),
+            )
+        });
 
         // The TOML round-trip below only substitutes vars that appear in
         // config string fields; it can't reach surql content loaded from
@@ -563,6 +593,12 @@ impl EvenframeConfig {
 
         new_config.config_file_path = config_file_path;
         new_config.schemasync.database.resolved = resolved;
+        if let Some((url, namespace, database)) = connection {
+            let db = &mut new_config.schemasync.database;
+            db.url = Self::substitute_env_vars_inner(&url, false)?;
+            db.namespace = Self::substitute_env_vars_inner(&namespace, false)?;
+            db.database = Self::substitute_env_vars_inner(&database, false)?;
+        }
 
         *config = new_config;
         Ok(())
@@ -571,6 +607,12 @@ impl EvenframeConfig {
     /// Substitute environment variables in config strings
     /// Supports ${VAR_NAME:-default} syntax
     pub fn substitute_env_vars(value: &str) -> Result<String> {
+        Self::substitute_env_vars_inner(value, true)
+    }
+
+    /// With `strict` false, a reference to an unset variable without a default
+    /// is left in place instead of being an error.
+    fn substitute_env_vars_inner(value: &str, strict: bool) -> Result<String> {
         trace!("Substituting environment variables in: {}", value);
         let mut result = value.to_string();
 
@@ -598,6 +640,13 @@ impl EvenframeConfig {
                             var_name, default
                         );
                         default.to_string()
+                    }
+                    None if !strict => {
+                        debug!(
+                            "Environment variable {} not set, leaving the reference unresolved",
+                            var_name
+                        );
+                        continue;
                     }
                     None => {
                         error!(
@@ -1164,6 +1213,71 @@ mod tests {
         let config = result.unwrap();
         assert_eq!(config.schemasync.database.namespace, "test_ns");
         assert_eq!(config.schemasync.database.database, "test_db");
+    }
+
+    fn config_with_env_refs(url: &str, output_path: &str) -> EvenframeConfig {
+        let content = format!(
+            r#"
+            [schemasync]
+            should_generate_mocks = false
+
+            [schemasync.database]
+            provider = "surrealdb"
+            url = "{url}"
+            namespace = "${{EF_TEST_OFFLINE_UNSET_NS}}"
+            database = "${{EF_TEST_OFFLINE_UNSET_DB:-fallback_db}}"
+
+            [schemasync.mock_gen_config]
+            default_record_count = 10
+            default_preservation_mode = "Smart"
+            default_batch_size = 10
+            full_refresh_mode = false
+            coordination_groups = []
+
+            [schemasync.performance]
+            embedded_db_memory_limit = "256MB"
+            cache_duration_seconds = 60
+            use_progressive_loading = false
+
+            [typesync]
+            output_path = "{output_path}"
+            should_generate_arktype_types = false
+            should_generate_effect_types = false
+            should_generate_macroforge_types = false
+            should_generate_surrealdb_schemas = false
+            "#
+        );
+        toml::from_str(&content).unwrap()
+    }
+
+    #[test]
+    fn offline_substitution_leaves_unset_connection_vars_unresolved() {
+        let mut config = config_with_env_refs("${EF_TEST_OFFLINE_UNSET_URL}", "./output/");
+
+        let strict = EvenframeConfig::substitute_all_env_vars(&mut config.clone(), true);
+        assert!(
+            matches!(strict, Err(EvenframeError::EnvVarNotSet(_))),
+            "online loading must still require the connection variables"
+        );
+
+        EvenframeConfig::substitute_all_env_vars(&mut config, false).unwrap();
+        let database = &config.schemasync.database;
+        assert_eq!(database.url, "${EF_TEST_OFFLINE_UNSET_URL}");
+        assert_eq!(database.namespace, "${EF_TEST_OFFLINE_UNSET_NS}");
+        assert_eq!(database.database, "fallback_db");
+    }
+
+    #[test]
+    fn offline_substitution_still_requires_other_vars() {
+        let mut config = config_with_env_refs(
+            "${EF_TEST_OFFLINE_UNSET_URL}",
+            "${EF_TEST_OFFLINE_UNSET_OUTPUT}",
+        );
+        let result = EvenframeConfig::substitute_all_env_vars(&mut config, false);
+        assert!(
+            matches!(&result, Err(EvenframeError::EnvVarNotSet(name)) if name == "EF_TEST_OFFLINE_UNSET_OUTPUT"),
+            "unexpected result: {result:?}"
+        );
     }
 
     #[test]

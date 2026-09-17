@@ -1401,10 +1401,10 @@ mod tests {
 
     #[test]
     fn test_comment_syntax_comparison() {
-        // This test demonstrates the difference between raw comments and interpolated comments
-        // in ts_template!
+        // Both raw and interpolated JSDoc comments survive ts_template! as JSDoc
+        // (older macroforge_ts versions turned raw ones into `#[doc = ...]`).
 
-        // Raw comment syntax - gets converted to #[doc = "..."] by the macro
+        // Raw comment syntax - the macro re-emits it as a JSDoc block
         let raw_comment_output = ts_template! {
             /** @derive(Deserialize) */
             export interface Test {}
@@ -1426,10 +1426,12 @@ mod tests {
             interpolated_comment_output
         );
 
-        // Raw comments are converted to Rust doc syntax (with spaces: "# [doc = ...")
+        // Raw comments come back as JSDoc (the macro may pad the closing `*/`)
         assert!(
-            raw_comment_output.contains("doc") && raw_comment_output.contains("@derive"),
-            "Raw comments should be converted to doc attribute syntax"
+            raw_comment_output.starts_with("/** @derive(Deserialize)")
+                && raw_comment_output.contains("*/")
+                && !raw_comment_output.contains("doc ="),
+            "Raw comments should be re-emitted as JSDoc"
         );
 
         // Interpolated comments preserve the JSDoc format

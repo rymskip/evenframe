@@ -35,7 +35,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 ordered-float = "5"
 linkme = "0.3"
-convert_case = "0.6"
+convert_case = "0.12"
 url = "2"
 
 [dev-dependencies]

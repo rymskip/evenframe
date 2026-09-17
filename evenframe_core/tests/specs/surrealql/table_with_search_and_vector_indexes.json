@@ -1,5 +1,5 @@
 {
-  "description": "Table with every struct-level #[index(...)] kind: fulltext, hnsw, diskann, count, array-element composite, plus name/comment/concurrently and a field-level #[unique] that collides with a struct-level index",
+  "description": "Table with every index kind: field-level fulltext, hnsw and diskann, struct-level count and array-element composite, plus name/comment/concurrently and a field-level #[unique] that collides with a struct-level unique index",
   "table_name": "article",
   "table_config": {
     "table_name": "article",

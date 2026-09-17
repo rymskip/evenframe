@@ -1,7 +1,7 @@
 use evenframe_derive::Evenframe;
 
 #[derive(Debug, Clone, Evenframe)]
-#[index(fields("nope.*"))]
+#[indexes(nope(fields("nope.*")))]
 pub struct Post {
     pub id: String,
     pub title: String,

@@ -78,13 +78,13 @@ impl<'a> FieldValueGenerator<'a> {
         while let Some(work_item) = work_stack.pop() {
             match work_item {
                 WorkItem::Generate(ctx) => {
-                    // Tier 0: WASM plugin override (field-level or table-level)
+                    // Tier 0: WASM plugin override (table-level #[mock_data(plugin = ...)])
                     #[cfg(feature = "wasm-plugins")]
-                    let _plugin_name: Option<&String> = ctx.field.mock_plugin.as_ref().or(self
+                    let _plugin_name: Option<&String> = self
                         .table_config
                         .mock_generation_config
                         .as_ref()
-                        .and_then(|c| c.plugin.as_ref()));
+                        .and_then(|c| c.plugin.as_ref());
                     #[cfg(feature = "wasm-plugins")]
                     if let Some(plugin_name) = _plugin_name {
                         if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
@@ -139,13 +139,12 @@ impl<'a> FieldValueGenerator<'a> {
 
                     // Tier 0 (no wasm-plugins feature): warn and fall through
                     #[cfg(not(feature = "wasm-plugins"))]
-                    if ctx.field.mock_plugin.is_some()
-                        || self
-                            .table_config
-                            .mock_generation_config
-                            .as_ref()
-                            .and_then(|c| c.plugin.as_ref())
-                            .is_some()
+                    if self
+                        .table_config
+                        .mock_generation_config
+                        .as_ref()
+                        .and_then(|c| c.plugin.as_ref())
+                        .is_some()
                     {
                         tracing::warn!(
                             "Field '{}' has a plugin configured but wasm-plugins feature is not enabled",
@@ -153,12 +152,13 @@ impl<'a> FieldValueGenerator<'a> {
                         );
                     }
 
-                    if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(
-                        &CoordinationId::builder()
+                    if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(&(
+                        *self.id_index,
+                        CoordinationId::builder()
                             .field_name(ctx.field_path.clone())
                             .table_name(self.table_config.table_name.to_string())
                             .build(),
-                    ) {
+                    )) {
                         value_stack.push(coordinated_value.to_string());
                     } else if let Some(format) = &ctx.field.format {
                         value_stack.push(self.handle_format(

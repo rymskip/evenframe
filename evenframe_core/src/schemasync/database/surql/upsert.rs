@@ -51,11 +51,7 @@ impl Mockmaker<'_> {
             .get(table_name)
             .expect("TableConfig was not found");
 
-        let n = config
-            .mock_generation_config
-            .as_ref()
-            .map(|c| c.n)
-            .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count);
+        let n = self.record_count(config);
 
         // Step 3: Generate UPSERT statements for each record
         for i in 0..n {

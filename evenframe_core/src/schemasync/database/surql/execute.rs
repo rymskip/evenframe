@@ -355,11 +355,15 @@ async fn import_via_cli(
 ) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
     use std::io::Write;
 
-    let config = crate::config::EvenframeConfig::new()?;
-
-    let url = &config.schemasync.database.url;
-    let namespace = &config.schemasync.database.namespace;
-    let database = &config.schemasync.database.database;
+    // Target the database this process connected to (which may come from
+    // CLI overrides), falling back to the configured one.
+    let connection = match crate::schemasync::active_connection() {
+        Some(connection) => connection,
+        None => crate::config::EvenframeConfig::new()?.schemasync.database,
+    };
+    let url = &connection.url;
+    let namespace = &connection.namespace;
+    let database = &connection.database;
     let username = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
     let password = std::env::var("SURREALDB_PASSWORD").unwrap_or_else(|_| "root".to_string());
 

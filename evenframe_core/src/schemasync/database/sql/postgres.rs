@@ -1,7 +1,7 @@
 //! PostgreSQL Database Provider Implementation
 
 use async_trait::async_trait;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{AssertSqlSafe, PgPool, Row, postgres::PgPoolOptions};
 use std::collections::BTreeMap;
 use tracing::{info, trace};
 
@@ -11,7 +11,7 @@ use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, StructField, Ta
 
 use super::{
     JoinTableConfig, PostgresSchemaInspector, PostgresTypeMapper, SchemaInspector,
-    generate_join_table_sql,
+    generate_join_table_sql, quote_identifier,
 };
 use crate::schemasync::database::TypeMapper;
 use crate::schemasync::database::{
@@ -136,7 +136,7 @@ impl DatabaseProvider for PostgresProvider {
 
         // Get all tables
         let tables_query = inspector.list_tables_query();
-        let table_rows: Vec<serde_json::Value> = sqlx::query(&tables_query)
+        let table_rows: Vec<serde_json::Value> = sqlx::query(AssertSqlSafe(tables_query.as_str()))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to list tables: {e}")))?
@@ -152,7 +152,7 @@ impl DatabaseProvider for PostgresProvider {
             if let Some(table_name) = inspector.parse_table_row(row) {
                 // Get columns for this table
                 let columns_query = inspector.list_columns_query(&table_name);
-                let column_rows: Vec<serde_json::Value> = sqlx::query(&columns_query)
+                let column_rows: Vec<serde_json::Value> = sqlx::query(AssertSqlSafe(columns_query.as_str()))
                     .fetch_all(pool)
                     .await
                     .map_err(|e| EvenframeError::database(format!(
@@ -211,11 +211,14 @@ impl DatabaseProvider for PostgresProvider {
 
         for stmt in statements {
             trace!("Executing: {}", stmt);
-            sqlx::query(stmt).execute(pool).await.map_err(|e| {
-                EvenframeError::database(format!(
-                    "Failed to execute statement: {e}\nStatement: {stmt}"
-                ))
-            })?;
+            sqlx::query(AssertSqlSafe(stmt.as_str()))
+                .execute(pool)
+                .await
+                .map_err(|e| {
+                    EvenframeError::database(format!(
+                        "Failed to execute statement: {e}\nStatement: {stmt}"
+                    ))
+                })?;
         }
 
         Ok(())
@@ -230,7 +233,7 @@ impl DatabaseProvider for PostgresProvider {
         let inspector = self.inspector();
         let columns_query = inspector.list_columns_query(table_name);
 
-        let rows = sqlx::query(&columns_query)
+        let rows = sqlx::query(AssertSqlSafe(columns_query.as_str()))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to get table info: {e}")))?;
@@ -282,7 +285,7 @@ impl DatabaseProvider for PostgresProvider {
         let inspector = self.inspector();
         let query = inspector.list_tables_query();
 
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(AssertSqlSafe(query.as_str()))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to list tables: {e}")))?;
@@ -296,7 +299,7 @@ impl DatabaseProvider for PostgresProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
-        let rows = sqlx::query(query)
+        let rows = sqlx::query(AssertSqlSafe(query))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to execute query: {e}")))?;
@@ -333,17 +336,17 @@ impl DatabaseProvider for PostgresProvider {
                 let values: Vec<String> = obj.values().map(format_pg_value).collect();
 
                 let query = format!(
-                    "INSERT INTO \"{}\" ({}) VALUES ({}) RETURNING id",
-                    table,
+                    "INSERT INTO {} ({}) VALUES ({}) RETURNING id",
+                    quote_identifier(table, '"'),
                     columns
                         .iter()
-                        .map(|c| format!("\"{}\"", c))
+                        .map(|c| quote_identifier(c, '"'))
                         .collect::<Vec<_>>()
                         .join(", "),
                     values.join(", ")
                 );
 
-                let row = sqlx::query(&query)
+                let row = sqlx::query(AssertSqlSafe(query.as_str()))
                     .fetch_one(pool)
                     .await
                     .map_err(|e| EvenframeError::database(format!("Failed to insert: {e}")))?;
@@ -376,23 +379,26 @@ impl DatabaseProvider for PostgresProvider {
                 let update_clause: String = columns
                     .iter()
                     .filter(|c| **c != "id")
-                    .map(|c| format!("\"{}\" = EXCLUDED.\"{}\"", c, c))
+                    .map(|c| {
+                        let column = quote_identifier(c, '"');
+                        format!("{column} = EXCLUDED.{column}")
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
 
                 let query = format!(
-                    "INSERT INTO \"{}\" ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {} RETURNING id",
-                    table,
+                    "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {} RETURNING id",
+                    quote_identifier(table, '"'),
                     columns
                         .iter()
-                        .map(|c| format!("\"{}\"", c))
+                        .map(|c| quote_identifier(c, '"'))
                         .collect::<Vec<_>>()
                         .join(", "),
                     values.join(", "),
                     update_clause
                 );
 
-                let row = sqlx::query(&query)
+                let row = sqlx::query(AssertSqlSafe(query.as_str()))
                     .fetch_one(pool)
                     .await
                     .map_err(|e| EvenframeError::database(format!("Failed to upsert: {e}")))?;
@@ -410,9 +416,9 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>> {
         let query = if let Some(f) = filter {
-            format!("SELECT * FROM \"{}\" WHERE {}", table, f)
+            format!("SELECT * FROM {} WHERE {}", quote_identifier(table, '"'), f)
         } else {
-            format!("SELECT * FROM \"{}\"", table)
+            format!("SELECT * FROM {}", quote_identifier(table, '"'))
         };
 
         self.execute(&query).await
@@ -425,12 +431,19 @@ impl DatabaseProvider for PostgresProvider {
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let query = if let Some(f) = filter {
-            format!("SELECT COUNT(*) as count FROM \"{}\" WHERE {}", table, f)
+            format!(
+                "SELECT COUNT(*) as count FROM {} WHERE {}",
+                quote_identifier(table, '"'),
+                f
+            )
         } else {
-            format!("SELECT COUNT(*) as count FROM \"{}\"", table)
+            format!(
+                "SELECT COUNT(*) as count FROM {}",
+                quote_identifier(table, '"')
+            )
         };
 
-        let row = sqlx::query(&query)
+        let row = sqlx::query(AssertSqlSafe(query.as_str()))
             .fetch_one(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to count: {e}")))?;
@@ -445,9 +458,19 @@ impl DatabaseProvider for PostgresProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
-        for id in ids {
-            let query = format!("DELETE FROM \"{}\" WHERE id = '{}'", table, id);
-            sqlx::query(&query)
+        // Ids are escaped string literals rather than bound TEXT parameters:
+        // an untyped literal coerces to the id column's type (UUID, BIGINT, ...)
+        for chunk in ids.chunks(DELETE_CHUNK_SIZE) {
+            let query = format!(
+                "DELETE FROM {} WHERE id IN ({})",
+                quote_identifier(table, '"'),
+                chunk
+                    .iter()
+                    .map(|id| pg_string_literal(id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            sqlx::query(AssertSqlSafe(query.as_str()))
                 .execute(pool)
                 .await
                 .map_err(|e| EvenframeError::database(format!("Failed to delete: {e}")))?;
@@ -539,7 +562,7 @@ impl DatabaseProvider for PostgresProvider {
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let mut columns = vec!["from_id", "to_id"];
-        let mut values = vec![format!("'{}'", from_id), format!("'{}'", to_id)];
+        let mut values = vec![pg_string_literal(from_id), pg_string_literal(to_id)];
 
         if let Some(data) = data
             && let Some(obj) = data.as_object()
@@ -553,17 +576,17 @@ impl DatabaseProvider for PostgresProvider {
         }
 
         let query = format!(
-            "INSERT INTO \"{}\" ({}) VALUES ({}) RETURNING id",
-            edge_table,
+            "INSERT INTO {} ({}) VALUES ({}) RETURNING id",
+            quote_identifier(edge_table, '"'),
             columns
                 .iter()
-                .map(|c| format!("\"{}\"", c))
+                .map(|c| quote_identifier(c, '"'))
                 .collect::<Vec<_>>()
                 .join(", "),
             values.join(", ")
         );
 
-        let row = sqlx::query(&query)
+        let row = sqlx::query(AssertSqlSafe(query.as_str()))
             .fetch_one(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to create relationship: {e}")))?;
@@ -587,11 +610,13 @@ impl DatabaseProvider for PostgresProvider {
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
         let query = format!(
-            "DELETE FROM \"{}\" WHERE from_id = '{}' AND to_id = '{}'",
-            edge_table, from_id, to_id
+            "DELETE FROM {} WHERE from_id = {} AND to_id = {}",
+            quote_identifier(edge_table, '"'),
+            pg_string_literal(from_id),
+            pg_string_literal(to_id)
         );
 
-        sqlx::query(&query)
+        sqlx::query(AssertSqlSafe(query.as_str()))
             .execute(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to delete relationship: {e}")))?;
@@ -605,24 +630,17 @@ impl DatabaseProvider for PostgresProvider {
         record_id: &str,
         direction: RelationshipDirection,
     ) -> Result<Vec<Relationship>> {
+        let table = quote_identifier(edge_table, '"');
+        let id = pg_string_literal(record_id);
         let query = match direction {
             RelationshipDirection::Outgoing => {
-                format!(
-                    "SELECT * FROM \"{}\" WHERE from_id = '{}'",
-                    edge_table, record_id
-                )
+                format!("SELECT * FROM {table} WHERE from_id = {id}")
             }
             RelationshipDirection::Incoming => {
-                format!(
-                    "SELECT * FROM \"{}\" WHERE to_id = '{}'",
-                    edge_table, record_id
-                )
+                format!("SELECT * FROM {table} WHERE to_id = {id}")
             }
             RelationshipDirection::Both => {
-                format!(
-                    "SELECT * FROM \"{}\" WHERE from_id = '{}' OR to_id = '{}'",
-                    edge_table, record_id, record_id
-                )
+                format!("SELECT * FROM {table} WHERE from_id = {id} OR to_id = {id}")
             }
         };
 
@@ -631,7 +649,7 @@ impl DatabaseProvider for PostgresProvider {
             .as_ref()
             .ok_or_else(|| EvenframeError::database("Not connected to PostgreSQL"))?;
 
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(AssertSqlSafe(query.as_str()))
             .fetch_all(pool)
             .await
             .map_err(|e| EvenframeError::database(format!("Failed to get relationships: {e}")))?;
@@ -667,13 +685,23 @@ impl DatabaseProvider for PostgresProvider {
     }
 }
 
+/// Maximum number of ids in one DELETE statement
+const DELETE_CHUNK_SIZE: usize = 500;
+
+/// Quote a string as a PostgreSQL literal. Safe because the server runs with
+/// `standard_conforming_strings` (the default since 9.1), where backslashes
+/// are ordinary characters
+fn pg_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// Format a JSON value for PostgreSQL
 fn format_pg_value(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "NULL".to_string(),
         serde_json::Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        serde_json::Value::String(s) => pg_string_literal(s),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
             format!("'{}'::JSONB", value.to_string().replace('\'', "''"))
         }
