@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
     let result = match &cli.command {
         Some(Commands::Typesync(args)) => commands::typesync::run(&cli, args.clone()).await,
         Some(Commands::Schemasync(args)) => commands::schemasync::run(&cli, args.clone()).await,
+        Some(Commands::Mockmake(args)) => commands::mockmake::run(&cli, args.clone()).await,
         Some(Commands::Generate(args)) => commands::generate::run(&cli, args.clone()).await,
         Some(Commands::Init(args)) => commands::init::run(&cli, args.clone()).await,
         Some(Commands::Validate(args)) => commands::validate::run(&cli, args.clone()).await,

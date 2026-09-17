@@ -93,12 +93,17 @@ pub trait DatabaseProvider: Send + Sync {
     async fn upsert(&self, table: &str, records: &[serde_json::Value]) -> Result<Vec<String>>;
 
     /// Select records from a table with optional filter
+    ///
+    /// `filter` is a raw WHERE clause in the provider's query language and is
+    /// not escaped; never build it from untrusted input
     async fn select(&self, table: &str, filter: Option<&str>) -> Result<Vec<serde_json::Value>>;
 
     /// Count records in a table with optional filter
+    ///
+    /// `filter` is a raw WHERE clause, like in [`DatabaseProvider::select`]
     async fn count(&self, table: &str, filter: Option<&str>) -> Result<u64>;
 
-    /// Delete records by IDs
+    /// Delete records by IDs (bound or escaped by the provider)
     async fn delete(&self, table: &str, ids: &[String]) -> Result<()>;
 
     // === Schema Generation ===

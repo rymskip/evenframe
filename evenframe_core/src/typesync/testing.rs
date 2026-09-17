@@ -135,7 +135,6 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         doccom: None,
         annotations: vec![],
         unique: false,
-        mock_plugin: None,
         output_override: None,
         raw_attributes: BTreeMap::new(),
     }

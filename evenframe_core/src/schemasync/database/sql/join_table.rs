@@ -178,7 +178,7 @@ pub fn generate_join_table_schema(edge: &EdgeConfig, config: &JoinTableConfig) -
 
 /// Generate SQL statements for creating a join table
 pub fn generate_join_table_sql(edge: &EdgeConfig, config: &JoinTableConfig) -> Vec<String> {
-    let q = |name: &str| format!("{}{}{}", config.quote_char, name, config.quote_char);
+    let q = |name: &str| super::quote_identifier(name, config.quote_char);
     let schema = generate_join_table_schema(edge, config);
 
     let mut statements = Vec::new();
@@ -277,10 +277,13 @@ pub fn generate_relationship_insert(
     additional_data: Option<&serde_json::Value>,
     config: &JoinTableConfig,
 ) -> String {
-    let q = |name: &str| format!("{}{}{}", config.quote_char, name, config.quote_char);
+    let q = |name: &str| super::quote_identifier(name, config.quote_char);
 
     let mut columns = vec!["from_id", "to_id"];
-    let mut values = vec![format!("'{}'", from_id), format!("'{}'", to_id)];
+    let mut values = vec![
+        format!("'{}'", super::escape_sql_string(from_id)),
+        format!("'{}'", super::escape_sql_string(to_id)),
+    ];
 
     if let Some(data) = additional_data
         && let Some(obj) = data.as_object()

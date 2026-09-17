@@ -1,0 +1,5 @@
+error: `fulltext` indexes cover a single field and are declared on it: move this to `#[fulltext(...)]` on the field
+ --> tests/ui/fail/index_fulltext_on_struct.rs:4:32
+  |
+4 | #[indexes(search(fields(body), fulltext(analyzer = "en")))]
+  |                                ^^^^^^^^

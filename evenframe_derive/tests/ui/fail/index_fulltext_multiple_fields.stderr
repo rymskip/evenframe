@@ -1,5 +1,0 @@
-error: `fulltext`, `hnsw` and `diskann` indexes take exactly one field, found 2
- --> tests/ui/fail/index_fulltext_multiple_fields.rs:4:9
-  |
-4 | #[index(fields(body, title), fulltext(analyzer = "en"))]
-  |         ^^^^^^

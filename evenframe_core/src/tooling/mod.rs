@@ -20,11 +20,13 @@ mod build_config;
 mod config_builders;
 pub mod expansion_cache;
 mod generator;
+mod registry;
 mod workspace_scanner;
 
 pub use build_config::*;
 pub use config_builders::*;
 pub use generator::*;
+pub use registry::*;
 pub use workspace_scanner::*;
 
 use crate::error::EvenframeError;

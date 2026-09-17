@@ -1,6 +1,6 @@
 [package]
 name = "evenframe"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -23,7 +23,8 @@ path = "src/lib.rs"
 default = ["cli"]
 
 # Enables file-based debug logging via the `evenframe_log!` macro.
-# Writes .log/.surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/.
+# Writes .log/.surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/
+# (the system temp directory when the variable is unset).
 # Not intended for production use.
 dev-mode = ["evenframe_core/dev-mode"]
 
@@ -81,7 +82,7 @@ full = ["evenframe_core/full"]
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.2.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
+evenframe_core = { version = "0.3.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }
@@ -92,14 +93,14 @@ toml = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-evenframe_derive = { version = "0.2.0", path = "../evenframe_derive" }
+evenframe_derive = { version = "0.3.0", path = "../evenframe_derive" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5.0"
-linkme = "0.3.33"
-clap = { version = "4.5", features = ["derive", "env"] }
+linkme = "0.3.37"
+clap = { version = "4.6", features = ["derive", "env"] }
 
 [dev-dependencies]
-tempfile = "3.10"
-mockall = "0.13"
-proptest = "1.4"
+tempfile = "3.27"
+mockall = "0.15"
+proptest = "1.11"
 pretty_assertions = "1.4"

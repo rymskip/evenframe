@@ -1,0 +1,5 @@
+error: declare all struct-level indexes in a single `#[indexes(...)]`
+ --> tests/ui/fail/indexes_repeated.rs:5:3
+  |
+5 | #[indexes(by_body(fields(body, title)))]
+  |   ^^^^^^^

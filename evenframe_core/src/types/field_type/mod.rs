@@ -146,7 +146,7 @@ impl FieldType {
                 );
                 FieldType::Other(to.to_token_stream().to_string())
             }
-            SynType::BareFn(f) => {
+            SynType::FnPtr(f) => {
                 tracing::debug!(
                     "Function pointer not directly supported: {}",
                     f.to_token_stream()

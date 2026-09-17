@@ -1,4 +1,4 @@
--- Analyzers used by #[index(..., fulltext(analyzer = "..."))] declarations.
+-- Analyzers used by #[fulltext(analyzer = "...")] field attributes.
 -- Applied by schemasync before tables; keep OVERWRITE so re-syncs succeed.
 
 DEFINE ANALYZER OVERWRITE blog_english

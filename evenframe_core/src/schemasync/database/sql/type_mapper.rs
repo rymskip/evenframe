@@ -212,7 +212,7 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
         match field_type {
             FieldType::String | FieldType::Char => {
                 let s = value.as_str().unwrap_or_default();
-                format!("'{}'", s.replace('\'', "''"))
+                mysql_string_literal(s)
             }
             FieldType::Bool => if value.as_bool().unwrap_or(false) {
                 "1"
@@ -224,9 +224,7 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
             | FieldType::Tuple(_)
             | FieldType::Struct(_)
             | FieldType::HashMap(_, _)
-            | FieldType::BTreeMap(_, _) => {
-                format!("'{}'", value.to_string().replace('\'', "''"))
-            }
+            | FieldType::BTreeMap(_, _) => mysql_string_literal(&value.to_string()),
             FieldType::Option(inner) => {
                 if value.is_null() {
                     "NULL".to_string()
@@ -240,7 +238,7 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
                 } else if value.is_number() {
                     value.to_string()
                 } else if let Some(s) = value.as_str() {
-                    format!("'{}'", s.replace('\'', "''"))
+                    mysql_string_literal(s)
                 } else {
                     value.to_string()
                 }
@@ -265,7 +263,7 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
     }
 
     fn format_datetime(&self, value: &str) -> String {
-        format!("'{}'", value)
+        mysql_string_literal(value)
     }
 
     fn format_duration(&self, nanos: i64) -> String {
@@ -273,12 +271,7 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
     }
 
     fn format_array(&self, _field_type: &FieldType, values: &[serde_json::Value]) -> String {
-        format!(
-            "'{}'",
-            serde_json::to_string(values)
-                .unwrap_or_default()
-                .replace('\'', "''")
-        )
+        mysql_string_literal(&serde_json::to_string(values).unwrap_or_default())
     }
 
     fn auto_increment_type(&self) -> &'static str {
@@ -290,6 +283,12 @@ impl<'a> TypeMapper for MysqlTypeMapper<'a> {
     fn uuid_generate_expr(&self) -> Option<&'static str> {
         Some("UUID()")
     }
+}
+
+/// Single-quoted MySQL string literal. MySQL treats `\` as an escape
+/// character by default, so it is escaped along with `'`
+fn mysql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 /// SQLite type mapper
@@ -441,4 +440,27 @@ fn is_primitive(field_type: &FieldType) -> bool {
             | FieldType::F32
             | FieldType::F64
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mysql_string_literal_escapes_backslashes_and_quotes() {
+        assert_eq!(mysql_string_literal("it's"), "'it''s'");
+        // Without the backslash escape, `\'` would end the literal in MySQL
+        assert_eq!(mysql_string_literal("a\\'b"), "'a\\\\''b'");
+    }
+
+    #[test]
+    fn mysql_format_value_uses_escaped_literals() {
+        let registry = ForeignTypeRegistry::default();
+        let mapper = MysqlTypeMapper::new(&registry);
+        assert_eq!(
+            mapper.format_value(&FieldType::String, &serde_json::json!("x\\")),
+            "'x\\\\'"
+        );
+        assert_eq!(mapper.format_datetime("2024-01-01'"), "'2024-01-01'''");
+    }
 }

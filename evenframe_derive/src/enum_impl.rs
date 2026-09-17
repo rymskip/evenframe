@@ -101,7 +101,6 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                         doccom: None,
                                         annotations: vec![],
                                         unique: false,
-                                        mock_plugin: None,
                                         output_override: None,
                                         raw_attributes: std::collections::BTreeMap::new(),
                                     }
@@ -147,7 +146,6 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                     doccom: None,
                                     annotations: vec![],
                                     unique: false,
-                                    mock_plugin: None,
                                     output_override: None,
                                     raw_attributes: std::collections::BTreeMap::new(),
                                 }

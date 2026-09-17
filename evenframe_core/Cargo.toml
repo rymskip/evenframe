@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -19,7 +19,8 @@ categories = ["development-tools", "database"]
 default = []
 
 # Enables file-based debug logging via the `evenframe_log!` macro.
-# Writes .log and .surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/.
+# Writes .log and .surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/
+# (the system temp directory when the variable is unset).
 # Not intended for production use.
 dev-mode = []
 
@@ -137,54 +138,54 @@ toml = { workspace = true }
 
 # Database providers (optional based on features)
 surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"], optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls"], optional = true }
-tempfile = { version = "3.10", optional = true }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls"], optional = true }
+tempfile = { version = "3.27", optional = true }
 
 # Always compiled (core)
 async-trait = "0.1"
-dotenv = "0.15.0"
-proc-macro2 = "1.0.95"
-quote = "1.0.40"
-serde = { version = "1.0.219", features = ["derive"] }
+dotenvy = "0.15.7"
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+serde = { version = "1.0.229", features = ["derive"] }
 heck = "0.5.0"
-chrono = "0.4.41"
-derive_more = { version = "2.0.1", features = ["from"] }
-petgraph = "0.8.2"
-futures = "0.3.31"
+chrono = "0.4.45"
+derive_more = { version = "2.1.1", features = ["from"] }
+petgraph = "0.8.3"
+futures = "0.3.34"
 serde-value = "0.7.0"
-thiserror = "2.0.12"
-ordered-float = { version = "5.0.0", features = ["serde"] }
+thiserror = "2.0.20"
+ordered-float = { version = "5.5.0", features = ["serde"] }
 derive-syn-parse = "0.2.0"
-linkme = "0.3.33"
-once_cell = "1.21.3"
-walkdir = "2.5"
-rayon = "1.10"
-blake3 = "1.5"
+linkme = "0.3.37"
+once_cell = "1.21.4"
+ignore = "0.4.33"
+rayon = "1.12"
+blake3 = "1.8"
 
 # Always compiled (used in type definitions throughout)
-bon = "3.6.5"
-rand = "0.10.0"
+bon = "3.10.1"
+rand = "0.10.2"
 rand_distr = "0.6.0"
-uuid = { version = "1.17", features = ["v4", "serde"] }
+uuid = { version = "1.26", features = ["v4", "serde"] }
 
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
 
 # Optional: WASM plugin runtime
-wasmtime = { version = "29", optional = true }
+wasmtime = { version = "48", optional = true }
 
 # Optional: typesync parser dependencies
 logos = { version = "0.16", optional = true }
 protox = { version = "0.9", optional = true }
 prost-types = { version = "0.14", optional = true }
-macroforge_ts = { version = "0.1.17", optional = true }
+macroforge_ts = { version = "0.1.84", optional = true }
 strum = { version = "0.28.0", features = ["derive"] }
 
 [dev-dependencies]
-proptest = "1.4"
-mockall = "0.12"
+proptest = "1.11"
+mockall = "0.15"
 temp-env = "0.3"
-tempfile = "3.10"
+tempfile = "3.27"
 pretty_assertions = "1.4"
 insta = { workspace = true }
 serde_json = { workspace = true }

@@ -198,9 +198,6 @@ pub struct StructField {
     pub annotations: Vec<String>,
     #[serde(default)]
     pub unique: bool,
-    /// Name of the WASM plugin to use for mock data generation (if any).
-    #[serde(default)]
-    pub mock_plugin: Option<String>,
     #[serde(default)]
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
@@ -222,7 +219,6 @@ impl std::hash::Hash for StructField {
         self.doccom.hash(state);
         self.annotations.hash(state);
         self.unique.hash(state);
-        self.mock_plugin.hash(state);
         self.output_override.hash(state);
     }
 }
@@ -848,7 +844,10 @@ impl StructField {
             }
 
             if let Some(ref comment_str) = def.comment {
-                stmt.push_str(&format!(" COMMENT '{}'", comment_str.replace('\'', "\\'")));
+                stmt.push_str(&format!(
+                    " COMMENT {}",
+                    crate::schemasync::table::surql_string_literal(comment_str)
+                ));
             }
 
             stmt.push_str(";\n");
@@ -934,7 +933,10 @@ impl StructField {
             }
 
             if let Some(ref comment_str) = def.comment {
-                stmt.push_str(&format!(" COMMENT '{}'", comment_str.replace('\'', "\\'")));
+                stmt.push_str(&format!(
+                    " COMMENT {}",
+                    crate::schemasync::table::surql_string_literal(comment_str)
+                ));
             }
         }
 
@@ -1278,7 +1280,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -1323,7 +1324,6 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     unique: false,
-                    mock_plugin: None,
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                 },
@@ -1338,7 +1338,6 @@ mod tests {
                     doccom: None,
                     annotations: vec![],
                     unique: false,
-                    mock_plugin: None,
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                 },
@@ -1526,7 +1525,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -1682,7 +1680,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };
@@ -1781,7 +1778,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         };

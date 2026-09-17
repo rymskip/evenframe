@@ -1,6 +1,7 @@
-//! End-to-end tests for `#[index(...)]` kinds (FULLTEXT, HNSW, DISKANN,
-//! COUNT, array-element composites) and analyzer handling against a real
-//! embedded SurrealDB.
+//! End-to-end tests for index declarations (field-level `#[fulltext]`,
+//! `#[hnsw]`, `#[diskann]`; struct-level `#[indexes(...)]` COUNT and
+//! array-element composites) and analyzer handling against a real embedded
+//! SurrealDB.
 //!
 //! The snapshot and unit tests only prove what evenframe *emits*. These drive
 //! the scanner, apply the generated statements to an in-memory SurrealDB,
@@ -13,11 +14,15 @@
 use evenframe_core::schemasync::TableConfig;
 use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schemas};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
+use evenframe_core::schemasync::config::{
+    AccessConfig, AccessType, AccessesSource, DatabaseConfig,
+};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::execute::validate_surql_response;
 use evenframe_core::schemasync::database::surql::remove::{
     generate_remove_analyzer_statements, generate_remove_index_statements,
 };
+use evenframe_core::schemasync::dump::{schema_surql, tables_surql};
 use evenframe_core::tooling::{BuildConfig, build_all_configs};
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
@@ -32,35 +37,42 @@ const ANALYZERS: &str = "DEFINE ANALYZER OVERWRITE english TOKENIZERS blank, cla
 
 const POST_SOURCE: &str = r#"
     #[derive(Evenframe)]
-    #[index(
-        name = "post_search",
-        fields(body),
-        fulltext(analyzer = "english", bm25(k1 = 1.2, b = 0.75), highlights),
-        comment = "full-text search"
+    #[indexes(
+        post_tags_created_at(fields("tags.*", created_at)),
+        post_count(count),
+        post_published_count(count(where = "published = true")),
     )]
-    #[index(fields(embedding), hnsw(dimension = 3, dist = "cosine", type = "f32", efc = 100, m = 8))]
-    #[index(
-        name = "post_ann",
-        fields(embedding),
-        diskann(dimension = 3, dist = "euclidean", type = "f32", degree = 16, l_build = 50, alpha = 1.2)
-    )]
-    #[index(fields("tags.*", created_at))]
-    #[index(count)]
-    #[index(name = "post_published_count", count(where = "published = true"))]
-    #[index(fields(slug), unique)]
     pub struct Post {
         pub id: String,
+        #[unique(comment = "one post per slug")]
         pub slug: String,
+        #[fulltext(
+            name = "post_search",
+            analyzer = "english",
+            bm25(k1 = 1.2, b = 0.75),
+            highlights,
+            comment = "full-text search"
+        )]
         pub body: String,
         pub tags: Vec<String>,
         pub created_at: String,
+        #[hnsw(dimension = 3, dist = "cosine", type = "f32", efc = 100, m = 8)]
+        #[diskann(
+            name = "post_ann",
+            dimension = 3,
+            dist = "euclidean",
+            type = "f32",
+            degree = 16,
+            l_build = 50,
+            alpha = 1.2
+        )]
         pub embedding: Vec<f32>,
         pub published: bool,
     }
 "#;
 
 /// Scan a one-file crate containing `source` and return its table configs.
-fn scan(source: &str) -> (TempDir, BTreeMap<String, TableConfig>) {
+fn scan(source: &str) -> BTreeMap<String, TableConfig> {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
@@ -75,33 +87,26 @@ fn scan(source: &str) -> (TempDir, BTreeMap<String, TableConfig>) {
         ..BuildConfig::default()
     };
     let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
-    (tmp, tables)
+    tables
 }
 
-fn define_statements(tmp: &TempDir, tables: &BTreeMap<String, TableConfig>) -> String {
+fn define_statements(tables: &BTreeMap<String, TableConfig>) -> String {
     let registry = ForeignTypeRegistry::default();
-    // `evenframe_log!` needs this under the `dev-mode` feature.
-    temp_env::with_var(
-        "ABSOLUTE_PATH_TO_EVENFRAME",
-        Some(tmp.path().to_str().unwrap()),
-        || {
-            tables
-                .iter()
-                .map(|(name, table)| {
-                    generate_define_statements(
-                        name,
-                        table,
-                        tables,
-                        &BTreeMap::new(),
-                        &BTreeMap::new(),
-                        &registry,
-                        true,
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        },
-    )
+    tables
+        .iter()
+        .map(|(name, table)| {
+            generate_define_statements(
+                name,
+                table,
+                tables,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &registry,
+                true,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn mem_db() -> Surreal<Db> {
@@ -133,8 +138,8 @@ async fn export_and_parse(
 
 #[tokio::test]
 async fn generated_indexes_are_accepted_and_round_trip_through_export() {
-    let (tmp, tables) = scan(POST_SOURCE);
-    let surql = define_statements(&tmp, &tables);
+    let tables = scan(POST_SOURCE);
+    let surql = define_statements(&tables);
 
     let a = mem_db().await;
     let b = mem_db().await;
@@ -176,7 +181,7 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
     );
 
     assert!(
-        index("idx_post_embedding")
+        index("idx_post_embedding_hnsw")
             .definition
             .starts_with("HNSW DIMENSION 3 DIST COSINE")
     );
@@ -186,17 +191,27 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
             .starts_with("DISKANN DIMENSION 3 DIST EUCLIDEAN")
     );
     assert_eq!(
-        index("idx_post_tags_created_at").columns,
+        index("post_tags_created_at").columns,
         vec!["tags.*".to_string(), "created_at".to_string()]
     );
-    assert!(index("idx_post_count").columns.is_empty());
-    assert_eq!(index("idx_post_count").definition, "COUNT");
+    assert!(index("post_count").columns.is_empty());
+    assert_eq!(index("post_count").definition, "COUNT");
     assert!(
         index("post_published_count")
             .definition
             .starts_with("COUNT WHERE")
     );
     assert!(index("idx_post_slug").unique);
+    assert_eq!(
+        index("idx_post_slug").definition,
+        "UNIQUE COMMENT 'one post per slug'",
+        "field-level #[unique(...)] options must win over the bare StructField flag"
+    );
+    assert_eq!(
+        post.indexes.iter().filter(|i| i.unique).count(),
+        1,
+        "#[unique(...)] must not also produce a second unique index"
+    );
 
     assert_eq!(schema_b.analyzers.len(), 1, "{export}");
     assert_eq!(schema_b.analyzers[0].name, "english");
@@ -227,27 +242,33 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
 
 #[tokio::test]
 async fn changed_fulltext_parameters_are_detected() {
-    let (tmp_old, old_tables) = scan(
+    let old_tables = scan(
         r#"
         #[derive(Evenframe)]
-        #[index(name = "post_search", fields(body), fulltext(analyzer = "english", bm25))]
-        pub struct Post { pub id: String, pub body: String }
+        pub struct Post {
+            pub id: String,
+            #[fulltext(name = "post_search", analyzer = "english", bm25)]
+            pub body: String,
+        }
         "#,
     );
-    let (tmp_new, new_tables) = scan(
+    let new_tables = scan(
         r#"
         #[derive(Evenframe)]
-        #[index(name = "post_search", fields(body), fulltext(analyzer = "english", bm25(k1 = 2.0, b = 0.5), highlights))]
-        pub struct Post { pub id: String, pub body: String }
+        pub struct Post {
+            pub id: String,
+            #[fulltext(name = "post_search", analyzer = "english", bm25(k1 = 2.0, b = 0.5), highlights)]
+            pub body: String,
+        }
         "#,
     );
 
     let old = mem_db().await;
     let new = mem_db().await;
     apply(&old, ANALYZERS).await;
-    apply(&old, &define_statements(&tmp_old, &old_tables)).await;
+    apply(&old, &define_statements(&old_tables)).await;
     apply(&new, ANALYZERS).await;
-    apply(&new, &define_statements(&tmp_new, &new_tables)).await;
+    apply(&new, &define_statements(&new_tables)).await;
 
     let (old_schema, new_schema, _) = export_and_parse(&old, &new).await;
     let changes = Comparator::compare(&old_schema, &new_schema).unwrap();
@@ -261,7 +282,7 @@ async fn changed_fulltext_parameters_are_detected() {
 
     // Re-applying the new definition over the old one (what schemasync does
     // for a modified table) must be accepted and converge.
-    apply(&old, &define_statements(&tmp_new, &new_tables)).await;
+    apply(&old, &define_statements(&new_tables)).await;
     let (old_schema, new_schema, _) = export_and_parse(&old, &new).await;
     let changes = Comparator::compare(&old_schema, &new_schema).unwrap();
     assert!(changes.modified_tables.is_empty(), "{changes:#?}");
@@ -269,14 +290,17 @@ async fn changed_fulltext_parameters_are_detected() {
 
 #[tokio::test]
 async fn orphan_index_and_analyzer_are_removed_in_order() {
-    let (tmp_old, old_tables) = scan(
+    let old_tables = scan(
         r#"
         #[derive(Evenframe)]
-        #[index(name = "post_search", fields(body), fulltext(analyzer = "english"))]
-        pub struct Post { pub id: String, pub body: String }
+        pub struct Post {
+            pub id: String,
+            #[fulltext(name = "post_search", analyzer = "english")]
+            pub body: String,
+        }
         "#,
     );
-    let (tmp_new, new_tables) = scan(
+    let new_tables = scan(
         r#"
         #[derive(Evenframe)]
         pub struct Post { pub id: String, pub body: String }
@@ -286,8 +310,8 @@ async fn orphan_index_and_analyzer_are_removed_in_order() {
     let old = mem_db().await;
     let new = mem_db().await;
     apply(&old, ANALYZERS).await;
-    apply(&old, &define_statements(&tmp_old, &old_tables)).await;
-    apply(&new, &define_statements(&tmp_new, &new_tables)).await;
+    apply(&old, &define_statements(&old_tables)).await;
+    apply(&new, &define_statements(&new_tables)).await;
 
     let (old_schema, new_schema, _) = export_and_parse(&old, &new).await;
     let changes = Comparator::compare(&old_schema, &new_schema).unwrap();
@@ -316,8 +340,11 @@ async fn orphan_index_and_analyzer_are_removed_in_order() {
 
 const DOC_WITH_PLAIN_SEARCH: &str = r#"
     #[derive(Evenframe)]
-    #[index(name = "doc_search", fields(body), fulltext(analyzer = "plain", bm25))]
-    pub struct Doc { pub id: String, pub body: String }
+    pub struct Doc {
+        pub id: String,
+        #[fulltext(name = "doc_search", analyzer = "plain", bm25)]
+        pub body: String,
+    }
 "#;
 
 async fn doc_hits(db: &Surreal<Db>, term: &str) -> usize {
@@ -367,8 +394,8 @@ async fn sync(
 
 #[tokio::test]
 async fn modified_analyzer_rebuilds_dependent_fulltext_index() {
-    let (tmp, tables) = scan(DOC_WITH_PLAIN_SEARCH);
-    let define = define_statements(&tmp, &tables);
+    let tables = scan(DOC_WITH_PLAIN_SEARCH);
+    let define = define_statements(&tables);
     let unstemmed = "DEFINE ANALYZER OVERWRITE plain TOKENIZERS blank FILTERS lowercase;";
     let stemmed =
         "DEFINE ANALYZER OVERWRITE plain TOKENIZERS blank FILTERS lowercase, snowball(english);";
@@ -412,21 +439,24 @@ async fn modified_analyzer_rebuilds_dependent_fulltext_index() {
 
 #[tokio::test]
 async fn index_can_move_off_an_analyzer_that_is_removed() {
-    let (tmp_old, old_tables) = scan(
+    let old_tables = scan(
         r#"
         #[derive(Evenframe)]
-        #[index(name = "doc_search", fields(body), fulltext(analyzer = "legacy"))]
-        pub struct Doc { pub id: String, pub body: String }
+        pub struct Doc {
+            pub id: String,
+            #[fulltext(name = "doc_search", analyzer = "legacy")]
+            pub body: String,
+        }
         "#,
     );
-    let (tmp_new, new_tables) = scan(DOC_WITH_PLAIN_SEARCH);
-    let new_define = define_statements(&tmp_new, &new_tables);
+    let new_tables = scan(DOC_WITH_PLAIN_SEARCH);
+    let new_define = define_statements(&new_tables);
     let new_analyzers =
         "DEFINE ANALYZER OVERWRITE plain TOKENIZERS blank FILTERS lowercase, snowball(english);";
 
     let live = mem_db().await;
     apply(&live, "DEFINE ANALYZER OVERWRITE legacy TOKENIZERS blank;").await;
-    apply(&live, &define_statements(&tmp_old, &old_tables)).await;
+    apply(&live, &define_statements(&old_tables)).await;
     apply(&live, "CREATE doc:one SET body = 'Searching things';").await;
 
     let changes = sync(&live, new_analyzers, &new_define).await;
@@ -460,4 +490,64 @@ async fn commented_analyzer_file_validates() {
     let (_, schema, _) = export_and_parse(&db, &db).await;
     let names: Vec<&str> = schema.analyzers.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, vec!["a", "b"]);
+}
+
+#[tokio::test]
+async fn full_schema_dump_applies_top_to_bottom() {
+    let tables = scan(POST_SOURCE);
+    let tables_surql = tables_surql(
+        &tables,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &ForeignTypeRegistry::default(),
+        true,
+    );
+
+    let mut database = DatabaseConfig::for_testing();
+    database.accesses = AccessesSource::Inline(vec![
+        AccessConfig {
+            name: "reader".to_string(),
+            access_type: AccessType::Bearer,
+            table_name: "post".to_string(),
+        },
+        AccessConfig {
+            name: "writer".to_string(),
+            access_type: AccessType::Bearer,
+            table_name: "post".to_string(),
+        },
+    ]);
+    database.resolved.analyzers_surql = Some(format!("-- analyzers; for search\n{ANALYZERS}\n"));
+    database.resolved.functions_surql = Some(
+        "DEFINE FUNCTION OVERWRITE fn::post_count($p: record<post>) { RETURN count($p) };"
+            .to_string(),
+    );
+    let dump = schema_surql(&database, &tables_surql);
+
+    let db = mem_db().await;
+    apply(&db, &dump).await;
+
+    // INFO FOR DB lists each definition as its DEFINE statement
+    let mut response = db.query("INFO FOR DB;").await.unwrap();
+    let info = response
+        .take::<Option<surrealdb::types::Value>>(0)
+        .unwrap()
+        .map(|v| serde_json::to_string(&v).unwrap())
+        .expect("INFO FOR DB result");
+    for definition in [
+        "DEFINE ACCESS reader ON DATABASE",
+        "DEFINE ACCESS writer ON DATABASE",
+        "DEFINE ANALYZER english",
+        "DEFINE FUNCTION fn::post_count",
+        "DEFINE TABLE post",
+    ] {
+        assert!(info.contains(definition), "missing `{definition}`: {info}");
+    }
+    let (_, schema, _) = export_and_parse(&db, &db).await;
+    assert!(
+        schema.tables["post"]
+            .indexes
+            .iter()
+            .any(|i| i.name == "post_search"),
+        "full-text index from the dump missing"
+    );
 }

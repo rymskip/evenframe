@@ -32,11 +32,7 @@ impl Mockmaker<'_> {
             true
         );
 
-        let n = config
-            .mock_generation_config
-            .as_ref()
-            .map(|c| c.n)
-            .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count);
+        let n = self.record_count(config);
 
         evenframe_log!(
             format!("Will generate {} records for table {}", n, table_name),

@@ -255,7 +255,7 @@ pub fn deps_of_table(
 }
 
 /// Collect all dependencies of a table including nested objects and enums
-fn collect_table_dependencies(
+pub fn collect_table_dependencies(
     table_name: &str,
     tables: &BTreeMap<String, TableConfig>,
     objects: &BTreeMap<String, StructConfig>,
@@ -745,7 +745,6 @@ mod tests {
             doccom: None,
             annotations: vec![],
             unique: false,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: BTreeMap::new(),
         }
@@ -1269,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_sort_tables_empty() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
         let objects: BTreeMap<String, StructConfig> = BTreeMap::new();
         let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
@@ -1281,7 +1280,7 @@ mod tests {
 
     #[test]
     fn test_sort_tables_no_dependencies() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let mut tables = BTreeMap::new();
         tables.insert(
             "user".to_string(),
@@ -1304,7 +1303,7 @@ mod tests {
 
     #[test]
     fn test_sort_tables_with_dependency() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let mut tables = BTreeMap::new();
         tables.insert(
             "post".to_string(),
@@ -1331,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_sort_tables_chain_dependency() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let mut tables = BTreeMap::new();
         tables.insert(
             "C".to_string(),
@@ -1370,7 +1369,7 @@ mod tests {
 
     #[test]
     fn test_sort_tables_circular_dependency() {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let mut tables = BTreeMap::new();
         tables.insert(
             "A".to_string(),

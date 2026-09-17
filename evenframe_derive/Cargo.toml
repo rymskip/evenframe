@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_derive"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -20,16 +20,16 @@ proc-macro = true
 serde_json = { workspace = true }
 regex = { workspace = true }
 convert_case = { workspace = true }
-evenframe_core = { version = "0.2.0", path = "../evenframe_core", default-features = false }
+evenframe_core = { version = "0.3.0", path = "../evenframe_core", default-features = false }
 
-proc-macro2 = "1.0.95"
-quote = "1.0.40"
-syn = { version = "2.0.104", features = ["full"] }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "3.0.5", features = ["full"] }
 
 
 [dev-dependencies]
 trybuild = "1.0"
-proptest = "1.4"
+proptest = "1.11"
 pretty_assertions = "1.4"
 evenframe = { path = "../evenframe", features = ["schemasync"] }
 linkme = "0.3"

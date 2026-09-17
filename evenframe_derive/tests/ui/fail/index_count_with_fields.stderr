@@ -1,5 +1,5 @@
 error: `count` indexes cannot have `fields(...)`
- --> tests/ui/fail/index_count_with_fields.rs:4:9
+ --> tests/ui/fail/index_count_with_fields.rs:4:22
   |
-4 | #[index(fields(body), count)]
-  |         ^^^^^^
+4 | #[indexes(body_count(fields(body), count))]
+  |                      ^^^^^^

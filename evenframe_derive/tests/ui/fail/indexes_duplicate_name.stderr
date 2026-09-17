@@ -1,0 +1,5 @@
+error: duplicate index name `by_body`
+ --> tests/ui/fail/indexes_duplicate_name.rs:4:41
+  |
+4 | #[indexes(by_body(fields(title, body)), by_body(fields(body, title)))]
+  |                                         ^^^^^^^

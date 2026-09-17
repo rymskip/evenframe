@@ -55,7 +55,10 @@ pub struct Mockmaker<'a> {
     pub(super) record_diffs: BTreeMap<String, i32>,
     filtered_tables: BTreeMap<String, TableConfig>,
     filtered_objects: BTreeMap<String, StructConfig>,
-    pub coordinated_values: BTreeMap<CoordinationId, String>,
+    /// Pre-computed coordinated values, keyed by record index and field.
+    pub coordinated_values: BTreeMap<(usize, CoordinationId), String>,
+    /// Record count for every table, taking precedence over `#[mock_data(n)]`.
+    pub count_override: Option<usize>,
     #[cfg(feature = "wasm-plugins")]
     pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
@@ -83,6 +86,7 @@ impl<'a> Mockmaker<'a> {
             filtered_tables: BTreeMap::new(),
             filtered_objects: BTreeMap::new(),
             coordinated_values: BTreeMap::new(),
+            count_override: None,
             #[cfg(feature = "wasm-plugins")]
             plugin_manager: {
                 if schemasync_config.plugins.is_empty() {
@@ -131,6 +135,20 @@ impl<'a> Mockmaker<'a> {
         Ok(())
     }
 
+    /// How many mock records to generate for `table_config`: the count
+    /// override, its `#[mock_data(n = ...)]`, or the configured
+    /// `default_record_count`. ID pools and INSERT/UPSERT generation must
+    /// agree on this, or record links point at records that are never created.
+    pub fn record_count(&self, table_config: &TableConfig) -> usize {
+        self.count_override.unwrap_or_else(|| {
+            table_config
+                .mock_generation_config
+                .as_ref()
+                .map(|c| c.n)
+                .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count)
+        })
+    }
+
     /// Generate IDs for tables
     pub async fn generate_ids(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         evenframe_log!("", "record_diffs.log");
@@ -146,13 +164,7 @@ impl<'a> Mockmaker<'a> {
             let table_config = table_config.effective();
             tracing::trace!(table = %table_name, "Generating IDs for table");
 
-            // Determine desired count from config or default
-            let desired_count =
-                if let Some(mock_generation_config) = &table_config.mock_generation_config {
-                    mock_generation_config.n
-                } else {
-                    self.schemasync_config.mock_gen_config.default_batch_size
-                };
+            let desired_count = self.record_count(table_config);
 
             // In full refresh mode, all data will be deleted and recreated.
             // Generate clean sequential IDs instead of reusing stale DB IDs,
@@ -322,10 +334,71 @@ impl<'a> Mockmaker<'a> {
 
         tracing::debug!(query_length = access_query.len(), "Executing access query");
 
-        execute_access_query(self.db, access_query).await
+        execute_access_query(
+            self.db,
+            access_query,
+            &self.schemasync_config.database.database,
+        )
+        .await
     }
 
     /// Filter changed tables and objects
+    /// Target the `selected` tables (every table when `None`) for mock data
+    /// without diffing against the database. Tables that aren't selected
+    /// only keep their existing records as link targets, and a selected
+    /// table that links to a table without records is an error. Call after
+    /// [`Self::generate_ids`].
+    pub fn select_tables_for_insert(
+        &mut self,
+        selected: Option<&BTreeSet<String>>,
+    ) -> crate::error::Result<()> {
+        let is_selected = |name: &str| selected.is_none_or(|s| s.contains(name));
+
+        for (table_name, ids) in self.id_map.iter_mut() {
+            if !is_selected(table_name) {
+                let new_ids = self
+                    .record_diffs
+                    .get(table_name)
+                    .copied()
+                    .unwrap_or(0)
+                    .max(0) as usize;
+                ids.truncate(ids.len().saturating_sub(new_ids));
+            }
+        }
+
+        self.filtered_tables = self
+            .tables
+            .iter()
+            .filter(|(name, _)| is_selected(name))
+            .map(|(name, table)| (name.clone(), table.clone()))
+            .collect();
+        self.filtered_objects = self.objects.clone();
+
+        for table_name in self.filtered_tables.keys() {
+            let dependencies = crate::dependency::collect_table_dependencies(
+                table_name,
+                self.tables,
+                self.objects,
+                self.enums,
+                &mut BTreeSet::new(),
+            );
+            for dependency in dependencies {
+                if self.id_map.get(&dependency).is_none_or(Vec::is_empty) {
+                    return Err(crate::error::EvenframeError::config(format!(
+                        "`{table_name}` links to `{dependency}`, which has no records; \
+                         include `{dependency}` in the selected tables or insert its records first"
+                    )));
+                }
+            }
+        }
+
+        tracing::info!(
+            selected_tables = self.filtered_tables.len(),
+            "Tables selected for mock data"
+        );
+        Ok(())
+    }
+
     pub async fn filter_changes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         tracing::trace!("Filtering changes based on schema comparison");
         let comparator = self.comparator.as_ref().unwrap();
@@ -790,8 +863,10 @@ pub struct MockGenerationConfig {
 
 impl Default for MockGenerationConfig {
     fn default() -> Self {
-        // Try to load config, fall back to hardcoded defaults if unavailable
-        let (n, batch_size, preservation_mode) = match crate::config::EvenframeConfig::new() {
+        // Try to load config, fall back to hardcoded defaults if unavailable.
+        // Only mock settings are read, so the connection env vars aren't needed.
+        let (n, batch_size, preservation_mode) = match crate::config::EvenframeConfig::new_offline()
+        {
             Ok(config) => (
                 config.schemasync.mock_gen_config.default_record_count,
                 config.schemasync.mock_gen_config.default_batch_size,

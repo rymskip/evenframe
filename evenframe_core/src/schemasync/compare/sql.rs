@@ -196,13 +196,13 @@ impl<'a> SchemaComparator for SqlSchemaComparator<'a> {
         // Get current schema from database
         let current_schema = self.get_current_schema().await?;
 
-        // #[index(...)] is only applied by the SurrealDB backend
+        // #[indexes(...)] and field index attributes are only applied by the SurrealDB backend
         for (table_name, table_config) in tables {
             if !table_config.indexes.is_empty() {
                 tracing::warn!(
                     table = %table_name,
                     count = table_config.indexes.len(),
-                    "#[index(...)] declarations are SurrealDB-only and are ignored by SQL backends"
+                    "index declarations are SurrealDB-only and are ignored by SQL backends"
                 );
             }
         }

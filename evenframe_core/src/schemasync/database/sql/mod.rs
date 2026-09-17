@@ -28,7 +28,7 @@ pub struct SqlQueryBuilder;
 impl SqlQueryBuilder {
     /// Generate a CREATE TABLE statement
     pub fn create_table(table: &TableSchema, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let mut sql = format!("CREATE TABLE IF NOT EXISTS {} (\n", q(&table.name));
 
@@ -67,7 +67,7 @@ impl SqlQueryBuilder {
 
     /// Generate ALTER TABLE ADD COLUMN statement
     pub fn add_column(table_name: &str, column: &ColumnSchema, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let mut sql = format!(
             "ALTER TABLE {} ADD COLUMN {} {}",
@@ -89,7 +89,7 @@ impl SqlQueryBuilder {
 
     /// Generate DROP COLUMN statement
     pub fn drop_column(table_name: &str, column_name: &str, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
         format!(
             "ALTER TABLE {} DROP COLUMN IF EXISTS {};",
             q(table_name),
@@ -99,7 +99,7 @@ impl SqlQueryBuilder {
 
     /// Generate CREATE INDEX statement
     pub fn create_index(index: &IndexSchema, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let unique = if index.unique { "UNIQUE " } else { "" };
         let cols: Vec<String> = index.columns.iter().map(|c| q(c)).collect();
@@ -115,7 +115,7 @@ impl SqlQueryBuilder {
 
     /// Generate DROP INDEX statement
     pub fn drop_index(index_name: &str, table_name: &str, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
         format!(
             "DROP INDEX IF EXISTS {} ON {};",
             q(index_name),
@@ -125,7 +125,7 @@ impl SqlQueryBuilder {
 
     /// Generate INSERT statement
     pub fn insert(table_name: &str, columns: &[&str], quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
         let cols: Vec<String> = columns.iter().map(|c| q(c)).collect();
         let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("${}", i)).collect();
 
@@ -144,7 +144,7 @@ impl SqlQueryBuilder {
         filter: Option<&str>,
         quote_char: char,
     ) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let cols = match columns {
             Some(cols) => cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", "),
@@ -163,7 +163,7 @@ impl SqlQueryBuilder {
 
     /// Generate DELETE statement
     pub fn delete(table_name: &str, filter: Option<&str>, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let mut sql = format!("DELETE FROM {}", q(table_name));
 
@@ -177,7 +177,7 @@ impl SqlQueryBuilder {
 
     /// Generate COUNT query
     pub fn count(table_name: &str, filter: Option<&str>, quote_char: char) -> String {
-        let q = |name: &str| format!("{}{}{}", quote_char, name, quote_char);
+        let q = |name: &str| quote_identifier(name, quote_char);
 
         let mut sql = format!("SELECT COUNT(*) as count FROM {}", q(table_name));
 
@@ -195,6 +195,21 @@ pub fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+/// Quote an identifier (table or column name), doubling any embedded quote
+/// characters so the name can't end the quoted identifier early
+pub fn quote_identifier(name: &str, quote_char: char) -> String {
+    let doubled = format!("{quote_char}{quote_char}");
+    format!(
+        "{quote_char}{}{quote_char}",
+        name.replace(quote_char, &doubled)
+    )
+}
+
+/// `?, ?, ...` placeholders for binding `count` values (MySQL / SQLite)
+pub fn question_placeholders(count: usize) -> String {
+    vec!["?"; count].join(", ")
+}
+
 /// Format a JSON value as a SQL literal
 pub fn format_sql_literal(value: &serde_json::Value) -> String {
     match value {
@@ -210,5 +225,35 @@ pub fn format_sql_literal(value: &serde_json::Value) -> String {
             // For objects, use JSON format
             format!("'{}'", escape_sql_string(&value.to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quote_identifier_doubles_embedded_quotes() {
+        assert_eq!(quote_identifier("user", '"'), "\"user\"");
+        assert_eq!(quote_identifier("we\"ird", '"'), "\"we\"\"ird\"");
+        assert_eq!(quote_identifier("we`ird", '`'), "`we``ird`");
+        // The other dialect's quote char is left alone
+        assert_eq!(quote_identifier("we`ird", '"'), "\"we`ird\"");
+    }
+
+    #[test]
+    fn question_placeholders_match_count() {
+        assert_eq!(question_placeholders(1), "?");
+        assert_eq!(question_placeholders(3), "?, ?, ?");
+    }
+
+    #[test]
+    fn relationship_insert_escapes_ids() {
+        let sql =
+            generate_relationship_insert("likes", "a'b", "c", None, &JoinTableConfig::postgres());
+        assert_eq!(
+            sql,
+            "INSERT INTO \"likes\" (\"from_id\", \"to_id\") VALUES ('a''b', 'c');"
+        );
     }
 }

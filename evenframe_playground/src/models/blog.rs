@@ -66,11 +66,11 @@ pub struct Author {
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 50)]
-// `blog_english` is defined in surql/analyzers.surql (see evenframe.toml).
-#[index(
-    name = "post_content_search",
-    fields(content),
-    fulltext(analyzer = "blog_english", bm25, highlights)
+#[indexes(
+    post_author_slug(fields(author, slug), unique),
+    post_author_published(fields(author, published, published_at)),
+    post_tags_created(fields("tags.*", created_at), comment = "posts by tag, newest first"),
+    post_published_count(count(where = "published = true")),
 )]
 pub struct Post {
     pub id: String,
@@ -93,6 +93,13 @@ pub struct Post {
 
     /// Post content - non-empty
     #[validators(StringValidator::NonEmpty)]
+    // `blog_english` is defined in surql/analyzers.surql (see evenframe.toml).
+    #[fulltext(
+        name = "post_content_search",
+        analyzer = "blog_english",
+        bm25,
+        highlights
+    )]
     pub content: String,
 
     /// Optional excerpt - max 500 chars

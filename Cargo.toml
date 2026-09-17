@@ -5,16 +5,16 @@ resolver = "2"
 [workspace.dependencies]
 try_from_expr = "0.1.1"
 evenframe_core = { path = "evenframe_core" }
-serde_json = "1.0.142"
-regex = "1.11.1"
-syn = { version = "2.0.104", features = ["full"] }
-tracing = "0.1.41"
-convert_case = "0.11.0"
-tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }
-toml = "1.0.3"
-insta = "1.42"
+serde_json = "1.0.151"
+regex = "1.13.1"
+syn = { version = "3.0.5", features = ["full"] }
+tracing = "0.1.44"
+convert_case = "0.12.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+toml = "1.1.6"
+insta = "1.48"
 url = "2.5"
-uuid = { version = "1.17", features = ["v4", "serde"] }
+uuid = { version = "1.26", features = ["v4", "serde"] }
 
 [profile.dev.package.insta]
 opt-level = 3

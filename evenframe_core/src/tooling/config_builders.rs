@@ -5,10 +5,10 @@ use crate::error::Result;
 use crate::{
     derive::{
         attributes::{
-            parse_annotation_attributes, parse_doccom_attribute, parse_event_attributes,
-            parse_format_attribute_bin, parse_index_attributes, parse_macroforge_derive_attribute,
-            parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
-            parse_table_validators,
+            find_duplicate_index_name, parse_annotation_attributes, parse_doccom_attribute,
+            parse_event_attributes, parse_field_index_attributes, parse_format_attribute_bin,
+            parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
+            parse_relation_attribute, parse_rust_derives, parse_table_validators,
         },
         validator_parser::parse_field_validators_as_enums,
     },
@@ -448,16 +448,46 @@ fn process_types(
                                         .iter()
                                         .map(|f| f.field_name.trim_start_matches("r#").to_string())
                                         .collect();
-                                let indexes = parse_index_attributes(
+                                let mut indexes = parse_index_attributes(
                                     &item_struct.attrs,
                                     &known_field_names,
                                 )
                                 .map_err(|e| {
                                     crate::error::EvenframeError::Config(format!(
-                                        "Failed to parse #[index(...)] on struct '{}' in '{}': {}",
+                                        "Failed to parse #[indexes(...)] on struct '{}' in '{}': {}",
                                         struct_config.struct_name, file_path, e
                                     ))
-                                })?;
+                                })?
+                                .into_iter()
+                                .map(|(index, _span)| index)
+                                .collect::<Vec<_>>();
+                                for field in &item_struct.fields {
+                                    let Some(ident) = &field.ident else {
+                                        continue;
+                                    };
+                                    let field_name = ident.to_string();
+                                    let field_indexes = parse_field_index_attributes(
+                                        field_name.trim_start_matches("r#"),
+                                        &field.attrs,
+                                    )
+                                    .map_err(|e| {
+                                        crate::error::EvenframeError::Config(format!(
+                                            "Failed to parse index attribute on field '{}.{}' in '{}': {}",
+                                            struct_config.struct_name, field_name, file_path, e
+                                        ))
+                                    })?;
+                                    indexes.extend(
+                                        field_indexes.into_iter().map(|(index, _span)| index),
+                                    );
+                                }
+                                if let Some((_, name)) =
+                                    find_duplicate_index_name(&table_name, &indexes)
+                                {
+                                    return Err(crate::error::EvenframeError::Config(format!(
+                                        "Another index on struct '{}' in '{}' already uses the name '{}'; give one of them `name = \"...\"`",
+                                        struct_config.struct_name, file_path, name
+                                    )));
+                                }
 
                                 let table_config = TableConfig {
                                     table_name: table_name.clone(),
@@ -779,7 +809,6 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             doccom,
             annotations,
             unique,
-            mock_plugin: None,
             output_override: None,
             raw_attributes: field_raw_attributes,
         });
@@ -800,10 +829,13 @@ const KNOWN_ATTRS: &[&str] = &[
     "event",
     "fetch",
     "format",
+    "fulltext",
+    "hnsw",
+    "diskann",
     "index",
+    "indexes",
     "macroforge_derive",
     "mock_data",
-    "mockmake",
     "permissions",
     "relation",
     "serde",
