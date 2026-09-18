@@ -7,5 +7,6 @@ pub mod execute;
 pub mod mock_records;
 pub mod remove;
 mod type_mapper;
+pub mod value;
 
 pub use type_mapper::SurrealdbTypeMapper;
