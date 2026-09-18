@@ -1,7 +1,7 @@
 //! test-plugin command — runs output rule plugins against project types
 //! and prints what they produce as JSON for scripted assertions.
 
-use crate::cli::{Cli, TestPluginArgs};
+use crate::cli::TestPluginArgs;
 use crate::config_builders;
 use evenframe_core::{
     config::EvenframeConfig,
@@ -11,9 +11,9 @@ use evenframe_core::{
 use std::collections::BTreeMap;
 use tracing::info;
 
-pub async fn run(_cli: &Cli, args: TestPluginArgs) -> Result<()> {
+pub async fn run(args: TestPluginArgs) -> Result<()> {
     let config = EvenframeConfig::new()?;
-    let build_config = config_builders::BuildConfig::from_toml()?;
+    let build_config = config_builders::BuildConfig::discover()?;
 
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
     let (enums, tables, objects) = config_builders::filter_for_typesync(enums, tables, objects);

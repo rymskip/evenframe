@@ -27,11 +27,7 @@ fn get_evenframe_binary() -> PathBuf {
         .join("debug")
         .join("evenframe");
 
-    let mtime = |p: &PathBuf| {
-        std::fs::metadata(p)
-            .and_then(|m| m.modified())
-            .ok()
-    };
+    let mtime = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
 
     match (mtime(&release_path), mtime(&debug_path)) {
         (Some(r), Some(d)) => {

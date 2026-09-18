@@ -1,0 +1,79 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe info
+status: Some(0)
+--- stdout ---
+
+=== Configuration ===
+
+Outputs:
+  arktype -> ./generated
+
+Mock Generation: disabled
+
+=== Detected Types ===
+
+Total: 3
+
+Tables (1):
+  - User (fixture_project)
+
+Objects (1):
+  - Address (fixture_project)
+
+Enums (1):
+  - Role (fixture_project)
+
+
+=== Schema Summary ===
+
+Tables: 1
+Objects: 2
+Enums: 1
+
+Table Details:
+  user:
+    Fields: 4
+--- stderr ---
+
+$ evenframe info --settings --format json
+status: Some(0)
+--- stdout ---
+{
+  "config": {
+    "outputs": [
+      {
+        "kind": "arktype",
+        "dir": "./generated",
+        "mode": "single",
+        "barrel_file": false,
+        "file_naming": "kebab",
+        "file_extension": ".ts",
+        "array_style": "shorthand",
+        "import_extension": "bare",
+        "import_validate": false
+      }
+    ],
+    "mock_generation": false,
+    "apply_aliases": []
+  }
+}
+--- stderr ---
+
+$ evenframe info --types --format yaml
+status: Some(0)
+--- stdout ---
+types:
+  tables:
+  - name: User
+    module: fixture_project
+  objects:
+  - name: Address
+    module: fixture_project
+  enums:
+  - name: Role
+    module: fixture_project
+--- stderr ---

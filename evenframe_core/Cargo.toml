@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_core"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -123,7 +123,7 @@ full = ["schemasync-full", "typesync-all", "all-providers"]
 # The feature set used by the evenframe CLI binary. Enables full schemasync
 # with mock data, all type generators, and SurrealDB (the primary provider
 # for the CLI workflow). Does not include SQL providers.
-cli = ["schemasync-full", "typesync-all", "surrealdb"]
+cli = ["schemasync-full", "typesync-all", "surrealdb", "dep:clap"]
 
 [dependencies]
 # workspace dependencies
@@ -140,6 +140,8 @@ toml = { workspace = true }
 surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"], optional = true }
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls"], optional = true }
 tempfile = { version = "3.27", optional = true }
+# Lets the CLI use core enums as argument values.
+clap = { version = "4.6", features = ["derive"], optional = true }
 
 # Always compiled (core)
 async-trait = "0.1"

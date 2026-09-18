@@ -58,19 +58,37 @@ fn test_built_in_generics_are_parsed_correctly() {
     let (_enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     let container = &objects["Container"];
-    
+
     // Option<String>
-    let opt_field = container.fields.iter().find(|f| f.field_name == "opt").unwrap();
-    assert!(matches!(opt_field.field_type, FieldType::Option(ref inner) if matches!(**inner, FieldType::String)));
+    let opt_field = container
+        .fields
+        .iter()
+        .find(|f| f.field_name == "opt")
+        .unwrap();
+    assert!(
+        matches!(opt_field.field_type, FieldType::Option(ref inner) if matches!(**inner, FieldType::String))
+    );
 
     // Vec<i32>
-    let list_field = container.fields.iter().find(|f| f.field_name == "list").unwrap();
-    assert!(matches!(list_field.field_type, FieldType::Vec(ref inner) if matches!(**inner, FieldType::I32)));
+    let list_field = container
+        .fields
+        .iter()
+        .find(|f| f.field_name == "list")
+        .unwrap();
+    assert!(
+        matches!(list_field.field_type, FieldType::Vec(ref inner) if matches!(**inner, FieldType::I32))
+    );
 
     // HashMap<String, f64>
-    let map_field = container.fields.iter().find(|f| f.field_name == "map").unwrap();
-    assert!(matches!(map_field.field_type, FieldType::HashMap(ref k, ref v) 
-        if matches!(**k, FieldType::String) && matches!(**v, FieldType::F64)));
+    let map_field = container
+        .fields
+        .iter()
+        .find(|f| f.field_name == "map")
+        .unwrap();
+    assert!(
+        matches!(map_field.field_type, FieldType::HashMap(ref k, ref v)
+        if matches!(**k, FieldType::String) && matches!(**v, FieldType::F64))
+    );
 }
 
 #[test]
@@ -95,14 +113,22 @@ fn test_custom_generic_instantiations_are_collapsed() {
     let (_enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     let usage = &objects["Usage"];
-    
+
     // Result<i32, String> -> collapsed to "Result"
-    let result_field = usage.fields.iter().find(|f| f.field_name == "int_enum").unwrap();
+    let result_field = usage
+        .fields
+        .iter()
+        .find(|f| f.field_name == "int_enum")
+        .unwrap();
     assert_eq!(result_field.field_type.canonical_name(), "Result");
     assert!(matches!(result_field.field_type, FieldType::Other(ref name) if name == "Result"));
 
     // MyGeneric<f64> -> collapsed to "MyGeneric"
-    let custom_field = usage.fields.iter().find(|f| f.field_name == "custom").unwrap();
+    let custom_field = usage
+        .fields
+        .iter()
+        .find(|f| f.field_name == "custom")
+        .unwrap();
     assert_eq!(custom_field.field_type.canonical_name(), "MyGeneric");
     assert!(matches!(custom_field.field_type, FieldType::Other(ref name) if name == "MyGeneric"));
 }
@@ -135,10 +161,17 @@ fn test_scanner_with_generic_definition() {
 
     // The scanner should still find the types, but the instantiation will be collapsed.
     let wrapper = &objects["Wrapper"];
-    let instantiated_field = wrapper.fields.iter().find(|f| f.field_name == "instantiated").unwrap();
-    
+    let instantiated_field = wrapper
+        .fields
+        .iter()
+        .find(|f| f.field_name == "instantiated")
+        .unwrap();
+
     // It should be collapsed to the base name "MyGenericEnum"
-    assert_eq!(instantiated_field.field_type.canonical_name(), "MyGenericEnum");
+    assert_eq!(
+        instantiated_field.field_type.canonical_name(),
+        "MyGenericEnum"
+    );
 
     // The enum definition itself should be found
     assert!(enums.contains_key("MyGenericEnum"));

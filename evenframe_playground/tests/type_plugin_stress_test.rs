@@ -222,7 +222,9 @@ fn field_annotations(
 #[test]
 fn panic_type_surfaces_intentional_error() {
     let mut pm = stress_manager();
-    let inp = struct_of("PanicType").fields(vec![field("x", "i32")]).build();
+    let inp = struct_of("PanicType")
+        .fields(vec![field("x", "i32")])
+        .build();
     let result = pm.transform_type("stress", &inp).unwrap();
     assert!(
         result.error.is_some(),
@@ -531,12 +533,13 @@ fn typesync_does_not_annotate_option_fields() {
     let mut pm = stress_manager();
     let inp = struct_of("P")
         .pipeline("Typesync")
-        .fields(vec![field("name", "String"), field("bio", "Option<String>")])
+        .fields(vec![
+            field("name", "String"),
+            field("bio", "Option<String>"),
+        ])
         .build();
     let result = pm.transform_type("stress", &inp).unwrap();
-    assert!(
-        !field_annotations(&result, "bio").contains(&"@schemasync_option".to_string())
-    );
+    assert!(!field_annotations(&result, "bio").contains(&"@schemasync_option".to_string()));
 }
 
 // ============================================================================
@@ -723,12 +726,8 @@ fn plugin_survives_rapid_sequential_calls() {
         assert!(result.is_ok(), "call {} failed: {:?}", i, result.err());
         let output = result.unwrap();
         assert!(field_annotations(&output, "amount").contains(&"@bigdecimal".to_string()));
-        assert!(
-            field_annotations(&output, "expires").contains(&"@datetime_nullable".to_string())
-        );
-        assert!(
-            field_annotations(&output, "ids").contains(&"@readonly_uuid_array".to_string())
-        );
+        assert!(field_annotations(&output, "expires").contains(&"@datetime_nullable".to_string()));
+        assert!(field_annotations(&output, "ids").contains(&"@readonly_uuid_array".to_string()));
     }
 }
 
@@ -736,10 +735,12 @@ fn plugin_survives_rapid_sequential_calls() {
 fn plugin_survives_alternating_error_and_success() {
     let mut pm = stress_manager();
     for i in 0..20 {
-        let type_name = if i % 2 == 0 { "PanicType" } else { "NormalType" };
-        let inp = struct_of(type_name)
-            .fields(vec![field("x", "i32")])
-            .build();
+        let type_name = if i % 2 == 0 {
+            "PanicType"
+        } else {
+            "NormalType"
+        };
+        let inp = struct_of(type_name).fields(vec![field("x", "i32")]).build();
         let result = pm.transform_type("stress", &inp);
         assert!(result.is_ok(), "call {} should not crash: {:?}", i, result);
         if i % 2 == 0 {
@@ -762,16 +763,16 @@ fn everything_combined_kitchen_sink() {
         .type_annotations(vec!["@audit"])
         .generator("arktype")
         .fields(vec![
-            field("amount", "Decimal"),                                    // @bigdecimal
-            field("expires", "Option<DateTime>"),                          // @datetime_nullable
-            field("ids", "Vec<Uuid>"),                                     // @readonly_uuid_array
-            field("scores", "HashMap<String, i64>"),                       // @string_number_map
-            field("created_at", "String"),                                 // @readonly
-            field_with_validators("email", "String", vec!["email"]),       // @validated
+            field("amount", "Decimal"),                              // @bigdecimal
+            field("expires", "Option<DateTime>"),                    // @datetime_nullable
+            field("ids", "Vec<Uuid>"),                               // @readonly_uuid_array
+            field("scores", "HashMap<String, i64>"),                 // @string_number_map
+            field("created_at", "String"),                           // @readonly
+            field_with_validators("email", "String", vec!["email"]), // @validated
             field_with_annotations("secret", "String", vec!["@internal"]), // @skip_internal
-            field("__private", "i32"),                                     // @skip_private
-            field("normal", "bool"),                                       // untouched
-            field("json_tricky", "String"),                                // @tricky(...)
+            field("__private", "i32"),                               // @skip_private
+            field("normal", "bool"),                                 // untouched
+            field("json_tricky", "String"),                          // @tricky(...)
         ])
         .table_name("kitchen_sink_dto")
         .build();
@@ -804,15 +805,9 @@ fn everything_combined_kitchen_sink() {
 
     // Field-level annotation markers
     assert!(field_annotations(&result, "amount").contains(&"@bigdecimal".to_string()));
-    assert!(
-        field_annotations(&result, "expires").contains(&"@datetime_nullable".to_string())
-    );
-    assert!(
-        field_annotations(&result, "ids").contains(&"@readonly_uuid_array".to_string())
-    );
-    assert!(
-        field_annotations(&result, "scores").contains(&"@string_number_map".to_string())
-    );
+    assert!(field_annotations(&result, "expires").contains(&"@datetime_nullable".to_string()));
+    assert!(field_annotations(&result, "ids").contains(&"@readonly_uuid_array".to_string()));
+    assert!(field_annotations(&result, "scores").contains(&"@string_number_map".to_string()));
     assert!(field_annotations(&result, "created_at").contains(&"@readonly".to_string()));
     assert!(field_annotations(&result, "email").contains(&"@validated".to_string()));
     assert!(field_annotations(&result, "secret").contains(&"@skip_internal".to_string()));

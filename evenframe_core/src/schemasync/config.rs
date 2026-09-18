@@ -24,8 +24,10 @@ pub struct SchemasyncConfig {
     /// Whether to generate mock data
     pub should_generate_mocks: bool,
     /// default mock data generation configuration, overridden by table and field level configs
+    #[serde(default)]
     pub mock_gen_config: SchemasyncMockGenConfig,
     /// Performance tuning configuration
+    #[serde(default)]
     pub performance: PerformanceConfig,
     /// WASM plugin definitions for mock data generation.
     #[serde(default)]
@@ -51,6 +53,7 @@ pub struct LintConfig {
 
 /// Database provider type for configuration
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum DatabaseProvider {
     /// SurrealDB (default)
@@ -170,7 +173,9 @@ pub struct ResolvedDatabaseItems {
     pub analyzers_surql: Option<String>,
 }
 
+/// Missing keys, and a missing table, take the values of [`Default`].
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
+#[serde(default)]
 pub struct SchemasyncMockGenConfig {
     /// overriden by table level  configs
     pub default_record_count: usize,
@@ -196,13 +201,21 @@ pub struct SchemasyncMockGenConfig {
     /// server to run with `--allow-scripting`. When `false`, those validators
     /// contribute no assertion (every native assertion is still emitted), so
     /// the generated schema remains applicable on servers without scripting.
-    #[serde(default = "default_scripting_asserts")]
     #[builder(default = true)]
     pub scripting_asserts: bool,
 }
 
-fn default_scripting_asserts() -> bool {
-    true
+impl Default for SchemasyncMockGenConfig {
+    fn default() -> Self {
+        Self {
+            default_record_count: 10,
+            default_preservation_mode: PreservationMode::default(),
+            default_batch_size: 1000,
+            coordination_groups: Vec::new(),
+            full_refresh_mode: false,
+            scripting_asserts: true,
+        }
+    }
 }
 
 impl Default for DatabaseConfig {
@@ -220,6 +233,28 @@ impl Default for DatabaseConfig {
             max_connections: None,
             min_connections: None,
             schema: None,
+        }
+    }
+}
+
+/// Command-line overrides for mock data generation. Each one only switches
+/// a setting on, whatever the config says.
+#[derive(Debug, Clone, Default)]
+pub struct MockOverrides {
+    /// Skip mock data generation.
+    pub skip_mocks: bool,
+    /// Delete existing data and regenerate everything.
+    pub full_refresh: bool,
+}
+
+impl SchemasyncConfig {
+    /// Apply the settings that `overrides` switches on.
+    pub fn apply_mock_overrides(&mut self, overrides: &MockOverrides) {
+        if overrides.skip_mocks {
+            self.should_generate_mocks = false;
+        }
+        if overrides.full_refresh {
+            self.mock_gen_config.full_refresh_mode = true;
         }
     }
 }
@@ -362,7 +397,9 @@ impl DatabaseConfig {
     }
 }
 
+/// Missing keys, and a missing table, take the values of [`Default`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PerformanceConfig {
     pub embedded_db_memory_limit: String,
     pub cache_duration_seconds: u64,
@@ -414,6 +451,23 @@ impl Default for PerformanceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mock_overrides_only_switch_settings_on() {
+        let mut config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+
+        config.apply_mock_overrides(&MockOverrides::default());
+        assert!(config.should_generate_mocks);
+        assert!(!config.mock_gen_config.full_refresh_mode);
+
+        config.apply_mock_overrides(&MockOverrides {
+            skip_mocks: true,
+            full_refresh: true,
+        });
+        assert!(!config.should_generate_mocks);
+        assert!(config.mock_gen_config.full_refresh_mode);
+    }
 
     #[test]
     fn connection_overrides_replace_unresolved_settings() {

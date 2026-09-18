@@ -142,7 +142,7 @@ pub struct CartItem {
         fields("shipping_address.city"),
         fulltext(analyzer = "blog_english", bm25),
         comment = "search orders by shipping city",
-    ),
+    )
 )]
 pub struct Order {
     pub id: String,

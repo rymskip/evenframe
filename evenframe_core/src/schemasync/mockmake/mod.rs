@@ -342,12 +342,12 @@ impl<'a> Mockmaker<'a> {
         .await
     }
 
-    /// Filter changed tables and objects
-    /// Target the `selected` tables (every table when `None`) for mock data
-    /// without diffing against the database. Tables that aren't selected
-    /// only keep their existing records as link targets, and a selected
-    /// table that links to a table without records is an error. Call after
-    /// [`Self::generate_ids`].
+    /// Target the `selected` tables (every table when `None`) that generate
+    /// records, without diffing against the database. Other tables only keep
+    /// their existing records as link targets, and a targeted table that
+    /// links to a table without records is an error. A table generating no
+    /// records creates no links, so it is neither targeted nor checked.
+    /// Call after [`Self::generate_ids`].
     pub fn select_tables_for_insert(
         &mut self,
         selected: Option<&BTreeSet<String>>,
@@ -369,7 +369,7 @@ impl<'a> Mockmaker<'a> {
         self.filtered_tables = self
             .tables
             .iter()
-            .filter(|(name, _)| is_selected(name))
+            .filter(|(name, table)| is_selected(name) && self.record_count(table.effective()) > 0)
             .map(|(name, table)| (name.clone(), table.clone()))
             .collect();
         self.filtered_objects = self.objects.clone();
@@ -399,6 +399,7 @@ impl<'a> Mockmaker<'a> {
         Ok(())
     }
 
+    /// Filter changed tables and objects
     pub async fn filter_changes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         tracing::trace!("Filtering changes based on schema comparison");
         let comparator = self.comparator.as_ref().unwrap();
@@ -863,28 +864,22 @@ pub struct MockGenerationConfig {
 
 impl Default for MockGenerationConfig {
     fn default() -> Self {
-        // Try to load config, fall back to hardcoded defaults if unavailable.
         // Only mock settings are read, so the connection env vars aren't needed.
-        let (n, batch_size, preservation_mode) = match crate::config::EvenframeConfig::new_offline()
-        {
-            Ok(config) => (
-                config.schemasync.mock_gen_config.default_record_count,
-                config.schemasync.mock_gen_config.default_batch_size,
-                config.schemasync.mock_gen_config.default_preservation_mode,
-            ),
-            Err(_) => {
-                // Fall back to reasonable defaults if config can't be loaded
-                (10, 1000, PreservationMode::Smart)
+        let mock_gen_config = match crate::config::EvenframeConfig::new_offline() {
+            Ok(config) => config.schemasync.mock_gen_config,
+            Err(e) => {
+                tracing::warn!("Using default mock settings; the configuration did not load: {e}");
+                crate::schemasync::config::SchemasyncMockGenConfig::default()
             }
         };
 
         Self {
-            n,
+            n: mock_gen_config.default_record_count,
             table_level_override: None,
             coordination_rules: Vec::new(),
-            batch_size,
+            batch_size: mock_gen_config.default_batch_size,
             regenerate_fields: vec![],
-            preservation_mode,
+            preservation_mode: mock_gen_config.default_preservation_mode,
             plugin: None,
         }
     }
@@ -939,5 +934,95 @@ impl quote::ToTokens for MockGenerationConfig {
         };
 
         tokens.extend(config_tokens);
+    }
+}
+
+#[cfg(all(test, feature = "schemasync"))]
+mod select_tables_tests {
+    use super::*;
+    use crate::schemasync::{TableConfig, config::SchemasyncConfig};
+    use crate::tooling::{BuildConfig, build_all_configs};
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Two tables generating no records that link to each other, and one
+    /// generating records that links to one of them.
+    fn scanned_tables() -> BTreeMap<String, TableConfig> {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(
+            tmp.path().join("src/lib.rs"),
+            r#"
+#[derive(Evenframe)]
+#[mock_data(n = 0)]
+pub struct Author { pub id: String, pub favorite: RecordLink<Post> }
+
+#[derive(Evenframe)]
+#[mock_data(n = 0)]
+pub struct Post { pub id: String, pub author: RecordLink<Author> }
+
+#[derive(Evenframe)]
+#[mock_data(n = 2)]
+pub struct Comment { pub id: String, pub post: RecordLink<Post> }
+"#,
+        )
+        .unwrap();
+        let config = BuildConfig {
+            scan_path: tmp.path().to_path_buf(),
+            ..BuildConfig::default()
+        };
+        let (_, tables, _) = build_all_configs(&config).unwrap();
+        tables
+    }
+
+    /// The tables `select_tables_for_insert` targets over an empty database.
+    fn targeted(
+        tables: &BTreeMap<String, TableConfig>,
+        selected: Option<&[&str]>,
+    ) -> crate::error::Result<Vec<String>> {
+        let db = Surreal::<Client>::init();
+        let config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+        let objects = BTreeMap::new();
+        let enums = BTreeMap::new();
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let mut mockmaker = Mockmaker::new(&db, tables, &objects, &enums, &config, &registry);
+        // What `generate_ids` leaves over an empty database: generated IDs only.
+        let id_map = tables
+            .iter()
+            .map(|(name, table)| {
+                let count = mockmaker.record_count(table.effective());
+                (
+                    name.clone(),
+                    (1..=count).map(|i| format!("{name}:{i}")).collect(),
+                )
+            })
+            .collect();
+        mockmaker.id_map = id_map;
+        let selected: Option<BTreeSet<String>> =
+            selected.map(|names| names.iter().map(|n| n.to_string()).collect());
+        mockmaker.select_tables_for_insert(selected.as_ref())?;
+        Ok(mockmaker.filtered_tables.keys().cloned().collect())
+    }
+
+    #[test]
+    fn tables_generating_no_records_are_neither_targeted_nor_checked() {
+        let tables = scanned_tables();
+        assert_eq!(
+            targeted(&tables, Some(&["author", "post"])).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_targeted_table_linking_to_an_empty_table_is_an_error() {
+        let tables = scanned_tables();
+        let err = targeted(&tables, None).unwrap_err().to_string();
+        assert!(err.contains("`comment` links to `post`"), "{err}");
     }
 }

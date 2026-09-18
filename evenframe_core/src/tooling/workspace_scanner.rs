@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 use syn::{Attribute, Item, ItemImpl, Meta, parse_file};
 use tracing::{debug, info, trace, warn};
 
+/// How deep below a crate's `src/` the scan descends before failing with
+/// [`EvenframeError::MaxRecursionDepth`].
+pub const MAX_SCAN_DEPTH: usize = 10;
+
 /// Every `Cargo.toml` under `root`, sorted, skipping anything a
 /// `.gitignore` excludes (such as `target/`). Like macroforge's scanner,
 /// hidden entries are walked and only the project's own `.gitignore` files
@@ -422,6 +426,9 @@ impl WorkspaceScanner {
         if !src_path.exists() {
             return Ok(Vec::new());
         }
+        let src_dir = std::path::absolute(&src_path).map_err(|e| {
+            EvenframeError::WorkspaceScan(format!("failed to resolve {}: {e}", src_path.display()))
+        })?;
 
         // 1. Walk src/ and collect per-file metadata.
         let file_meta = collect_source_files(&src_path, crate_name).map_err(|e| {
@@ -454,7 +461,10 @@ impl WorkspaceScanner {
         let mut hits: Vec<(SourceFile, String, CacheEntry)> = Vec::new();
         let mut misses: Vec<(SourceFile, String)> = Vec::new();
         for (meta, hash) in hashed {
-            match manifest.entries.get(&meta.rel_path) {
+            match manifest
+                .as_ref()
+                .and_then(|m| m.entries.get(&meta.rel_path))
+            {
                 Some(entry) if entry.input_hash == hash => {
                     hits.push((meta, hash, entry.clone()));
                 }
@@ -482,7 +492,7 @@ impl WorkspaceScanner {
 
         // 5. Assemble the output: cache hits + freshly-expanded entries.
         let mut all_types: Vec<EvenframeType> = Vec::new();
-        let mut next_manifest = CacheManifest::empty(crate_name);
+        let mut next_manifest = CacheManifest::empty(crate_name, &src_dir);
         for (meta, hash, entry) in hits {
             all_types.extend(entry.extracted_types.iter().cloned());
             next_manifest.entries.insert(
@@ -683,9 +693,9 @@ impl WorkspaceScanner {
             dir, base_module, depth
         );
 
-        if depth > 10 {
+        if depth > MAX_SCAN_DEPTH {
             return Err(EvenframeError::MaxRecursionDepth {
-                depth: 10,
+                depth: MAX_SCAN_DEPTH,
                 path: dir.to_path_buf(),
             });
         }
@@ -888,7 +898,7 @@ struct SourceFile {
 /// [`WorkspaceScanner::scan_directory_into`] without doing any parsing.
 fn collect_source_files(src_path: &Path, crate_name: &str) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
-    walk_src(src_path, crate_name, "", crate_name, &mut out, 0)?;
+    walk_src(src_path, crate_name, "", &mut out, 0)?;
     Ok(out)
 }
 
@@ -896,13 +906,12 @@ fn walk_src(
     dir: &Path,
     base_module: &str,
     rel_dir: &str,
-    _crate_name: &str,
     out: &mut Vec<SourceFile>,
     depth: usize,
 ) -> Result<()> {
-    if depth > 10 {
+    if depth > MAX_SCAN_DEPTH {
         return Err(EvenframeError::MaxRecursionDepth {
-            depth: 10,
+            depth: MAX_SCAN_DEPTH,
             path: dir.to_path_buf(),
         });
     }
@@ -928,14 +937,7 @@ fn walk_src(
             } else {
                 format!("{}/{}", rel_dir, dir_name)
             };
-            walk_src(
-                &path,
-                &child_module,
-                &child_rel,
-                _crate_name,
-                out,
-                depth + 1,
-            )?;
+            walk_src(&path, &child_module, &child_rel, out, depth + 1)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let file_stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
@@ -1848,7 +1850,7 @@ mod tests {
         // Should hit max recursion depth and return an error
         assert!(result.is_err());
         if let Err(EvenframeError::MaxRecursionDepth { depth, .. }) = result {
-            assert_eq!(depth, 10);
+            assert_eq!(depth, MAX_SCAN_DEPTH);
         } else {
             panic!("Expected MaxRecursionDepth error");
         }

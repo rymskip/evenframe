@@ -4,9 +4,10 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 use toml;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// TypeScript import configuration for a foreign type.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -122,8 +123,19 @@ pub struct ForeignTypeConfig {
     pub serde_format: String,
 }
 
+/// Loads environment variables from the `.env` file at `env_path`. The file
+/// is optional; one that exists but cannot be loaded is reported.
+fn load_env_from(env_path: &Path) {
+    match dotenvy::from_path(env_path) {
+        Ok(()) => info!("Loaded environment variables from {:?}", env_path),
+        Err(e) if e.not_found() => debug!("No .env file found at {:?}, skipping", env_path),
+        Err(e) => warn!("Failed to load .env file {:?}: {e}", env_path),
+    }
+}
+
 /// Source of truth for type definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum SourceOfTruth {
     /// Rust structs with #[derive(Evenframe)] or #[apply(...)]
@@ -278,22 +290,39 @@ pub struct EvenframeConfig {
     pub config_file_path: PathBuf,
 }
 
+/// The configuration file chosen for this process (the CLI's `--config`),
+/// used instead of searching upward from the current directory.
+static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
+
 impl EvenframeConfig {
-    /// Best-effort early .env load for use before full config is parsed.
-    /// Finds the config file, derives the project root, and loads `.env` from there.
-    /// Falls back to `dotenvy::dotenv()` if config discovery fails.
+    /// Makes every configuration lookup in this process use `path` instead of
+    /// searching upward from the current directory.
+    pub fn use_config_file(path: &Path) -> Result<()> {
+        let path = std::path::absolute(path).map_err(|e| {
+            EvenframeError::config(format!(
+                "Failed to resolve configuration path {}: {e}",
+                path.display()
+            ))
+        })?;
+        CONFIG_FILE.set(path).map_err(|rejected| {
+            EvenframeError::config(format!(
+                "Cannot use {}: the configuration file is already chosen",
+                rejected.display()
+            ))
+        })
+    }
+
+    /// Best-effort early .env load for use before full config is parsed:
+    /// the project's `.env`, or a `.env` found from the current directory
+    /// when there is no project yet.
     pub fn load_env_early() {
-        if let Ok(config_path) = Self::find_config_file() {
-            let parent = config_path.parent().unwrap_or(Path::new("."));
-            let project_root = if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe")
-            {
-                parent.parent().unwrap_or(Path::new("."))
-            } else {
-                parent
-            };
-            let _ = dotenvy::from_path(project_root.join(".env"));
-        } else {
-            let _ = dotenvy::dotenv();
+        match Self::find_project_root() {
+            Some(root) => load_env_from(&root.join(".env")),
+            None => match dotenvy::dotenv() {
+                Ok(path) => debug!("Loaded environment variables from {:?}", path),
+                Err(e) if e.not_found() => debug!("No .env file found"),
+                Err(e) => warn!("Failed to load .env file: {e}"),
+            },
         }
     }
 
@@ -319,15 +348,19 @@ impl EvenframeConfig {
         info!("Found configuration file at: {:?}", config_path);
 
         let contents = fs::read_to_string(&config_path).map_err(|e| {
-            error!("Failed to read configuration file: {}", e);
-            EvenframeError::from(e)
+            EvenframeError::config(format!(
+                "Failed to read configuration file {}: {e}",
+                config_path.display()
+            ))
         })?;
 
         debug!("Configuration file size: {} bytes", contents.len());
 
         let mut config: EvenframeConfig = toml::from_str(&contents).map_err(|e| {
-            error!("Failed to parse TOML configuration: {}", e);
-            EvenframeError::config(e.to_string())
+            EvenframeError::config(format!(
+                "Failed to parse configuration file {}: {e}",
+                config_path.display()
+            ))
         })?;
 
         debug!("Successfully parsed TOML configuration");
@@ -364,19 +397,21 @@ impl EvenframeConfig {
 
         info!("Configuration loaded successfully");
         debug!(
-            "Schemasync enabled: {}, Typesync arktype: {}, effect: {}, macroforge: {}",
+            "Mock generation: {}, typesync outputs: {}",
             config.schemasync.should_generate_mocks,
-            config.typesync.should_generate_arktype_types,
-            config.typesync.should_generate_effect_types,
-            config.typesync.should_generate_macroforge_types
+            config.typesync.outputs.len()
         );
 
         Ok(config)
     }
 
-    /// Searches for `.evenframe/config.toml` (preferred) or `evenframe.toml` (fallback)
-    /// starting from the current directory and traversing up to the root.
-    fn find_config_file() -> Result<PathBuf> {
+    /// The configuration file: the one chosen with [`Self::use_config_file`],
+    /// or else `.evenframe/config.toml` (preferred) or `evenframe.toml`,
+    /// searching upward from the current directory.
+    pub fn find_config_file() -> Result<PathBuf> {
+        if let Some(path) = CONFIG_FILE.get() {
+            return Ok(path.clone());
+        }
         let current_dir = env::current_dir()?;
         debug!("Starting config file search from: {:?}", current_dir);
 
@@ -396,7 +431,6 @@ impl EvenframeConfig {
             }
         }
 
-        error!("Configuration file not found in any parent directory.");
         Err(EvenframeError::config(
             "Configuration file not found. Expected '.evenframe/config.toml' or 'evenframe.toml' in current or any parent directory.",
         ))
@@ -408,24 +442,24 @@ impl EvenframeConfig {
     /// in the current directory or any ancestor.
     pub fn find_project_root() -> Option<PathBuf> {
         let config_path = Self::find_config_file().ok()?;
-        let parent = config_path.parent()?;
-        if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
-            parent.parent().map(Path::to_path_buf)
-        } else {
-            Some(parent.to_path_buf())
-        }
+        Some(Self::project_root_of(&config_path).to_path_buf())
     }
 
-    /// Returns the project root directory based on config file location.
-    /// - For `evenframe.toml` → parent dir
-    /// - For `.evenframe/config.toml` → grandparent dir
-    pub fn project_root(&self) -> &Path {
-        let parent = self.config_file_path.parent().unwrap_or(Path::new("."));
+    /// The project root for a configuration file:
+    /// - For `evenframe.toml` → its directory
+    /// - For `.evenframe/config.toml` → the directory containing `.evenframe/`
+    pub fn project_root_of(config_path: &Path) -> &Path {
+        let parent = config_path.parent().unwrap_or(Path::new("."));
         if parent.file_name().and_then(|n| n.to_str()) == Some(".evenframe") {
             parent.parent().unwrap_or(Path::new("."))
         } else {
             parent
         }
+    }
+
+    /// The project root of this configuration's file.
+    pub fn project_root(&self) -> &Path {
+        Self::project_root_of(&self.config_file_path)
     }
 
     /// Resolves `general.include_files` to absolute paths for the workspace
@@ -469,19 +503,7 @@ impl EvenframeConfig {
 
     /// Load environment variables from the .env file resolved from config.
     fn load_env_file(config: &EvenframeConfig) {
-        let env_path = config.resolve_env_path();
-        debug!("Loading environment variables from: {:?}", env_path);
-        match dotenvy::from_path(&env_path) {
-            Ok(_) => info!("Loaded environment variables from {:?}", env_path),
-            Err(e) => {
-                if env_path.exists() {
-                    warn!("Failed to load .env file {:?}: {}", env_path, e);
-                } else {
-                    // A .env file is optional
-                    debug!("No .env file found at {:?}, skipping", env_path);
-                }
-            }
-        }
+        load_env_from(&config.resolve_env_path());
     }
 
     /// Load surql content from a file or directory path, with env var substitution.
@@ -649,10 +671,6 @@ impl EvenframeConfig {
                         continue;
                     }
                     None => {
-                        error!(
-                            "Environment variable {} not set and no default provided",
-                            var_name
-                        );
                         return Err(EvenframeError::EnvVarNotSet(var_name.to_string()));
                     }
                 },
@@ -669,6 +687,7 @@ impl EvenframeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::typesync::config::{OutputKind, TypesyncOutput};
     use tempfile::TempDir;
 
     // ==================== GeneralConfig Tests ====================
@@ -979,16 +998,7 @@ mod tests {
                 "#,
             )
             .unwrap(),
-            typesync: toml::from_str(
-                r#"
-                output_path = "./"
-                should_generate_arktype_types = false
-                should_generate_effect_types = false
-                should_generate_macroforge_types = false
-                should_generate_surrealdb_schemas = false
-                "#,
-            )
-            .unwrap(),
+            typesync: toml::from_str("outputs = []").unwrap(),
             config_file_path: PathBuf::from("/project/evenframe.toml"),
         };
         assert_eq!(config.project_root(), Path::new("/project"));
@@ -1019,16 +1029,7 @@ mod tests {
                 "#,
             )
             .unwrap(),
-            typesync: toml::from_str(
-                r#"
-                output_path = "./"
-                should_generate_arktype_types = false
-                should_generate_effect_types = false
-                should_generate_macroforge_types = false
-                should_generate_surrealdb_schemas = false
-                "#,
-            )
-            .unwrap(),
+            typesync: toml::from_str("outputs = []").unwrap(),
             config_file_path: PathBuf::from("/project/.evenframe/config.toml"),
         };
         assert_eq!(config.project_root(), Path::new("/project"));
@@ -1107,17 +1108,16 @@ mod tests {
             use_progressive_loading = false
 
             [typesync]
-            output_path = "./generated/"
-            should_generate_arktype_types = false
-            should_generate_effect_types = false
-            should_generate_macroforge_types = false
-            should_generate_surrealdb_schemas = false
+            output = { kind = "arktype", dir = "./generated/" }
         "#;
 
         let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
         assert!(config.general.apply_aliases.is_empty()); // Default
         assert_eq!(config.schemasync.database.url, "http://localhost:8000");
-        assert_eq!(config.typesync.output_path, "./generated/");
+        assert_eq!(
+            config.typesync.outputs,
+            vec![TypesyncOutput::new(OutputKind::Arktype, "./generated/")]
+        );
     }
 
     #[test]
@@ -1148,18 +1148,18 @@ mod tests {
             use_progressive_loading = true
 
             [typesync]
-            output_path = "./types/"
-            should_generate_arktype_types = true
-            should_generate_effect_types = true
-            should_generate_macroforge_types = false
-            should_generate_surrealdb_schemas = true
+            outputs = [
+                { kind = "arktype", dir = "./types/arktype" },
+                { kind = "effect", dir = "./types/effect" },
+            ]
         "#;
 
         let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.general.apply_aliases.len(), 1);
         assert_eq!(config.general.apply_aliases[0], "MyAlias");
         assert!(config.schemasync.should_generate_mocks);
-        assert!(config.typesync.should_generate_arktype_types);
+        let kinds: Vec<OutputKind> = config.typesync.outputs.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, vec![OutputKind::Arktype, OutputKind::Effect]);
     }
 
     // ==================== EvenframeConfig::new() Integration Tests ====================
@@ -1194,11 +1194,7 @@ mod tests {
             use_progressive_loading = false
 
             [typesync]
-            output_path = "./output/"
-            should_generate_arktype_types = false
-            should_generate_effect_types = false
-            should_generate_macroforge_types = false
-            should_generate_surrealdb_schemas = false
+            outputs = []
         "#;
         fs::write(temp_dir.path().join("evenframe.toml"), config_content).unwrap();
 
@@ -1240,11 +1236,7 @@ mod tests {
             use_progressive_loading = false
 
             [typesync]
-            output_path = "{output_path}"
-            should_generate_arktype_types = false
-            should_generate_effect_types = false
-            should_generate_macroforge_types = false
-            should_generate_surrealdb_schemas = false
+            output = {{ kind = "arktype", dir = "{output_path}" }}
             "#
         );
         toml::from_str(&content).unwrap()

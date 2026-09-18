@@ -1,0 +1,46 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 67
+expression: transcript
+---
+$ evenframe check
+status: Some(1)
+--- stdout ---
+No scan cache at [PROJECT]/.evenframe/cache.json
+  Run `evenframe validate --types-only` to write it
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe validate --types-only
+status: Some(0)
+--- stdout ---
+Types: OK
+  tables: 1, objects: 2, enums: 1
+Validation passed
+--- stderr ---
+
+$ evenframe check
+status: Some(0)
+--- stdout ---
+Types are in sync with [PROJECT]/.evenframe/cache.json
+  tables: 1, objects: 2, enums: 1
+--- stderr ---
+
+$ evenframe check
+status: Some(1)
+--- stdout ---
+Types are out of sync: src/lib.rs changed
+  Run `evenframe validate --types-only` to refresh [PROJECT]/.evenframe/cache.json
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe check --json
+status: Some(1)
+--- stdout ---
+{
+  "cache_path": "[PROJECT]/.evenframe/cache.json",
+  "status": "stale",
+  "reason": "src/lib.rs changed"
+}
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current

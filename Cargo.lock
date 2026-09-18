@@ -1852,17 +1852,19 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "clap",
  "convert_case 0.12.0",
  "evenframe_core",
  "evenframe_derive",
+ "insta",
  "linkme",
  "mockall",
  "pretty_assertions",
  "proptest",
  "regex",
+ "serde",
  "serde_json",
  "syn 3.0.5",
  "tempfile",
@@ -1873,17 +1875,19 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "yaml_serde",
 ]
 
 [[package]]
 name = "evenframe_core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "blake3",
  "bon",
  "chrono",
  "chrono-tz",
+ "clap",
  "convert_case 0.12.0",
  "derive-syn-parse",
  "derive_more",
@@ -1930,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "convert_case 0.12.0",
  "evenframe",
@@ -1948,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_plugin"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3091,7 +3095,9 @@ checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console",
  "once_cell",
+ "regex",
  "similar",
+ "strip-ansi-escapes",
  "tempfile",
 ]
 
@@ -3367,6 +3373,12 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "libyaml-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
 
 [[package]]
 name = "linkme"
@@ -6409,6 +6421,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7553,6 +7574,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "wait-timeout"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8546,6 +8576,19 @@ name = "xsum"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0637d3a5566a82fa5214bae89087bc8c9fb94cd8e8a3c07feb691bb8d9c632db"
+
+[[package]]
+name = "yaml_serde"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "libyaml-rs",
+ "ryu",
+ "serde",
+]
 
 [[package]]
 name = "yansi"

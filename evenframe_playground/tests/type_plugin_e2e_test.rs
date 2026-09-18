@@ -45,7 +45,11 @@ fn field_with_annotation(name: &str, ty: &str, annotation: &str) -> StructField 
     f
 }
 
-fn struct_input(type_name: &str, derives: Vec<&str>, fields: Vec<StructField>) -> OutputRulePluginInput {
+fn struct_input(
+    type_name: &str,
+    derives: Vec<&str>,
+    fields: Vec<StructField>,
+) -> OutputRulePluginInput {
     OutputRulePluginInput::Struct {
         pipeline: "Both".to_string(),
         generator: "macroforge".to_string(),
@@ -100,7 +104,11 @@ fn decimal_field_gets_bigdecimal_annotation_when_serialize_derived() {
     let output = pm
         .transform_type("decimal_override", &input)
         .expect("plugin call must succeed");
-    assert!(output.error.is_none(), "plugin reported error: {:?}", output.error);
+    assert!(
+        output.error.is_none(),
+        "plugin reported error: {:?}",
+        output.error
+    );
 
     let amount_annotations = output
         .field_overrides
@@ -223,11 +231,7 @@ fn type_level_annotation_appears_when_any_override_fires() {
 #[test]
 fn type_level_annotation_absent_when_no_override_fires() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
-        "Empty",
-        vec!["Debug"],
-        vec![field("name", "String")],
-    );
+    let input = struct_input("Empty", vec!["Debug"], vec![field("name", "String")]);
 
     let output = pm
         .transform_type("decimal_override", &input)
@@ -243,11 +247,7 @@ fn type_level_annotation_absent_when_no_override_fires() {
 #[test]
 fn plugin_is_stable_across_repeated_calls() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
-        "Widget",
-        vec!["Serialize"],
-        vec![field("price", "Decimal")],
-    );
+    let input = struct_input("Widget", vec!["Serialize"], vec![field("price", "Decimal")]);
 
     let first = pm
         .transform_type("decimal_override", &input)
@@ -257,8 +257,14 @@ fn plugin_is_stable_across_repeated_calls() {
             .transform_type("decimal_override", &input)
             .expect("repeat call");
         assert_eq!(
-            first.field_overrides.get("price").map(|f| f.annotations.clone()),
-            again.field_overrides.get("price").map(|f| f.annotations.clone()),
+            first
+                .field_overrides
+                .get("price")
+                .map(|f| f.annotations.clone()),
+            again
+                .field_overrides
+                .get("price")
+                .map(|f| f.annotations.clone()),
         );
     }
 }

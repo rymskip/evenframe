@@ -48,7 +48,10 @@ fn inline_struct_variants_build_full_struct_config() {
         VariantData::InlineStruct(sc) => {
             assert_eq!(sc.struct_name, "Shape_Pair");
             assert_eq!(sc.fields.len(), 2);
-            assert!(!sc.resolve_only, "inline-struct StructConfig.resolve_only must be false");
+            assert!(
+                !sc.resolve_only,
+                "inline-struct StructConfig.resolve_only must be false"
+            );
         }
         _ => panic!("expected InlineStruct for Pair"),
     }
@@ -58,7 +61,10 @@ fn inline_struct_variants_build_full_struct_config() {
         VariantData::InlineStruct(sc) => {
             assert_eq!(sc.struct_name, "Shape_Labeled");
             assert_eq!(sc.fields.len(), 2);
-            assert!(!sc.resolve_only, "inline-struct StructConfig.resolve_only must be false");
+            assert!(
+                !sc.resolve_only,
+                "inline-struct StructConfig.resolve_only must be false"
+            );
         }
         _ => panic!("expected InlineStruct for Labeled"),
     }

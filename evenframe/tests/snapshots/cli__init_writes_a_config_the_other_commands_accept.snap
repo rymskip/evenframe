@@ -1,0 +1,53 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe init --minimal
+status: Some(0)
+--- stdout ---
+Created evenframe.toml
+Created .env
+
+Next steps:
+  1. Edit evenframe.toml to configure your project
+  2. Add #[derive(Evenframe)] to your Rust structs
+  3. Run `evenframe generate` to generate types and sync the schema
+--- stderr ---
+
+$ evenframe validate
+status: Some(0)
+--- stdout ---
+Configuration: OK
+  Output: arktype -> ./src/generated
+Types: OK
+  tables: 1, objects: 2, enums: 1
+Validation passed
+--- stderr ---
+
+$ evenframe init
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Configuration error: evenframe.toml already exists; use --force to overwrite it
+
+$ evenframe init --force
+status: Some(0)
+--- stdout ---
+Created evenframe.toml
+
+Next steps:
+  1. Edit evenframe.toml to configure your project
+  2. Add #[derive(Evenframe)] to your Rust structs
+  3. Run `evenframe generate` to generate types and sync the schema
+--- stderr ---
+
+$ evenframe validate
+status: Some(0)
+--- stdout ---
+Configuration: OK
+  Output: arktype -> ./src/generated/arktype
+Types: OK
+  tables: 1, objects: 2, enums: 1
+Validation passed
+--- stderr ---

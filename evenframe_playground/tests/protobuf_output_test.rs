@@ -100,8 +100,8 @@ fn test_protobuf_enabled_in_config() {
         .expect("Failed to read evenframe.toml");
 
     assert!(
-        config_content.contains("should_generate_protobuf_types = true"),
-        "Protocol Buffers generation should be enabled in evenframe.toml"
+        config_content.contains(r#"kind = "protobuf""#),
+        "A Protocol Buffers output should be configured in evenframe.toml"
     );
 }
 
@@ -113,7 +113,7 @@ fn test_protobuf_package_in_config() {
         .expect("Failed to read evenframe.toml");
 
     assert!(
-        config_content.contains("protobuf_package"),
+        config_content.contains(r#"package = "evenframe.playground""#),
         "Protocol Buffers package should be configured in evenframe.toml"
     );
 }
@@ -126,7 +126,7 @@ fn test_protobuf_import_validate_in_config() {
         .expect("Failed to read evenframe.toml");
 
     assert!(
-        config_content.contains("protobuf_import_validate"),
+        config_content.contains("import_validate = true"),
         "Protocol Buffers validate import should be configured in evenframe.toml"
     );
 }

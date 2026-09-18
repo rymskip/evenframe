@@ -1,20 +1,25 @@
 //! Schemasync command - synchronizes database schema.
 
-use crate::cli::{Cli, DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
+use crate::cli::{DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
 use crate::config_builders;
 use evenframe_core::{
     error::Result,
-    schemasync::{Schemasync, config::ConnectionOverrides},
+    schemasync::table::TableConfig,
+    schemasync::{
+        Schemasync,
+        config::{ConnectionOverrides, MockOverrides},
+    },
+    types::{StructConfig, TaggedUnion},
 };
-use std::path::PathBuf;
-use tracing::{debug, error, info};
+use std::collections::BTreeMap;
+use tracing::{debug, info};
 
 /// Runs the schemasync command.
-pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
+pub async fn run(args: SchemasyncArgs) -> Result<()> {
     info!("Starting schema synchronization");
 
     // Build all configs and filter to schemasync-eligible types
-    let build_config = config_builders::BuildConfig::from_toml()?;
+    let build_config = config_builders::BuildConfig::discover()?;
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
     let (enums, tables, objects) = config_builders::filter_for_schemasync(enums, tables, objects);
 
@@ -29,6 +34,10 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
         url: args.url.clone(),
         namespace: args.namespace.clone(),
         database: args.database.clone(),
+    };
+    let mocks = MockOverrides {
+        skip_mocks: args.no_mocks,
+        full_refresh: args.full_refresh,
     };
 
     // Handle subcommands
@@ -106,12 +115,12 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                         ))
                     })?;
                     if !input.trim().eq_ignore_ascii_case("y") {
-                        info!("Aborted by user");
+                        println!("Aborted");
                         return Ok(());
                     }
                 }
 
-                run_schemasync(&enums, &tables, &objects, overrides).await?;
+                run_schemasync(&enums, &tables, &objects, overrides, mocks).await?;
             }
             SchemasyncCommands::Mock(mock_args) => {
                 info!("Generating mock data only...");
@@ -148,18 +157,18 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
                 let (ddl, output_path) = match dump_args.command {
                     Some(DumpCommands::Tables(tables_args)) => (
                         tables_surql,
-                        tables_args
-                            .output
-                            .unwrap_or_else(|| PathBuf::from(".evenframe/surql/tables.surql")),
+                        tables_args.file.unwrap_or_else(|| {
+                            config.project_root().join(".evenframe/surql/tables.surql")
+                        }),
                     ),
                     None => (
                         evenframe_core::schemasync::dump::schema_surql(
                             &config.schemasync.database,
                             &tables_surql,
                         ),
-                        dump_args
-                            .output
-                            .unwrap_or_else(|| PathBuf::from(".evenframe/surql/schema.surql")),
+                        dump_args.file.unwrap_or_else(|| {
+                            config.project_root().join(".evenframe/surql/schema.surql")
+                        }),
                     ),
                 };
                 let statement_count = ddl
@@ -194,17 +203,20 @@ pub async fn run(_cli: &Cli, args: SchemasyncArgs) -> Result<()> {
     }
 
     // Default: run full schemasync
-    run_schemasync(&enums, &tables, &objects, overrides).await
+    run_schemasync(&enums, &tables, &objects, overrides, mocks).await
 }
 
-async fn run_schemasync(
-    enums: &std::collections::BTreeMap<String, evenframe_core::types::TaggedUnion>,
-    tables: &std::collections::BTreeMap<String, evenframe_core::schemasync::table::TableConfig>,
-    objects: &std::collections::BTreeMap<String, evenframe_core::types::StructConfig>,
+/// Runs the full schemasync pipeline over the scanned types.
+pub(crate) async fn run_schemasync(
+    enums: &BTreeMap<String, TaggedUnion>,
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
     overrides: ConnectionOverrides,
+    mocks: MockOverrides,
 ) -> Result<()> {
     let schemasync = Schemasync::new()
         .with_connection_overrides(overrides)
+        .with_mock_overrides(mocks)
         .with_tables(tables)
         .with_objects(objects)
         .with_enums(enums);
@@ -217,14 +229,7 @@ async fn run_schemasync(
     );
 
     info!("Running Schemasync...");
-    match schemasync.run().await {
-        Ok(_) => {
-            info!("Schemasync completed successfully");
-            Ok(())
-        }
-        Err(e) => {
-            error!("Schemasync failed: {}", e);
-            Err(e)
-        }
-    }
+    schemasync.run().await?;
+    info!("Schemasync completed successfully");
+    Ok(())
 }

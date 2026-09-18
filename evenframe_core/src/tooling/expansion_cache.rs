@@ -32,7 +32,7 @@ use tracing::{debug, trace, warn};
 
 /// Current manifest schema version. Bump when the on-disk format changes in
 /// an incompatible way — loads of older versions fall back to an empty cache.
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// Number of changed files at or above which we switch from per-file
 /// `cargo expand` invocations to a single crate-level call.
@@ -43,6 +43,9 @@ pub const CRATE_LEVEL_THRESHOLD: usize = 5;
 pub struct CacheManifest {
     pub version: u32,
     pub crate_name: String,
+    /// Absolute path of the crate's `src/` directory, which `entries` are
+    /// relative to.
+    pub src_dir: PathBuf,
     /// Keyed by source path relative to the crate's `src/` directory,
     /// e.g. `lib.rs`, `foo.rs`, `bar/baz.rs`.
     pub entries: HashMap<String, CacheEntry>,
@@ -61,49 +64,74 @@ pub struct CacheEntry {
     pub extracted_types: Vec<EvenframeType>,
 }
 
+/// Just the version of a manifest, readable whatever its layout.
+#[derive(Deserialize)]
+struct ManifestVersion {
+    version: u32,
+}
+
 impl CacheManifest {
-    /// Creates an empty manifest for a given crate.
-    pub fn empty(crate_name: &str) -> Self {
+    /// Creates an empty manifest for the crate whose sources are in `src_dir`.
+    pub fn empty(crate_name: &str, src_dir: &Path) -> Self {
         Self {
             version: MANIFEST_VERSION,
             crate_name: crate_name.to_string(),
+            src_dir: src_dir.to_path_buf(),
             entries: HashMap::new(),
         }
     }
 
-    /// Loads the manifest from disk, returning an empty one on any failure
-    /// (missing file, parse error, version mismatch).
+    /// Loads the manifest from disk, or `None` when there is no usable one
+    /// (missing file, parse error, version or crate mismatch).
     ///
     /// Also validates that every referenced fragment file exists and is
     /// non-empty on disk. A 0-byte fragment is treated as cache corruption
     /// (the manifest was saved mid-write, or a buggy writer stored an empty
     /// fragment) — in that case the whole manifest is discarded so the
     /// next run re-expands from scratch.
-    pub fn load(cache_dir: &Path, crate_name: &str) -> Self {
+    pub fn load(cache_dir: &Path, crate_name: &str) -> Option<Self> {
         let path = cache_dir.join("manifest.json");
         let bytes = match fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
                 trace!("no existing manifest at {:?}: {}", path, e);
-                return Self::empty(crate_name);
+                return None;
             }
         };
-        let manifest = match serde_json::from_slice::<CacheManifest>(&bytes) {
-            Ok(m) if m.version == MANIFEST_VERSION && m.crate_name == crate_name => m,
-            Ok(m) => {
+        // The version is read on its own first, so a manifest in an older
+        // layout is a version mismatch rather than a parse failure.
+        match serde_json::from_slice::<ManifestVersion>(&bytes) {
+            Ok(v) if v.version == MANIFEST_VERSION => {}
+            Ok(v) => {
                 debug!(
-                    "manifest at {:?} has mismatched version/crate ({} vs {}, {:?} vs {:?}); \
-                     starting fresh",
-                    path, m.version, MANIFEST_VERSION, m.crate_name, crate_name
+                    "manifest at {:?} is version {} (expected {}); starting fresh",
+                    path, v.version, MANIFEST_VERSION
                 );
-                return Self::empty(crate_name);
+                return None;
             }
             Err(e) => {
                 warn!(
                     "failed to parse manifest at {:?}: {}; starting fresh",
                     path, e
                 );
-                return Self::empty(crate_name);
+                return None;
+            }
+        }
+        let manifest = match serde_json::from_slice::<CacheManifest>(&bytes) {
+            Ok(m) if m.crate_name == crate_name => m,
+            Ok(m) => {
+                debug!(
+                    "manifest at {:?} belongs to crate {:?}, not {:?}; starting fresh",
+                    path, m.crate_name, crate_name
+                );
+                return None;
+            }
+            Err(e) => {
+                warn!(
+                    "failed to parse manifest at {:?}: {}; starting fresh",
+                    path, e
+                );
+                return None;
             }
         };
 
@@ -117,7 +145,7 @@ impl CacheManifest {
                          (referenced by source '{}'); discarding the entire cache",
                         crate_name, abs, rel_source
                     );
-                    return Self::empty(crate_name);
+                    return None;
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -126,12 +154,12 @@ impl CacheManifest {
                          (source '{}'): {}; discarding the entire cache",
                         crate_name, abs, rel_source, e
                     );
-                    return Self::empty(crate_name);
+                    return None;
                 }
             }
         }
 
-        manifest
+        Some(manifest)
     }
 
     /// Atomically writes the manifest to `cache_dir/manifest.json` via a
@@ -380,7 +408,7 @@ mod tests {
     fn manifest_save_and_load_roundtrip() {
         let dir = TempDir::new().unwrap();
         let cache_dir = dir.path();
-        let mut m = CacheManifest::empty("my_crate");
+        let mut m = CacheManifest::empty("my_crate", Path::new("/proj/src"));
         m.entries.insert(
             "lib.rs".to_string(),
             CacheEntry {
@@ -394,9 +422,10 @@ mod tests {
         // load() now validates referenced fragments — create a non-empty one.
         write_fragment(cache_dir, "lib.rs", "struct Placeholder;").unwrap();
 
-        let loaded = CacheManifest::load(cache_dir, "my_crate");
+        let loaded = CacheManifest::load(cache_dir, "my_crate").unwrap();
         assert_eq!(loaded.version, MANIFEST_VERSION);
         assert_eq!(loaded.crate_name, "my_crate");
+        assert_eq!(loaded.src_dir, Path::new("/proj/src"));
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries["lib.rs"].input_hash, "deadbeef");
     }
@@ -405,7 +434,7 @@ mod tests {
     fn manifest_load_discards_cache_when_fragment_missing() {
         let dir = TempDir::new().unwrap();
         let cache_dir = dir.path();
-        let mut m = CacheManifest::empty("my_crate");
+        let mut m = CacheManifest::empty("my_crate", Path::new("/proj/src"));
         m.entries.insert(
             "lib.rs".to_string(),
             CacheEntry {
@@ -418,15 +447,14 @@ mod tests {
         m.save(cache_dir).unwrap();
         // Deliberately do NOT create the fragment file.
 
-        let loaded = CacheManifest::load(cache_dir, "my_crate");
-        assert!(loaded.entries.is_empty());
+        assert!(CacheManifest::load(cache_dir, "my_crate").is_none());
     }
 
     #[test]
     fn manifest_load_discards_cache_when_fragment_empty() {
         let dir = TempDir::new().unwrap();
         let cache_dir = dir.path();
-        let mut m = CacheManifest::empty("my_crate");
+        let mut m = CacheManifest::empty("my_crate", Path::new("/proj/src"));
         m.entries.insert(
             "lib.rs".to_string(),
             CacheEntry {
@@ -442,8 +470,7 @@ mod tests {
         fs::create_dir_all(frag.parent().unwrap()).unwrap();
         fs::write(&frag, b"").unwrap();
 
-        let loaded = CacheManifest::load(cache_dir, "my_crate");
-        assert!(loaded.entries.is_empty());
+        assert!(CacheManifest::load(cache_dir, "my_crate").is_none());
     }
 
     #[test]
@@ -462,28 +489,35 @@ mod tests {
     }
 
     #[test]
-    fn manifest_load_returns_empty_on_missing_file() {
+    fn manifest_load_returns_none_on_missing_file() {
         let dir = TempDir::new().unwrap();
-        let loaded = CacheManifest::load(dir.path(), "my_crate");
-        assert_eq!(loaded.version, MANIFEST_VERSION);
-        assert!(loaded.entries.is_empty());
+        assert!(CacheManifest::load(dir.path(), "my_crate").is_none());
     }
 
     #[test]
-    fn manifest_load_returns_empty_on_crate_mismatch() {
+    fn manifest_load_returns_none_on_older_version() {
         let dir = TempDir::new().unwrap();
-        let m = CacheManifest::empty("old_crate");
+        fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"version":1,"crate_name":"my_crate","entries":{}}"#,
+        )
+        .unwrap();
+        assert!(CacheManifest::load(dir.path(), "my_crate").is_none());
+    }
+
+    #[test]
+    fn manifest_load_returns_none_on_crate_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let m = CacheManifest::empty("old_crate", Path::new("/proj/src"));
         m.save(dir.path()).unwrap();
 
-        let loaded = CacheManifest::load(dir.path(), "new_crate");
-        assert_eq!(loaded.crate_name, "new_crate");
-        assert!(loaded.entries.is_empty());
+        assert!(CacheManifest::load(dir.path(), "new_crate").is_none());
     }
 
     #[test]
     fn manifest_save_is_atomic() {
         let dir = TempDir::new().unwrap();
-        let m = CacheManifest::empty("my_crate");
+        let m = CacheManifest::empty("my_crate", Path::new("/proj/src"));
         m.save(dir.path()).unwrap();
         // The .tmp file should not exist after a successful save.
         assert!(!dir.path().join("manifest.json.tmp").exists());

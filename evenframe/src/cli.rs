@@ -1,6 +1,9 @@
 //! Command-line interface definitions for Evenframe.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use evenframe_core::config::SourceOfTruth;
+use evenframe_core::schemasync::config::DatabaseProvider;
+use evenframe_core::typesync::config::OutputKind;
 use std::path::PathBuf;
 
 /// Evenframe - TypeScript type generation and database schema synchronization
@@ -17,9 +20,11 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value = "rust")]
     pub source: SourceOfTruth,
 
-    /// Output path override (overrides config file)
-    #[arg(short, long, global = true)]
-    pub output: Option<PathBuf>,
+    // Its own id, apart from the subcommands' `-o <FILE>`: clap copies a
+    // global argument's value up from any subcommand argument sharing its id.
+    /// Directory for generated types, when one output is generated (overrides its `dir`)
+    #[arg(long = "output", global = true)]
+    pub output_dir: Option<PathBuf>,
 
     /// Increase logging verbosity (repeat for more: -v=info, -vv=debug, -vvv=trace)
     #[arg(
@@ -57,17 +62,6 @@ impl Cli {
     }
 }
 
-/// Source of truth for type definitions
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub enum SourceOfTruth {
-    /// Rust structs with #[derive(Evenframe)] or #[apply(...)]
-    Rust,
-    /// FlatBuffers schema files (.fbs)
-    Flatbuffers,
-    /// Protocol Buffers schema files (.proto)
-    Protobuf,
-}
-
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Generate TypeScript types and schemas
@@ -76,9 +70,9 @@ pub enum Commands {
     /// Synchronize database schema
     Schemasync(SchemasyncArgs),
 
-    /// Insert mock data using the scan registry (no source scan)
+    /// Insert mock data using the scan cache (no source scan)
     ///
-    /// Reads `.evenframe/registry.json`, written by every command that scans
+    /// Reads `.evenframe/cache.json`, written by every command that scans
     /// the workspace, and refuses to run if the sources changed since. The
     /// database schema must already be in place (see `schemasync`).
     Mockmake(MockmakeArgs),
@@ -88,6 +82,13 @@ pub enum Commands {
 
     /// Initialize a new evenframe.toml configuration file
     Init(InitArgs),
+
+    /// Report whether the scan cache still matches the Rust sources
+    ///
+    /// Recomputes the scan fingerprint with a cheap file walk (no Rust
+    /// parsing, no database) and compares it with `.evenframe/cache.json`.
+    /// Exits with status 1 when the two disagree, so CI can gate on it.
+    Check(CheckArgs),
 
     /// Validate configuration and detected types
     Validate(ValidateArgs),
@@ -100,7 +101,7 @@ pub enum Commands {
     TestPlugin(TestPluginArgs),
 
     /// Manage the macro expansion cache
-    Cache(CacheArgs),
+    Expand(ExpandArgs),
 }
 
 // ============================================================================
@@ -116,15 +117,15 @@ pub struct TypesyncArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Comma-separated list of formats to generate
+    /// Only generate the configured outputs of these kinds (comma-separated)
     #[arg(long, value_delimiter = ',')]
-    pub formats: Option<Vec<TypeFormat>>,
+    pub formats: Option<Vec<OutputKind>>,
 
-    /// Disable specific formats (overrides config)
+    /// Skip the configured outputs of these kinds (comma-separated)
     #[arg(long, value_delimiter = ',')]
-    pub skip: Option<Vec<TypeFormat>>,
+    pub skip: Option<Vec<OutputKind>>,
 
-    /// Enable per-file output mode (overrides config)
+    /// Write effect and macroforge outputs one file per type (overrides config)
     #[arg(long)]
     pub per_file: bool,
 }
@@ -147,41 +148,32 @@ pub enum TypesyncCommands {
     Protobuf(ProtobufArgs),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ValueEnum)]
-pub enum TypeFormat {
-    Arktype,
-    Effect,
-    Macroforge,
-    Flatbuffers,
-    Protobuf,
-}
-
 #[derive(Args, Debug, Clone)]
 pub struct ArktypeArgs {
-    /// Output file path (default: {output_path}/arktype.ts)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: arktype.ts in the output's dir)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct EffectArgs {
-    /// Output file path (default: {output_path}/bindings.ts)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: bindings.ts in the output's dir)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct MacroforgeArgs {
-    /// Output file path (default: {output_path}/macroforge.ts)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: macroforge.ts in the output's dir)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct FlatbuffersArgs {
-    /// Output file path (default: {output_path}/schema.fbs)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: schema.fbs in the output's dir)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 
     /// Override namespace (e.g., "com.example.app")
     #[arg(long)]
@@ -190,9 +182,9 @@ pub struct FlatbuffersArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ProtobufArgs {
-    /// Output file path (default: {output_path}/schema.proto)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: schema.proto in the output's dir)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 
     /// Override package name (e.g., "com.example.app")
     #[arg(long)]
@@ -333,16 +325,16 @@ pub struct DumpArgs {
     #[command(subcommand)]
     pub command: Option<DumpCommands>,
 
-    /// Output file path (default: .evenframe/surql/schema.surql)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: .evenframe/surql/schema.surql in the project root)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DumpTablesArgs {
-    /// Output file path (default: .evenframe/surql/tables.surql)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file path (default: .evenframe/surql/tables.surql in the project root)
+    #[arg(short = 'o', long)]
+    pub file: Option<PathBuf>,
 }
 
 // ============================================================================
@@ -362,10 +354,6 @@ pub struct GenerateArgs {
     /// Skip mock data generation
     #[arg(long)]
     pub no_mocks: bool,
-
-    /// Watch mode - regenerate on file changes
-    #[arg(short, long)]
-    pub watch: bool,
 }
 
 // ============================================================================
@@ -387,12 +375,15 @@ pub struct InitArgs {
     pub minimal: bool,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub enum DatabaseProvider {
-    Surrealdb,
-    Postgres,
-    Mysql,
-    Sqlite,
+// ============================================================================
+// Check Arguments
+// ============================================================================
+
+#[derive(Args, Debug, Clone)]
+pub struct CheckArgs {
+    /// Emit the result as JSON for scripted assertions
+    #[arg(long)]
+    pub json: bool,
 }
 
 // ============================================================================
@@ -424,9 +415,9 @@ pub struct InfoArgs {
     #[arg(long)]
     pub types: bool,
 
-    /// Show configuration values
+    /// Show the resolved configuration (the global --config picks the file)
     #[arg(long)]
-    pub config: bool,
+    pub settings: bool,
 
     /// Show database schema information
     #[arg(long)]
@@ -456,21 +447,21 @@ pub struct TestPluginArgs {
 }
 
 // ============================================================================
-// Cache Arguments
+// Expand Arguments
 // ============================================================================
 
 #[derive(Args, Debug, Clone)]
-pub struct CacheArgs {
+pub struct ExpandArgs {
     #[command(subcommand)]
-    pub command: CacheCommands,
+    pub command: ExpandCommands,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum CacheCommands {
-    /// Show cache status (per-crate hit/miss counts, total size on disk)
+pub enum ExpandCommands {
+    /// Show expansion cache status (per-crate hit/miss counts, total size on disk)
     Status,
 
-    /// Warm the cache by expanding all workspace crates
+    /// Warm the expansion cache by expanding all workspace crates
     Warm,
 
     /// Clear the expansion cache

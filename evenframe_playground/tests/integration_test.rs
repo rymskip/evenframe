@@ -398,16 +398,16 @@ fn test_evenframe_config() {
 
     // Check for typesync settings
     assert!(
-        config_content.contains("should_generate_arktype_types"),
-        "Config should have arktype generation setting"
+        config_content.contains(r#"kind = "arktype""#),
+        "Config should have an arktype output"
     );
     assert!(
-        config_content.contains("should_generate_effect_types"),
-        "Config should have effect generation setting"
+        config_content.contains(r#"kind = "effect""#),
+        "Config should have an effect output"
     );
     assert!(
-        config_content.contains("output_path"),
-        "Config should have output_path setting"
+        config_content.contains("dir = "),
+        "Config outputs should set their dir"
     );
 
     // Check for database settings

@@ -1,0 +1,84 @@
+---
+source: evenframe/src/commands/init.rs
+assertion_line: 226
+expression: "parse(&generate_minimal_config(&DatabaseProvider::Surrealdb))"
+---
+EvenframeConfig {
+    general: GeneralConfig {
+        apply_aliases: [],
+        include_files: [],
+        expand_macros: false,
+        source: SourceConfig {
+            primary: Rust,
+            flatbuffers_input: None,
+            protobuf_input: None,
+            include_paths: [],
+        },
+        env_path: None,
+        foreign_types: {},
+        output_rule_plugins: {},
+        synthetic_item_plugins: {},
+    },
+    schemasync: SchemasyncConfig {
+        database: DatabaseConfig {
+            provider: Surrealdb,
+            url: "${SURREALDB_URL}",
+            namespace: "${SURREALDB_NS}",
+            database: "${SURREALDB_DB}",
+            timeout: 60,
+            accesses: Inline(
+                [],
+            ),
+            functions: None,
+            analyzers: None,
+            resolved: ResolvedDatabaseItems {
+                access_surql: None,
+                functions_surql: None,
+                analyzers_surql: None,
+            },
+            max_connections: None,
+            min_connections: None,
+            schema: None,
+        },
+        should_generate_mocks: false,
+        mock_gen_config: SchemasyncMockGenConfig {
+            default_record_count: 10,
+            default_preservation_mode: Smart,
+            default_batch_size: 1000,
+            coordination_groups: [],
+            full_refresh_mode: false,
+            scripting_asserts: true,
+        },
+        performance: PerformanceConfig {
+            embedded_db_memory_limit: "1GB",
+            cache_duration_seconds: 300,
+            use_progressive_loading: true,
+        },
+        plugins: {},
+        lint: LintConfig {
+            silence_unverifiable_annotations: false,
+        },
+    },
+    typesync: TypesyncConfig {
+        outputs: [
+            TypesyncOutput {
+                kind: Arktype,
+                dir: "./src/generated",
+                file: None,
+                files: OutputConfig {
+                    mode: Single,
+                    barrel_file: false,
+                    file_naming: Kebab,
+                    file_extension: ".ts",
+                    array_style: Shorthand,
+                    import_extension: Bare,
+                },
+                namespace: None,
+                package: None,
+                import_validate: false,
+            },
+        ],
+        collision_strategy: Error,
+    },
+    config_file_path: "",
+}

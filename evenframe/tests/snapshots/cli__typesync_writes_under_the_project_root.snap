@@ -1,0 +1,55 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/generated/arktype.ts
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts
+
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/generated/arktype.ts
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts
+
+$ evenframe typesync --output out
+status: Some(0)
+--- stdout ---
+Wrote out/arktype.ts
+--- stderr ---
+
+$ ls -R out
+out/arktype.ts
+
+$ evenframe typesync arktype -o single/types.ts
+status: Some(0)
+--- stdout ---
+Wrote single/types.ts
+--- stderr ---
+
+$ ls -R single
+single/types.ts
+
+$ evenframe typesync effect -o effect.ts
+status: Some(0)
+--- stdout ---
+Wrote effect.ts
+--- stderr ---
+
+$ evenframe --output fx typesync effect
+status: Some(0)
+--- stdout ---
+Wrote fx/bindings.ts
+--- stderr ---
+
+$ ls -R fx
+fx/bindings.ts

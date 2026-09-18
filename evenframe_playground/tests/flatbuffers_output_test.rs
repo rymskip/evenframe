@@ -99,8 +99,8 @@ fn test_flatbuffers_enabled_in_config() {
         .expect("Failed to read evenframe.toml");
 
     assert!(
-        config_content.contains("should_generate_flatbuffers_types = true"),
-        "FlatBuffers generation should be enabled in evenframe.toml"
+        config_content.contains(r#"kind = "flatbuffers""#),
+        "A FlatBuffers output should be configured in evenframe.toml"
     );
 }
 
@@ -112,7 +112,7 @@ fn test_flatbuffers_namespace_in_config() {
         .expect("Failed to read evenframe.toml");
 
     assert!(
-        config_content.contains("flatbuffers_namespace"),
+        config_content.contains(r#"namespace = "evenframe.playground""#),
         "FlatBuffers namespace should be configured in evenframe.toml"
     );
 }
