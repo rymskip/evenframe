@@ -23,6 +23,7 @@ mod tests {
             "hello".to_string(),
             PluginConfig {
                 path: ".evenframe/plugins/hello_plugin.wasm".to_string(),
+                params: Default::default(),
             },
         );
         PluginManager::new(&plugins, &playground_root()).expect("Should load plugin")
@@ -125,6 +126,7 @@ mod tests {
             "missing".to_string(),
             PluginConfig {
                 path: ".evenframe/plugins/does_not_exist.wasm".to_string(),
+                params: Default::default(),
             },
         );
         let result = PluginManager::new(&plugins, &playground_root());

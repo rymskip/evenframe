@@ -6,6 +6,8 @@ use try_from_expr::TryFromExpr;
 
 #[cfg(feature = "schemasync")]
 use super::regex_val_gen::RegexValGen;
+#[cfg(feature = "schemasync")]
+use rand::RngExt;
 
 /// Generate a regex pattern for dates within a specified number of days from now
 fn generate_date_range_pattern(days: i64) -> String {
@@ -33,6 +35,60 @@ fn generate_date_range_pattern(days: i64) -> String {
     pattern
 }
 
+/// A user-provided pattern for [`Format::Custom`], checked to be a valid
+/// regex when it is created.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct CustomPattern(String);
+
+impl CustomPattern {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// A pattern already checked where its attribute was parsed. Only
+    /// derive output calls this.
+    #[doc(hidden)]
+    pub fn checked(pattern: &str) -> Self {
+        Self(pattern.to_string())
+    }
+}
+
+impl TryFrom<String> for CustomPattern {
+    type Error = regex::Error;
+
+    fn try_from(pattern: String) -> Result<Self, Self::Error> {
+        Regex::new(&pattern)?;
+        Ok(Self(pattern))
+    }
+}
+
+impl From<CustomPattern> for String {
+    fn from(pattern: CustomPattern) -> Self {
+        pattern.0
+    }
+}
+
+impl TryFrom<&syn::Expr> for CustomPattern {
+    type Error = syn::Error;
+
+    fn try_from(expr: &syn::Expr) -> Result<Self, Self::Error> {
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(literal),
+            ..
+        }) = expr
+        else {
+            return Err(syn::Error::new_spanned(
+                expr,
+                "a custom format takes a regex pattern string literal",
+            ));
+        };
+        Self::try_from(literal.value()).map_err(|e| {
+            syn::Error::new_spanned(expr, format!("invalid custom format pattern: {e}"))
+        })
+    }
+}
+
 #[derive(
     Debug,
     Clone,
@@ -44,6 +100,7 @@ fn generate_date_range_pattern(days: i64) -> String {
     serde::Deserialize,
     strum::EnumString,
 )]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[strum(serialize_all = "snake_case")]
 pub enum Format {
     /// Generate a random UUID string
@@ -131,64 +188,76 @@ pub enum Format {
     /// Generate a set of Tailwind-style colors (main, hover, active)
     TailwindColorSet(Option<String>), // Optional color name for seeding
     /// Custom format with a user-provided pattern
-    Custom(String),
+    #[strum(disabled)]
+    Custom(CustomPattern),
     /// Generate a completely random string of 8-16 characters
     Random,
     /// Generate appointment duration in nanoseconds (1-5 hours in 15-minute increments)
     AppointmentDurationNs,
 }
 
+/// A day in 2020 through 2029, the years the date patterns allow.
+#[cfg(feature = "schemasync")]
+fn random_date(rng: &mut impl RngExt) -> chrono::NaiveDate {
+    const FIRST: chrono::NaiveDate =
+        chrono::NaiveDate::from_ymd_opt(2020, 1, 1).expect("2020-01-01 is a date");
+    let days_in_decade = 3653;
+    FIRST + Duration::days(rng.random_range(0..days_in_decade))
+}
+
 #[cfg(feature = "schemasync")]
 impl Format {
-    /// Helper function to generate a value from regex pattern
-    fn generate_from_regex(&self) -> String {
-        tracing::trace!(format = ?self, "Generating value from regex pattern");
-        let regex: Regex = self.clone().into();
-        let pattern = regex.as_str();
-
-        let mut maker = RegexValGen::new();
-
-        let result = maker
-            .generate(pattern)
-            .unwrap_or_else(|e| panic!("Failed to generate value for {:?}: {}", self, e));
-
-        tracing::trace!(value_length = result.len(), "Generated value from regex");
-        result
-    }
-
-    pub fn generate_formatted_value(&self) -> String {
+    /// A value matching this format's pattern.
+    pub fn generate_formatted_value(&self) -> crate::error::Result<String> {
         tracing::debug!(format = ?self, "Generating formatted value");
-        self.generate_from_regex()
+        // The date patterns allow day 31 in every month, so dates come from
+        // the calendar instead.
+        let mut rng = rand::rng();
+        match self {
+            Format::Date => return Ok(random_date(&mut rng).to_string()),
+            Format::DateTime => {
+                return Ok(format!(
+                    "{}T{:02}:{:02}:{:02}Z",
+                    random_date(&mut rng),
+                    rng.random_range(0..24),
+                    [0, 15, 30, 45][rng.random_range(0..4)],
+                    rng.random_range(0..60)
+                ));
+            }
+            _ => {}
+        }
+        RegexValGen::new().generate(&self.pattern()).map_err(|e| {
+            crate::error::EvenframeError::mock_generation(format!(
+                "generating a value for format {self:?}: {e}"
+            ))
+        })
     }
 }
 
 impl Format {
-    /// Convert this Format into a Regex
-    pub fn into_regex(self) -> Regex {
-        tracing::trace!(format = ?self, "Converting format to regex");
-        self.into()
+    /// This format as a compiled regex.
+    pub fn regex(&self) -> Regex {
+        Regex::new(&self.pattern()).expect(
+            "format patterns are valid: built-in ones are fixed and custom ones are checked when created",
+        )
     }
-}
 
-impl From<Format> for Regex {
-    fn from(format: Format) -> Self {
-        tracing::trace!(format = ?format, "Creating regex from format");
-        let pattern = match format {
+    /// The regex pattern values of this format match.
+    pub fn pattern(&self) -> String {
+        let pattern = match self {
             Format::Uuid => {
                 r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
             }
             Format::DateTime => {
-                r"^(202[0-9])-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):(0|15|30|45):[0-5][0-9]Z$"
+                r"^(202[0-9])-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):(00|15|30|45):[0-5][0-9]Z$"
             }
             Format::Date => r"^(202[0-9])-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
             Format::Time => r"^\d{2}:\d{2}:\d{2}$",
             Format::HexString(len) => {
-                return Regex::new(&format!(r"^[0-9a-fA-F]{{{}}}$", len))
-                    .expect("Failed to create hex string regex");
+                return format!(r"^[0-9a-fA-F]{{{}}}$", len);
             }
             Format::Base64String(len) => {
-                return Regex::new(&format!(r"^[A-Za-z0-9+/]{{{}}}$", len))
-                    .expect("Failed to create base64 string regex");
+                return format!(r"^[A-Za-z0-9+/]{{{}}}$", len);
             }
             Format::JwtToken => r"^[A-Za-z0-9+/]{36}\.[A-Za-z0-9+/]{36}\.[A-Za-z0-9+/]{43}$",
             Format::CreditCardNumber => r"^\d{4}-\d{4}-\d{4}-\d{4}$",
@@ -199,13 +268,11 @@ impl From<Format> for Regex {
             Format::MacAddress => r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$",
             Format::ColorHex => r"^#[0-9a-fA-F]{6}$",
             Format::Oklch => r"^oklch\(\d+(?:\.\d+)?% \d+(?:\.\d+)? \d+(?:\.\d+)?\)$",
-            Format::Filename(ref extension) => {
-                return Regex::new(&format!(r"^[a-z]{{8}}\.{}$", regex::escape(extension)))
-                    .expect("Failed to create filename regex");
+            Format::Filename(extension) => {
+                return format!(r"^[a-z]{{8}}\.{}$", regex::escape(extension));
             }
-            Format::Url(ref domain) => {
-                return Regex::new(&format!(r"^https://{}/[a-z]{{8}}$", regex::escape(domain)))
-                    .expect("Failed to create URL regex");
+            Format::Url(domain) => {
+                return format!(r"^https://{}/[a-z]{{8}}$", regex::escape(domain));
             }
             Format::CurrencyAmount => r"^\$\d+\.\d{2}$",
             Format::Percentage => r"^\d+(?:\.\d+)?%$",
@@ -282,14 +349,14 @@ impl From<Format> for Regex {
                     r")$",
                 ]
                 .concat();
-                return Regex::new(&pattern).expect("Failed to create ISO 8601 duration regex");
+                return pattern;
             }
             Format::TimeZone => {
                 r"^(Africa/Abidjan|Africa/Accra|Africa/Addis_Ababa|Africa/Algiers|Africa/Asmara|Africa/Bamako|Africa/Bangui|Africa/Banjul|Africa/Bissau|Africa/Blantyre|Africa/Brazzaville|Africa/Bujumbura|Africa/Cairo|Africa/Casablanca|Africa/Ceuta|Africa/Conakry|Africa/Dakar|Africa/Dar_es_Salaam|Africa/Djibouti|Africa/Douala|Africa/El_Aaiun|Africa/Freetown|Africa/Gaborone|Africa/Harare|Africa/Johannesburg|Africa/Juba|Africa/Kampala|Africa/Khartoum|Africa/Kigali|Africa/Kinshasa|Africa/Lagos|Africa/Libreville|Africa/Lome|Africa/Luanda|Africa/Lubumbashi|Africa/Lusaka|Africa/Malabo|Africa/Maputo|Africa/Maseru|Africa/Mbabane|Africa/Mogadishu|Africa/Monrovia|Africa/Nairobi|Africa/Ndjamena|Africa/Niamey|Africa/Nouakchott|Africa/Ouagadougou|Africa/Porto-Novo|Africa/Sao_Tome|Africa/Tripoli|Africa/Tunis|Africa/Windhoek|America/Adak|America/Anchorage|America/Anguilla|America/Antigua|America/Araguaina|America/Argentina/Buenos_Aires|America/Argentina/Catamarca|America/Argentina/Cordoba|America/Argentina/Jujuy|America/Argentina/La_Rioja|America/Argentina/Mendoza|America/Argentina/Rio_Gallegos|America/Argentina/Salta|America/Argentina/San_Juan|America/Argentina/San_Luis|America/Argentina/Tucuman|America/Argentina/Ushuaia|America/Aruba|America/Asuncion|America/Atikokan|America/Bahia|America/Bahia_Banderas|America/Barbados|America/Belem|America/Belize|America/Blanc-Sablon|America/Boa_Vista|America/Bogota|America/Boise|America/Cambridge_Bay|America/Campo_Grande|America/Cancun|America/Caracas|America/Cayenne|America/Cayman|America/Chicago|America/Chihuahua|America/Costa_Rica|America/Creston|America/Cuiaba|America/Curacao|America/Danmarkshavn|America/Dawson|America/Dawson_Creek|America/Denver|America/Detroit|America/Dominica|America/Edmonton|America/Eirunepe|America/El_Salvador|America/Fort_Nelson|America/Fortaleza|America/Glace_Bay|America/Goose_Bay|America/Grand_Turk|America/Grenada|America/Guadeloupe|America/Guatemala|America/Guayaquil|America/Guyana|America/Halifax|America/Havana|America/Hermosillo|America/Indiana/Indianapolis|America/Indiana/Knox|America/Indiana/Marengo|America/Indiana/Petersburg|America/Indiana/Tell_City|America/Indiana/Vevay|America/Indiana/Vincennes|America/Indiana/Winamac|America/Inuvik|America/Iqaluit|America/Jamaica|America/Juneau|America/Kentucky/Louisville|America/Kentucky/Monticello|America/Kralendijk|America/La_Paz|America/Lima|America/Los_Angeles|America/Lower_Princes|America/Maceio|America/Managua|America/Manaus|America/Marigot|America/Martinique|America/Matamoros|America/Mazatlan|America/Menominee|America/Merida|America/Metlakatla|America/Mexico_City|America/Miquelon|America/Moncton|America/Monterrey|America/Montevideo|America/Montserrat|America/Nassau|America/New_York|America/Nipigon|America/Nome|America/Noronha|America/North_Dakota/Beulah|America/North_Dakota/Center|America/North_Dakota/New_Salem|America/Nuuk|America/Ojinaga|America/Panama|America/Pangnirtung|America/Paramaribo|America/Phoenix|America/Port-au-Prince|America/Port_of_Spain|America/Porto_Velho|America/Puerto_Rico|America/Punta_Arenas|America/Rainy_River|America/Rankin_Inlet|America/Recife|America/Regina|America/Resolute|America/Rio_Branco|America/Santarem|America/Santiago|America/Santo_Domingo|America/Sao_Paulo|America/Scoresbysund|America/Sitka|America/St_Barthelemy|America/St_Johns|America/St_Kitts|America/St_Lucia|America/St_Thomas|America/St_Vincent|America/Swift_Current|America/Tegucigalpa|America/Thule|America/Thunder_Bay|America/Tijuana|America/Toronto|America/Tortola|America/Vancouver|America/Whitehorse|America/Winnipeg|America/Yakutat|America/Yellowknife|Antarctica/Casey|Antarctica/Davis|Antarctica/DumontDUrville|Antarctica/Macquarie|Antarctica/Mawson|Antarctica/McMurdo|Antarctica/Palmer|Antarctica/Rothera|Antarctica/Syowa|Antarctica/Troll|Antarctica/Vostok|Arctic/Longyearbyen|Asia/Aden|Asia/Almaty|Asia/Amman|Asia/Anadyr|Asia/Aqtau|Asia/Aqtobe|Asia/Ashgabat|Asia/Atyrau|Asia/Baghdad|Asia/Bahrain|Asia/Baku|Asia/Bangkok|Asia/Barnaul|Asia/Beirut|Asia/Bishkek|Asia/Brunei|Asia/Chita|Asia/Choibalsan|Asia/Colombo|Asia/Damascus|Asia/Dhaka|Asia/Dili|Asia/Dubai|Asia/Dushanbe|Asia/Famagusta|Asia/Gaza|Asia/Hebron|Asia/Ho_Chi_Minh|Asia/Hong_Kong|Asia/Hovd|Asia/Irkutsk|Asia/Jakarta|Asia/Jayapura|Asia/Jerusalem|Asia/Kabul|Asia/Kamchatka|Asia/Karachi|Asia/Kathmandu|Asia/Khandyga|Asia/Kolkata|Asia/Krasnoyarsk|Asia/Kuala_Lumpur|Asia/Kuching|Asia/Kuwait|Asia/Macau|Asia/Magadan|Asia/Makassar|Asia/Manila|Asia/Muscat|Asia/Nicosia|Asia/Novokuznetsk|Asia/Novosibirsk|Asia/Omsk|Asia/Oral|Asia/Phnom_Penh|Asia/Pontianak|Asia/Pyongyang|Asia/Qatar|Asia/Qostanay|Asia/Qyzylorda|Asia/Riyadh|Asia/Sakhalin|Asia/Samarkand|Asia/Seoul|Asia/Shanghai|Asia/Singapore|Asia/Srednekolymsk|Asia/Taipei|Asia/Tashkent|Asia/Tbilisi|Asia/Tehran|Asia/Thimphu|Asia/Tokyo|Asia/Tomsk|Asia/Ulaanbaatar|Asia/Urumqi|Asia/Ust-Nera|Asia/Vientiane|Asia/Vladivostok|Asia/Yakutsk|Asia/Yangon|Asia/Yekaterinburg|Asia/Yerevan|Atlantic/Azores|Atlantic/Bermuda|Atlantic/Canary|Atlantic/Cape_Verde|Atlantic/Faroe|Atlantic/Madeira|Atlantic/Reykjavik|Atlantic/South_Georgia|Atlantic/St_Helena|Atlantic/Stanley|Australia/Adelaide|Australia/Brisbane|Australia/Broken_Hill|Australia/Darwin|Australia/Eucla|Australia/Hobart|Australia/Lindeman|Australia/Lord_Howe|Australia/Melbourne|Australia/Perth|Australia/Sydney|Europe/Amsterdam|Europe/Andorra|Europe/Astrakhan|Europe/Athens|Europe/Belgrade|Europe/Berlin|Europe/Bratislava|Europe/Brussels|Europe/Bucharest|Europe/Budapest|Europe/Busingen|Europe/Chisinau|Europe/Copenhagen|Europe/Dublin|Europe/Gibraltar|Europe/Guernsey|Europe/Helsinki|Europe/Isle_of_Man|Europe/Istanbul|Europe/Jersey|Europe/Kaliningrad|Europe/Kiev|Europe/Kirov|Europe/Lisbon|Europe/Ljubljana|Europe/London|Europe/Luxembourg|Europe/Madrid|Europe/Malta|Europe/Mariehamn|Europe/Minsk|Europe/Monaco|Europe/Moscow|Europe/Oslo|Europe/Paris|Europe/Podgorica|Europe/Prague|Europe/Riga|Europe/Rome|Europe/Samara|Europe/San_Marino|Europe/Sarajevo|Europe/Saratov|Europe/Simferopol|Europe/Skopje|Europe/Sofia|Europe/Stockholm|Europe/Tallinn|Europe/Tirane|Europe/Ulyanovsk|Europe/Uzhgorod|Europe/Vaduz|Europe/Vatican|Europe/Vienna|Europe/Vilnius|Europe/Volgograd|Europe/Warsaw|Europe/Zagreb|Europe/Zaporozhye|Europe/Zurich|Indian/Antananarivo|Indian/Chagos|Indian/Christmas|Indian/Cocos|Indian/Comoro|Indian/Kerguelen|Indian/Mahe|Indian/Maldives|Indian/Mauritius|Indian/Mayotte|Indian/Reunion|Pacific/Apia|Pacific/Auckland|Pacific/Bougainville|Pacific/Chatham|Pacific/Chuuk|Pacific/Easter|Pacific/Efate|Pacific/Enderbury|Pacific/Fakaofo|Pacific/Fiji|Pacific/Funafuti|Pacific/Galapagos|Pacific/Gambier|Pacific/Guadalcanal|Pacific/Guam|Pacific/Honolulu|Pacific/Kanton|Pacific/Kiritimati|Pacific/Kosrae|Pacific/Kwajalein|Pacific/Majuro|Pacific/Marquesas|Pacific/Midway|Pacific/Nauru|Pacific/Niue|Pacific/Norfolk|Pacific/Noumea|Pacific/Pago_Pago|Pacific/Palau|Pacific/Pitcairn|Pacific/Pohnpei|Pacific/Port_Moresby|Pacific/Rarotonga|Pacific/Saipan|Pacific/Tahiti|Pacific/Tarawa|Pacific/Tongatapu|Pacific/Wake|Pacific/Wallis)$"
             }
             Format::DateWithinDays(days) => {
                 // Use the helper function to generate date range pattern
-                let date_pattern = generate_date_range_pattern(days);
+                let date_pattern = generate_date_range_pattern(*days);
 
                 &format!(r"^{}T([01][0-9]|2[0-3]):(00|15|30|45):00Z$", date_pattern)
             }
@@ -303,7 +370,7 @@ impl From<Format> for Regex {
             Format::TailwindColorSet(_) => {
                 r#"^\{\"main\":\"\#[0-9a-fA-F]{6}\",\"hover\":\"\#[0-9a-fA-F]{6}\",\"active\":\"\#[0-9a-fA-F]{6}\"\}$"#
             }
-            Format::Custom(pattern) => &pattern.clone(),
+            Format::Custom(custom) => custom.as_str(),
 
             Format::Random => r"^[a-zA-Z0-9]{8,16}$",
 
@@ -317,9 +384,7 @@ impl From<Format> for Regex {
             }
         };
 
-        let regex = Regex::new(pattern).expect("Failed to create regex from Format");
-        tracing::trace!(pattern_length = pattern.len(), "Regex created successfully");
-        regex
+        pattern.to_string()
     }
 }
 
@@ -437,8 +502,13 @@ impl ToTokens for Format {
                     quote! { ::evenframe::schemasync::format::Format::TailwindColorSet(None) }
                 }
             },
-            Format::Custom(pattern) => {
-                quote! { ::evenframe::schemasync::format::Format::Custom(#pattern.to_string()) }
+            Format::Custom(custom) => {
+                let pattern = custom.as_str();
+                quote! {
+                    ::evenframe::schemasync::format::Format::Custom(
+                        ::evenframe::schemasync::format::CustomPattern::checked(#pattern)
+                    )
+                }
             }
             Format::Random => {
                 quote! { ::evenframe::schemasync::format::Format::Random }
@@ -458,7 +528,7 @@ mod pattern_tests {
 
     #[test]
     fn phone_number_allows_one_space_per_gap() {
-        let regex = Format::PhoneNumber.into_regex();
+        let regex = Format::PhoneNumber.regex();
         for ok in [
             "+1 555 010 2000",
             "+1 555-010-2000",
@@ -491,10 +561,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_built_in_pattern_is_a_valid_regex() {
+        use strum::IntoEnumIterator;
+        for format in Format::iter() {
+            assert!(
+                Regex::new(&format.pattern()).is_ok(),
+                "{format:?} has an invalid pattern"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_dates_are_calendar_dates() {
+        for _ in 0..2000 {
+            let date = Format::Date.generate_formatted_value().unwrap();
+            assert!(
+                chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_ok(),
+                "{date}"
+            );
+            let datetime = Format::DateTime.generate_formatted_value().unwrap();
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&datetime).is_ok(),
+                "{datetime}"
+            );
+            assert!(Format::DateTime.regex().is_match(&datetime), "{datetime}");
+        }
+    }
+
+    #[test]
+    fn custom_patterns_are_checked_when_created() {
+        assert!(CustomPattern::try_from("[a-z]+".to_string()).is_ok());
+        assert!(CustomPattern::try_from("[a-z".to_string()).is_err());
+        let expr: syn::Expr = syn::parse_quote!("(unclosed");
+        assert!(CustomPattern::try_from(&expr).is_err());
+        assert!(serde_json::from_str::<CustomPattern>("\"[z-a]\"").is_err());
+    }
+
+    #[test]
     fn test_uuid_format() {
         let format = Format::Uuid;
-        let value = format.generate_formatted_value();
-        let regex = format.into_regex();
+        let value = format.generate_formatted_value().unwrap();
+        let regex = format.regex();
         assert!(
             regex.is_match(&value),
             "Generated UUID {} doesn't match pattern",
@@ -505,8 +612,8 @@ mod tests {
     #[test]
     fn test_datetime_format() {
         let format = Format::DateTime;
-        let value = format.generate_formatted_value();
-        let regex = format.into_regex();
+        let value = format.generate_formatted_value().unwrap();
+        let regex = format.regex();
         assert!(
             regex.is_match(&value),
             "Generated DateTime {} doesn't match pattern",
@@ -517,7 +624,7 @@ mod tests {
     #[test]
     fn test_hex_string_format() {
         let format = Format::HexString(8);
-        let value = format.generate_formatted_value();
+        let value = format.generate_formatted_value().unwrap();
         assert_eq!(value.len(), 8);
         assert!(value.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -525,8 +632,8 @@ mod tests {
     #[test]
     fn test_email_format() {
         let format = Format::Email;
-        let value = format.generate_formatted_value();
-        let regex = format.into_regex();
+        let value = format.generate_formatted_value().unwrap();
+        let regex = format.regex();
         assert!(
             regex.is_match(&value),
             "Generated Email {} doesn't match pattern",
@@ -537,11 +644,11 @@ mod tests {
     #[test]
     fn test_phone_number_format() {
         let format = Format::PhoneNumber;
-        let value = format.generate_formatted_value();
+        let value = format.generate_formatted_value().unwrap();
         println!("Generated phone number: {}", value);
 
         // Phone number should match the pattern
-        let regex = format.into_regex();
+        let regex = format.regex();
         assert!(
             regex.is_match(&value),
             "Generated phone number {} doesn't match pattern",
@@ -551,7 +658,7 @@ mod tests {
         // Generate multiple samples to see variety
         println!("Multiple phone number samples:");
         for _ in 0..10 {
-            let phone = Format::PhoneNumber.generate_formatted_value();
+            let phone = Format::PhoneNumber.generate_formatted_value().unwrap();
             println!("  {}", phone);
         }
     }
@@ -559,8 +666,8 @@ mod tests {
     #[test]
     fn test_ip_address_format() {
         let format = Format::IpAddress;
-        let value = format.generate_formatted_value();
-        let regex = format.into_regex();
+        let value = format.generate_formatted_value().unwrap();
+        let regex = format.regex();
         assert!(
             regex.is_match(&value),
             "Generated IP {} doesn't match pattern",
@@ -581,8 +688,8 @@ mod tests {
         ];
 
         for format in formats {
-            let value = format.generate_formatted_value();
-            let regex = format.clone().into_regex();
+            let value = format.generate_formatted_value().unwrap();
+            let regex = format.regex();
             assert!(
                 regex.is_match(&value),
                 "Generated value '{}' for {:?} doesn't match pattern",
@@ -596,7 +703,7 @@ mod tests {
     fn test_name_formats() {
         // Test FirstName format generates real first names
         let first_name_format = Format::FirstName;
-        let first_name = first_name_format.generate_formatted_value();
+        let first_name = first_name_format.generate_formatted_value().unwrap();
         println!("Generated First Name: {}", first_name);
         assert!(!first_name.is_empty(), "First name should not be empty");
         assert!(
@@ -606,7 +713,7 @@ mod tests {
 
         // Test LastName format generates real last names
         let last_name_format = Format::LastName;
-        let last_name = last_name_format.generate_formatted_value();
+        let last_name = last_name_format.generate_formatted_value().unwrap();
         println!("Generated Last Name: {}", last_name);
         assert!(!last_name.is_empty(), "Last name should not be empty");
         assert!(
@@ -616,7 +723,7 @@ mod tests {
 
         // Test FullName format generates real full names
         let full_name_format = Format::FullName;
-        let full_name = full_name_format.generate_formatted_value();
+        let full_name = full_name_format.generate_formatted_value().unwrap();
         println!("Generated Full Name: {}", full_name);
         let parts: Vec<&str> = full_name.split_whitespace().collect();
         assert_eq!(parts.len(), 2, "Full name should have exactly 2 parts");
@@ -626,21 +733,21 @@ mod tests {
         for _ in 0..10 {
             println!(
                 "  {} {} ({})",
-                Format::FirstName.generate_formatted_value(),
-                Format::LastName.generate_formatted_value(),
-                Format::FullName.generate_formatted_value()
+                Format::FirstName.generate_formatted_value().unwrap(),
+                Format::LastName.generate_formatted_value().unwrap(),
+                Format::FullName.generate_formatted_value().unwrap()
             );
         }
 
         // Verify the pattern matching works correctly
-        let first_regex = Format::FirstName.into_regex();
-        let last_regex = Format::LastName.into_regex();
-        let full_regex = Format::FullName.into_regex();
+        let first_regex = Format::FirstName.regex();
+        let last_regex = Format::LastName.regex();
+        let full_regex = Format::FullName.regex();
 
         for _ in 0..10 {
-            let first = Format::FirstName.generate_formatted_value();
-            let last = Format::LastName.generate_formatted_value();
-            let full = Format::FullName.generate_formatted_value();
+            let first = Format::FirstName.generate_formatted_value().unwrap();
+            let last = Format::LastName.generate_formatted_value().unwrap();
+            let full = Format::FullName.generate_formatted_value().unwrap();
 
             assert!(
                 first_regex.is_match(&first),
@@ -663,7 +770,7 @@ mod tests {
     #[test]
     fn test_timezone_format() {
         let timezone_format = Format::TimeZone;
-        let timezone = timezone_format.generate_formatted_value();
+        let timezone = timezone_format.generate_formatted_value().unwrap();
         println!("Generated TimeZone: {}", timezone);
 
         // Verify it has the correct format (Continent/City or special cases)
@@ -675,14 +782,14 @@ mod tests {
         // Generate multiple samples to see variety
         println!("\nGenerating multiple timezone samples:");
         for _ in 0..10 {
-            let tz = Format::TimeZone.generate_formatted_value();
+            let tz = Format::TimeZone.generate_formatted_value().unwrap();
             println!("  {}", tz);
         }
 
         // Verify pattern matching
-        let tz_regex = Format::TimeZone.into_regex();
+        let tz_regex = Format::TimeZone.regex();
         for _ in 0..10 {
-            let tz = Format::TimeZone.generate_formatted_value();
+            let tz = Format::TimeZone.generate_formatted_value().unwrap();
             assert!(
                 tz_regex.is_match(&tz),
                 "Timezone '{}' doesn't match regex",
@@ -694,7 +801,7 @@ mod tests {
     #[test]
     fn test_duration_format() {
         let duration_format = Format::Iso8601DurationString;
-        let duration = duration_format.generate_formatted_value();
+        let duration = duration_format.generate_formatted_value().unwrap();
         println!("Generated Iso8601DurationString: {}", duration);
 
         // Verify it starts with P
@@ -718,14 +825,18 @@ mod tests {
         // Generate multiple samples to see variety
         println!("\nGenerating multiple duration samples:");
         for _ in 0..15 {
-            let dur = Format::Iso8601DurationString.generate_formatted_value();
+            let dur = Format::Iso8601DurationString
+                .generate_formatted_value()
+                .unwrap();
             println!("  {}", dur);
         }
 
         // Verify pattern matching
-        let dur_regex = Format::Iso8601DurationString.into_regex();
+        let dur_regex = Format::Iso8601DurationString.regex();
         for _ in 0..20 {
-            let dur = Format::Iso8601DurationString.generate_formatted_value();
+            let dur = Format::Iso8601DurationString
+                .generate_formatted_value()
+                .unwrap();
             assert!(
                 dur_regex.is_match(&dur),
                 "Iso8601DurationString '{}' doesn't match regex",
@@ -738,7 +849,7 @@ mod tests {
     fn test_city_state_country() {
         // Test City format generates real city names
         let city_format = Format::City;
-        let city = city_format.generate_formatted_value();
+        let city = city_format.generate_formatted_value().unwrap();
         println!("Generated City: {}", city);
         // Just verify it's not empty and looks like a city name (contains letters and possibly spaces)
         assert!(!city.is_empty(), "City should not be empty");
@@ -749,7 +860,7 @@ mod tests {
 
         // Test State format generates real state codes
         let state_format = Format::State;
-        let state = state_format.generate_formatted_value();
+        let state = state_format.generate_formatted_value().unwrap();
         println!("Generated State: {}", state);
         assert!(state.len() == 2, "State code should be 2 characters");
         assert!(
@@ -759,7 +870,7 @@ mod tests {
 
         // Test Country format generates real country names
         let country_format = Format::Country;
-        let country = country_format.generate_formatted_value();
+        let country = country_format.generate_formatted_value().unwrap();
         println!("Generated Country: {}", country);
         // Just verify it's not empty and looks like a country name
         assert!(!country.is_empty(), "Country should not be empty");
@@ -773,21 +884,21 @@ mod tests {
         for _ in 0..10 {
             println!(
                 "  City: {}, State: {}, Country: {}",
-                Format::City.generate_formatted_value(),
-                Format::State.generate_formatted_value(),
-                Format::Country.generate_formatted_value()
+                Format::City.generate_formatted_value().unwrap(),
+                Format::State.generate_formatted_value().unwrap(),
+                Format::Country.generate_formatted_value().unwrap()
             );
         }
 
         // Verify the pattern matching works correctly
-        let city_regex = Format::City.into_regex();
-        let state_regex = Format::State.into_regex();
-        let country_regex = Format::Country.into_regex();
+        let city_regex = Format::City.regex();
+        let state_regex = Format::State.regex();
+        let country_regex = Format::Country.regex();
 
         for _ in 0..10 {
-            let city = Format::City.generate_formatted_value();
-            let state = Format::State.generate_formatted_value();
-            let country = Format::Country.generate_formatted_value();
+            let city = Format::City.generate_formatted_value().unwrap();
+            let state = Format::State.generate_formatted_value().unwrap();
+            let country = Format::Country.generate_formatted_value().unwrap();
 
             assert!(
                 city_regex.is_match(&city),

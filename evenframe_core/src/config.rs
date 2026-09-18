@@ -11,6 +11,7 @@ use tracing::{debug, info, trace, warn};
 
 /// TypeScript import configuration for a foreign type.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TsImport {
     /// The symbol name to import (e.g., "DateTime", "BigDecimal"). Empty = no import.
     #[serde(default)]
@@ -44,6 +45,7 @@ fn default_true() -> bool {
 /// Defines how a Rust type from an external crate maps to each database
 /// and TypeScript target.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ForeignTypeConfig {
     /// Source crate name (for documentation/provenance)
     #[serde(default, rename = "crate")]
@@ -61,12 +63,6 @@ pub struct ForeignTypeConfig {
     // --- Database schema mappings ---
     #[serde(default)]
     pub surrealdb: String,
-    #[serde(default)]
-    pub postgres: String,
-    #[serde(default)]
-    pub mysql: String,
-    #[serde(default)]
-    pub sqlite: String,
 
     /// SurrealDB format when field is `id`, e.g. "record<{table_name}>"
     #[serde(default)]
@@ -133,40 +129,6 @@ fn load_env_from(env_path: &Path) {
     }
 }
 
-/// Source of truth for type definitions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[serde(rename_all = "lowercase")]
-pub enum SourceOfTruth {
-    /// Rust structs with #[derive(Evenframe)] or #[apply(...)]
-    #[default]
-    Rust,
-    /// FlatBuffers schema files (.fbs)
-    Flatbuffers,
-    /// Protocol Buffers schema files (.proto)
-    Protobuf,
-}
-
-/// Configuration for schema source files (FlatBuffers/Protobuf)
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct SourceConfig {
-    /// Primary source of truth for type definitions
-    #[serde(default)]
-    pub primary: SourceOfTruth,
-
-    /// Glob pattern for FlatBuffers schema files (e.g., "./schemas/*.fbs")
-    #[serde(default)]
-    pub flatbuffers_input: Option<String>,
-
-    /// Glob pattern for Protocol Buffers schema files (e.g., "./schemas/*.proto")
-    #[serde(default)]
-    pub protobuf_input: Option<String>,
-
-    /// Additional include paths for schema imports
-    #[serde(default)]
-    pub include_paths: Vec<String>,
-}
-
 /// A single `include_files` entry: either a bare path string, or a table form
 /// `{ path = "...", resolve_only = true }`.
 ///
@@ -176,6 +138,7 @@ pub struct SourceConfig {
 /// pipeline chooses *which* pipelines emit a type, while `resolve_only` keeps a
 /// type present for resolution in *both* pipelines while emitting it in neither.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum IncludeFileSpec {
     /// Bare path string — the file's types are registered and emitted, as if in-tree.
@@ -209,6 +172,7 @@ impl IncludeFileSpec {
 
 /// General configuration for Evenframe operations
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GeneralConfig {
     /// Attribute macro names that expand to include Evenframe derive
     /// These are used with #[apply(...)] and automatically include Evenframe
@@ -229,10 +193,6 @@ pub struct GeneralConfig {
     /// Requires `cargo-expand` to be installed (`cargo install cargo-expand`).
     #[serde(default)]
     pub expand_macros: bool,
-
-    /// Source of truth configuration
-    #[serde(default)]
-    pub source: SourceConfig,
 
     /// Path to the .env file, relative to the project root.
     /// Defaults to `.env` in the project root directory.
@@ -262,6 +222,7 @@ pub struct GeneralConfig {
 
 /// Configuration for a output-rule WASM plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputRulePluginConfig {
     /// Path to the `.wasm` file, relative to the project root.
     pub path: String,
@@ -269,6 +230,7 @@ pub struct OutputRulePluginConfig {
 
 /// Configuration for a synthetic-item WASM plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyntheticItemPluginConfig {
     /// Path to the `.wasm` file, relative to the project root.
     pub path: String,
@@ -277,6 +239,7 @@ pub struct SyntheticItemPluginConfig {
 /// Unified configuration for Evenframe operations
 /// This is the root configuration that contains both schemasync and typesync configurations
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvenframeConfig {
     /// General configuration
     #[serde(default)]
@@ -720,7 +683,6 @@ mod tests {
     fn test_general_config_serialize() {
         let config = GeneralConfig {
             apply_aliases: vec!["Test".to_string()],
-            source: SourceConfig::default(),
             env_path: None,
             ..Default::default()
         };
@@ -988,13 +950,7 @@ mod tests {
                 [mock_gen_config]
                 default_record_count = 10
                 default_preservation_mode = "Smart"
-                default_batch_size = 10
                 full_refresh_mode = false
-                coordination_groups = []
-                [performance]
-                embedded_db_memory_limit = "256MB"
-                cache_duration_seconds = 60
-                use_progressive_loading = false
                 "#,
             )
             .unwrap(),
@@ -1019,13 +975,7 @@ mod tests {
                 [mock_gen_config]
                 default_record_count = 10
                 default_preservation_mode = "Smart"
-                default_batch_size = 10
                 full_refresh_mode = false
-                coordination_groups = []
-                [performance]
-                embedded_db_memory_limit = "256MB"
-                cache_duration_seconds = 60
-                use_progressive_loading = false
                 "#,
             )
             .unwrap(),
@@ -1098,14 +1048,8 @@ mod tests {
             [schemasync.mock_gen_config]
             default_record_count = 10
             default_preservation_mode = "Smart"
-            default_batch_size = 10
             full_refresh_mode = false
-            coordination_groups = []
 
-            [schemasync.performance]
-            embedded_db_memory_limit = "256MB"
-            cache_duration_seconds = 60
-            use_progressive_loading = false
 
             [typesync]
             output = { kind = "arktype", dir = "./generated/" }
@@ -1118,6 +1062,48 @@ mod tests {
             config.typesync.outputs,
             vec![TypesyncOutput::new(OutputKind::Arktype, "./generated/")]
         );
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected() {
+        let base = r#"
+            [schemasync]
+            should_generate_mocks = false
+
+            [schemasync.database]
+            url = "http://localhost:8000"
+
+            [typesync]
+            output = { kind = "arktype", dir = "./generated/" }
+        "#;
+        assert!(toml::from_str::<EvenframeConfig>(base).is_ok());
+
+        for (unknown, key) in [
+            (
+                "[schemasync.mock_gen_config]\ndefault_batch_size = 10",
+                "default_batch_size",
+            ),
+            (
+                "[schemasync.performance]\ncache_duration_seconds = 60",
+                "performance",
+            ),
+            ("[general]\napply_alias = [\"Typo\"]", "apply_alias"),
+            ("[unknown_section]\nkey = 1", "unknown_section"),
+        ] {
+            let error = toml::from_str::<EvenframeConfig>(&format!("{base}\n{unknown}"))
+                .expect_err(unknown)
+                .to_string();
+            assert!(error.contains(key), "{error}");
+        }
+
+        let output_typo = base.replace(
+            r#"dir = "./generated/" }"#,
+            r#"dir = "./generated/", barel_file = true }"#,
+        );
+        let error = toml::from_str::<EvenframeConfig>(&output_typo)
+            .expect_err("a typo in an output")
+            .to_string();
+        assert!(error.contains("barel_file"), "{error}");
     }
 
     #[test]
@@ -1138,14 +1124,8 @@ mod tests {
             [schemasync.mock_gen_config]
             default_record_count = 100
             default_preservation_mode = "Smart"
-            default_batch_size = 50
             full_refresh_mode = false
-            coordination_groups = []
 
-            [schemasync.performance]
-            embedded_db_memory_limit = "1GB"
-            cache_duration_seconds = 300
-            use_progressive_loading = true
 
             [typesync]
             outputs = [
@@ -1184,14 +1164,8 @@ mod tests {
             [schemasync.mock_gen_config]
             default_record_count = 10
             default_preservation_mode = "Smart"
-            default_batch_size = 10
             full_refresh_mode = false
-            coordination_groups = []
 
-            [schemasync.performance]
-            embedded_db_memory_limit = "256MB"
-            cache_duration_seconds = 60
-            use_progressive_loading = false
 
             [typesync]
             outputs = []
@@ -1226,14 +1200,8 @@ mod tests {
             [schemasync.mock_gen_config]
             default_record_count = 10
             default_preservation_mode = "Smart"
-            default_batch_size = 10
             full_refresh_mode = false
-            coordination_groups = []
 
-            [schemasync.performance]
-            embedded_db_memory_limit = "256MB"
-            cache_duration_seconds = 60
-            use_progressive_loading = false
 
             [typesync]
             output = {{ kind = "arktype", dir = "{output_path}" }}

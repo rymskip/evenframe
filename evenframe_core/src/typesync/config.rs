@@ -159,6 +159,7 @@ impl std::fmt::Display for OutputKind {
 /// One generated output: which generator runs, where its files go and how
 /// they are laid out.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(from = "TypesyncOutputToml")]
 pub struct TypesyncOutput {
     pub kind: OutputKind,
     /// Directory the output is written to, relative to the project root
@@ -180,6 +181,51 @@ pub struct TypesyncOutput {
     /// Buffers).
     #[serde(default)]
     pub import_validate: bool,
+}
+
+/// An output as written, with its file settings inline. Spelled out rather
+/// than flattened so unknown keys are rejected.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TypesyncOutputToml {
+    kind: OutputKind,
+    dir: String,
+    #[serde(default)]
+    file: Option<String>,
+    mode: Option<OutputMode>,
+    barrel_file: Option<bool>,
+    file_naming: Option<FileNamingConvention>,
+    file_extension: Option<String>,
+    array_style: Option<ArrayStyle>,
+    import_extension: Option<ImportExtensionStyle>,
+    #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
+    package: Option<String>,
+    #[serde(default)]
+    import_validate: bool,
+}
+
+impl From<TypesyncOutputToml> for TypesyncOutput {
+    fn from(toml: TypesyncOutputToml) -> Self {
+        let defaults = OutputConfig::default();
+        Self {
+            kind: toml.kind,
+            dir: toml.dir,
+            file: toml.file,
+            files: OutputConfig {
+                mode: toml.mode.unwrap_or(defaults.mode),
+                barrel_file: toml.barrel_file.unwrap_or(defaults.barrel_file),
+                file_naming: toml.file_naming.unwrap_or(defaults.file_naming),
+                file_extension: toml.file_extension.unwrap_or(defaults.file_extension),
+                array_style: toml.array_style.unwrap_or(defaults.array_style),
+                import_extension: toml.import_extension.unwrap_or(defaults.import_extension),
+            },
+            namespace: toml.namespace,
+            package: toml.package,
+            import_validate: toml.import_validate,
+        }
+    }
 }
 
 impl TypesyncOutput {

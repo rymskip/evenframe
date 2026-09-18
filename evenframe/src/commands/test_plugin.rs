@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use tracing::info;
 
 pub async fn run(args: TestPluginArgs) -> Result<()> {
-    let config = EvenframeConfig::new()?;
+    let config = EvenframeConfig::new_offline()?;
     let build_config = config_builders::BuildConfig::discover()?;
 
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;

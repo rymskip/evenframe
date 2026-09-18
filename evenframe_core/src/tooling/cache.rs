@@ -8,8 +8,8 @@
 //! walk — no Rust parsing — so a cache that no longer matches the sources
 //! is refused instead of silently used.
 //!
-//! It is a local cache, never committed: every scan rewrites it. Input paths
-//! are project-relative, so moving the project keeps it valid, and content
+//! It is a local cache: every scan rewrites it. Input paths are
+//! project-relative, so moving the project keeps it valid, and content
 //! hashes ignore CRLF vs LF.
 
 use super::{AllConfigs, BuildConfig, MAX_SCAN_DEPTH};

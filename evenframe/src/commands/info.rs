@@ -77,7 +77,7 @@ struct ConfigSummary {
 
 impl ConfigSummary {
     fn load() -> Result<Self> {
-        let config = EvenframeConfig::new()?;
+        let config = EvenframeConfig::new_offline()?;
         Ok(Self {
             outputs: config.typesync.outputs,
             mock_generation: config.schemasync.should_generate_mocks,
@@ -124,7 +124,7 @@ struct TypesSummary {
 
 impl TypesSummary {
     fn scan() -> Result<Self> {
-        let config = EvenframeConfig::new()?;
+        let config = EvenframeConfig::new_offline()?;
         let extra_files = config.resolved_include_files();
         let scanner =
             WorkspaceScanner::new(config.general.apply_aliases, config.general.expand_macros)?

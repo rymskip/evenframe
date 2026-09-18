@@ -908,7 +908,7 @@ fn apply_validators_to_schema(
                 StringValidator::RegexLiteral(format_variant) => format!(
                     "{}.pipe(Schema.pattern(/{}/, {{ message: () => `{}` has an invalid format` }}))",
                     result,
-                    format_variant.to_owned().into_regex().as_str(),
+                    format_variant.pattern(),
                     field_name_title
                 ),
                 _ => result,

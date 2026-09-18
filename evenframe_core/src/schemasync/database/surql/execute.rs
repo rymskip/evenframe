@@ -244,9 +244,9 @@ pub async fn validate_surql_response(
     }
 }
 
-/// Executes a query and validates the response, panicking on any errors.
-/// If the request fails with 413 Payload Too Large, falls back to writing
-/// a `.surql` file and importing it via `surreal import`.
+/// Executes `statements` and returns every failed statement as an error.
+/// Statements over the RPC size limit are imported with `surreal import`
+/// instead.
 pub async fn execute_and_validate<C>(
     db: &surrealdb::Surreal<C>,
     statements: &str,
@@ -272,13 +272,44 @@ where
         return import_via_cli(statements, operation_type, table_name).await;
     }
 
-    debug!("Sending query to database");
-    let response = db.query(statements).await.map_err(|e| {
-        error!(operation_type = %operation_type, table_name = %table_name, error = %e, "Database query failed");
-        e
-    })?;
+    // A statement that hits a transaction conflict with a concurrent writer
+    // is rolled back and can be run again; only those statements are
+    // retried, since the others already committed.
+    const CONFLICT_RETRIES: u32 = 5;
+    let mut pending = statements.to_string();
+    let mut attempt = 0;
+    let outcome = loop {
+        debug!("Sending query to database");
+        let response = db.query(pending.as_str()).await.map_err(|e| {
+            error!(operation_type = %operation_type, table_name = %table_name, error = %e, "Database query failed");
+            e
+        })?;
+        match validate_surql_response(response, &pending, operation_type).await {
+            Err(errors)
+                if attempt < CONFLICT_RETRIES
+                    && errors.iter().all(|e| e.message.contains("can be retried")) =>
+            {
+                attempt += 1;
+                warn!(
+                    operation_type = %operation_type,
+                    table_name = %table_name,
+                    conflicts = errors.len(),
+                    attempt,
+                    "Retrying statements rolled back by a transaction conflict"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50 << attempt)).await;
+                pending = errors
+                    .iter()
+                    .filter_map(|e| e.statement.as_deref())
+                    .map(|statement| format!("{statement};"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            outcome => break outcome,
+        }
+    };
 
-    match validate_surql_response(response, statements, operation_type).await {
+    match outcome {
         Ok(results) => {
             // Log success with details
             evenframe_log!(
@@ -295,7 +326,7 @@ where
             Ok(results)
         }
         Err(errors) => {
-            // Log all errors before panicking
+            // Log every error before returning them
             evenframe_log!(
                 &format!(
                     "ERRORS executing {} for table {}: {} errors found",
@@ -323,8 +354,7 @@ where
                 }
             }
 
-            // Panic with detailed error information
-            panic!(
+            Err(crate::error::EvenframeError::database(format!(
                 "SurrealDB query validation failed for {} on table {}:\n{}",
                 operation_type,
                 table_name,
@@ -341,7 +371,8 @@ where
                     ))
                     .collect::<Vec<_>>()
                     .join("\n")
-            );
+            ))
+            .into())
         }
     }
 }

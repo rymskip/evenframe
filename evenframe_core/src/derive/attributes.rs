@@ -12,9 +12,9 @@ use crate::{
         Bm25, Direction, EdgeConfig, IndexConfig, IndexKind, VectorDistance, VectorType,
         mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
     },
-    types::{EnumRepresentation, StructField},
+    types::EnumRepresentation,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 
 // Remove unused imports - these are only used in the macro implementation, not generated code
@@ -50,7 +50,6 @@ pub fn parse_mock_data_attribute(
                     debug!("Successfully parsed {} meta arguments", metas.len());
                     // Start with defaults from MockGenerationConfig::default()
                     let mut base_config = MockGenerationConfig::default();
-                    let mut overrides_name = None;
 
                     for (meta_index, meta) in metas.iter().enumerate() {
                         trace!("Processing meta {} of {}", meta_index + 1, metas.len());
@@ -87,21 +86,8 @@ pub fn parse_mock_data_attribute(
                                     ));
                                 }
                             }
-                            Meta::NameValue(nv) if nv.path.is_ident("overrides") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(lit), ..
-                                }) = &nv.value
-                                {
-                                    overrides_name = Some(lit.value());
-                                } else {
-                                    return Err(syn::Error::new(
-                                        nv.value.span(),
-                                        "The 'overrides' parameter must be a string literal.\n\nExample: #[mock_data(overrides = \"custom_config\")]",
-                                    ));
-                                }
-                            }
                             Meta::NameValue(nv) if nv.path.is_ident("coordinate") => {
-                                // Skip here - coordinate is parsed separately by coordinate_parser
+                                // Parsed below.
                             }
                             Meta::NameValue(nv) if nv.path.is_ident("plugin") => {
                                 debug!("Processing 'plugin' parameter");
@@ -126,7 +112,7 @@ pub fn parse_mock_data_attribute(
                                 return Err(syn::Error::new(
                                     nv.path.span(),
                                     format!(
-                                        "Unknown parameter '{}' in mock_data attribute.\n\nValid parameters are: n, overrides, coordinate, plugin\n\nExample: #[mock_data(n = 1000, plugin = \"my_plugin\")]",
+                                        "Unknown parameter '{}' in mock_data attribute.\n\nValid parameters are: n, coordinate, plugin\n\nExample: #[mock_data(n = 1000, plugin = \"my_plugin\")]",
                                         param_name
                                     ),
                                 ));
@@ -134,7 +120,7 @@ pub fn parse_mock_data_attribute(
                             _ => {
                                 return Err(syn::Error::new(
                                     meta.span(),
-                                    "Invalid syntax in mock_data attribute.\n\nExpected format: #[mock_data(n = 1000, overrides = \"config\")]",
+                                    "Invalid syntax in mock_data attribute.\n\nExpected format: #[mock_data(n = 1000)]",
                                 ));
                             }
                         }
@@ -173,31 +159,11 @@ pub fn parse_mock_data_attribute(
                     }
 
                     info!(
-                        "Successfully parsed mock_data attribute: n={}, overrides={:?}, coordination_rules_count={}",
+                        "Successfully parsed mock_data attribute: n={}, coordination_rules_count={}",
                         base_config.n,
-                        overrides_name,
                         coordination_rules.len()
                     );
 
-                    // Parse overrides from config if specified
-                    let table_level_override: Option<HashMap<StructField, Format>> =
-                        if let Some(override_name) = overrides_name {
-                            // Loading format overrides from config is not currently supported.
-                            // This code runs inside a proc macro (compile time), so it cannot
-                            // access runtime config. Compile-time file reading is possible but
-                            // fragile (cargo doesn't track TOML changes as dependencies).
-                            // For now, specify format overrides inline via field-level attributes.
-                            debug!(
-                                "Override '{}' specified but override loading not yet implemented",
-                                override_name
-                            );
-                            None
-                        } else {
-                            None
-                        };
-
-                    // Apply parsed values to the base config
-                    base_config.table_level_override = table_level_override;
                     base_config.coordination_rules = coordination_rules;
 
                     return Ok(Some(base_config));
@@ -207,7 +173,7 @@ pub fn parse_mock_data_attribute(
                     return Err(syn::Error::new(
                         attr.span(),
                         format!(
-                            "Failed to parse mock_data attribute: {}\n\nExample usage:\n#[mock_data(n = 1000)]\n#[mock_data(n = 500, overrides = \"custom_config\")]",
+                            "Failed to parse mock_data attribute: {}\n\nExample usage:\n#[mock_data(n = 1000)]\n#[mock_data(n = 500, plugin = \"my_plugin\")]",
                             err
                         ),
                     ));

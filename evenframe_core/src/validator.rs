@@ -730,8 +730,7 @@ impl Validator {
                 },
                 StringValidator::RegexLiteral(format_variant) => {
                     // have to make it a string because Regex does not have ToTokens
-                    let format_regex_string: String =
-                        format_variant.to_owned().into_regex().to_string();
+                    let format_regex_string = format_variant.pattern();
                     quote! {
                         {
                             static RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
@@ -1520,10 +1519,7 @@ fn match_string_validator(sv: &StringValidator, s: &str) -> bool {
             };
             first.is_lowercase()
         }
-        StringValidator::RegexLiteral(format_variant) => {
-            let re = format_variant.clone().into_regex();
-            re.is_match(s)
-        }
+        StringValidator::RegexLiteral(format_variant) => format_variant.regex().is_match(s),
         // Variants without an attached pattern or with no clean Rust check —
         // mockmake's constraint generator will produce values that satisfy
         // them, and the retry loop has no way to second-guess them, so

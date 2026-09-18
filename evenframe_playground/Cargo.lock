@@ -1773,7 +1773,7 @@ checksum = "120339709b24832c07464b0838828361b735d793c409b8ca3147db0dae601542"
 
 [[package]]
 name = "evenframe"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "convert_case 0.12.0",
@@ -1796,9 +1796,8 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
- "async-trait",
  "blake3",
  "bon",
  "chrono",
@@ -1812,14 +1811,11 @@ dependencies = [
  "heck 0.5.0",
  "ignore",
  "linkme",
- "logos 0.16.1",
  "macroforge_ts",
  "once_cell",
  "ordered-float 5.5.0",
  "petgraph 0.8.3",
  "proc-macro2",
- "prost-types",
- "protox",
  "quote",
  "rand 0.10.2",
  "rand_distr 0.6.0",
@@ -1843,7 +1839,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "convert_case 0.12.0",
  "evenframe_core",
@@ -1867,8 +1863,10 @@ dependencies = [
  "http-body-util",
  "linkme",
  "ordered-float 5.5.0",
+ "protox",
  "serde",
  "serde_json",
+ "surrealdb",
  "tempfile",
  "tokio",
  "tower",

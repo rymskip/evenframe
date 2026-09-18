@@ -91,19 +91,23 @@ pub fn generate_remove_event_statements(schema_changes: &SchemaChanges) -> Strin
 }
 
 impl Mockmaker<'_> {
-    /// Generate REMOVE statements based on schema changes and record differences
-    ///
-    /// This function takes a SchemaChanges instance and record differences, and generates
-    /// REMOVE statements for tables and fields that have been removed from the schema,
-    /// as well as DELETE statements for excess records.
-    ///
-    /// # Arguments
-    /// * `schema_changes` - The schema changes detected between old and new schemas
-    /// * `record_diffs` - Map of table names to record count differences
-    /// * `id_map` - Map of table names to their existing IDs
-    ///
-    /// # Returns
-    /// A string containing all REMOVE and DELETE statements to be executed
+    /// DELETE statements for the records beyond each table's count. Links
+    /// are only generated to ids kept in the pool, so no new record points at
+    /// an excess one.
+    pub(crate) fn excess_record_deletes(&self) -> String {
+        let mut output = String::new();
+        for (table_name, excess) in self.excess_ids.iter().filter(|(_, ids)| !ids.is_empty()) {
+            output.push_str(&format!("-- Removing excess records from {table_name}\n"));
+            for id in excess {
+                output.push_str(&format!("DELETE {id};\n"));
+            }
+            output.push('\n');
+        }
+        output
+    }
+
+    /// REMOVE statements for what `schema_changes` removed from the schema,
+    /// and DELETE statements for the records beyond each table's count.
     pub fn generate_remove_statements(&self, schema_changes: &SchemaChanges) -> String {
         info!("Generating remove statements based on schema changes");
         debug!(
@@ -150,44 +154,7 @@ impl Mockmaker<'_> {
             }
         }
 
-        // Process excess records (negative diffs mean we have too many records)
-        let mut has_excess_records = false;
-        for diff in self.record_diffs.values() {
-            if *diff < 0 {
-                has_excess_records = true;
-                break;
-            }
-        }
-
-        if has_excess_records {
-            output.push_str("-- Removing excess records\n");
-            for (table_name, diff) in &self.record_diffs {
-                if *diff < 0 {
-                    let table_name_snake = table_name.to_case(Case::Snake);
-                    let excess_count = diff.unsigned_abs() as usize;
-
-                    // Get the IDs for this table
-                    if let Some(table_ids) = self.id_map.get(table_name) {
-                        // Delete the last N records (where N = excess_count)
-                        // We delete from the end to maintain existing references
-                        let ids_to_delete = table_ids
-                            .iter()
-                            .rev()
-                            .take(excess_count)
-                            .collect::<Vec<_>>();
-
-                        for id in ids_to_delete {
-                            output.push_str(&format!("DELETE {};\n", id));
-                        }
-                    }
-                    output.push_str(&format!(
-                        "-- Removed {} excess records from table {}\n",
-                        excess_count, table_name_snake
-                    ));
-                }
-            }
-            output.push('\n');
-        }
+        output.push_str(&self.excess_record_deletes());
 
         // Process removed indexes before removed fields: SurrealDB rejects
         // `REMOVE FIELD` on a column that still has a live index referencing

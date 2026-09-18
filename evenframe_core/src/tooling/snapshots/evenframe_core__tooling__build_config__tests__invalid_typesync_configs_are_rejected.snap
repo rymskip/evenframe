@@ -23,7 +23,7 @@ Configuration error: Failed to parse [typesync]: `file` names a single output fi
 
 
 Configuration error: Failed to parse [typesync]: unknown variant `kebabcase`, expected one of `pascal`, `kebab`, `snake`, `camel`
-in `output`
+in `output.file_naming`
 
 
 Configuration error: Failed to parse [typesync]: unknown variant `autorename`, expected `error` or `auto_rename`

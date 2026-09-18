@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -35,14 +35,12 @@ dev-mode = []
 typesync = []
 
 # Enables Protocol Buffers (.proto) schema generation from Rust types.
-# Pulls in the `protox` parser and `prost-types` for proto file handling.
 # Implies: typesync
-protobuf = ["typesync", "dep:protox", "dep:prost-types"]
+protobuf = ["typesync"]
 
 # Enables FlatBuffers (.fbs) schema generation from Rust types.
-# Pulls in the `logos` lexer generator for FlatBuffers parsing.
 # Implies: typesync
-flatbuffers = ["typesync", "dep:logos"]
+flatbuffers = ["typesync"]
 
 # Enables Macroforge template-based TypeScript generation with JSDoc annotations.
 # Pulls in the `macroforge_ts` template engine.
@@ -89,40 +87,16 @@ schemasync-full = ["schemasync", "mockmake"]
 # single dependency in the tree (~200+ transitive crates).
 surrealdb = ["dep:surrealdb"]
 
-# Enables the SQL database abstraction layer via sqlx. This is the base
-# feature required by all SQL providers (postgres, mysql, sqlite). Includes
-# the tokio runtime and rustls TLS support.
-sql = ["dep:sqlx"]
-
-# Enables PostgreSQL as a database backend via sqlx.
-# Implies: sql
-postgres = ["sql", "sqlx?/postgres"]
-
-# Enables MySQL/MariaDB as a database backend via sqlx.
-# Implies: sql
-mysql = ["sql", "sqlx?/mysql"]
-
-# Enables SQLite as a database backend via sqlx.
-# Implies: sql
-sqlite = ["sql", "sqlx?/sqlite"]
-
-# Enables all SQL database backends (PostgreSQL, MySQL, SQLite).
-sql-all = ["postgres", "mysql", "sqlite"]
-
-# Enables every database provider (SurrealDB + all SQL backends).
-all-providers = ["surrealdb", "sql-all"]
-
 # ---------------------------------------------------------------------------
 # Convenience bundles
 # ---------------------------------------------------------------------------
 
-# Enables every feature: all generators, full schemasync with mock data,
-# and all database providers. Use this for CI or when you need everything.
-full = ["schemasync-full", "typesync-all", "all-providers"]
+# Enables every feature: all generators and full schemasync with mock data.
+# Use this for CI or when you need everything.
+full = ["schemasync-full", "typesync-all"]
 
 # The feature set used by the evenframe CLI binary. Enables full schemasync
-# with mock data, all type generators, and SurrealDB (the primary provider
-# for the CLI workflow). Does not include SQL providers.
+# with mock data, all type generators, and SurrealDB.
 cli = ["schemasync-full", "typesync-all", "surrealdb", "dep:clap"]
 
 [dependencies]
@@ -138,13 +112,11 @@ toml = { workspace = true }
 
 # Database providers (optional based on features)
 surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"], optional = true }
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls"], optional = true }
 tempfile = { version = "3.27", optional = true }
 # Lets the CLI use core enums as argument values.
 clap = { version = "4.6", features = ["derive"], optional = true }
 
 # Always compiled (core)
-async-trait = "0.1"
 dotenvy = "0.15.7"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
@@ -176,10 +148,7 @@ chrono-tz = { version = "0.10.4", optional = true }
 # Optional: WASM plugin runtime
 wasmtime = { version = "48", optional = true }
 
-# Optional: typesync parser dependencies
-logos = { version = "0.16", optional = true }
-protox = { version = "0.9", optional = true }
-prost-types = { version = "0.14", optional = true }
+# Optional: typesync generator dependencies
 macroforge_ts = { version = "0.1.84", optional = true }
 strum = { version = "0.28.0", features = ["derive"] }
 

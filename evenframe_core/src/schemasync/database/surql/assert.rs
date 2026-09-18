@@ -203,7 +203,7 @@ pub fn generate_assert_from_validators(
                     // Format regexes contain backslashes (\d, \., \s, …). They must
                     // be escaped for the SurrealQL string literal, or SurrealDB
                     // rejects the DEFINE FIELD with "invalid escape sequence".
-                    escape_surql_string(format_variant.to_owned().into_regex().as_str())
+                    escape_surql_string(&format_variant.pattern())
                 )),
 
                 // Base64 — native regex plus the length-multiple-of-4 rule.

@@ -3,7 +3,6 @@
 use crate::cli::{Cli, InitArgs};
 use evenframe_core::config::EvenframeConfig;
 use evenframe_core::error::{EvenframeError, Result};
-use evenframe_core::schemasync::config::DatabaseProvider;
 use std::fs;
 use std::path::Path;
 
@@ -26,9 +25,9 @@ pub async fn run(cli: &Cli, args: InitArgs) -> Result<()> {
     }
 
     let content = if args.minimal {
-        generate_minimal_config(&args.provider)
+        generate_minimal_config()
     } else {
-        generate_full_config(&args.provider)
+        generate_full_config()
     };
 
     fs::write(config_path, content).map_err(|e| {
@@ -38,7 +37,7 @@ pub async fn run(cli: &Cli, args: InitArgs) -> Result<()> {
 
     let env_path = EvenframeConfig::project_root_of(config_path).join(".env");
     if !env_path.exists() {
-        fs::write(&env_path, generate_env_template(&args.provider)).map_err(|e| {
+        fs::write(&env_path, generate_env_template()).map_err(|e| {
             EvenframeError::config(format!("Failed to write {}: {e}", env_path.display()))
         })?;
         println!("Created {}", env_path.display());
@@ -56,9 +55,8 @@ pub async fn run(cli: &Cli, args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-fn generate_minimal_config(provider: &DatabaseProvider) -> String {
-    match provider {
-        DatabaseProvider::Surrealdb => r#"[general]
+fn generate_minimal_config() -> String {
+    r#"[general]
 apply_aliases = []
 
 [schemasync]
@@ -72,28 +70,11 @@ database = "${SURREALDB_DB}"
 [typesync]
 output = { kind = "arktype", dir = "./src/generated" }
 "#
-        .to_string(),
-        _ => format!(
-            r#"[general]
-apply_aliases = []
-
-[schemasync]
-should_generate_mocks = false
-
-[schemasync.database]
-provider = "{provider}"
-url = "${{DATABASE_URL}}"
-
-[typesync]
-output = {{ kind = "arktype", dir = "./src/generated" }}
-"#
-        ),
-    }
+    .to_string()
 }
 
-fn generate_full_config(provider: &DatabaseProvider) -> String {
-    match provider {
-        DatabaseProvider::Surrealdb => r#"# Evenframe Configuration
+fn generate_full_config() -> String {
+    r#"# Evenframe Configuration
 # See https://github.com/rymskip/evenframe for documentation
 
 [general]
@@ -128,66 +109,18 @@ outputs = [
   # { kind = "protobuf", dir = "./schemas/protobuf", package = "com.example.app", import_validate = false },
 ]
 "#
-        .to_string(),
-        _ => format!(
-            r#"# Evenframe Configuration
-# See https://github.com/rymskip/evenframe for documentation
-
-[general]
-# Custom attribute macros that include Evenframe derive
-apply_aliases = []
-
-# Note: Database provider '{provider}' is not yet fully supported
-# SchemaSync currently only works with SurrealDB
-
-[schemasync]
-should_generate_mocks = false
-
-[schemasync.database]
-provider = "{provider}"
-url = "${{DATABASE_URL}}"
-
-[typesync]
-# Each generated output names its kind and the directory it writes to. Use
-# `output = {{ ... }}` for one kind, or `outputs = [ ... ]` for several, each in
-# its own directory. effect and macroforge also take mode = "per_file" (one
-# file per type), barrel_file, file_naming, file_extension, array_style and
-# import_extension. A single-file output can rename its file with file = "...".
-outputs = [
-  {{ kind = "arktype", dir = "./src/generated/arktype" }},
-  # {{ kind = "effect", dir = "./src/generated/effect" }},
-  # {{ kind = "macroforge", dir = "./src/generated/types", mode = "per_file" }},
-  # {{ kind = "flatbuffers", dir = "./schemas/flatbuffers", namespace = "com.example.app" }},
-  # {{ kind = "protobuf", dir = "./schemas/protobuf", package = "com.example.app", import_validate = false }},
-]
-"#
-        ),
-    }
+    .to_string()
 }
 
-fn generate_env_template(provider: &DatabaseProvider) -> String {
-    match provider {
-        DatabaseProvider::Surrealdb => r#"# SurrealDB Connection
+fn generate_env_template() -> String {
+    r#"# SurrealDB Connection
 SURREALDB_URL=http://localhost:8000
 SURREALDB_NS=test
 SURREALDB_DB=test
 SURREALDB_USER=root
 SURREALDB_PASSWORD=root
 "#
-        .to_string(),
-        DatabaseProvider::Postgres => r#"# PostgreSQL Connection
-DATABASE_URL=postgres://user:password@localhost:5432/database
-"#
-        .to_string(),
-        DatabaseProvider::Mysql => r#"# MySQL Connection
-DATABASE_URL=mysql://user:password@localhost:3306/database
-"#
-        .to_string(),
-        DatabaseProvider::Sqlite => r#"# SQLite Connection
-DATABASE_URL=sqlite:./database.db
-"#
-        .to_string(),
-    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -195,35 +128,14 @@ mod tests {
     use super::*;
     use evenframe_core::config::EvenframeConfig;
 
-    const PROVIDERS: [DatabaseProvider; 4] = [
-        DatabaseProvider::Surrealdb,
-        DatabaseProvider::Postgres,
-        DatabaseProvider::Mysql,
-        DatabaseProvider::Sqlite,
-    ];
-
     fn parse(template: &str) -> EvenframeConfig {
         toml::from_str(template)
             .unwrap_or_else(|e| panic!("template is not a valid config: {e}\n{template}"))
     }
 
     #[test]
-    fn every_template_is_a_valid_config() {
-        for provider in PROVIDERS {
-            parse(&generate_minimal_config(&provider));
-            parse(&generate_full_config(&provider));
-        }
-    }
-
-    #[test]
-    fn surrealdb_templates_resolve_to_these_configs() {
-        insta::assert_debug_snapshot!(
-            "minimal",
-            parse(&generate_minimal_config(&DatabaseProvider::Surrealdb))
-        );
-        insta::assert_debug_snapshot!(
-            "full",
-            parse(&generate_full_config(&DatabaseProvider::Surrealdb))
-        );
+    fn templates_resolve_to_these_configs() {
+        insta::assert_debug_snapshot!("minimal", parse(&generate_minimal_config()));
+        insta::assert_debug_snapshot!("full", parse(&generate_full_config()));
     }
 }

@@ -1,99 +1,14 @@
-//! Tests that verify Evenframe CLI output
-//!
-//! These tests run the evenframe CLI and verify:
-//! 1. TypeScript files are generated correctly
-//! 2. Database schema files are generated correctly
-//!
-//! Note: These tests require the evenframe CLI to be built.
-//! Run with: cargo test --test evenframe_output_test
+//! Checks the playground's models and configuration: the attributes,
+//! validators and settings the other suites rely on.
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
-
-#[allow(unused_imports)]
-use std::process::Command;
-
-/// Get the workspace root directory
-#[allow(dead_code)]
-fn get_workspace_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // evenframe_playground is at the same level as evenframe, evenframe_core, etc.
-    manifest_dir.parent().unwrap().to_path_buf()
-}
 
 /// Get the playground directory
 fn get_playground_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Create the bindings output directory if it doesn't exist
-#[allow(dead_code)]
-fn ensure_bindings_dir() {
-    let playground_dir = get_playground_dir();
-    let bindings_dir = playground_dir.join("src/bindings");
-    if !bindings_dir.exists() {
-        fs::create_dir_all(&bindings_dir).expect("Failed to create bindings directory");
-    }
-}
-
-/// Clean up generated files before test
-#[allow(dead_code)]
-fn cleanup_generated_files() {
-    let playground_dir = get_playground_dir();
-    let bindings_dir = playground_dir.join("src/bindings");
-
-    if bindings_dir.exists() {
-        // Remove all .ts files in bindings directory
-        if let Ok(entries) = fs::read_dir(&bindings_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "ts") {
-                    let _ = fs::remove_file(path);
-                }
-            }
-        }
-    }
-}
-
-/// Run the evenframe CLI on the playground
-#[allow(dead_code)]
-fn run_evenframe() -> Result<std::process::Output, std::io::Error> {
-    let workspace_root = get_workspace_root();
-    let playground_dir = get_playground_dir();
-
-    // First, ensure bindings directory exists
-    ensure_bindings_dir();
-
-    // Build evenframe first
-    let build_output = Command::new("cargo")
-        .args(["build", "-p", "evenframe"])
-        .current_dir(&workspace_root)
-        .output()?;
-
-    if !build_output.status.success() {
-        eprintln!(
-            "Failed to build evenframe: {}",
-            String::from_utf8_lossy(&build_output.stderr)
-        );
-        return Err(std::io::Error::other("Failed to build evenframe"));
-    }
-
-    // Run evenframe in the playground directory
-    // Note: We need to set up a .env file or environment variables for the database
-    Command::new("cargo")
-        .args(["run", "-p", "evenframe"])
-        .current_dir(&playground_dir)
-        .env("RUST_LOG", "warn") // Reduce output noise
-        .env("SURREALDB_URL", "http://localhost:8000")
-        .env("SURREALDB_NS", "test")
-        .env("SURREALDB_DB", "test")
-        .env("SURREALDB_USER", "root")
-        .env("SURREALDB_PASSWORD", "root")
-        .output()
-}
-
-/// Test that verifies the model structure matches expected patterns
 #[test]
 fn test_model_field_counts() {
     let playground_dir = get_playground_dir();

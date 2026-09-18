@@ -945,8 +945,7 @@ fn string_validator_to_macroforge(sv: &StringValidator) -> Option<String> {
 
         // Pattern validators
         StringValidator::RegexLiteral(format) => {
-            let regex = format.clone().into_regex();
-            Some(format!("pattern({})", escape_for_jsdoc(regex.as_str())))
+            Some(format!("pattern({})", escape_for_jsdoc(&format.pattern())))
         }
         StringValidator::Literal(s) => Some(format!("literal(\"{}\")", escape_for_jsdoc(s))),
 

@@ -204,25 +204,6 @@ pub struct StructField {
     pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
 
-/// Manual Hash impl — hashes every field except `raw_attributes` (BTreeMap
-/// doesn't implement Hash). StructField is used as a HashMap key in
-/// `MockGenerationConfig.table_level_override`.
-impl std::hash::Hash for StructField {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.field_name.hash(state);
-        self.field_type.hash(state);
-        self.edge_config.hash(state);
-        self.define_config.hash(state);
-        self.format.hash(state);
-        self.validators.hash(state);
-        self.always_regenerate.hash(state);
-        self.doccom.hash(state);
-        self.annotations.hash(state);
-        self.unique.hash(state);
-        self.output_override.hash(state);
-    }
-}
-
 impl StructField {
     pub fn unit(field_name: String) -> Self {
         Self {
@@ -248,6 +229,18 @@ impl StructField {
             .as_deref()
             .map_or(self, Self::effective)
     }
+
+    /// Whether mock data writes a value for this field. The record id is set
+    /// separately, edges live in their relation tables, and skipped, readonly
+    /// and computed fields are not stored from input.
+    pub fn is_mock_written(&self) -> bool {
+        self.field_name != "id"
+            && self.edge_config.is_none()
+            && self.define_config.as_ref().is_none_or(|d| {
+                !d.should_skip && !d.readonly.unwrap_or(false) && d.computed.is_none()
+            })
+    }
+
     /// Combine the manually-specified `#[define_field_statement(assert(...))]`
     /// clause with the assertions derived from this field's validators into a
     /// single ASSERT expression. Returns `None` when neither is present.
@@ -416,21 +409,13 @@ impl StructField {
                                 }
                                 FieldType::RecordLink(inner) => {
                                     if let FieldType::Other(type_name) = inner.as_ref() {
-                                        // Resolve `output_override` so a synthetic
-                                        // projection (e.g. PartialUser → User) emits
-                                        // the underlying table name. Falls back to
-                                        // the literal name when no registered struct
-                                        // or table matches.
-                                        let resolved = if let Some(sc) = app_structs.get(type_name)
-                                        {
-                                            sc.effective().struct_name.to_case(Case::Snake)
-                                        } else if let Some(tc) =
-                                            persistable_structs.get(&type_name.to_case(Case::Snake))
-                                        {
-                                            tc.effective().table_name.clone()
-                                        } else {
-                                            type_name.to_case(Case::Snake)
-                                        };
+                                        let resolved = record_link_target_surql(
+                                            type_name,
+                                            &persistable_structs,
+                                            &app_structs,
+                                            &enums,
+                                        )
+                                        .unwrap_or_else(|| type_name.to_case(Case::Snake));
                                         value_stack.push((
                                             format!("record<{}>", resolved),
                                             false,
@@ -884,23 +869,20 @@ impl StructField {
                     ""
                 };
                 stmt.push_str(&format!(" DEFAULT{} {}", always, def_val));
-            } else if self.auto_default_satisfies_validators() {
-                use crate::default::field_type_to_surql_default;
-                stmt.push_str(&format!(
-                    " DEFAULT {}",
-                    field_type_to_surql_default(
-                        &self.field_name,
-                        table_name,
-                        &self.field_type,
-                        &enums,
-                        &app_structs,
-                        &persistable_structs,
-                        registry,
-                    )
-                ));
+            } else if self.auto_default_satisfies_validators()
+                && let Some(default) = crate::default::field_type_to_surql_default(
+                    &self.field_name,
+                    table_name,
+                    &self.field_type,
+                    &enums,
+                    &app_structs,
+                    registry,
+                )
+            {
+                stmt.push_str(&format!(" DEFAULT {default}"));
             }
-            // else: the fallback default would violate the field's validators,
-            // so omit it — the field becomes required rather than unsatisfiable.
+            // else: no zero value exists or it would violate the field's
+            // validators, so the field is required instead of unsatisfiable.
 
             if def.readonly.unwrap_or(false) {
                 stmt.push_str(" READONLY");
@@ -1017,6 +999,69 @@ impl Variant {
             .as_deref()
             .map_or(self, Self::effective)
     }
+}
+
+/// The keys (in `tables`) of the tables a `RecordLink<type_name>` can point
+/// at: the type's own table, the table a projection object's
+/// `output_override` stands for, or every table variant of a persistable
+/// union. Empty when `type_name` names none of those.
+#[cfg(feature = "schemasync")]
+pub fn link_target_tables(
+    type_name: &str,
+    tables: &BTreeMap<String, TableConfig>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+) -> Vec<String> {
+    let table_key = |name: &str| {
+        let key = name.to_case(Case::Snake);
+        tables.contains_key(&key).then_some(key)
+    };
+    if let Some(key) = table_key(type_name) {
+        return vec![key];
+    }
+    if let Some(key) = structs
+        .get(type_name)
+        .and_then(|s| table_key(&s.effective().struct_name))
+    {
+        return vec![key];
+    }
+    enums
+        .get(type_name)
+        .map(|union| {
+            union
+                .variants
+                .iter()
+                .filter_map(|variant| match variant.data.as_ref()? {
+                    VariantData::InlineStruct(enum_struct) => table_key(&enum_struct.struct_name),
+                    VariantData::DataStructureRef(FieldType::Other(name)) => table_key(name),
+                    VariantData::DataStructureRef(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How a `RecordLink<type_name>` names its target in SurrealQL: every table
+/// it can point at, joined with ` | `, or else the table a projection
+/// object's `output_override` names. `None` when `type_name` is neither.
+#[cfg(feature = "schemasync")]
+pub fn record_link_target_surql(
+    type_name: &str,
+    tables: &BTreeMap<String, TableConfig>,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+) -> Option<String> {
+    let names: Vec<String> = link_target_tables(type_name, tables, structs, enums)
+        .iter()
+        .filter_map(|key| tables.get(key))
+        .map(|table| table.effective().table_name.clone())
+        .collect();
+    if !names.is_empty() {
+        return Some(names.join(" | "));
+    }
+    structs
+        .get(type_name)
+        .map(|s| s.effective().struct_name.to_case(Case::Snake))
 }
 
 #[cfg(test)]

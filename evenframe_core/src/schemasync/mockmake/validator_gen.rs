@@ -12,7 +12,7 @@
 //! coordinated-values check, and the explicit `Format` check, but before the
 //! type-default `match`.
 
-use crate::schemasync::mockmake::{Mockmaker, regex_val_gen::RegexValGen};
+use crate::schemasync::mockmake::Mockmaker;
 use crate::types::FieldType;
 use crate::validator::{ArrayValidator, MockValue, NumberValidator, StringValidator, Validator};
 use rand::{RngExt, rngs::ThreadRng};
@@ -252,8 +252,9 @@ fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<
 
     // 1. Seed value from the shape/regex/length pipeline.
     let mut s = if let Some(fmt) = &c.regex_format {
-        let mut maker = RegexValGen::new();
-        maker.generate(fmt.clone().into_regex().as_str()).ok()?
+        fmt.generate_formatted_value()
+            .inspect_err(|e| tracing::warn!("{e}; trying another candidate"))
+            .ok()?
     } else if let Some(shape) = c.shape {
         gen_shape(shape, target_len, rng)?
     } else {
@@ -360,8 +361,9 @@ fn effective_max_len(c: &StringConstraints) -> Option<usize> {
 fn gen_shape(shape: StringShape, target_len: Option<usize>, rng: &mut ThreadRng) -> Option<String> {
     use crate::schemasync::mockmake::format::Format;
     let format_via = |f: Format| -> Option<String> {
-        let mut maker = RegexValGen::new();
-        maker.generate(f.into_regex().as_str()).ok()
+        f.generate_formatted_value()
+            .inspect_err(|e| tracing::warn!("{e}; trying another candidate"))
+            .ok()
     };
     match shape {
         StringShape::Email => format_via(Format::Email),
