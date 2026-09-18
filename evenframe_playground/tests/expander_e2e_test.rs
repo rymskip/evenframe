@@ -283,8 +283,7 @@ impl EvenframePersistableStruct for LibOnly {}
     .unwrap();
 
     // Raw-source scan (expand_macros=false) over the temp crate.
-    let scanner =
-        WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), false);
+    let scanner = WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), false);
     let types = scanner
         .scan_for_evenframe_types()
         .expect("raw scan must succeed");
@@ -324,8 +323,7 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
     fs::create_dir_all(&crate_dir).unwrap();
     write_minimal_lib_crate(&crate_dir, "expand_me");
 
-    let scanner =
-        WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
+    let scanner = WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
     let types = scanner
         .scan_for_evenframe_types()
         .expect("expansion-mode scan must succeed on a valid temp crate");
@@ -393,8 +391,7 @@ fn expand_macros_second_run_is_a_cache_hit() {
     fs::create_dir_all(&crate_dir).unwrap();
     write_minimal_lib_crate(&crate_dir, "cache_me");
 
-    let scanner =
-        WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
+    let scanner = WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
 
     // First run: populates the cache.
     let first = scanner.scan_for_evenframe_types().expect("first scan");
@@ -406,14 +403,13 @@ fn expand_macros_second_run_is_a_cache_hit() {
 
     // Snapshot fragment mtimes.
     let fragments_dir = cache_dir.join("fragments");
-    let first_mtimes: Vec<(PathBuf, std::time::SystemTime)> =
-        collect_file_sizes(&fragments_dir)
-            .into_iter()
-            .map(|(p, _)| {
-                let mtime = fs::metadata(&p).unwrap().modified().unwrap();
-                (p, mtime)
-            })
-            .collect();
+    let first_mtimes: Vec<(PathBuf, std::time::SystemTime)> = collect_file_sizes(&fragments_dir)
+        .into_iter()
+        .map(|(p, _)| {
+            let mtime = fs::metadata(&p).unwrap().modified().unwrap();
+            (p, mtime)
+        })
+        .collect();
     assert!(
         !first_mtimes.is_empty(),
         "first run should have produced fragments under {:?}",
@@ -455,9 +451,7 @@ fn expand_macros_second_run_is_a_cache_hit() {
 #[test]
 fn expand_macros_handles_mixed_lib_and_bin_crate() {
     if !cargo_expand_available() {
-        eprintln!(
-            "SKIP expand_macros_handles_mixed_lib_and_bin_crate: cargo-expand not installed"
-        );
+        eprintln!("SKIP expand_macros_handles_mixed_lib_and_bin_crate: cargo-expand not installed");
         return;
     }
 
@@ -511,8 +505,7 @@ impl EvenframePersistableStruct for Account {}
     )
     .unwrap();
 
-    let scanner =
-        WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
+    let scanner = WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
     let result = scanner.scan_for_evenframe_types();
 
     // This MUST succeed. Before fix 1d, it would fail with a "missing module"

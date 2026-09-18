@@ -1,0 +1,23 @@
+---
+source: evenframe_core/src/tooling/build_config.rs
+assertion_line: 301
+expression: config.outputs
+---
+[
+    TypesyncOutput {
+        kind: Macroforge,
+        dir: "./generated",
+        file: None,
+        files: OutputConfig {
+            mode: PerFile,
+            barrel_file: false,
+            file_naming: Kebab,
+            file_extension: ".svelte.ts",
+            array_style: Shorthand,
+            import_extension: Js,
+        },
+        namespace: None,
+        package: None,
+        import_validate: false,
+    },
+]

@@ -50,9 +50,8 @@ fn build_synthetic_test_plugin() -> &'static Path {
             built
         );
 
-        std::fs::copy(&built, &installed).unwrap_or_else(|e| {
-            panic!("failed to copy {:?} to {:?}: {}", built, installed, e)
-        });
+        std::fs::copy(&built, &installed)
+            .unwrap_or_else(|e| panic!("failed to copy {:?} to {:?}: {}", built, installed, e));
 
         installed
     })
@@ -288,8 +287,7 @@ fn synthetic_enum_roundtrips_through_core_tagged_union() {
 
     let ec = &output.new_enums[0];
     let json = serde_json::to_value(ec).expect("serialize TaggedUnion");
-    let reparsed: TaggedUnion =
-        serde_json::from_value(json).expect("TaggedUnion must round-trip");
+    let reparsed: TaggedUnion = serde_json::from_value(json).expect("TaggedUnion must round-trip");
     assert_eq!(reparsed.enum_name, "SyntheticSeverity");
     assert_eq!(reparsed.variants.len(), 3);
     let variant_names: Vec<_> = reparsed.variants.iter().map(|v| v.name.as_str()).collect();
@@ -305,8 +303,7 @@ fn synthetic_table_roundtrips_through_core_table_config() {
 
     let tc = &output.new_tables[0];
     let json = serde_json::to_value(tc).expect("serialize TableConfig");
-    let reparsed: TableConfig =
-        serde_json::from_value(json).expect("TableConfig must round-trip");
+    let reparsed: TableConfig = serde_json::from_value(json).expect("TableConfig must round-trip");
     assert_eq!(reparsed.table_name, "synthetic_ping");
     assert_eq!(reparsed.struct_config.struct_name, "SyntheticPing");
     assert_eq!(reparsed.struct_config.fields.len(), 3);

@@ -2,9 +2,7 @@
 
 use crate::config::ForeignTypeConfig;
 use crate::error::EvenframeError;
-use crate::typesync::config::{
-    ArrayStyle, CollisionStrategy, FileNamingConvention, OutputConfig, OutputMode,
-};
+use crate::typesync::config::{CollisionStrategy, OutputKind, TypesyncConfig, TypesyncOutput};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -19,41 +17,14 @@ pub struct BuildConfig {
     /// The config file this configuration was loaded from, if any.
     pub config_path: Option<PathBuf>,
 
-    /// Output directory for generated files.
-    pub output_path: PathBuf,
-
     /// Apply aliases for attribute detection (e.g., custom derive macros).
     pub apply_aliases: Vec<String>,
 
     /// When true, use `cargo expand` to resolve macro-generated types.
     pub expand_macros: bool,
 
-    /// Generate ArkType schema.
-    pub arktype: bool,
-
-    /// Generate Effect-TS schema.
-    pub effect: bool,
-
-    /// Generate Macroforge types.
-    pub macroforge: bool,
-
-    /// Generate FlatBuffers schema.
-    pub flatbuffers: bool,
-
-    /// Generate Protocol Buffers schema.
-    pub protobuf: bool,
-
-    /// FlatBuffers namespace (e.g., "com.example.app").
-    pub flatbuffers_namespace: Option<String>,
-
-    /// Protocol Buffers package name (e.g., "com.example.app").
-    pub protobuf_package: Option<String>,
-
-    /// Whether to import validate.proto for Protocol Buffers.
-    pub protobuf_import_validate: bool,
-
-    /// Per-file output configuration.
-    pub output: OutputConfig,
+    /// The outputs to generate; each `dir` resolves against `scan_path`.
+    pub outputs: Vec<TypesyncOutput>,
 
     /// How to handle type name collisions across files.
     pub collision_strategy: CollisionStrategy,
@@ -78,18 +49,9 @@ impl Default for BuildConfig {
         Self {
             scan_path: PathBuf::from("."),
             config_path: None,
-            output_path: PathBuf::from("./src/generated/"),
             apply_aliases: Vec::new(),
             expand_macros: false,
-            arktype: true,
-            effect: false,
-            macroforge: false,
-            flatbuffers: false,
-            protobuf: false,
-            flatbuffers_namespace: None,
-            protobuf_package: None,
-            protobuf_import_validate: false,
-            output: OutputConfig::default(),
+            outputs: vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")],
             collision_strategy: CollisionStrategy::Error,
             foreign_types: BTreeMap::new(),
             output_rule_plugins: BTreeMap::new(),
@@ -105,7 +67,15 @@ impl BuildConfig {
         Self::default()
     }
 
-    /// Loads configuration from evenframe.toml.
+    /// Loads the configuration file the CLI uses: the one
+    /// [`EvenframeConfig::find_config_file`](crate::config::EvenframeConfig::find_config_file)
+    /// finds from the current directory, so both configs always describe the
+    /// same project.
+    pub fn discover() -> Result<Self, EvenframeError> {
+        Self::from_toml_path(crate::config::EvenframeConfig::find_config_file()?)
+    }
+
+    /// Loads configuration from evenframe.toml, for build scripts.
     ///
     /// Searches for evenframe.toml starting from `CARGO_MANIFEST_DIR` (if set)
     /// or the current directory, walking upward to the filesystem root.
@@ -125,7 +95,12 @@ impl BuildConfig {
     /// Loads configuration from a specific evenframe.toml file.
     pub fn from_toml_path(path: impl AsRef<Path>) -> Result<Self, EvenframeError> {
         let path = path.as_ref();
-        let content = fs::read_to_string(path)?;
+        let content = fs::read_to_string(path).map_err(|e| {
+            EvenframeError::config_error(format!(
+                "Failed to read configuration file {}: {e}",
+                path.display()
+            ))
+        })?;
 
         Self::parse_toml(&content, path)
     }
@@ -184,14 +159,7 @@ impl BuildConfig {
             include_specs = general_config.include_files;
         }
 
-        // Derive project root: for .evenframe/config.toml go up one more level
-        let config_dir = path.parent().unwrap_or(Path::new("."));
-        let project_root = if config_dir.file_name().and_then(|n| n.to_str()) == Some(".evenframe")
-        {
-            config_dir.parent().unwrap_or(Path::new("."))
-        } else {
-            config_dir
-        };
+        let project_root = crate::config::EvenframeConfig::project_root_of(path);
 
         // Resolve `include_files` paths relative to the project root (absolute as-is).
         config.include_files = include_specs
@@ -210,81 +178,12 @@ impl BuildConfig {
             })
             .collect();
 
-        // Parse [typesync] section
-        if let Some(typesync) = value.get("typesync").and_then(|v| v.as_table()) {
-            if let Some(output) = typesync.get("output_path").and_then(|v| v.as_str()) {
-                // Resolve relative paths from the project root
-                config.output_path = project_root.join(output);
-            }
-
-            if let Some(v) = typesync.get("should_generate_arktype_types") {
-                config.arktype = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(v) = typesync.get("should_generate_effect_types") {
-                config.effect = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(v) = typesync.get("should_generate_macroforge_types") {
-                config.macroforge = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(v) = typesync.get("should_generate_flatbuffers_types") {
-                config.flatbuffers = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(v) = typesync.get("should_generate_protobuf_types") {
-                config.protobuf = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(ns) = typesync
-                .get("flatbuffers_namespace")
-                .and_then(|v| v.as_str())
-            {
-                config.flatbuffers_namespace = Some(ns.to_string());
-            }
-
-            if let Some(pkg) = typesync.get("protobuf_package").and_then(|v| v.as_str()) {
-                config.protobuf_package = Some(pkg.to_string());
-            }
-
-            if let Some(v) = typesync.get("protobuf_import_validate") {
-                config.protobuf_import_validate = v.as_bool().unwrap_or(false);
-            }
-
-            if let Some(strategy_str) = typesync.get("collision_strategy").and_then(|v| v.as_str())
-            {
-                config.collision_strategy = match strategy_str {
-                    "auto_rename" => CollisionStrategy::AutoRename,
-                    _ => CollisionStrategy::Error,
-                };
-            }
-
-            if let Some(output_table) = typesync.get("output").and_then(|v| v.as_table()) {
-                if let Some(mode_str) = output_table.get("mode").and_then(|v| v.as_str()) {
-                    config.output.mode = match mode_str {
-                        "per_file" => OutputMode::PerFile,
-                        _ => OutputMode::Single,
-                    };
-                }
-                if let Some(v) = output_table.get("barrel_file").and_then(|v| v.as_bool()) {
-                    config.output.barrel_file = v;
-                }
-                if let Some(naming_str) = output_table.get("file_naming").and_then(|v| v.as_str()) {
-                    config.output.file_naming = match naming_str {
-                        "pascal" => FileNamingConvention::Pascal,
-                        "snake" => FileNamingConvention::Snake,
-                        "camel" => FileNamingConvention::Camel,
-                        _ => FileNamingConvention::Kebab,
-                    };
-                }
-                if let Some(style_str) = output_table.get("array_style").and_then(|v| v.as_str()) {
-                    config.output.array_style = match style_str {
-                        "generic" => ArrayStyle::Generic,
-                        _ => ArrayStyle::Shorthand,
-                    };
-                }
-            }
+        if let Some(typesync) = value.get("typesync") {
+            let typesync: TypesyncConfig = typesync.clone().try_into().map_err(|e| {
+                EvenframeError::config_error(format!("Failed to parse [typesync]: {e}"))
+            })?;
+            config.outputs = typesync.outputs;
+            config.collision_strategy = typesync.collision_strategy;
         }
 
         // Set scan_path to the project root
@@ -319,12 +218,6 @@ impl BuildConfigBuilder {
         self
     }
 
-    /// Sets the output path for generated files.
-    pub fn output_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config.output_path = path.into();
-        self
-    }
-
     /// Adds an apply alias for attribute detection.
     pub fn apply_alias(mut self, alias: impl Into<String>) -> Self {
         self.config.apply_aliases.push(alias.into());
@@ -343,116 +236,15 @@ impl BuildConfigBuilder {
         self
     }
 
-    /// Enables ArkType schema generation.
-    pub fn enable_arktype(mut self) -> Self {
-        self.config.arktype = true;
-        self
-    }
-
-    /// Disables ArkType schema generation.
-    pub fn disable_arktype(mut self) -> Self {
-        self.config.arktype = false;
-        self
-    }
-
-    /// Enables Effect-TS schema generation.
-    pub fn enable_effect(mut self) -> Self {
-        self.config.effect = true;
-        self
-    }
-
-    /// Disables Effect-TS schema generation.
-    pub fn disable_effect(mut self) -> Self {
-        self.config.effect = false;
-        self
-    }
-
-    /// Enables Macroforge type generation.
-    pub fn enable_macroforge(mut self) -> Self {
-        self.config.macroforge = true;
-        self
-    }
-
-    /// Disables Macroforge type generation.
-    pub fn disable_macroforge(mut self) -> Self {
-        self.config.macroforge = false;
-        self
-    }
-
-    /// Enables FlatBuffers schema generation with optional namespace.
-    pub fn enable_flatbuffers(mut self, namespace: Option<String>) -> Self {
-        self.config.flatbuffers = true;
-        self.config.flatbuffers_namespace = namespace;
-        self
-    }
-
-    /// Disables FlatBuffers schema generation.
-    pub fn disable_flatbuffers(mut self) -> Self {
-        self.config.flatbuffers = false;
-        self
-    }
-
-    /// Enables Protocol Buffers schema generation with options.
-    pub fn enable_protobuf(mut self, package: Option<String>, import_validate: bool) -> Self {
-        self.config.protobuf = true;
-        self.config.protobuf_package = package;
-        self.config.protobuf_import_validate = import_validate;
-        self
-    }
-
-    /// Disables Protocol Buffers schema generation.
-    pub fn disable_protobuf(mut self) -> Self {
-        self.config.protobuf = false;
-        self
-    }
-
-    /// Sets the output mode (single file or per-file).
-    pub fn output_mode(mut self, mode: OutputMode) -> Self {
-        self.config.output.mode = mode;
-        self
-    }
-
-    /// Enables or disables barrel file generation.
-    pub fn barrel_file(mut self, enabled: bool) -> Self {
-        self.config.output.barrel_file = enabled;
-        self
-    }
-
-    /// Sets the file naming convention for per-file output.
-    pub fn file_naming(mut self, naming: FileNamingConvention) -> Self {
-        self.config.output.file_naming = naming;
-        self
-    }
-
-    /// Sets the TypeScript array syntax style.
-    pub fn array_style(mut self, style: ArrayStyle) -> Self {
-        self.config.output.array_style = style;
-        self
-    }
-
     /// Sets foreign type configurations.
     pub fn foreign_types(mut self, foreign_types: BTreeMap<String, ForeignTypeConfig>) -> Self {
         self.config.foreign_types = foreign_types;
         self
     }
 
-    /// Enables all generators.
-    pub fn enable_all(mut self) -> Self {
-        self.config.arktype = true;
-        self.config.effect = true;
-        self.config.macroforge = true;
-        self.config.flatbuffers = true;
-        self.config.protobuf = true;
-        self
-    }
-
-    /// Disables all generators.
-    pub fn disable_all(mut self) -> Self {
-        self.config.arktype = false;
-        self.config.effect = false;
-        self.config.macroforge = false;
-        self.config.flatbuffers = false;
-        self.config.protobuf = false;
+    /// Sets the outputs to generate, replacing the default ArkType output.
+    pub fn outputs(mut self, outputs: Vec<TypesyncOutput>) -> Self {
+        self.config.outputs = outputs;
         self
     }
 
@@ -466,77 +258,88 @@ impl BuildConfigBuilder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_config() {
-        let config = BuildConfig::default();
-        assert!(config.arktype);
-        assert!(!config.effect);
-        assert!(!config.macroforge);
-        assert!(!config.flatbuffers);
-        assert!(!config.protobuf);
+    fn parse(content: &str) -> Result<BuildConfig, EvenframeError> {
+        BuildConfig::parse_toml(content, Path::new("/proj/evenframe.toml"))
     }
 
     #[test]
-    fn test_builder_enable_arktype() {
-        let config = BuildConfig::builder().enable_arktype().build();
-        assert!(config.arktype);
+    fn default_config_generates_arktype() {
+        assert_eq!(
+            BuildConfig::default().outputs,
+            vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")]
+        );
     }
 
     #[test]
-    fn test_builder_enable_all() {
-        let config = BuildConfig::builder().enable_all().build();
-        assert!(config.arktype);
-        assert!(config.effect);
-        assert!(config.macroforge);
-        assert!(config.flatbuffers);
-        assert!(config.protobuf);
-    }
-
-    #[test]
-    fn test_builder_custom_paths() {
+    fn builder_sets_paths_aliases_and_outputs() {
+        let outputs = vec![TypesyncOutput::new(OutputKind::Effect, "/custom/output")];
         let config = BuildConfig::builder()
             .scan_path("/custom/scan")
-            .output_path("/custom/output")
+            .apply_alias("MyMacro")
+            .apply_alias("OtherMacro")
+            .outputs(outputs.clone())
             .build();
 
         assert_eq!(config.scan_path, PathBuf::from("/custom/scan"));
-        assert_eq!(config.output_path, PathBuf::from("/custom/output"));
+        assert_eq!(config.apply_aliases, vec!["MyMacro", "OtherMacro"]);
+        assert_eq!(config.outputs, outputs);
     }
 
     #[test]
-    fn test_builder_apply_aliases() {
-        let config = BuildConfig::builder()
-            .apply_alias("MyMacro")
-            .apply_alias("OtherMacro")
-            .build();
-
-        assert_eq!(config.apply_aliases.len(), 2);
-        assert!(config.apply_aliases.contains(&"MyMacro".to_string()));
-        assert!(config.apply_aliases.contains(&"OtherMacro".to_string()));
-    }
-
-    #[test]
-    fn test_parse_toml_basic() {
-        let toml_content = r#"
+    fn single_output_is_read_in_full() {
+        let config = parse(
+            r#"
 [general]
 apply_aliases = ["MyMacro"]
 
 [typesync]
-output_path = "./generated/"
-should_generate_arktype_types = true
-should_generate_effect_types = true
-"#;
-
-        let config = BuildConfig::parse_toml(toml_content, Path::new("/test/evenframe.toml"))
-            .expect("Should parse successfully");
-
-        assert!(config.arktype);
-        assert!(config.effect);
-        assert_eq!(config.apply_aliases, vec!["MyMacro".to_string()]);
+output = { kind = "macroforge", dir = "./generated", mode = "per_file", file_extension = ".svelte.ts", import_extension = "js" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.apply_aliases, vec!["MyMacro"]);
+        insta::assert_debug_snapshot!(config.outputs);
     }
 
     #[test]
-    fn test_parse_toml_include_files() {
+    fn outputs_array_keeps_each_kinds_settings() {
+        let config = parse(
+            r#"
+[typesync]
+outputs = [
+  { kind = "arktype", dir = "./generated/arktype", file = "schemas.ts" },
+  { kind = "protobuf", dir = "./proto", package = "com.example", import_validate = true },
+]
+"#,
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(config.outputs);
+    }
+
+    #[test]
+    fn invalid_typesync_configs_are_rejected() {
+        let errors: Vec<String> = [
+            "should_generate_arktype_types = true",
+            "output = { kind = \"arcktype\", dir = \"g\" }",
+            "output = { kind = \"arktype\", dir = \"g\" }\noutputs = [{ kind = \"effect\", dir = \"e\" }]",
+            "output = { kind = \"arktype\", dir = \"g\", mode = \"per_file\" }",
+            "output = { kind = \"effect\", dir = \"g\", package = \"com.example\" }",
+            "output = { kind = \"effect\", dir = \"g\", mode = \"per_file\", file = \"x.ts\" }",
+            "output = { kind = \"macroforge\", dir = \"g\", file_naming = \"kebabcase\" }",
+            "collision_strategy = \"autorename\"",
+        ]
+        .iter()
+        .map(|body| {
+            parse(&format!("[typesync]\n{body}\n"))
+                .unwrap_err()
+                .to_string()
+        })
+        .collect();
+        insta::assert_snapshot!(errors.join("\n\n"));
+    }
+
+    #[test]
+    fn include_files_resolve_against_the_project_root() {
         // Both the bare-string and the `{ path, resolve_only }` table forms,
         // resolved relative to the project root (parent of `.evenframe/`).
         let toml_content = r#"
@@ -545,9 +348,6 @@ include_files = [
   "../idp/src/lib/policy.rs",
   { path = "/abs/shared/ids.rs", resolve_only = true },
 ]
-
-[typesync]
-output_path = "./generated/"
 "#;
 
         let config =
@@ -567,5 +367,6 @@ output_path = "./generated/"
             PathBuf::from("/abs/shared/ids.rs")
         );
         assert!(config.include_files[1].resolve_only);
+        assert_eq!(config.scan_path, PathBuf::from("/proj"));
     }
 }

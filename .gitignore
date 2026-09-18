@@ -12,3 +12,5 @@ CLAUDE.md
 .pixi
 **/*.wasm
 **/scheduled_tasks.lock
+# The scan cache is local, rewritten by every scan
+**/.evenframe/cache.json

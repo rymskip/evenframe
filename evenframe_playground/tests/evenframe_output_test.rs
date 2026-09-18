@@ -302,10 +302,10 @@ fn test_output_path_configuration() {
     let config_content = fs::read_to_string(playground_dir.join("evenframe.toml"))
         .expect("Failed to read evenframe.toml");
 
-    // Check output_path is set to ./src/bindings/
+    // Check the outputs write to ./src/bindings
     assert!(
-        config_content.contains(r#"output_path = "./src/bindings/""#),
-        "output_path should be set to ./src/bindings/"
+        config_content.contains(r#"dir = "./src/bindings""#),
+        "outputs should write to ./src/bindings"
     );
 }
 
@@ -696,15 +696,15 @@ fn test_flatbuffers_configuration() {
     let config_content = fs::read_to_string(playground_dir.join("evenframe.toml"))
         .expect("Failed to read evenframe.toml");
 
-    // Check FlatBuffers is enabled
+    // Check FlatBuffers is configured
     assert!(
-        config_content.contains("should_generate_flatbuffers_types = true"),
-        "FlatBuffers generation should be enabled"
+        config_content.contains(r#"kind = "flatbuffers""#),
+        "A FlatBuffers output should be configured"
     );
 
     // Check namespace is configured
     assert!(
-        config_content.contains("flatbuffers_namespace"),
+        config_content.contains(r#"namespace = "evenframe.playground""#),
         "FlatBuffers namespace should be configured"
     );
 }

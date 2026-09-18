@@ -1,6 +1,7 @@
 //! Command handlers for the Evenframe CLI.
 
-pub mod cache;
+pub mod check;
+pub mod expand;
 pub mod generate;
 pub mod info;
 pub mod init;

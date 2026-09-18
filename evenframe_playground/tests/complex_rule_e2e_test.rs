@@ -162,7 +162,9 @@ fn type_annotations(output: &OutputRulePluginOutput) -> &[String] {
 #[test]
 fn full_match_effect_generator_brands_monetary_fields() {
     let mut pm = mgr();
-    let result = pm.transform_type("complex", &full_match_input("effect")).unwrap();
+    let result = pm
+        .transform_type("complex", &full_match_input("effect"))
+        .unwrap();
     assert!(result.error.is_none());
 
     // Type-level rename + generator + count annotations
@@ -572,21 +574,21 @@ fn kitchen_sink_everything_at_once() {
         .generator("effect")
         .fields(vec![
             f("id", "String"),
-            f("total", "Decimal"),                              // monetary
-            f("tax", "f64"),                                    // monetary
-            f("item_count", "i64"),                             // monetary
-            f_ann("raw_total", "Decimal", vec!["@raw"]),        // exempted by @raw
-            f("raw_amount", "Decimal"),                         // skipped by name
-            f_ann("secret_key", "String", vec!["@internal"]),   // @skip_internal
-            f("currency_code", "String"),                       // @iso4217
+            f("total", "Decimal"),                            // monetary
+            f("tax", "f64"),                                  // monetary
+            f("item_count", "i64"),                           // monetary
+            f_ann("raw_total", "Decimal", vec!["@raw"]),      // exempted by @raw
+            f("raw_amount", "Decimal"),                       // skipped by name
+            f_ann("secret_key", "String", vec!["@internal"]), // @skip_internal
+            f("currency_code", "String"),                     // @iso4217
             f("created_at", "String"),
             f_val(
                 "email",
                 "String",
                 vec!["email", "min_length(3)", "max_length(255)"],
             ), // @heavily_validated
-            f("items", "Vec<LineItem>"),                        // @nested_collection
-            f("metadata", "LineItem"),                          // struct ref
+            f("items", "Vec<LineItem>"), // @nested_collection
+            f("metadata", "LineItem"),   // struct ref
             f("description", "String"),
         ])
         .build();

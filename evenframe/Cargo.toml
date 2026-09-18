@@ -1,6 +1,6 @@
 [package]
 name = "evenframe"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -82,7 +82,7 @@ full = ["evenframe_core/full"]
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.3.2", path = "../evenframe_core", default-features = false, features = ["cli"] }
+evenframe_core = { version = "0.4.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }
@@ -90,16 +90,19 @@ tokio = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true }
+yaml_serde = "0.10.7"
 url = { workspace = true }
 uuid = { workspace = true }
-evenframe_derive = { version = "0.3.2", path = "../evenframe_derive" }
+evenframe_derive = { version = "0.4.0", path = "../evenframe_derive" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5.0"
 linkme = "0.3.37"
 clap = { version = "4.6", features = ["derive", "env"] }
 
 [dev-dependencies]
+insta = { workspace = true, features = ["filters"] }
 tempfile = "3.27"
 mockall = "0.15"
 proptest = "1.11"

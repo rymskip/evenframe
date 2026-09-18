@@ -69,7 +69,7 @@ pub struct Author {
 #[indexes(
     post_slug_published(fields(slug, published), unique),
     post_published_at(fields(published, published_at), comment = "published posts by date"),
-    post_published_count(count(where = "published = true")),
+    post_published_count(count(where = "published = true"))
 )]
 pub struct Post {
     pub id: String,

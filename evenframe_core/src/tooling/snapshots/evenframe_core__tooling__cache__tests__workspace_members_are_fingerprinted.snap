@@ -1,0 +1,14 @@
+---
+source: evenframe_core/src/tooling/cache.rs
+assertion_line: 426
+expression: "inputs.keys().collect::<Vec<_>>()"
+---
+[
+    "Cargo.toml",
+    "crates/api/Cargo.toml",
+    "crates/api/src/lib.rs",
+    "crates/api/src/routes/user.rs",
+    "crates/db/Cargo.toml",
+    "crates/db/src/lib.rs",
+    "crates/db/src/models/user.rs",
+]

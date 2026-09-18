@@ -1773,7 +1773,7 @@ checksum = "120339709b24832c07464b0838828361b735d793c409b8ca3147db0dae601542"
 
 [[package]]
 name = "evenframe"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "clap",
  "convert_case 0.12.0",
@@ -1781,6 +1781,7 @@ dependencies = [
  "evenframe_derive",
  "linkme",
  "regex",
+ "serde",
  "serde_json",
  "syn 3.0.5",
  "tokio",
@@ -1790,17 +1791,19 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "yaml_serde",
 ]
 
 [[package]]
 name = "evenframe_core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "blake3",
  "bon",
  "chrono",
  "chrono-tz",
+ "clap",
  "convert_case 0.12.0",
  "derive-syn-parse",
  "derive_more",
@@ -1840,7 +1843,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "convert_case 0.12.0",
  "evenframe_core",
@@ -3190,6 +3193,12 @@ checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "libyaml-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
 
 [[package]]
 name = "linkme"
@@ -7994,6 +8003,19 @@ name = "xsum"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0637d3a5566a82fa5214bae89087bc8c9fb94cd8e8a3c07feb691bb8d9c632db"
+
+[[package]]
+name = "yaml_serde"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "libyaml-rs",
+ "ryu",
+ "serde",
+]
 
 [[package]]
 name = "yoke"

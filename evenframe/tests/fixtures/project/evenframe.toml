@@ -1,0 +1,13 @@
+[general]
+apply_aliases = []
+
+[schemasync]
+should_generate_mocks = false
+
+[schemasync.database]
+url = "http://localhost:8000"
+namespace = "test"
+database = "test"
+
+[typesync]
+output = { kind = "arktype", dir = "./generated" }

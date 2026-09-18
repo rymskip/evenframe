@@ -1,18 +1,18 @@
-//! The scan registry: the resolved types from the last workspace scan,
-//! persisted to `.evenframe/registry.json` so commands such as
+//! The scan cache: the resolved types from the last workspace scan,
+//! persisted to `.evenframe/cache.json` so commands such as
 //! `evenframe mockmake` can work without re-scanning Rust sources.
 //!
-//! The registry carries a fingerprint of everything the scan read (crate
+//! The cache carries a fingerprint of everything the scan read (crate
 //! manifests, Rust sources, include files, the evenframe config and
-//! plugins). [`ScanRegistry::stale_reason`] recomputes it with a cheap file
-//! walk — no Rust parsing — so a registry that no longer matches the sources
+//! plugins). [`ScanCache::stale_reason`] recomputes it with a cheap file
+//! walk — no Rust parsing — so a cache that no longer matches the sources
 //! is refused instead of silently used.
 //!
-//! The file is meant to be committed: it is pretty-printed JSON with sorted
-//! keys and a trailing newline, holds project-relative `/` paths, and has no
-//! timestamps. Content hashes ignore CRLF vs LF.
+//! It is a local cache, never committed: every scan rewrites it. Input paths
+//! are project-relative, so moving the project keeps it valid, and content
+//! hashes ignore CRLF vs LF.
 
-use super::{AllConfigs, BuildConfig};
+use super::{AllConfigs, BuildConfig, MAX_SCAN_DEPTH};
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::TableConfig;
 use crate::types::{StructConfig, TaggedUnion};
@@ -21,17 +21,18 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Bumped whenever the registry layout changes incompatibly.
-pub const REGISTRY_FORMAT_VERSION: u32 = 1;
+/// Bumped whenever the cache layout changes incompatibly.
+pub const CACHE_FORMAT_VERSION: u32 = 1;
 
-/// Where the registry lives, relative to the project root.
-pub const REGISTRY_RELATIVE_PATH: &str = ".evenframe/registry.json";
+/// Where the cache lives, relative to the project root.
+pub const CACHE_RELATIVE_PATH: &str = ".evenframe/cache.json";
 
-/// The command that refreshes the registry, for staleness messages.
-const REFRESH_COMMAND: &str = "evenframe schemasync";
+/// The lightest command that refreshes the cache (a scan, with no database
+/// connection), for staleness messages.
+pub const CACHE_REFRESH_COMMAND: &str = "evenframe validate --types-only";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScanRegistry {
+pub struct ScanCache {
     pub format_version: u32,
     pub evenframe_version: String,
     /// Content hash (blake3) of every scan input, keyed by its path relative
@@ -42,13 +43,13 @@ pub struct ScanRegistry {
     pub objects: BTreeMap<String, StructConfig>,
 }
 
-impl ScanRegistry {
-    /// Build a registry for the scan results `configs`, fingerprinting the
+impl ScanCache {
+    /// Build a cache entry for the scan results `configs`, fingerprinting the
     /// inputs `config` describes.
     pub fn from_scan(config: &BuildConfig, configs: &AllConfigs) -> Result<Self> {
         let (enums, tables, objects) = configs;
         Ok(Self {
-            format_version: REGISTRY_FORMAT_VERSION,
+            format_version: CACHE_FORMAT_VERSION,
             evenframe_version: env!("CARGO_PKG_VERSION").to_string(),
             inputs: scan_inputs(config)?,
             enums: enums.clone(),
@@ -57,21 +58,19 @@ impl ScanRegistry {
         })
     }
 
-    /// The registry path for the project rooted at `project_root`.
+    /// The cache path for the project rooted at `project_root`.
     pub fn path(project_root: &Path) -> PathBuf {
-        project_root.join(REGISTRY_RELATIVE_PATH)
+        project_root.join(CACHE_RELATIVE_PATH)
     }
 
-    /// Serialize as committed: pretty JSON with a trailing newline. Maps are
-    /// `BTreeMap`s all the way down, so key order is stable.
+    /// Compact JSON. Maps are `BTreeMap`s all the way down, so the same scan
+    /// always produces the same bytes and an unchanged cache is not rewritten.
     pub fn to_json(&self) -> Result<String> {
-        let mut json = serde_json::to_string_pretty(self)
-            .map_err(|e| EvenframeError::config(format!("Failed to serialize registry: {e}")))?;
-        json.push('\n');
-        Ok(json)
+        serde_json::to_string(self)
+            .map_err(|e| EvenframeError::config(format!("Failed to serialize scan cache: {e}")))
     }
 
-    /// Write the registry under `project_root`, leaving the file untouched
+    /// Write the cache under `project_root`, leaving the file untouched
     /// when its content wouldn't change. The write goes through a temporary
     /// sibling and a rename so readers never see a partial file.
     pub fn write(&self, project_root: &Path) -> Result<PathBuf> {
@@ -89,29 +88,29 @@ impl ScanRegistry {
         Ok(path)
     }
 
-    /// Load the registry under `project_root`.
+    /// Load the cache under `project_root`.
     pub fn load(project_root: &Path) -> Result<Self> {
         let path = Self::path(project_root);
         let json = fs::read_to_string(&path).map_err(|e| {
             EvenframeError::config(format!(
-                "No scan registry at {} ({e}); run `{REFRESH_COMMAND}` to create it",
+                "No scan cache at {} ({e}); run `{CACHE_REFRESH_COMMAND}` to create it",
                 path.display()
             ))
         })?;
         serde_json::from_str(&json).map_err(|e| {
             EvenframeError::config(format!(
-                "Scan registry at {} is unreadable ({e}); run `{REFRESH_COMMAND}` to rebuild it",
+                "Scan cache at {} is unreadable ({e}); run `{CACHE_REFRESH_COMMAND}` to rebuild it",
                 path.display()
             ))
         })
     }
 
-    /// Why this registry no longer describes the project `config` points
+    /// Why this cache no longer describes the project `config` points
     /// at, or `None` when it is current.
     pub fn stale_reason(&self, config: &BuildConfig) -> Result<Option<String>> {
-        if self.format_version != REGISTRY_FORMAT_VERSION {
+        if self.format_version != CACHE_FORMAT_VERSION {
             return Ok(Some(format!(
-                "the registry format changed (v{} → v{REGISTRY_FORMAT_VERSION})",
+                "the cache format changed (v{} → v{CACHE_FORMAT_VERSION})",
                 self.format_version
             )));
         }
@@ -125,15 +124,28 @@ impl ScanRegistry {
         Ok(describe_changes(&self.inputs, &scan_inputs(config)?))
     }
 
-    /// Load the registry and fail with an actionable error if it is stale.
+    /// Load the cache and fail with an actionable error if it is stale.
     pub fn load_current(config: &BuildConfig) -> Result<Self> {
-        let registry = Self::load(&config.scan_path)?;
-        if let Some(reason) = registry.stale_reason(config)? {
+        let cache = Self::load(&config.scan_path)?;
+        if let Some(reason) = cache.stale_reason(config)? {
             return Err(EvenframeError::config(format!(
-                "The scan registry is stale: {reason}. Run `{REFRESH_COMMAND}` to refresh it."
+                "The scan cache is stale: {reason}. Run `{CACHE_REFRESH_COMMAND}` to refresh it."
             )));
         }
-        Ok(registry)
+        Ok(cache)
+    }
+
+    /// Inspect the cache without failing on a missing or stale one, for
+    /// callers that report the state rather than depend on it.
+    pub fn status(config: &BuildConfig) -> Result<CacheStatus> {
+        if !Self::path(&config.scan_path).exists() {
+            return Ok(CacheStatus::Absent);
+        }
+        let cache = Self::load(&config.scan_path)?;
+        Ok(match cache.stale_reason(config)? {
+            Some(reason) => CacheStatus::Stale(reason),
+            None => CacheStatus::Current(cache),
+        })
     }
 
     /// The scan results, in the shape `build_all_configs` returns.
@@ -142,12 +154,24 @@ impl ScanRegistry {
     }
 }
 
-/// Run the workspace scan and record its results in the registry.
+/// How the cache on disk relates to the current sources, as
+/// [`ScanCache::status`] finds it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CacheStatus {
+    /// The cache describes the sources as they are now.
+    Current(ScanCache),
+    /// No cache has been written for this project yet.
+    Absent,
+    /// The cache no longer describes the sources, for this reason.
+    Stale(String),
+}
+
+/// Run the workspace scan and record its results in the cache.
 pub fn build_and_record(config: &BuildConfig) -> Result<AllConfigs> {
     let configs = super::build_all_configs(config)?;
-    let registry = ScanRegistry::from_scan(config, &configs)?;
-    let path = registry.write(&config.scan_path)?;
-    tracing::debug!("Scan registry written to {}", path.display());
+    let cache = ScanCache::from_scan(config, &configs)?;
+    let path = cache.write(&config.scan_path)?;
+    tracing::debug!("Scan cache written to {}", path.display());
     Ok(configs)
 }
 
@@ -165,32 +189,33 @@ pub fn scan_inputs(config: &BuildConfig) -> Result<BTreeMap<String, String>> {
     let manifests = super::find_manifests(root);
     for manifest in &manifests {
         files.push(manifest.clone());
-        let Some(manifest_dir) = manifest.parent() else {
-            continue;
-        };
-        let Ok(value) = fs::read_to_string(manifest)
-            .map_err(|_| ())
-            .and_then(|text| toml::from_str::<toml::Value>(&text).map_err(|_| ()))
-        else {
-            continue;
-        };
+        let manifest_dir = manifest
+            .parent()
+            .ok_or_else(|| EvenframeError::InvalidPath {
+                path: manifest.clone(),
+            })?;
+        let text = fs::read_to_string(manifest).map_err(|e| {
+            EvenframeError::WorkspaceScan(format!("failed to read {}: {e}", manifest.display()))
+        })?;
+        let value: toml::Value = toml::from_str(&text)
+            .map_err(|e| EvenframeError::parse_error(manifest, e.to_string()))?;
         if let Some(members) = value
             .get("workspace")
             .and_then(|w| w.get("members"))
             .and_then(|m| m.as_array())
         {
             for member in members.iter().filter_map(|m| m.as_str()) {
-                collect_rust_files(&manifest_dir.join(member).join("src"), &mut files, 0);
+                collect_src_files(&manifest_dir.join(member).join("src"), &mut files)?;
             }
         }
         if value.get("package").is_some() {
-            collect_rust_files(&manifest_dir.join("src"), &mut files, 0);
+            collect_src_files(&manifest_dir.join("src"), &mut files)?;
         }
     }
 
     for include in &config.include_files {
         if include.path.is_dir() {
-            collect_rust_files(&include.path, &mut files, 0);
+            collect_rust_files(&include.path, &mut files, 0)?;
         } else {
             files.push(include.path.clone());
         }
@@ -216,31 +241,50 @@ pub fn scan_inputs(config: &BuildConfig) -> Result<BTreeMap<String, String>> {
     Ok(inputs)
 }
 
-fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
-    if depth > 10 {
-        return;
+/// A crate's `src` tree; like the scanner, a crate without one contributes
+/// nothing.
+fn collect_src_files(src: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    if src.is_dir() {
+        collect_rust_files(src, out, 0)?;
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    Ok(())
+}
+
+/// The `.rs` files under `dir`, failing where the scanner would: on an
+/// unreadable directory or past [`MAX_SCAN_DEPTH`].
+fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
+    if depth > MAX_SCAN_DEPTH {
+        return Err(EvenframeError::MaxRecursionDepth {
+            depth: MAX_SCAN_DEPTH,
+            path: dir.to_path_buf(),
+        });
+    }
+    let unreadable = |e: std::io::Error| {
+        EvenframeError::WorkspaceScan(format!("failed to read {}: {e}", dir.display()))
     };
-    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    let mut paths = fs::read_dir(dir)
+        .map_err(unreadable)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<PathBuf>>>()
+        .map_err(unreadable)?;
     paths.sort();
     for path in paths {
-        if path
-            .symlink_metadata()
-            .is_ok_and(|m| m.file_type().is_symlink())
-        {
+        let metadata = path.symlink_metadata().map_err(|e| {
+            EvenframeError::WorkspaceScan(format!("failed to read {}: {e}", path.display()))
+        })?;
+        if metadata.file_type().is_symlink() {
             continue;
         }
-        if path.is_dir() {
+        if metadata.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name != "tests" && name != "benches" {
-                collect_rust_files(&path, out, depth + 1);
+                collect_rust_files(&path, out, depth + 1)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 /// A `/`-separated path relative to `root` (or the path itself when it lies
@@ -351,6 +395,59 @@ mod tests {
     }
 
     #[test]
+    fn workspace_members_are_fingerprinted() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/api\", \"crates/db\"]\n",
+        )
+        .unwrap();
+        for (member, module) in [("api", "routes"), ("db", "models")] {
+            let dir = root.join("crates").join(member);
+            fs::create_dir_all(dir.join("src").join(module)).unwrap();
+            fs::create_dir_all(dir.join("src/tests")).unwrap();
+            fs::write(
+                dir.join("Cargo.toml"),
+                format!("[package]\nname = \"{member}\"\nversion = \"0.0.0\"\n"),
+            )
+            .unwrap();
+            fs::write(dir.join("src/lib.rs"), "").unwrap();
+            fs::write(dir.join("src").join(module).join("user.rs"), "").unwrap();
+            fs::write(dir.join("src/tests/skipped.rs"), "").unwrap();
+        }
+        let config = BuildConfig {
+            scan_path: root.to_path_buf(),
+            ..BuildConfig::default()
+        };
+        let inputs = scan_inputs(&config).unwrap();
+        insta::assert_debug_snapshot!(inputs.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn unparseable_manifest_is_an_error() {
+        let (tmp, config) = project();
+        fs::write(tmp.path().join("Cargo.toml"), "[package\n").unwrap();
+        let err = scan_inputs(&config).unwrap_err();
+        assert!(matches!(err, EvenframeError::ParseError { .. }), "{err}");
+    }
+
+    #[test]
+    fn sources_past_the_scan_depth_are_an_error() {
+        let (tmp, config) = project();
+        let mut dir = tmp.path().join("src");
+        for level in 0..=MAX_SCAN_DEPTH {
+            dir = dir.join(format!("level_{level}"));
+        }
+        fs::create_dir_all(&dir).unwrap();
+        let err = scan_inputs(&config).unwrap_err();
+        assert!(
+            matches!(err, EvenframeError::MaxRecursionDepth { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn gitignored_crates_are_skipped_unless_included() {
         let (tmp, mut config) = project();
         let root = tmp.path();
@@ -398,23 +495,23 @@ mod tests {
     }
 
     #[test]
-    fn registry_round_trips_and_detects_staleness() {
+    fn cache_round_trips_and_detects_staleness() {
         let (tmp, config) = project();
         let configs = super::super::build_all_configs(&config).unwrap();
-        let registry = ScanRegistry::from_scan(&config, &configs).unwrap();
-        assert!(registry.tables.contains_key("user"));
+        let cache = ScanCache::from_scan(&config, &configs).unwrap();
+        assert!(cache.tables.contains_key("user"));
 
-        let path = registry.write(tmp.path()).unwrap();
-        assert_eq!(path, tmp.path().join(".evenframe/registry.json"));
+        let path = cache.write(tmp.path()).unwrap();
+        assert_eq!(path, tmp.path().join(".evenframe/cache.json"));
         let json = fs::read_to_string(&path).unwrap();
-        assert!(json.ends_with("}\n"));
+        assert!(!json.contains('\n'), "the cache should be compact");
         assert!(
             !json.contains(&*tmp.path().to_string_lossy()),
             "absolute paths leaked"
         );
 
-        let loaded = ScanRegistry::load_current(&config).unwrap();
-        assert_eq!(loaded, registry);
+        let loaded = ScanCache::load_current(&config).unwrap();
+        assert_eq!(loaded, cache);
 
         fs::write(tmp.path().join("src/models/post.rs"), "pub struct Post2;\n").unwrap();
         assert_eq!(
@@ -431,29 +528,52 @@ mod tests {
             )
         );
 
-        let err = ScanRegistry::load_current(&config).unwrap_err().to_string();
-        assert!(err.contains("Run `evenframe schemasync`"), "{err}");
+        let err = ScanCache::load_current(&config).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("Run `{CACHE_REFRESH_COMMAND}`")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn status_reports_absent_current_and_stale() {
+        let (tmp, config) = project();
+        assert_eq!(ScanCache::status(&config).unwrap(), CacheStatus::Absent);
+
+        let configs = super::super::build_all_configs(&config).unwrap();
+        let cache = ScanCache::from_scan(&config, &configs).unwrap();
+        cache.write(tmp.path()).unwrap();
+        assert_eq!(
+            ScanCache::status(&config).unwrap(),
+            CacheStatus::Current(cache)
+        );
+
+        fs::write(tmp.path().join("src/models/post.rs"), "pub struct Post2;\n").unwrap();
+        assert_eq!(
+            ScanCache::status(&config).unwrap(),
+            CacheStatus::Stale("src/models/post.rs changed".to_string())
+        );
     }
 
     #[test]
     fn version_mismatch_is_stale() {
         let (_tmp, config) = project();
-        let mut registry = ScanRegistry::from_scan(
+        let mut cache = ScanCache::from_scan(
             &config,
             &(BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
         )
         .unwrap();
-        registry.evenframe_version = "0.0.1".to_string();
-        let reason = registry.stale_reason(&config).unwrap().unwrap();
+        cache.evenframe_version = "0.0.1".to_string();
+        let reason = cache.stale_reason(&config).unwrap().unwrap();
         assert!(reason.contains("written by evenframe 0.0.1"), "{reason}");
     }
 
     #[test]
-    fn missing_registry_explains_how_to_create_it() {
+    fn missing_cache_explains_how_to_create_it() {
         let (tmp, _config) = project();
-        let err = ScanRegistry::load(tmp.path()).unwrap_err().to_string();
+        let err = ScanCache::load(tmp.path()).unwrap_err().to_string();
         assert!(
-            err.contains("run `evenframe schemasync` to create it"),
+            err.contains(&format!("run `{CACHE_REFRESH_COMMAND}` to create it")),
             "{err}"
         );
     }

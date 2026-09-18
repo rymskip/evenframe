@@ -59,7 +59,7 @@ use crate::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
     schemasync::compare::SchemaChanges,
-    schemasync::config::ConnectionOverrides,
+    schemasync::config::{ConnectionOverrides, MockOverrides},
     schemasync::database::surql::{
         define::generate_define_statements,
         execute::{execute_and_validate, split_surql_statements},
@@ -99,6 +99,7 @@ pub struct Schemasync<'a> {
     /// Owned registry built from config during initialization (used when no external registry is provided)
     owned_registry: Option<crate::types::ForeignTypeRegistry>,
     connection_overrides: ConnectionOverrides,
+    mock_overrides: MockOverrides,
 }
 
 /// Load the config for a command that connects to the database: connection
@@ -240,6 +241,7 @@ impl<'a> Schemasync<'a> {
             schemasync_config: None,
             owned_registry: None,
             connection_overrides: ConnectionOverrides::default(),
+            mock_overrides: MockOverrides::default(),
         }
     }
 
@@ -277,10 +279,17 @@ impl<'a> Schemasync<'a> {
         self
     }
 
+    /// Override the configured mock generation settings (e.g. from CLI flags).
+    pub fn with_mock_overrides(mut self, overrides: MockOverrides) -> Self {
+        self.mock_overrides = overrides;
+        self
+    }
+
     /// Initialize database connection and config from environment
     async fn initialize(&mut self) -> Result<()> {
         info!("Initializing Schemasync database connection and configuration");
-        let config = load_connected_config(&self.connection_overrides)?;
+        let mut config = load_connected_config(&self.connection_overrides)?;
+        config.schemasync.apply_mock_overrides(&self.mock_overrides);
         debug!("Loaded Evenframe configuration successfully");
 
         let db = connect_database(&config.schemasync.database).await?;
@@ -637,10 +646,10 @@ impl<'a> Schemasync<'a> {
 
         // Continue with the rest of the mockmaker pipeline
         info!("Removing old data from database");
-        mockmaker.remove_old_data().await.map_err(|e| {
-            error!("Failed to remove old data: {}", e);
-            e
-        })?;
+        mockmaker
+            .remove_old_data()
+            .await
+            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to remove old data: {e}")))?;
         debug!("Old data removal completed");
 
         // Execution order matters:
@@ -652,16 +661,14 @@ impl<'a> Schemasync<'a> {
 
         info!("Executing access control setup");
         mockmaker.execute_access().await.map_err(|e| {
-            error!("Failed to execute access setup: {}", e);
-            e
+            EvenframeError::SchemaSync(format!("Failed to execute access setup: {e}"))
         })?;
         debug!("Access control setup completed");
 
         info!("Executing analyzer definitions");
-        self.execute_analyzers(&db, &config).await.map_err(|e| {
-            error!("Failed to execute analyzers: {}", e);
-            e
-        })?;
+        self.execute_analyzers(&db, &config)
+            .await
+            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute analyzers: {e}")))?;
         debug!("Analyzer definitions completed");
 
         let schema_changes = mockmaker
@@ -678,32 +685,27 @@ impl<'a> Schemasync<'a> {
             config.mock_gen_config.full_refresh_mode,
         )
         .await
-        .map_err(|e| {
-            error!("Failed to define tables: {}", e);
-            e
-        })?;
+        .map_err(|e| EvenframeError::SchemaSync(format!("Failed to define tables: {e}")))?;
         debug!("Table definitions completed successfully");
 
         info!("Executing function definitions");
-        self.execute_functions(&db, &config).await.map_err(|e| {
-            error!("Failed to execute functions: {}", e);
-            e
-        })?;
+        self.execute_functions(&db, &config)
+            .await
+            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute functions: {e}")))?;
         debug!("Function definitions completed");
 
         info!("Filtering schema changes");
-        mockmaker.filter_changes().await.map_err(|e| {
-            error!("Failed to filter changes: {}", e);
-            e
-        })?;
+        mockmaker
+            .filter_changes()
+            .await
+            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to filter changes: {e}")))?;
         debug!("Schema changes filtering completed");
 
         if config.should_generate_mocks {
             info!("Generating mock data");
             mockmaker.generate_coordinated_values();
             mockmaker.generate_mock_data().await.map_err(|e| {
-                error!("Failed to generate mock data: {}", e);
-                e
+                EvenframeError::SchemaSync(format!("Failed to generate mock data: {e}"))
             })?;
         }
 

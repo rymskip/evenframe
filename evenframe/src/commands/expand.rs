@@ -1,28 +1,28 @@
-use crate::cli::{CacheArgs, CacheCommands, Cli};
-use evenframe_core::error::Result;
+use crate::cli::{ExpandArgs, ExpandCommands};
+use evenframe_core::error::{EvenframeError, Result};
 use evenframe_core::tooling::BuildConfig;
 use evenframe_core::tooling::WorkspaceScanner;
 use evenframe_core::tooling::expansion_cache::{self, CacheManifest, hash_file};
 use std::fs;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
-pub async fn run(_cli: &Cli, args: CacheArgs) -> Result<()> {
+pub async fn run(args: ExpandArgs) -> Result<()> {
     match args.command {
-        CacheCommands::Status => status().await,
-        CacheCommands::Warm => warm().await,
-        CacheCommands::Clear => clear().await,
+        ExpandCommands::Status => status().await,
+        ExpandCommands::Warm => warm().await,
+        ExpandCommands::Clear => clear().await,
     }
 }
 
 async fn status() -> Result<()> {
-    let config = BuildConfig::from_toml()?;
+    let config = BuildConfig::discover()?;
     let target_dir = expansion_cache::find_target_dir(&config.scan_path);
     let expanded_dir = target_dir.join(".evenframe-expanded");
 
     if !expanded_dir.exists() {
         println!("No expansion cache found.");
-        println!("Run `evenframe cache warm` to populate it.");
+        println!("Run `evenframe expand warm` to populate it.");
         return Ok(());
     }
 
@@ -31,14 +31,24 @@ async fn status() -> Result<()> {
     let mut total_hits: usize = 0;
     let mut total_misses: usize = 0;
 
-    for entry in fs::read_dir(&expanded_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+    let unreadable = |path: &Path, e: std::io::Error| {
+        EvenframeError::WorkspaceScan(format!("failed to read {}: {e}", path.display()))
+    };
+    for entry in fs::read_dir(&expanded_dir).map_err(|e| unreadable(&expanded_dir, e))? {
+        let entry = entry.map_err(|e| unreadable(&expanded_dir, e))?;
+        let cache_dir = entry.path();
+        if !entry
+            .file_type()
+            .map_err(|e| unreadable(&cache_dir, e))?
+            .is_dir()
+        {
             continue;
         }
         let crate_name = entry.file_name().to_string_lossy().to_string();
-        let cache_dir = entry.path();
-        let manifest = CacheManifest::load(&cache_dir, &crate_name);
+        let Some(manifest) = CacheManifest::load(&cache_dir, &crate_name) else {
+            println!("  {crate_name}: no usable manifest (rebuilt on the next scan)");
+            continue;
+        };
 
         let mut crate_size: u64 = 0;
         let mut hits = 0;
@@ -48,19 +58,19 @@ async fn status() -> Result<()> {
             total_entries += 1;
 
             let frag_path = cache_dir.join(&cache_entry.fragment_path);
-            if let Ok(md) = fs::metadata(&frag_path) {
-                crate_size += md.len();
-            }
+            crate_size += fs::metadata(&frag_path)
+                .map_err(|e| unreadable(&frag_path, e))?
+                .len();
 
-            let source_path = config
-                .scan_path
-                .join(&crate_name)
-                .join("src")
-                .join(rel_source);
+            let source_path = manifest.src_dir.join(rel_source);
             let is_hit = source_path.exists()
-                && hash_file(&source_path)
-                    .map(|h| h == cache_entry.input_hash)
-                    .unwrap_or(false);
+                && match hash_file(&source_path) {
+                    Ok(hash) => hash == cache_entry.input_hash,
+                    Err(e) => {
+                        warn!("Counting {} as stale: {e}", source_path.display());
+                        false
+                    }
+                };
 
             if is_hit {
                 hits += 1;
@@ -90,7 +100,7 @@ async fn status() -> Result<()> {
 }
 
 async fn warm() -> Result<()> {
-    let config = BuildConfig::from_toml()?;
+    let config = BuildConfig::discover()?;
 
     info!("Warming expansion cache for all workspace crates");
     println!("Warming expansion cache...");
@@ -104,7 +114,7 @@ async fn warm() -> Result<()> {
 }
 
 async fn clear() -> Result<()> {
-    let config = BuildConfig::from_toml()?;
+    let config = BuildConfig::discover()?;
     let target_dir = expansion_cache::find_target_dir(&config.scan_path);
     let expanded_dir = target_dir.join(".evenframe-expanded");
 

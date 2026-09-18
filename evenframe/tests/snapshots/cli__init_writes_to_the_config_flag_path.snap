@@ -1,0 +1,26 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe init --minimal --config .evenframe/config.toml
+status: Some(0)
+--- stdout ---
+Created .evenframe/config.toml
+Created .env
+
+Next steps:
+  1. Edit .evenframe/config.toml to configure your project
+  2. Add #[derive(Evenframe)] to your Rust structs
+  3. Run `evenframe generate` to generate types and sync the schema
+--- stderr ---
+
+$ evenframe validate
+status: Some(0)
+--- stdout ---
+Configuration: OK
+  Output: arktype -> ./src/generated
+Types: OK
+  tables: 1, objects: 2, enums: 1
+Validation passed
+--- stderr ---

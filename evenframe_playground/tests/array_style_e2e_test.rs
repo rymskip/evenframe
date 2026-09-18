@@ -7,7 +7,7 @@
 //! Run with: cargo test --test array_style_e2e_test
 
 use evenframe_core::tooling::{BuildConfig, TypeGenerator};
-use evenframe_core::typesync::config::ArrayStyle;
+use evenframe_core::typesync::config::{ArrayStyle, OutputConfig, OutputKind, TypesyncOutput};
 use std::fs;
 use tempfile::TempDir;
 
@@ -19,21 +19,17 @@ fn playground_root() -> std::path::PathBuf {
 fn generate_macroforge_with_style(style: ArrayStyle) -> String {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
+    let mut output = TypesyncOutput::new(OutputKind::Macroforge, temp_dir.path().to_string_lossy());
+    output.files.array_style = style;
     let config = BuildConfig::builder()
         .scan_path(playground_root())
-        .output_path(temp_dir.path())
-        .disable_arktype()
-        .disable_effect()
-        .enable_macroforge()
-        .disable_flatbuffers()
-        .disable_protobuf()
-        .array_style(style)
+        .outputs(vec![output])
         .build();
 
-    let generator = TypeGenerator::new(config);
-    let generated = generator
-        .generate_macroforge()
+    let report = TypeGenerator::new(config)
+        .generate_all()
         .expect("Macroforge generation should succeed");
+    let generated = report.files.first().expect("one macroforge file");
 
     fs::read_to_string(&generated.path).expect("Should read generated macroforge file")
 }
@@ -158,9 +154,8 @@ fn test_both_styles_contain_expected_types() {
 #[test]
 fn test_default_array_style_is_shorthand() {
     // Verify that the default OutputConfig uses Shorthand
-    let config = BuildConfig::default();
     assert_eq!(
-        config.output.array_style,
+        OutputConfig::default().array_style,
         ArrayStyle::Shorthand,
         "Default array_style should be Shorthand"
     );

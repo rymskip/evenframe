@@ -6,7 +6,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// A per-project lock held for the lifetime of an evenframe run.
 ///
@@ -21,9 +21,17 @@ use tracing::{debug, info};
 /// canonicalized project root, so committed `.evenframe/` directories stay
 /// free of runtime artifacts.
 pub struct ProcessLock {
-    /// Holding the handle holds the kernel lock; releasing happens on drop
-    /// (or process death) when the descriptor closes.
-    _file: File,
+    /// The locked handle. Dropping the guard unlocks it; process death
+    /// releases it by closing the descriptor.
+    file: File,
+}
+
+impl Drop for ProcessLock {
+    fn drop(&mut self) {
+        if let Err(e) = self.file.unlock() {
+            warn!("Failed to release evenframe process lock: {e}");
+        }
+    }
 }
 
 impl ProcessLock {
@@ -73,20 +81,29 @@ impl ProcessLock {
             }
         }
 
-        // Best-effort diagnostics: record the holder's pid in the lock file.
-        let _ = file.set_len(0);
-        let _ = writeln!(&file, "{}", std::process::id());
+        // The holder's pid is diagnostics only: the kernel lock is already
+        // held, so a failed write is logged rather than failing the run.
+        if let Err(e) = file
+            .set_len(0)
+            .and_then(|()| writeln!(&file, "{}", std::process::id()))
+        {
+            warn!(lock = %path.display(), "Failed to record pid in process lock: {e}");
+        }
 
         debug!(lock = %path.display(), "Acquired evenframe process lock");
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 
     /// The lock-file path for a project root: stable per canonical root,
     /// outside the repository.
     fn lock_path(project_root: &Path) -> PathBuf {
-        let canonical = project_root
-            .canonicalize()
-            .unwrap_or_else(|_| project_root.to_path_buf());
+        let canonical = project_root.canonicalize().unwrap_or_else(|e| {
+            warn!(
+                root = %project_root.display(),
+                "Failed to canonicalize project root for the process lock: {e}"
+            );
+            project_root.to_path_buf()
+        });
         let mut hasher = DefaultHasher::new();
         canonical.hash(&mut hasher);
         std::env::temp_dir().join(format!("evenframe-{:016x}.lock", hasher.finish()))

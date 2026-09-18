@@ -67,69 +67,207 @@ pub enum CollisionStrategy {
 }
 
 /// Per-file output configuration (used under `[typesync.output]`).
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+///
+/// Missing keys, and a missing table, take the values of [`Default`], so the
+/// serde and programmatic defaults cannot drift apart.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
 pub struct OutputConfig {
     /// Single-file or per-file output mode.
-    #[serde(default)]
     pub mode: OutputMode,
     /// Whether to generate a barrel `index.ts` that re-exports everything.
-    #[serde(default)]
     pub barrel_file: bool,
     /// Naming convention for generated filenames.
-    #[serde(default)]
     pub file_naming: FileNamingConvention,
     /// File extension for generated files (default: `.ts`).
     /// Use `.svelte.ts` for SvelteKit projects, etc.
-    #[serde(default = "default_file_extension")]
     pub file_extension: String,
     /// TypeScript array syntax style (default: shorthand `Type[]`).
     /// Set to `generic` for `Array<Type>` syntax.
-    #[serde(default)]
     pub array_style: ArrayStyle,
     /// Extension policy for relative import specifiers (default: `bare`).
     /// Set to `js` when the generated tree is consumed as a packaged
     /// `dist/` so its imports resolve without post-processing.
-    #[serde(default)]
     pub import_extension: ImportExtensionStyle,
 }
 
-fn default_file_extension() -> String {
-    ".ts".to_string()
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            mode: OutputMode::default(),
+            barrel_file: false,
+            file_naming: FileNamingConvention::default(),
+            file_extension: ".ts".to_string(),
+            array_style: ArrayStyle::default(),
+            import_extension: ImportExtensionStyle::default(),
+        }
+    }
+}
+
+/// A kind of generated output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[serde(rename_all = "snake_case")]
+pub enum OutputKind {
+    /// ArkType validator schemas.
+    Arktype,
+    /// Effect-TS schemas.
+    Effect,
+    /// Macroforge TypeScript interfaces.
+    Macroforge,
+    /// A FlatBuffers schema.
+    Flatbuffers,
+    /// A Protocol Buffers schema.
+    Protobuf,
+}
+
+impl OutputKind {
+    /// The name the config and the CLI use for this kind.
+    pub fn name(self) -> &'static str {
+        match self {
+            OutputKind::Arktype => "arktype",
+            OutputKind::Effect => "effect",
+            OutputKind::Macroforge => "macroforge",
+            OutputKind::Flatbuffers => "flatbuffers",
+            OutputKind::Protobuf => "protobuf",
+        }
+    }
+
+    /// The file a single-file output of this kind is written to.
+    pub fn default_filename(self) -> &'static str {
+        match self {
+            OutputKind::Arktype => "arktype.ts",
+            OutputKind::Effect => "bindings.ts",
+            OutputKind::Macroforge => "macroforge.ts",
+            OutputKind::Flatbuffers => "schema.fbs",
+            OutputKind::Protobuf => "schema.proto",
+        }
+    }
+
+    /// Whether this kind can write one file per type.
+    pub fn supports_per_file(self) -> bool {
+        matches!(self, OutputKind::Effect | OutputKind::Macroforge)
+    }
+}
+
+impl std::fmt::Display for OutputKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// One generated output: which generator runs, where its files go and how
+/// they are laid out.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct TypesyncOutput {
+    pub kind: OutputKind,
+    /// Directory the output is written to, relative to the project root
+    /// unless absolute.
+    pub dir: String,
+    /// File name of a single-file output within `dir`, instead of the kind's
+    /// standard name (such as `arktype.ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(flatten)]
+    pub files: OutputConfig,
+    /// FlatBuffers namespace (e.g. "com.example.app").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Protocol Buffers package (e.g. "com.example.app").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Whether to import validate.proto for validation rules (Protocol
+    /// Buffers).
+    #[serde(default)]
+    pub import_validate: bool,
+}
+
+impl TypesyncOutput {
+    /// An output of `kind` in `dir` with default settings.
+    pub fn new(kind: OutputKind, dir: impl Into<String>) -> Self {
+        Self {
+            kind,
+            dir: dir.into(),
+            file: None,
+            files: OutputConfig::default(),
+            namespace: None,
+            package: None,
+            import_validate: false,
+        }
+    }
+
+    /// The output directory, resolved against `project_root`.
+    pub fn resolve_dir(&self, project_root: &std::path::Path) -> std::path::PathBuf {
+        // Collecting the components drops the `./` that a configured path
+        // such as `./src/generated/` leaves inside the joined path.
+        project_root.join(&self.dir).components().collect()
+    }
+
+    /// Rejects settings the generator for this kind cannot honor.
+    pub fn validate(&self) -> Result<(), String> {
+        let kind = self.kind;
+        if self.file.is_some() && self.files.mode == OutputMode::PerFile {
+            return Err(format!(
+                "`file` names a single output file, but the `{kind}` output is per-file"
+            ));
+        }
+        if self.files.mode == OutputMode::PerFile && !kind.supports_per_file() {
+            return Err(format!(
+                "the `{kind}` output cannot use mode = \"per_file\"; only effect and macroforge can"
+            ));
+        }
+        if self.namespace.is_some() && kind != OutputKind::Flatbuffers {
+            return Err(format!(
+                "`namespace` only applies to flatbuffers outputs, not `{kind}`"
+            ));
+        }
+        if (self.package.is_some() || self.import_validate) && kind != OutputKind::Protobuf {
+            return Err(format!(
+                "`package` and `import_validate` only apply to protobuf outputs, not `{kind}`"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Configuration for Typesync operations (TypeScript/Effect type generation)
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(try_from = "TypesyncToml")]
 pub struct TypesyncConfig {
-    /// Whether to generate Arktype types
-    pub should_generate_arktype_types: bool,
-    /// Whether to generate Effect Schema types
-    pub should_generate_effect_types: bool,
-    /// Whether to generate Macroforge TypeScript interfaces with JSDoc annotations
-    #[serde(default)]
-    pub should_generate_macroforge_types: bool,
-    /// Whether to generate FlatBuffers schema files (.fbs)
-    #[serde(default)]
-    pub should_generate_flatbuffers_types: bool,
-    /// Optional namespace for FlatBuffers schema (e.g., "com.example.app")
-    #[serde(default)]
-    pub flatbuffers_namespace: Option<String>,
-    /// Whether to generate Protocol Buffers schema files (.proto)
-    #[serde(default)]
-    pub should_generate_protobuf_types: bool,
-    /// Optional package name for Protocol Buffers schema (e.g., "com.example.app")
-    #[serde(default)]
-    pub protobuf_package: Option<String>,
-    /// Whether to import validate.proto for validation rules in Protocol Buffers
-    #[serde(default)]
-    pub protobuf_import_validate: bool,
-    /// Whether to generate SurrealDB schema types
-    pub should_generate_surrealdb_schemas: bool,
-    /// Output path for generated type files
-    pub output_path: String,
-    /// Per-file output settings.
-    #[serde(default)]
-    pub output: OutputConfig,
+    /// Every configured output, from `output` (one) or `outputs` (several).
+    pub outputs: Vec<TypesyncOutput>,
     /// How to handle type name collisions across different source files.
-    #[serde(default)]
     pub collision_strategy: CollisionStrategy,
+}
+
+/// `[typesync]` as written: a single `output` table or an `outputs` array.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TypesyncToml {
+    output: Option<TypesyncOutput>,
+    #[serde(default)]
+    outputs: Vec<TypesyncOutput>,
+    #[serde(default)]
+    collision_strategy: CollisionStrategy,
+}
+
+impl TryFrom<TypesyncToml> for TypesyncConfig {
+    type Error = String;
+
+    fn try_from(toml: TypesyncToml) -> Result<Self, Self::Error> {
+        let outputs = match toml.output {
+            Some(_) if !toml.outputs.is_empty() => {
+                return Err("`output` and `outputs` cannot both be set".to_string());
+            }
+            Some(output) => vec![output],
+            None => toml.outputs,
+        };
+        for output in &outputs {
+            output.validate()?;
+        }
+        Ok(Self {
+            outputs,
+            collision_strategy: toml.collision_strategy,
+        })
+    }
 }

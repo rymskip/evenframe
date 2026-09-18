@@ -1,0 +1,43 @@
+---
+source: evenframe_core/src/tooling/build_config.rs
+assertion_line: 316
+expression: config.outputs
+---
+[
+    TypesyncOutput {
+        kind: Arktype,
+        dir: "./generated/arktype",
+        file: Some(
+            "schemas.ts",
+        ),
+        files: OutputConfig {
+            mode: Single,
+            barrel_file: false,
+            file_naming: Kebab,
+            file_extension: ".ts",
+            array_style: Shorthand,
+            import_extension: Bare,
+        },
+        namespace: None,
+        package: None,
+        import_validate: false,
+    },
+    TypesyncOutput {
+        kind: Protobuf,
+        dir: "./proto",
+        file: None,
+        files: OutputConfig {
+            mode: Single,
+            barrel_file: false,
+            file_naming: Kebab,
+            file_extension: ".ts",
+            array_style: Shorthand,
+            import_extension: Bare,
+        },
+        namespace: None,
+        package: Some(
+            "com.example",
+        ),
+        import_validate: true,
+    },
+]

@@ -213,8 +213,7 @@ fn test_field_type_canonical_name() {
         "Vec<i32>"
     );
     assert_eq!(
-        FieldType::HashMap(Box::new(FieldType::String), Box::new(FieldType::I64))
-            .canonical_name(),
+        FieldType::HashMap(Box::new(FieldType::String), Box::new(FieldType::I64)).canonical_name(),
         "HashMap<String, i64>"
     );
     assert_eq!(

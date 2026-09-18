@@ -12,6 +12,7 @@ use evenframe_core::tooling::{
     filter_for_typesync, merge_tables_and_objects,
 };
 use evenframe_core::types::Pipeline;
+use evenframe_core::typesync::config::{OutputKind, TypesyncOutput};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -470,15 +471,19 @@ fn test_typegenerator_excludes_schemasync_only_types() {
 
     let config = BuildConfig::builder()
         .scan_path(root)
-        .output_path(&out_dir)
-        .enable_arktype()
-        .enable_effect()
+        .outputs(vec![
+            TypesyncOutput::new(OutputKind::Arktype, out_dir.to_string_lossy()),
+            TypesyncOutput::new(OutputKind::Effect, out_dir.to_string_lossy()),
+        ])
         .build();
 
     let generator = TypeGenerator::new(config);
     let report = generator.generate_all().unwrap();
 
-    assert!(!report.files.is_empty(), "Should generate at least one file");
+    assert!(
+        !report.files.is_empty(),
+        "Should generate at least one file"
+    );
 
     // Read all generated TypeScript content
     let mut all_ts_content = String::new();

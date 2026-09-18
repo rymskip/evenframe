@@ -1,0 +1,30 @@
+---
+source: evenframe_core/src/tooling/build_config.rs
+assertion_line: 338
+expression: "errors.join(\"\\n\\n\")"
+---
+Configuration error: Failed to parse [typesync]: unknown field `should_generate_arktype_types`, expected one of `output`, `outputs`, `collision_strategy`
+
+
+Configuration error: Failed to parse [typesync]: unknown variant `arcktype`, expected one of `arktype`, `effect`, `macroforge`, `flatbuffers`, `protobuf`
+in `output.kind`
+
+
+Configuration error: Failed to parse [typesync]: `output` and `outputs` cannot both be set
+
+
+Configuration error: Failed to parse [typesync]: the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
+
+
+Configuration error: Failed to parse [typesync]: `package` and `import_validate` only apply to protobuf outputs, not `effect`
+
+
+Configuration error: Failed to parse [typesync]: `file` names a single output file, but the `effect` output is per-file
+
+
+Configuration error: Failed to parse [typesync]: unknown variant `kebabcase`, expected one of `pascal`, `kebab`, `snake`, `camel`
+in `output`
+
+
+Configuration error: Failed to parse [typesync]: unknown variant `autorename`, expected `error` or `auto_rename`
+in `collision_strategy`

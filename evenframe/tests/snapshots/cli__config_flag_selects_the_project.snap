@@ -1,0 +1,33 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe check --config [PROJECT]/evenframe.toml
+status: Some(1)
+--- stdout ---
+No scan cache at [PROJECT]/.evenframe/cache.json
+  Run `evenframe validate --types-only` to write it
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe validate --types-only --config [PROJECT]/evenframe.toml
+status: Some(0)
+--- stdout ---
+Types: OK
+  tables: 1, objects: 2, enums: 1
+Validation passed
+--- stderr ---
+
+$ evenframe check --config [PROJECT]/evenframe.toml
+status: Some(0)
+--- stdout ---
+Types are in sync with [PROJECT]/.evenframe/cache.json
+  tables: 1, objects: 2, enums: 1
+--- stderr ---
+
+$ evenframe check
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Configuration error: Configuration file not found. Expected '.evenframe/config.toml' or 'evenframe.toml' in current or any parent directory.
