@@ -1,4 +1,5 @@
 use crate::{
+    error::EvenframeError,
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::coordinate::CoordinationId,
@@ -60,8 +61,9 @@ pub struct FieldValueGenerator<'a> {
 }
 
 impl<'a> FieldValueGenerator<'a> {
-    // Was having stack overflow so created an iterative version
-    pub fn run(&self) -> String {
+    /// A SurrealQL literal for the field, built iteratively: recursion
+    /// overflowed the stack on deep types.
+    pub fn run(&self) -> Result<String, EvenframeError> {
         let mut work_stack: Vec<WorkItem<'a>> = Vec::new();
         let mut value_stack: Vec<String> = Vec::new();
         let mut rng = rand::rng();
@@ -80,30 +82,36 @@ impl<'a> FieldValueGenerator<'a> {
                 WorkItem::Generate(ctx) => {
                     // Tier 0: WASM plugin override (table-level #[mock_data(plugin = ...)])
                     #[cfg(feature = "wasm-plugins")]
-                    let _plugin_name: Option<&String> = self
+                    if let Some(plugin_name) = self
                         .table_config
                         .mock_generation_config
                         .as_ref()
-                        .and_then(|c| c.plugin.as_ref());
-                    #[cfg(feature = "wasm-plugins")]
-                    if let Some(plugin_name) = _plugin_name {
+                        .and_then(|c| c.plugin.as_ref())
+                    {
                         if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
                             let pm = &mut *pm_cell.borrow_mut();
+                            let record_id = self
+                                .mockmaker
+                                .id_map
+                                .get(&self.table_config.table_name)
+                                .and_then(|ids| ids.get(*self.id_index))
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    tracing::warn!(
+                                        "No record id at index {} of `{}` for plugin '{}'",
+                                        self.id_index,
+                                        self.table_config.table_name,
+                                        plugin_name
+                                    );
+                                    String::new()
+                                });
                             let input = super::plugin_types::PluginFieldInput {
                                 table_name: self.table_config.table_name.to_string(),
                                 field_name: ctx.field_path.clone(),
                                 field_type: format!("{:?}", ctx.field_type),
                                 record_index: *self.id_index,
-                                total_records: self
-                                    .table_config
-                                    .mock_generation_config
-                                    .as_ref()
-                                    .map(|c| c.n)
-                                    .unwrap_or(10),
-                                record_id: format!(
-                                    "{}:{}",
-                                    self.table_config.table_name, self.id_index
-                                ),
+                                total_records: self.mockmaker.record_count(self.table_config),
+                                record_id,
                             };
                             match pm.generate_field_value(plugin_name, &input) {
                                 Ok(value) => {
@@ -165,7 +173,7 @@ impl<'a> FieldValueGenerator<'a> {
                             format,
                             ctx.field_type,
                             &ctx.field.validators,
-                        ));
+                        )?);
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
                         &ctx.field.validators,
@@ -209,7 +217,11 @@ impl<'a> FieldValueGenerator<'a> {
                                 &mut rng,
                             )),
                             FieldType::Option(inner_type) => {
-                                if rng.random_bool(0.5) {
+                                // An optional value holding a link with nothing to
+                                // point at stays null.
+                                if rng.random_bool(0.5)
+                                    || self.mockmaker.has_unfillable_link(inner_type)
+                                {
                                     value_stack.push("null".to_string());
                                 } else {
                                     work_stack.push(WorkItem::Generate(Frame {
@@ -221,7 +233,11 @@ impl<'a> FieldValueGenerator<'a> {
                             FieldType::Vec(inner_type) => {
                                 let (lo, hi) =
                                     validator_gen::array_count_range(&ctx.field.validators, 2, 9);
-                                let count = if lo == hi {
+                                // A list of values holding a link with nothing to
+                                // point at stays empty.
+                                let count = if self.mockmaker.has_unfillable_link(inner_type) {
+                                    0
+                                } else if lo == hi {
                                     lo
                                 } else {
                                     rng.random_range(lo..=hi)
@@ -287,7 +303,7 @@ impl<'a> FieldValueGenerator<'a> {
                                         &ctx.table_config.table_name,
                                         ctx.table_config,
                                         &mut rng,
-                                    ));
+                                    )?);
                                     continue;
                                 }
 
@@ -295,101 +311,32 @@ impl<'a> FieldValueGenerator<'a> {
                                 // If the inner type is an enum (persistable struct union), choose a variant that maps to a table.
                                 match inner_type.as_ref() {
                                     FieldType::Other(type_name) => {
-                                        // Helper: resolve a type name to a table key in self.mockmaker.tables
-                                        // Closure uses RNG; mark as mut so it implements FnMut
-                                        let mut resolve_table = |name: &str,
-                                                            tables: &std::collections::BTreeMap<String, crate::schemasync::table::TableConfig>,
-                                                            enums: &std::collections::BTreeMap<String, crate::types::TaggedUnion>,
-                                                            objects: &std::collections::BTreeMap<String, crate::types::StructConfig>,
-                                        | -> Option<String> {
-                                            // 1) Direct match: type name corresponds to a table
-                                            let snake = name.to_case(Case::Snake);
-                                            if tables.contains_key(&snake) {
-                                                return Some(snake);
-                                            }
-                                            // 2) Synthetic projection: object whose `output_override`
-                                            //    redirects to a real table (e.g. PartialUser → User)
-                                            if let Some(sc) = objects.get(name) {
-                                                let effective_snake =
-                                                    sc.effective().struct_name.to_case(Case::Snake);
-                                                if tables.contains_key(&effective_snake) {
-                                                    return Some(effective_snake);
-                                                }
-                                            }
-                                            // 3) Enum (persistable struct union): pick a variant that maps to a table
-                                            if let Some(tagged) = enums.get(name) {
-                                                // Collect candidate table names from variants
-                                                let mut candidates: Vec<String> = Vec::new();
-                                                for v in &tagged.variants {
-                                                    if let Some(data) = &v.data {
-                                                        match data {
-                                                            crate::types::VariantData::InlineStruct(enum_struct) => {
-                                                                let t = enum_struct.struct_name.to_case(Case::Snake);
-                                                                if tables.contains_key(&t) {
-                                                                    candidates.push(t);
-                                                                }
-                                                            }
-                                                            crate::types::VariantData::DataStructureRef(fty) => {
-                                                                if let crate::types::FieldType::Other(inner_name) = fty {
-                                                                    let t = inner_name.to_case(Case::Snake);
-                                                                    if tables.contains_key(&t) {
-                                                                        candidates.push(t);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if !candidates.is_empty() {
-                                                    // Choose a random candidate
-                                                    let idx = rng.random_range(0..candidates.len());
-                                                    return Some(candidates[idx].clone());
-                                                }
-                                            }
-                                            None
-                                        };
-
-                                        if let Some(table_key) = resolve_table(
-                                            type_name,
-                                            self.mockmaker.tables,
-                                            self.mockmaker.enums,
-                                            self.mockmaker.objects,
-                                        ) {
-                                            // Generate a record ID for the resolved table
-                                            if let Some(possible_ids) =
-                                                self.mockmaker.id_map.get(&table_key)
-                                            {
-                                                if !possible_ids.is_empty() {
-                                                    let id = format!(
-                                                        "r'{}'",
-                                                        possible_ids[rng
-                                                            .random_range(0..possible_ids.len())]
-                                                    );
-                                                    value_stack.push(id);
-                                                } else {
-                                                    panic!(
-                                                        "No IDs generated for table {} in RecordLink",
-                                                        table_key
-                                                    );
-                                                }
-                                            } else {
-                                                // Fallback: synthesize a plausible ID using current index
-                                                let id =
-                                                    format!("r'{}:{}'", table_key, &self.id_index);
-                                                value_stack.push(id);
-                                            }
-                                        } else {
-                                            panic!(
-                                                "RecordLink references type '{}' which does not map to a persistable table or persistable union in field {}",
-                                                type_name, ctx.field.field_name
-                                            );
+                                        let targets = self.mockmaker.link_target_tables(type_name);
+                                        if targets.is_empty() {
+                                            return Err(EvenframeError::mock_generation(format!(
+                                                "`{}` links to `{type_name}`, which is not a table or a union of tables",
+                                                ctx.field_path
+                                            )));
                                         }
+                                        let ids: Vec<&String> = targets
+                                            .iter()
+                                            .filter_map(|t| self.mockmaker.id_map.get(t))
+                                            .flatten()
+                                            .collect();
+                                        let id = ids.choose(&mut rng).ok_or_else(|| {
+                                            EvenframeError::mock_generation(format!(
+                                                "`{}` must link to {}, which has no records",
+                                                ctx.field_path,
+                                                targets.join(" or ")
+                                            ))
+                                        })?;
+                                        value_stack.push(format!("r'{id}'"));
                                     }
                                     _ => {
-                                        panic!(
-                                            "RecordLink contains non-Other type {:?} in field {}. RecordLink should reference a type name or a persistable union.",
-                                            inner_type, ctx.field.field_name
-                                        );
+                                        return Err(EvenframeError::mock_generation(format!(
+                                            "`{}` links to {inner_type:?}; a link names a table or a union of tables",
+                                            ctx.field_path
+                                        )));
                                     }
                                 }
                             }
@@ -455,7 +402,7 @@ impl<'a> FieldValueGenerator<'a> {
                                                 &ctx.table_config.table_name,
                                                 ctx.table_config,
                                                 &mut rng,
-                                            ));
+                                            )?);
                                             continue;
                                         }
                                         "object" => {
@@ -464,7 +411,7 @@ impl<'a> FieldValueGenerator<'a> {
                                         }
                                         _ => {
                                             if let Ok(fmt) = strategy.parse::<Format>() {
-                                                let val = fmt.generate_formatted_value();
+                                                let val = fmt.generate_formatted_value()?;
                                                 value_stack.push(format!("'{}'", val));
                                                 continue;
                                             }
@@ -491,20 +438,18 @@ impl<'a> FieldValueGenerator<'a> {
                                     .iter()
                                     .find(|(_, tc)| &tc.table_name == type_name)
                                 {
-                                    let value = if let Some(possible_ids) =
-                                        self.mockmaker.id_map.get(table_name)
-                                    {
-                                        format!(
-                                            "r'{}'",
-                                            possible_ids[rng.random_range(0..possible_ids.len())]
-                                        )
-                                    } else {
-                                        panic!(
-                                            "There were no id's for the table {}, field {}",
-                                            table_name, ctx.field.field_name
-                                        );
-                                    };
-                                    value_stack.push(value);
+                                    let id = self
+                                        .mockmaker
+                                        .id_map
+                                        .get(table_name)
+                                        .and_then(|ids| ids.choose(&mut rng))
+                                        .ok_or_else(|| {
+                                            EvenframeError::mock_generation(format!(
+                                                "`{}` must link to {table_name}, which has no records",
+                                                ctx.field_path
+                                            ))
+                                        })?;
+                                    value_stack.push(format!("r'{id}'"));
                                 } else if let Some(struct_config) = self
                                     .mockmaker
                                     .objects
@@ -539,15 +484,27 @@ impl<'a> FieldValueGenerator<'a> {
                                 } else if let Some(tagged_union) =
                                     self.mockmaker.enums.get(type_name)
                                 {
-                                    let variant = tagged_union
-                                        .variants
-                                        .choose(&mut rng)
-                                        .expect("Failed to select a random enum variant");
+                                    let variant =
+                                        tagged_union.variants.choose(&mut rng).ok_or_else(|| {
+                                            EvenframeError::mock_generation(format!(
+                                                "`{}` is the enum `{type_name}`, which has no variants",
+                                                ctx.field_path
+                                            ))
+                                        })?;
                                     let repr = &tagged_union.representation;
                                     if let Some(ref variant_data) = variant.data {
                                         match variant_data {
                                             VariantData::InlineStruct(enum_struct) => {
-                                                let struct_config = self.mockmaker.objects.get(&enum_struct.struct_name).expect("Inline enum struct should have corresponding object definition");
+                                                let struct_config = self
+                                                    .mockmaker
+                                                    .objects
+                                                    .get(&enum_struct.struct_name)
+                                                    .ok_or_else(|| {
+                                                        EvenframeError::mock_generation(format!(
+                                                            "the variant `{}` of `{type_name}` has no object definition `{}`",
+                                                            variant.name, enum_struct.struct_name
+                                                        ))
+                                                    })?;
                                                 let field_names: Vec<String> = struct_config
                                                     .fields
                                                     .iter()
@@ -682,26 +639,21 @@ impl<'a> FieldValueGenerator<'a> {
                                         }
                                     }
                                 } else {
-                                    panic!(
-                                        "This type could not be parsed: table {}, field {}",
-                                        ctx.table_config.table_name, ctx.field.field_name
-                                    );
+                                    return Err(EvenframeError::mock_generation(format!(
+                                        "`{}.{}` has the type `{type_name}`, which is not a table, object, enum or foreign type",
+                                        ctx.table_config.table_name, ctx.field_path
+                                    )));
                                 }
                             }
                         }
                     }
                 }
-                WorkItem::AssembleVec { count } => {
-                    let items: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
-                    value_stack.push(format!("[{}]", items.join(", ")));
-                }
-                WorkItem::AssembleTuple { count } => {
-                    let items: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                WorkItem::AssembleVec { count } | WorkItem::AssembleTuple { count } => {
+                    let items = take_last(&mut value_stack, count)?;
                     value_stack.push(format!("[{}]", items.join(", ")));
                 }
                 WorkItem::AssembleStruct { field_names } => {
-                    let count = field_names.len();
-                    let values: Vec<_> = value_stack.drain(value_stack.len() - count..).collect();
+                    let values = take_last(&mut value_stack, field_names.len())?;
                     let assignments: Vec<String> = field_names
                         .into_iter()
                         .zip(values)
@@ -710,20 +662,17 @@ impl<'a> FieldValueGenerator<'a> {
                     value_stack.push(format!("{{ {} }}", assignments.join(", ")));
                 }
                 WorkItem::AssembleMap { count } => {
-                    let mut entries = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        let value = value_stack.pop().unwrap();
-                        let key = value_stack.pop().unwrap();
-                        entries.push(format!("{}: {}", key, value));
-                    }
-                    entries.reverse();
+                    let entries: Vec<String> = take_last(&mut value_stack, count * 2)?
+                        .chunks(2)
+                        .map(|pair| pair.join(": "))
+                        .collect();
                     value_stack.push(format!("{{ {} }}", entries.join(", ")));
                 }
                 WorkItem::AssembleEnum { .. } => {
                     // No action needed; the generated value just stays on the stack.
                 }
                 WorkItem::WrapInVariantKey { variant_name } => {
-                    let inner = value_stack.pop().unwrap();
+                    let inner = take_last(&mut value_stack, 1)?.join("");
                     value_stack.push(format!("{{ {}: {} }}", variant_name, inner));
                 }
                 WorkItem::AssembleTaggedStruct {
@@ -732,10 +681,8 @@ impl<'a> FieldValueGenerator<'a> {
                     field_names,
                 } => {
                     // Like AssembleStruct but the first field is the tag with a known value
-                    let data_count = field_names.len() - 1; // minus the tag field
-                    let data_values: Vec<_> = value_stack
-                        .drain(value_stack.len() - data_count..)
-                        .collect();
+                    let data_values =
+                        take_last(&mut value_stack, field_names.len().saturating_sub(1))?;
                     let mut assignments: Vec<String> =
                         vec![format!("{}: '{}'", tag_key, tag_value)];
                     for (name, value) in field_names.into_iter().skip(1).zip(data_values) {
@@ -746,12 +693,14 @@ impl<'a> FieldValueGenerator<'a> {
             }
         }
 
-        assert_eq!(
-            value_stack.len(),
-            1,
-            "Generation ended with not exactly one value on the stack."
-        );
-        value_stack.pop().unwrap()
+        match value_stack.as_slice() {
+            [value] => Ok(value.clone()),
+            values => Err(EvenframeError::mock_generation(format!(
+                "generating `{}` left {} values instead of one",
+                self.field.field_name,
+                values.len()
+            ))),
+        }
     }
 
     pub fn handle_format(
@@ -759,7 +708,7 @@ impl<'a> FieldValueGenerator<'a> {
         format: &Format,
         target: &FieldType,
         validators: &[Validator],
-    ) -> String {
+    ) -> Result<String, EvenframeError> {
         let mut scalar = target;
         while let FieldType::Option(inner) = scalar {
             scalar = inner;
@@ -775,15 +724,15 @@ impl<'a> FieldValueGenerator<'a> {
             if let Some(value) =
                 validator_gen::generate_with_validators(scalar, validators, &mut rng)
             {
-                return value;
+                return Ok(value);
             }
-            return match format {
+            return Ok(match format {
                 Format::CurrencyAmount => format!("{:.2}", rng.random_range(0.0..1000.0)),
                 _ => format!("{:.1}", rng.random_range(0.0..100.0)),
-            };
+            });
         }
 
-        let generated = format.generate_formatted_value();
+        let generated = format.generate_formatted_value()?;
 
         // A format hint can contradict the field's validators, and the
         // validators are what the database enforces (they become ASSERT
@@ -806,12 +755,12 @@ impl<'a> FieldValueGenerator<'a> {
                 if let Some(value) =
                     validator_gen::generate_with_validators(scalar, validators, &mut rng)
                 {
-                    return value;
+                    return Ok(value);
                 }
             }
         }
 
-        match format {
+        Ok(match format {
             Format::CurrencyAmount | Format::Percentage => format!("'{}'", generated),
             Format::Latitude | Format::Longitude | Format::AppointmentDurationNs => generated,
             Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
@@ -825,7 +774,7 @@ impl<'a> FieldValueGenerator<'a> {
                 }
             }
             _ => format!("'{}'", generated),
-        }
+        })
     }
 
     fn handle_record_id(
@@ -834,60 +783,65 @@ impl<'a> FieldValueGenerator<'a> {
         table_name: &str,
         table_config: &TableConfig,
         rng: &mut ThreadRng,
-    ) -> String {
-        if let Some(relation) = &table_config.relation {
-            // Check if this field has a OneToOne coordination (sequential 1:1 mapping)
-            let has_one_to_one = table_config
+    ) -> Result<String, EvenframeError> {
+        if let Some(relation) = &table_config.relation
+            && matches!(field_name, "in" | "out")
+        {
+            // A OneToOne coordination maps record `i` to target record `i`.
+            let one_to_one = table_config
                 .mock_generation_config
                 .as_ref()
-                .map(|c| {
+                .is_some_and(|c| {
                     c.coordination_rules.iter().any(|r| {
                         matches!(r, crate::schemasync::mockmake::coordinate::Coordination::OneToOne(f) if f == field_name)
                     })
-                })
-                .unwrap_or(false);
-
-            let id_index = *self.id_index;
-            let mut pick_relation_record = |tables: &[String], field_label: &str| -> String {
-                for candidate in tables {
-                    if let Some(ids) = self.mockmaker.id_map.get(candidate) {
-                        if ids.is_empty() {
-                            panic!(
-                                "There were no id's for the table {}, field {}",
-                                candidate, field_label
-                            );
-                        }
-                        if has_one_to_one {
-                            // Sequential 1:1 mapping: record index → target ID
-                            let idx = id_index % ids.len();
-                            return format!("r'{}'", ids[idx]);
-                        }
-                        return format!("r'{}'", ids[rng.random_range(0..ids.len())].clone());
-                    }
-                }
-                panic!(
-                    "There were no id's for any of the tables {:?}, field {}",
-                    tables, field_label
-                );
-            };
-
-            if field_name == "in" {
-                return pick_relation_record(&relation.from, field_name);
-            } else if field_name == "out" {
-                return pick_relation_record(&relation.to, field_name);
-            }
-        }
-
-        if let Some(ids) = self.mockmaker.id_map.get(table_name) {
-            if *self.id_index < ids.len() {
-                format!("r'{}'", ids[*self.id_index].clone())
+                });
+            let tables = if field_name == "in" {
+                &relation.from
             } else {
-                panic!("Out of bounds index for {table_name}, {field_name}")
-            }
-        } else {
-            format!("r'{}:{}'", table_name, &self.id_index)
+                &relation.to
+            };
+            let ids = tables
+                .iter()
+                .find_map(|t| self.mockmaker.id_map.get(t))
+                .filter(|ids| !ids.is_empty())
+                .ok_or_else(|| {
+                    EvenframeError::mock_generation(format!(
+                        "`{table_name}.{field_name}` must link to {}, which has no records",
+                        tables.join(" or ")
+                    ))
+                })?;
+            let id = if one_to_one {
+                &ids[*self.id_index % ids.len()]
+            } else {
+                &ids[rng.random_range(0..ids.len())]
+            };
+            return Ok(format!("r'{id}'"));
         }
+
+        self.mockmaker
+            .id_map
+            .get(table_name)
+            .and_then(|ids| ids.get(*self.id_index))
+            .map(|id| format!("r'{id}'"))
+            .ok_or_else(|| {
+                EvenframeError::mock_generation(format!(
+                    "`{table_name}` has no record id at index {} for `{field_name}`",
+                    self.id_index
+                ))
+            })
     }
+}
+
+/// The last `count` values on `stack`, in order.
+fn take_last(stack: &mut Vec<String>, count: usize) -> Result<Vec<String>, EvenframeError> {
+    let start = stack.len().checked_sub(count).ok_or_else(|| {
+        EvenframeError::mock_generation(format!(
+            "assembling a value needed {count} parts but {} were generated",
+            stack.len()
+        ))
+    })?;
+    Ok(stack.split_off(start))
 }
 
 /// Cap on retry attempts when the default generator produces a value that

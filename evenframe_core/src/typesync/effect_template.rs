@@ -488,8 +488,8 @@ fn apply_single_validator(schema: &str, validator: &Validator, field: &str) -> S
                     {:case StringValidator::Uncapitalized}
                         @{schema}.pipe(Schema.uncapitalize)
                     {:case StringValidator::RegexLiteral(format_variant)}
-                        {$let regex = format_variant.to_owned().into_regex()}
-                        @{schema}.pipe(Schema.pattern(/@{regex.as_str()}/, { message: () => "'^@{field} has an invalid format^'" }))
+                        {$let regex = format_variant.pattern()}
+                        @{schema}.pipe(Schema.pattern(/@{regex}/, { message: () => "'^@{field} has an invalid format^'" }))
                     {:case _}
                         @{schema}
                 {/match}

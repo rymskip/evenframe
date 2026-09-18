@@ -1,8 +1,6 @@
 //! Command-line interface definitions for Evenframe.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use evenframe_core::config::SourceOfTruth;
-use evenframe_core::schemasync::config::DatabaseProvider;
 use evenframe_core::typesync::config::OutputKind;
 use std::path::PathBuf;
 
@@ -15,10 +13,6 @@ pub struct Cli {
     /// Path to evenframe.toml configuration file
     #[arg(short, long, global = true, env = "EVENFRAME_CONFIG")]
     pub config: Option<PathBuf>,
-
-    /// Source of truth for type definitions
-    #[arg(long, global = true, value_enum, default_value = "rust")]
-    pub source: SourceOfTruth,
 
     // Its own id, apart from the subcommands' `-o <FILE>`: clap copies a
     // global argument's value up from any subcommand argument sharing its id.
@@ -365,10 +359,6 @@ pub struct InitArgs {
     /// Overwrite existing evenframe.toml if present
     #[arg(short, long)]
     pub force: bool,
-
-    /// Database provider to configure
-    #[arg(long, value_enum, default_value = "surrealdb")]
-    pub provider: DatabaseProvider,
 
     /// Initialize with minimal configuration
     #[arg(long)]

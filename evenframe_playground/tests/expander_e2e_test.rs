@@ -148,13 +148,12 @@ fn collect_file_sizes(dir: &Path) -> Vec<(PathBuf, u64)> {
 
 #[test]
 fn load_cache_discards_manifest_pointing_at_missing_fragment() {
-    // This exercises the CacheManifest::load validator (fix 1c):
-    // if the manifest references a fragment that doesn't exist on disk,
-    // the entire cache must be thrown away so the next run re-expands.
+    // A manifest that references a fragment missing on disk is thrown
+    // away whole, so the next run re-expands.
     let tmp = TempDir::new().unwrap();
     let cache_dir = tmp.path();
 
-    let mut m = CacheManifest::empty("test_crate");
+    let mut m = CacheManifest::empty("test_crate", &cache_dir.join("src"));
     m.entries.insert(
         "lib.rs".to_string(),
         CacheEntry {
@@ -167,22 +166,19 @@ fn load_cache_discards_manifest_pointing_at_missing_fragment() {
     m.save(cache_dir).unwrap();
     // Note: the fragment file is deliberately NOT created.
 
-    let loaded = CacheManifest::load(cache_dir, "test_crate");
     assert!(
-        loaded.entries.is_empty(),
+        CacheManifest::load(cache_dir, "test_crate").is_none(),
         "cache with a missing fragment must be discarded"
     );
 }
 
 #[test]
 fn load_cache_discards_manifest_pointing_at_zero_byte_fragment() {
-    // Reproduces the symptom from the original bug: a 0-byte fragment
-    // exists on disk and the manifest points at it. Loading must notice
-    // the poisoned state and throw the whole thing away.
+    // A manifest pointing at a 0-byte fragment is thrown away whole.
     let tmp = TempDir::new().unwrap();
     let cache_dir = tmp.path();
 
-    let mut m = CacheManifest::empty("poisoned_crate");
+    let mut m = CacheManifest::empty("poisoned_crate", &cache_dir.join("src"));
     m.entries.insert(
         "lib.rs".to_string(),
         CacheEntry {
@@ -199,9 +195,8 @@ fn load_cache_discards_manifest_pointing_at_zero_byte_fragment() {
     fs::write(&frag, b"").unwrap(); // 0-byte fragment
     assert_eq!(fs::metadata(&frag).unwrap().len(), 0);
 
-    let loaded = CacheManifest::load(cache_dir, "poisoned_crate");
     assert!(
-        loaded.entries.is_empty(),
+        CacheManifest::load(cache_dir, "poisoned_crate").is_none(),
         "cache with a 0-byte fragment must be discarded"
     );
 }
@@ -368,7 +363,7 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
 
     // The manifest on disk must survive a round-trip through the loader.
     // If any fragment were 0-byte, the loader would have discarded it.
-    let loaded = CacheManifest::load(&cache_dir, "expand_me");
+    let loaded = CacheManifest::load(&cache_dir, "expand_me").expect("the manifest should load");
     assert!(
         !loaded.entries.is_empty(),
         "persisted manifest was empty after reload — fragments may be corrupt"
@@ -521,7 +516,7 @@ impl EvenframePersistableStruct for Account {}
     // Check the cache doesn't contain a `main.rs.expanded` entry.
     let target_dir = expansion_cache::find_target_dir(&crate_dir);
     let cache_dir = expansion_cache::crate_cache_dir(&target_dir, "mixed");
-    let loaded = CacheManifest::load(&cache_dir, "mixed");
+    let loaded = CacheManifest::load(&cache_dir, "mixed").expect("the manifest should load");
     assert!(
         !loaded.entries.contains_key("main.rs"),
         "cache should not have an entry for main.rs; entries: {:?}",

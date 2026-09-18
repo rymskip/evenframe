@@ -84,6 +84,16 @@ use crate::{
     types::{StructConfig, TaggedUnion},
 };
 
+/// What a pipeline run needs, once [`Schemasync`] has been set up.
+#[cfg(feature = "schemasync")]
+struct Ready<'a> {
+    db: Surreal<Client>,
+    tables: &'a BTreeMap<String, TableConfig>,
+    objects: &'a BTreeMap<String, StructConfig>,
+    enums: &'a BTreeMap<String, TaggedUnion>,
+    config: crate::schemasync::config::SchemasyncConfig,
+}
+
 #[cfg(feature = "schemasync")]
 #[derive(Default)]
 pub struct Schemasync<'a> {
@@ -131,9 +141,25 @@ pub fn active_connection() -> Option<crate::schemasync::config::DatabaseConfig> 
 }
 
 /// Connect to SurrealDB over HTTP, sign in as root with `SURREALDB_USER` /
-/// `SURREALDB_PASSWORD`, and select the configured namespace and database.
+/// `SURREALDB_PASSWORD`, and select the configured namespace and database,
+/// within the configured `timeout`.
 #[cfg(feature = "schemasync")]
 pub async fn connect_database(
+    database: &crate::schemasync::config::DatabaseConfig,
+) -> Result<Surreal<Client>> {
+    let timeout = std::time::Duration::from_secs(database.timeout);
+    tokio::time::timeout(timeout, open_database(database))
+        .await
+        .map_err(|_| {
+            EvenframeError::database(format!(
+                "connecting to SurrealDB at {} took longer than the {}s timeout",
+                database.url, database.timeout
+            ))
+        })?
+}
+
+#[cfg(feature = "schemasync")]
+async fn open_database(
     database: &crate::schemasync::config::DatabaseConfig,
 ) -> Result<Surreal<Client>> {
     trace!("Database URL: {}", database.url);
@@ -185,45 +211,13 @@ pub async fn connect_database(
 #[cfg(feature = "schemasync")]
 pub async fn check_database_connectivity() -> Result<()> {
     let config = EvenframeConfig::new()?;
-
+    let database = &config.schemasync.database;
+    info!("Connecting to SurrealDB at {}...", database.url);
+    connect_database(database).await?;
     info!(
-        "Connecting to SurrealDB at {}...",
-        config.schemasync.database.url
+        "    Connected to namespace '{}' / database '{}'",
+        database.namespace, database.database
     );
-    let db = Surreal::new::<Http>(&config.schemasync.database.url)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "Failed to connect to SurrealDB at {}: {e}",
-                config.schemasync.database.url
-            ))
-        })?;
-    info!("    Connection: OK");
-
-    let username = std::env::var("SURREALDB_USER")
-        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_USER".to_string()))?;
-    let password = std::env::var("SURREALDB_PASSWORD")
-        .map_err(|_| EvenframeError::EnvVarNotSet("SURREALDB_PASSWORD".to_string()))?;
-
-    db.signin(Root { username, password })
-        .await
-        .map_err(|e| EvenframeError::database(format!("Failed to authenticate: {e}")))?;
-    info!("    Authentication: OK");
-
-    db.use_ns(&config.schemasync.database.namespace)
-        .use_db(&config.schemasync.database.database)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "Failed to select namespace '{}' / database '{}': {e}",
-                config.schemasync.database.namespace, config.schemasync.database.database
-            ))
-        })?;
-    info!(
-        "    Namespace '{}' / Database '{}': OK",
-        config.schemasync.database.namespace, config.schemasync.database.database
-    );
-
     Ok(())
 }
 
@@ -309,16 +303,7 @@ impl<'a> Schemasync<'a> {
     }
 
     /// Validate that all required fields are set and return them.
-    #[allow(clippy::type_complexity)]
-    fn validate(
-        &mut self,
-    ) -> Result<(
-        Surreal<Client>,
-        &'a BTreeMap<String, TableConfig>,
-        &'a BTreeMap<String, StructConfig>,
-        &'a BTreeMap<String, TaggedUnion>,
-        crate::schemasync::config::SchemasyncConfig,
-    )> {
+    fn validate(&mut self) -> Result<Ready<'a>> {
         debug!("Validating required fields for Schemasync pipeline");
         let db = self
             .db
@@ -403,7 +388,13 @@ impl<'a> Schemasync<'a> {
             }
         }
 
-        Ok((db, tables, objects, enums, config))
+        Ok(Ready {
+            db,
+            tables,
+            objects,
+            enums,
+            config,
+        })
     }
 
     /// Generate define statements for all tables.
@@ -450,7 +441,13 @@ impl<'a> Schemasync<'a> {
         info!("Starting schema diff");
         self.initialize().await?;
 
-        let (db, tables, objects, enums, config) = self.validate()?;
+        let Ready {
+            db,
+            tables,
+            objects,
+            enums,
+            config,
+        } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
             .registry
@@ -493,7 +490,13 @@ impl<'a> Schemasync<'a> {
         info!("Starting mock-only generation");
         self.initialize().await?;
 
-        let (db, tables, objects, enums, config) = self.validate()?;
+        let Ready {
+            db,
+            tables,
+            objects,
+            enums,
+            config,
+        } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
             .registry
@@ -538,7 +541,7 @@ impl<'a> Schemasync<'a> {
         }
 
         mockmaker.filter_changes().await?;
-        mockmaker.generate_coordinated_values();
+        mockmaker.generate_coordinated_values()?;
         mockmaker.generate_mock_data().await?;
 
         info!("Mock-only generation completed successfully");
@@ -550,7 +553,9 @@ impl<'a> Schemasync<'a> {
     /// [`Self::mock_only`] this never diffs or defines anything: each selected
     /// table is brought to its record count (`count_override`, the table's
     /// `#[mock_data(n = ...)]`, or `default_record_count`), regenerating the
-    /// records it already has and adding the rest.
+    /// records it keeps, adding the rest and deleting any beyond it. With
+    /// `full_refresh_mode`,
+    /// every table's records are deleted and all tables are regenerated.
     pub async fn insert_mock_data(
         mut self,
         count_override: Option<usize>,
@@ -559,17 +564,33 @@ impl<'a> Schemasync<'a> {
         info!("Inserting mock data");
         self.initialize().await?;
 
-        let (db, tables, objects, enums, mut config) = self.validate()?;
+        let Ready {
+            db,
+            tables,
+            objects,
+            enums,
+            config,
+        } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
             .registry
             .or(self.owned_registry.as_ref())
             .unwrap_or(&default_registry);
 
-        // Existing records must stay link targets, and this command exists
-        // to generate data.
-        config.mock_gen_config.full_refresh_mode = false;
-        config.should_generate_mocks = true;
+        if !config.should_generate_mocks {
+            return Err(EvenframeError::config(
+                "should_generate_mocks is false in [schemasync], so no mock data is inserted"
+                    .to_string(),
+            ));
+        }
+        let full_refresh = config.mock_gen_config.full_refresh_mode;
+        if full_refresh && table_filter.is_some() {
+            return Err(EvenframeError::config(
+                "--tables limits which tables get mock data, but full_refresh_mode \
+                 regenerates every table"
+                    .to_string(),
+            ));
+        }
 
         let selected: Option<std::collections::BTreeSet<String>> = match table_filter {
             None => None,
@@ -589,8 +610,12 @@ impl<'a> Schemasync<'a> {
         let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
         mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
-        mockmaker.select_tables_for_insert(selected.as_ref())?;
-        mockmaker.generate_coordinated_values();
+        if full_refresh {
+            mockmaker.remove_old_data().await?;
+        }
+        mockmaker.select_tables_for_insert(selected.as_ref());
+        mockmaker.remove_excess_records().await?;
+        mockmaker.generate_coordinated_values()?;
         mockmaker.generate_mock_data().await?;
 
         info!("Mock data inserted");
@@ -602,7 +627,13 @@ impl<'a> Schemasync<'a> {
         info!("Starting Schemasync pipeline execution");
         self.initialize().await?;
 
-        let (db, tables, objects, enums, config) = self.validate()?;
+        let Ready {
+            db,
+            tables,
+            objects,
+            enums,
+            config,
+        } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
             .registry
@@ -703,7 +734,7 @@ impl<'a> Schemasync<'a> {
 
         if config.should_generate_mocks {
             info!("Generating mock data");
-            mockmaker.generate_coordinated_values();
+            mockmaker.generate_coordinated_values()?;
             mockmaker.generate_mock_data().await.map_err(|e| {
                 EvenframeError::SchemaSync(format!("Failed to generate mock data: {e}"))
             })?;

@@ -21,12 +21,10 @@ pub struct Tag {
     pub slug: String,
 
     /// Optional description - max 500 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::MaxLength(500))]
     pub description: Option<String>,
 
     /// Post count - non-negative
-    /// BUG: NumberValidator::NonNegative compares with 0.0 (f64) but field is u32
     #[validators(NumberValidator::NonNegative)]
     pub post_count: u32,
 }
@@ -40,23 +38,19 @@ pub struct Author {
     pub user: RecordLink<User>,
 
     /// Author bio - max 2000 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::MaxLength(2000))]
     pub bio: Option<String>,
 
     /// Avatar URL - valid URL format
-    /// BUG: StringValidator::Url on Option<String> doesn't unwrap the Option
     #[format(Url("example.com"))]
     #[validators(StringValidator::Url)]
     pub avatar_url: Option<String>,
 
     /// Twitter handle - starts with @, max 16 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::StartsWith("@"), StringValidator::MaxLength(16))]
     pub twitter_handle: Option<String>,
 
     /// GitHub handle - max 39 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::MaxLength(39))]
     pub github_handle: Option<String>,
 
@@ -102,7 +96,6 @@ pub struct Post {
     pub content: String,
 
     /// Optional excerpt - max 500 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::MaxLength(500))]
     pub excerpt: Option<String>,
 
@@ -114,7 +107,6 @@ pub struct Post {
     pub tags: Vec<RecordLink<Tag>>,
 
     /// Featured image URL - valid URL
-    /// BUG: StringValidator::Url on Option<String> doesn't unwrap the Option
     #[format(Url("example.com"))]
     #[validators(StringValidator::Url)]
     pub featured_image: Option<String>,
@@ -125,7 +117,6 @@ pub struct Post {
     pub published_at: Option<String>,
 
     /// View count - non-negative
-    /// BUG: NumberValidator::NonNegative compares with 0.0 (f64) but field is u32
     #[validators(NumberValidator::NonNegative)]
     pub view_count: u32,
 

@@ -42,3 +42,5 @@ url = "2"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+protox = "0.9"
+surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"] }

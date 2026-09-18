@@ -1,4 +1,5 @@
 /target
+/src/bindings
 .env
 /evenframe/logs
 /evenframe/remote_schema.surql

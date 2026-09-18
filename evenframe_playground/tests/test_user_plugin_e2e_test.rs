@@ -23,6 +23,7 @@ mod tests {
             "test_user".to_string(),
             PluginConfig {
                 path: ".evenframe/plugins/test_user.wasm".to_string(),
+                params: Default::default(),
             },
         );
         PluginManager::new(&plugins, &playground_root()).expect("Should load test_user plugin")

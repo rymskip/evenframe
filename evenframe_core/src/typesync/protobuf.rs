@@ -390,13 +390,10 @@ fn string_validator_to_protobuf(sv: &StringValidator) -> Option<String> {
         StringValidator::IpV6 => Some("ipv6: true".to_string()),
 
         // Pattern validators
-        StringValidator::RegexLiteral(format) => {
-            let regex = format.clone().into_regex();
-            Some(format!(
-                "pattern: \"{}\"",
-                escape_for_protobuf(regex.as_str())
-            ))
-        }
+        StringValidator::RegexLiteral(format) => Some(format!(
+            "pattern: \"{}\"",
+            escape_for_protobuf(&format.pattern())
+        )),
 
         // Prefix/Suffix validators
         StringValidator::StartsWith(s) => Some(format!("prefix: \"{}\"", escape_for_protobuf(s))),

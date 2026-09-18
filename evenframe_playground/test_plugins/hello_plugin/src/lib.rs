@@ -6,17 +6,12 @@
 use serde::{Deserialize, Serialize};
 use std::alloc::Layout;
 
+/// The parts of the host's input this plugin reads.
 #[derive(Deserialize)]
 struct FieldInput {
-    #[allow(dead_code)]
-    table_name: String,
     field_name: String,
     field_type: String,
     record_index: usize,
-    #[allow(dead_code)]
-    total_records: usize,
-    #[allow(dead_code)]
-    record_id: String,
 }
 
 #[derive(Serialize)]

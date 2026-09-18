@@ -378,13 +378,10 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         StringValidator::Includes(s) => Some(format!("includes(\\\"{}\\\")", escape_for_fbs(s))),
 
         // Pattern validators
-        StringValidator::RegexLiteral(format) => {
-            let regex = format.clone().into_regex();
-            Some(format!(
-                "pattern(\\\"{}\\\")",
-                escape_for_fbs(regex.as_str())
-            ))
-        }
+        StringValidator::RegexLiteral(format) => Some(format!(
+            "pattern(\\\"{}\\\")",
+            escape_for_fbs(&format.pattern())
+        )),
         StringValidator::Literal(s) => Some(format!("literal(\\\"{}\\\")", escape_for_fbs(s))),
 
         // Special cases - skip internal validators

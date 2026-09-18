@@ -23,13 +23,9 @@ pub mod testing;
 // Feature-gated parsers
 #[cfg(feature = "flatbuffers")]
 pub mod flatbuffers;
-#[cfg(feature = "flatbuffers")]
-pub mod flatbuffers_parser;
 
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
-#[cfg(feature = "protobuf")]
-pub mod protobuf_parser;
 
 #[cfg(feature = "macroforge")]
 pub mod effect_template;

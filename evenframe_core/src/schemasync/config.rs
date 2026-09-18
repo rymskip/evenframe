@@ -1,4 +1,4 @@
-use crate::schemasync::{PreservationMode, mockmake::coordinate::CoordinationGroup};
+use crate::schemasync::PreservationMode;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -6,6 +6,7 @@ use tracing::{debug, trace};
 
 /// Configuration for a WASM mock data plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     /// Path to the `.wasm` file, relative to project root.
     pub path: String,
@@ -18,6 +19,7 @@ pub struct PluginConfig {
 
 /// Configuration for Schemasync operations (database synchronization)
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
+#[serde(deny_unknown_fields)]
 pub struct SchemasyncConfig {
     /// Database connection configuration
     pub database: DatabaseConfig,
@@ -26,9 +28,6 @@ pub struct SchemasyncConfig {
     /// default mock data generation configuration, overridden by table and field level configs
     #[serde(default)]
     pub mock_gen_config: SchemasyncMockGenConfig,
-    /// Performance tuning configuration
-    #[serde(default)]
-    pub performance: PerformanceConfig,
     /// WASM plugin definitions for mock data generation.
     #[serde(default)]
     #[builder(default)]
@@ -41,6 +40,7 @@ pub struct SchemasyncConfig {
 
 /// Configuration for the schemasync lint pass, under `[schemasync.lint]`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LintConfig {
     /// Silence warnings for `#[define_field_statement(...)]` settings whose
     /// effect cannot be determined from this run's data: settings on a
@@ -51,36 +51,19 @@ pub struct LintConfig {
     pub silence_unverifiable_annotations: bool,
 }
 
-/// Database provider type for configuration
+/// The database schemasync works with. Only SurrealDB is supported; SQL
+/// databases are in development on the `wip/sql-providers` branch.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum DatabaseProvider {
-    /// SurrealDB (default)
     #[default]
     Surrealdb,
-    /// PostgreSQL
-    Postgres,
-    /// MySQL
-    Mysql,
-    /// SQLite
-    Sqlite,
-}
-
-impl std::fmt::Display for DatabaseProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DatabaseProvider::Surrealdb => write!(f, "surrealdb"),
-            DatabaseProvider::Postgres => write!(f, "postgres"),
-            DatabaseProvider::Mysql => write!(f, "mysql"),
-            DatabaseProvider::Sqlite => write!(f, "sqlite"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
-    /// Database provider type (surrealdb, postgres, mysql, sqlite)
+    /// The database kind; only `surrealdb`.
     #[serde(default)]
     pub provider: DatabaseProvider,
     /// Database connection URL
@@ -107,15 +90,6 @@ pub struct DatabaseConfig {
     /// Resolved surql content loaded from paths (set at runtime, not from TOML)
     #[serde(skip)]
     pub resolved: ResolvedDatabaseItems,
-    /// Maximum number of connections in the pool (SQL databases)
-    #[serde(default)]
-    pub max_connections: Option<u32>,
-    /// Minimum number of connections in the pool (SQL databases)
-    #[serde(default)]
-    pub min_connections: Option<u32>,
-    /// Schema name for PostgreSQL (defaults to "public")
-    #[serde(default)]
-    pub schema: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -123,6 +97,7 @@ fn default_timeout() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessConfig {
     pub name: String,
     pub access_type: AccessType,
@@ -139,6 +114,7 @@ pub enum AccessType {
 
 /// Source for access definitions: either inline config or a path to .surql file(s).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum AccessesSource {
     /// Existing format: array of AccessConfig structs
@@ -155,12 +131,14 @@ impl Default for AccessesSource {
 
 /// Source for function definitions: a path to .surql file(s).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FunctionsSource {
     pub path: String,
 }
 
 /// Source for analyzer definitions: a path to .surql file(s).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalyzersSource {
     pub path: String,
 }
@@ -175,6 +153,7 @@ pub struct ResolvedDatabaseItems {
 
 /// Missing keys, and a missing table, take the values of [`Default`].
 #[derive(Debug, Clone, Deserialize, Serialize, Builder)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct SchemasyncMockGenConfig {
     /// overriden by table level  configs
@@ -182,13 +161,6 @@ pub struct SchemasyncMockGenConfig {
 
     /// overriden by table level and field level configs
     pub default_preservation_mode: PreservationMode,
-
-    /// overriden by table level and field level configs
-    pub default_batch_size: usize,
-
-    #[builder(default)]
-    /// global table field coordination, Vec<(BTreeSet<TableName>, Vec<Coordination>)>
-    pub coordination_groups: Vec<CoordinationGroup>,
 
     pub full_refresh_mode: bool,
 
@@ -210,8 +182,6 @@ impl Default for SchemasyncMockGenConfig {
         Self {
             default_record_count: 10,
             default_preservation_mode: PreservationMode::default(),
-            default_batch_size: 1000,
-            coordination_groups: Vec::new(),
             full_refresh_mode: false,
             scripting_asserts: true,
         }
@@ -230,9 +200,6 @@ impl Default for DatabaseConfig {
             functions: None,
             analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
-            max_connections: None,
-            min_connections: None,
-            schema: None,
         }
     }
 }
@@ -314,9 +281,6 @@ impl DatabaseConfig {
             analyzers: None,
             resolved: ResolvedDatabaseItems::default(),
             timeout: 60,
-            max_connections: None,
-            min_connections: None,
-            schema: None,
         };
         trace!(
             "Test database config - URL: {}, namespace: {}, database: {}, timeout: {}s",
@@ -325,125 +289,6 @@ impl DatabaseConfig {
         if let AccessesSource::Inline(ref accesses) = config.accesses {
             trace!("Test access configs: {} entries", accesses.len());
         }
-        config
-    }
-
-    /// Creates a database configuration for PostgreSQL testing
-    pub fn for_postgres_testing(url: &str) -> Self {
-        debug!("Creating PostgreSQL database configuration for testing");
-        Self {
-            provider: DatabaseProvider::Postgres,
-            url: url.to_string(),
-            namespace: String::new(),
-            database: String::new(),
-            timeout: 60,
-            accesses: AccessesSource::default(),
-            functions: None,
-            analyzers: None,
-            resolved: ResolvedDatabaseItems::default(),
-            max_connections: Some(5),
-            min_connections: Some(1),
-            schema: Some("public".to_string()),
-        }
-    }
-
-    /// Creates a database configuration for SQLite testing
-    pub fn for_sqlite_testing(path: &str) -> Self {
-        debug!("Creating SQLite database configuration for testing");
-        Self {
-            provider: DatabaseProvider::Sqlite,
-            url: format!("sqlite:{}", path),
-            namespace: String::new(),
-            database: String::new(),
-            timeout: 60,
-            accesses: AccessesSource::default(),
-            functions: None,
-            analyzers: None,
-            resolved: ResolvedDatabaseItems::default(),
-            max_connections: Some(1),
-            min_connections: Some(1),
-            schema: None,
-        }
-    }
-
-    /// Convert to provider-specific DatabaseConfig
-    #[cfg(feature = "schemasync")]
-    pub fn to_provider_config(&self) -> crate::schemasync::database::DatabaseConfig {
-        crate::schemasync::database::DatabaseConfig {
-            provider: match self.provider {
-                DatabaseProvider::Surrealdb => crate::schemasync::database::ProviderType::SurrealDb,
-                DatabaseProvider::Postgres => crate::schemasync::database::ProviderType::Postgres,
-                DatabaseProvider::Mysql => crate::schemasync::database::ProviderType::MySql,
-                DatabaseProvider::Sqlite => crate::schemasync::database::ProviderType::Sqlite,
-            },
-            url: self.url.clone(),
-            namespace: if self.namespace.is_empty() {
-                None
-            } else {
-                Some(self.namespace.clone())
-            },
-            database: if self.database.is_empty() {
-                None
-            } else {
-                Some(self.database.clone())
-            },
-            username: None, // Will be loaded from env vars
-            password: None, // Will be loaded from env vars
-            max_connections: self.max_connections,
-            min_connections: self.min_connections,
-            schema: self.schema.clone(),
-            timeout_secs: self.timeout,
-        }
-    }
-}
-
-/// Missing keys, and a missing table, take the values of [`Default`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PerformanceConfig {
-    pub embedded_db_memory_limit: String,
-    pub cache_duration_seconds: u64,
-    pub use_progressive_loading: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MockMode {
-    Smart,
-    RegenerateAll,
-    PreserveAll,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegenerateFieldsConfig {
-    pub always: Vec<String>,
-}
-
-impl Default for RegenerateFieldsConfig {
-    fn default() -> Self {
-        debug!("Creating default regenerate fields configuration");
-        let config = Self {
-            always: vec!["updated_at".to_string(), "created_at".to_string()],
-        };
-        trace!("Default regenerate fields: {:?}", config.always);
-        config
-    }
-}
-
-impl Default for PerformanceConfig {
-    fn default() -> Self {
-        debug!("Creating default performance configuration");
-        let config = Self {
-            embedded_db_memory_limit: "1GB".to_string(),
-            cache_duration_seconds: 300,
-            use_progressive_loading: true,
-        };
-        trace!(
-            "Default performance config - memory: {}, cache: {}s, progressive: {}",
-            config.embedded_db_memory_limit,
-            config.cache_duration_seconds,
-            config.use_progressive_loading
-        );
         config
     }
 }

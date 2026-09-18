@@ -1,6 +1,6 @@
 [package]
 name = "evenframe"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -61,28 +61,16 @@ wasm-plugins = ["evenframe_core/wasm-plugins"]
 
 # SurrealDB client (kv-mem + HTTP protocol). Heaviest single dependency.
 surrealdb = ["evenframe_core/surrealdb"]
-# SQL abstraction layer via sqlx. Base for postgres/mysql/sqlite.
-sql = ["evenframe_core/sql"]
-# PostgreSQL via sqlx. Implies: sql.
-postgres = ["evenframe_core/postgres"]
-# MySQL/MariaDB via sqlx. Implies: sql.
-mysql = ["evenframe_core/mysql"]
-# SQLite via sqlx. Implies: sql.
-sqlite = ["evenframe_core/sqlite"]
-# All SQL backends (PostgreSQL, MySQL, SQLite).
-sql-all = ["evenframe_core/sql-all"]
-# Every database provider (SurrealDB + all SQL backends).
-all-providers = ["evenframe_core/all-providers"]
 
 # --- Convenience ---
 
-# Everything: all generators, full schemasync, all database providers.
+# Everything: all generators and full schemasync.
 full = ["evenframe_core/full"]
 
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.4.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
+evenframe_core = { version = "0.5.0", path = "../evenframe_core", default-features = false, features = ["cli"] }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }
@@ -95,7 +83,7 @@ serde_json = { workspace = true }
 yaml_serde = "0.10.7"
 url = { workspace = true }
 uuid = { workspace = true }
-evenframe_derive = { version = "0.4.0", path = "../evenframe_derive" }
+evenframe_derive = { version = "0.5.0", path = "../evenframe_derive" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5.0"
 linkme = "0.3.37"

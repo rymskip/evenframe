@@ -40,14 +40,12 @@ pub struct Product {
     pub price: f64,
 
     /// Stock quantity - non-negative
-    /// BUG: NumberValidator::NonNegative compares with 0.0 (f64) but field is u32
     #[validators(NumberValidator::NonNegative)]
     pub stock_quantity: u32,
 
     pub category: ProductCategory,
 
     /// Image URL - valid URL
-    /// BUG: StringValidator::Url on Option<String> doesn't unwrap the Option
     #[format(Url("example.com"))]
     #[validators(StringValidator::Url)]
     pub image_url: Option<String>,
@@ -121,7 +119,6 @@ pub struct CartItem {
     pub product_name: String,
 
     /// Quantity - must be positive (at least 1)
-    /// BUG: NumberValidator::Positive compares with 0.0 (f64) but field is u32
     #[validators(NumberValidator::Positive)]
     pub quantity: u32,
 
@@ -179,7 +176,6 @@ pub struct Order {
     pub shipping_address: Address,
 
     /// Order notes - max 1000 chars
-    /// BUG: StringValidator on Option<String> doesn't unwrap the Option
     #[validators(StringValidator::MaxLength(1000))]
     pub notes: Option<String>,
 

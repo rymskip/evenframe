@@ -28,6 +28,10 @@ async fn main() {
         .route("/api/products/:id", get(handlers::ecommerce::get_product))
         .route("/api/orders", get(handlers::ecommerce::list_orders))
         .route("/api/orders/:id", get(handlers::ecommerce::get_order))
+        // Billing routes
+        .route("/api/billables", get(handlers::billing::list_billables))
+        .route("/api/bookings", get(handlers::billing::list_bookings))
+        .route("/api/shifts", get(handlers::billing::list_shifts))
         // Blog routes
         .route("/api/posts", get(handlers::blog::list_posts))
         .route("/api/posts/:id", get(handlers::blog::get_post))
@@ -48,6 +52,9 @@ async fn main() {
     tracing::info!("  GET /api/products/:id");
     tracing::info!("  GET /api/orders");
     tracing::info!("  GET /api/orders/:id");
+    tracing::info!("  GET /api/billables");
+    tracing::info!("  GET /api/bookings");
+    tracing::info!("  GET /api/shifts");
     tracing::info!("  GET /api/posts");
     tracing::info!("  GET /api/posts/:id");
     tracing::info!("  GET /api/tags");

@@ -18,7 +18,7 @@ use tracing::info;
 
 /// Runs the typesync command.
 pub async fn run(cli: &Cli, args: TypesyncArgs) -> Result<()> {
-    let config = EvenframeConfig::new()?;
+    let config = EvenframeConfig::new_offline()?;
     let build_config = config_builders::BuildConfig::discover()?;
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
     generate(cli, args, &config, enums, tables, objects)

@@ -237,37 +237,29 @@ pub fn field_type_to_default_value(
 }
 
 #[cfg(feature = "surrealdb")]
-/// Generate default values for SurrealDB queries (CREATE/UPDATE statements)
+/// The SurrealQL zero value for a field type, used as its `DEFAULT`. `None`
+/// when the type has no valid zero value: a required record link cannot
+/// point at nothing, and neither can a struct or variant that contains one.
 pub fn field_type_to_surql_default(
     field_name: &String,
     table_name: &String,
     field_type: &FieldType,
     enums: &BTreeMap<String, TaggedUnion>,
     app_structs: &BTreeMap<String, StructConfig>,
-    persistable_structs: &BTreeMap<String, TableConfig>,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Option<String> {
     trace!(
         "Generating SURQL default for field '{}' in table '{}', type: {:?}",
         field_name, table_name, field_type
     );
+    let default_of = |ty: &FieldType| {
+        field_type_to_surql_default(field_name, table_name, ty, enums, app_structs, registry)
+    };
     let result = match field_type {
-        FieldType::String | FieldType::Char => {
-            trace!("Generating SURQL default for String/Char");
-            "\'\'".to_string()
-        }
-        FieldType::Bool => {
-            trace!("Generating SURQL default for Bool");
-            "false".to_string()
-        }
-        FieldType::Unit => {
-            trace!("Generating SURQL default for Unit");
-            "NULL".to_string()
-        }
-        FieldType::F32 | FieldType::F64 => {
-            trace!("Generating SURQL default for float type");
-            "0.0f".to_string()
-        }
+        FieldType::String | FieldType::Char => Some("''".to_string()),
+        FieldType::Bool => Some("false".to_string()),
+        FieldType::Unit | FieldType::Option(_) => Some("NULL".to_string()),
+        FieldType::F32 | FieldType::F64 => Some("0.0f".to_string()),
         FieldType::I8
         | FieldType::I16
         | FieldType::I32
@@ -279,199 +271,122 @@ pub fn field_type_to_surql_default(
         | FieldType::U32
         | FieldType::U64
         | FieldType::U128
-        | FieldType::Usize => {
-            trace!("Generating SURQL default for integer type");
-            "0".to_string()
-        }
-        FieldType::Tuple(inner_types) => {
-            trace!(
-                "Generating SURQL default for Tuple with {} types",
-                inner_types.len()
-            );
-            let tuple_defaults: Vec<String> = inner_types
-                .iter()
-                .map(|ty| {
-                    field_type_to_surql_default(
-                        field_name,
-                        table_name,
-                        ty,
-                        enums,
-                        app_structs,
-                        persistable_structs,
-                        registry,
-                    )
-                })
-                .collect();
-            format!("[{}]", tuple_defaults.join(", "))
-        }
-        FieldType::Struct(fields) => {
-            trace!(
-                "Generating SURQL default for Struct with {} fields",
-                fields.len()
-            );
-            let fields_str = fields
-                .iter()
-                .map(|(name, ftype)| {
-                    format!(
-                        "{}: {}",
-                        name.to_case(Case::Snake), // SurrealDB typically uses snake_case
-                        field_type_to_surql_default(
-                            field_name,
-                            table_name,
-                            ftype,
-                            enums,
-                            app_structs,
-                            persistable_structs,
-                            registry
-                        )
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{{ {} }}", fields_str)
-        }
-        FieldType::Option(inner) => {
-            trace!(
-                "Generating SURQL default for Option with inner: {:?}",
-                inner
-            );
-            "NULL".to_string()
-        }
-        FieldType::Vec(inner) => {
-            trace!("Generating SURQL default for Vec with inner: {:?}", inner);
-            "[]".to_string()
-        }
-        FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
-            trace!(
-                "Generating SURQL default for Map with key: {:?}, value: {:?}",
-                key, value
-            );
-            "{}".to_string()
-        }
-        FieldType::RecordLink(inner) => {
-            trace!(
-                "Generating SURQL default for RecordLink with inner: {:?}",
-                inner
-            );
-            "NULL".to_string()
-        }
+        | FieldType::Usize => Some("0".to_string()),
+        FieldType::Tuple(inner_types) => inner_types
+            .iter()
+            .map(default_of)
+            .collect::<Option<Vec<_>>>()
+            .map(|defaults| format!("[{}]", defaults.join(", "))),
+        FieldType::Struct(fields) => fields
+            .iter()
+            .map(|(name, ftype)| {
+                default_of(ftype).map(|value| format!("{}: {}", name.to_case(Case::Snake), value))
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|fields| format!("{{ {} }}", fields.join(", "))),
+        FieldType::Vec(_) => Some("[]".to_string()),
+        FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => Some("{}".to_string()),
+        FieldType::RecordLink(_) => None,
         FieldType::Other(name) => {
-            debug!("Processing Other type '{}' for SURQL default", name);
-
-            // Check if it's a configured foreign type
             if let Some(ftc) = registry.lookup(name) {
-                return ftc.default_value_surql.clone();
-            }
-
-            // Check if it's an enum
-            if let Some(enum_schema) = enums.values().find(|e| e.enum_name == *name) {
-                trace!(
-                    "Found enum '{}' with {} variants",
-                    name,
-                    enum_schema.variants.len()
-                );
-                let chosen_variant = enum_schema
-                    .variants
-                    .iter()
-                    .find(|v| v.is_default)
-                    .unwrap_or(&enum_schema.variants[0]);
-                if let Some(variant_data) = &chosen_variant.data {
-                    let inner_default = match variant_data {
-                        // An inline payload is anonymous — it is never registered
-                        // in `app_structs`, so it cannot be resolved by name.
-                        // Build the object from its own fields.
-                        VariantData::InlineStruct(enum_struct) => {
-                            struct_fields_to_surql_default_object(
-                                &enum_struct.fields,
-                                table_name,
-                                enums,
-                                app_structs,
-                                persistable_structs,
-                                registry,
-                            )
-                        }
-                        VariantData::DataStructureRef(field_type) => field_type_to_surql_default(
-                            field_name,
-                            table_name,
-                            field_type,
-                            enums,
-                            app_structs,
-                            persistable_structs,
-                            registry,
-                        ),
-                    };
-                    match &enum_schema.representation {
-                        EnumRepresentation::ExternallyTagged => {
-                            format!("{{ {}: {} }}", chosen_variant.name, inner_default)
-                        }
-                        EnumRepresentation::InternallyTagged { tag } => {
-                            if let VariantData::InlineStruct(_) = variant_data {
-                                let trimmed = inner_default.trim();
-                                if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                                    let inner = &trimmed[1..trimmed.len() - 1];
-                                    format!(
-                                        "{{ {}: '{}', {} }}",
-                                        tag,
-                                        chosen_variant.name,
-                                        inner.trim()
-                                    )
-                                } else {
-                                    format!("{{ {}: '{}' }}", tag, chosen_variant.name)
-                                }
-                            } else {
-                                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
-                            }
-                        }
-                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                            format!(
-                                "{{ {}: '{}', {}: {} }}",
-                                tag, chosen_variant.name, content, inner_default
-                            )
-                        }
-                        EnumRepresentation::Untagged => inner_default,
-                    }
-                } else {
-                    // For simple enum variant
-                    match &enum_schema.representation {
-                        EnumRepresentation::InternallyTagged { tag }
-                        | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                            format!("{{ {}: '{}' }}", tag, chosen_variant.name)
-                        }
-                        _ => format!("'{}'", chosen_variant.name),
-                    }
-                }
-            }
-            // Check if it's a struct
-            else if let Some(struct_config) = app_structs.values().find(|struct_config| {
+                Some(ftc.default_value_surql.clone())
+            } else if let Some(enum_schema) = enums.values().find(|e| e.enum_name == *name) {
+                enum_surql_default(
+                    enum_schema,
+                    field_name,
+                    table_name,
+                    enums,
+                    app_structs,
+                    registry,
+                )
+            } else if let Some(struct_config) = app_structs.values().find(|struct_config| {
                 struct_config.struct_name.to_case(Case::Pascal) == name.to_case(Case::Pascal)
             }) {
-                debug!(
-                    "Found app struct '{}' with {} fields",
-                    name,
-                    struct_config.fields.len()
-                );
                 struct_fields_to_surql_default_object(
                     &struct_config.fields,
                     table_name,
                     enums,
                     app_structs,
-                    persistable_structs,
                     registry,
                 )
-            }
-            // Check if it's a persistable struct (table reference)
-            else if persistable_structs.get(name).is_some() {
-                // For record links to other tables, default to NULL
-                debug!("Found persistable struct '{}', defaulting to NULL", name);
-                "NULL".to_string()
             } else {
-                trace!("Type '{}' not found, defaulting to NULL", name);
-                "NULL".to_string()
+                // A table reference or an unresolved type has no zero value.
+                None
             }
         }
     };
-    trace!("Generated SURQL default: {}", result);
+    trace!("Generated SURQL default: {:?}", result);
     result
+}
+
+/// The default of an enum: its `#[default]` variant, else the first declared.
+#[cfg(feature = "surrealdb")]
+fn enum_surql_default(
+    enum_schema: &TaggedUnion,
+    field_name: &String,
+    table_name: &String,
+    enums: &BTreeMap<String, TaggedUnion>,
+    app_structs: &BTreeMap<String, StructConfig>,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Option<String> {
+    let chosen_variant = enum_schema
+        .variants
+        .iter()
+        .find(|v| v.is_default)
+        .or_else(|| enum_schema.variants.first())?;
+    let Some(variant_data) = &chosen_variant.data else {
+        return Some(match &enum_schema.representation {
+            EnumRepresentation::InternallyTagged { tag }
+            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+            }
+            _ => format!("'{}'", chosen_variant.name),
+        });
+    };
+    let inner_default = match variant_data {
+        // An inline payload is anonymous: it is never registered in
+        // `app_structs`, so build the object from its own fields.
+        VariantData::InlineStruct(enum_struct) => struct_fields_to_surql_default_object(
+            &enum_struct.fields,
+            table_name,
+            enums,
+            app_structs,
+            registry,
+        )?,
+        VariantData::DataStructureRef(field_type) => field_type_to_surql_default(
+            field_name,
+            table_name,
+            field_type,
+            enums,
+            app_structs,
+            registry,
+        )?,
+    };
+    Some(match &enum_schema.representation {
+        EnumRepresentation::ExternallyTagged => {
+            format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+        }
+        EnumRepresentation::InternallyTagged { tag } => {
+            if let VariantData::InlineStruct(_) = variant_data {
+                let trimmed = inner_default.trim();
+                if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                    let inner = &trimmed[1..trimmed.len() - 1];
+                    format!("{{ {}: '{}', {} }}", tag, chosen_variant.name, inner.trim())
+                } else {
+                    format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+                }
+            } else {
+                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+            }
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            format!(
+                "{{ {}: '{}', {}: {} }}",
+                tag, chosen_variant.name, content, inner_default
+            )
+        }
+        EnumRepresentation::Untagged => inner_default,
+    })
 }
 
 /// Build the `{ field: default, ... }` object literal for a struct's fields:
@@ -484,33 +399,34 @@ fn struct_fields_to_surql_default_object(
     table_name: &String,
     enums: &BTreeMap<String, TaggedUnion>,
     app_structs: &BTreeMap<String, StructConfig>,
-    persistable_structs: &BTreeMap<String, TableConfig>,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    let fields_str = fields
+) -> Option<String> {
+    fields
         .iter()
         .map(|table_field| {
-            let value = table_field
+            let value = match table_field
                 .define_config
                 .as_ref()
                 .and_then(|dc| dc.default.as_deref())
-                .map(|d| d.to_string())
-                .unwrap_or_else(|| {
-                    field_type_to_surql_default(
-                        &table_field.field_name,
-                        table_name,
-                        &table_field.field_type,
-                        enums,
-                        app_structs,
-                        persistable_structs,
-                        registry,
-                    )
-                });
-            format!("{}: {}", table_field.field_name.to_case(Case::Snake), value)
+            {
+                Some(default) => default.to_string(),
+                None => field_type_to_surql_default(
+                    &table_field.field_name,
+                    table_name,
+                    &table_field.field_type,
+                    enums,
+                    app_structs,
+                    registry,
+                )?,
+            };
+            Some(format!(
+                "{}: {}",
+                table_field.field_name.to_case(Case::Snake),
+                value
+            ))
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{{ {} }}", fields_str)
+        .collect::<Option<Vec<_>>>()
+        .map(|fields| format!("{{ {} }}", fields.join(", ")))
 }
 
 #[cfg(feature = "surrealdb")]
@@ -921,7 +837,6 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), card_or_row);
         let app_structs = BTreeMap::new();
-        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -930,11 +845,10 @@ mod tests {
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
-            &persistable_structs,
             &registry,
         );
 
-        assert_eq!(result, "'Table'");
+        assert_eq!(result.as_deref(), Some("'Table'"));
     }
 
     #[test]
@@ -951,7 +865,6 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), color);
         let app_structs = BTreeMap::new();
-        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -960,11 +873,10 @@ mod tests {
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
-            &persistable_structs,
             &registry,
         );
 
-        assert_eq!(result, "'Red'");
+        assert_eq!(result.as_deref(), Some("'Red'"));
     }
 
     #[test]
@@ -1011,7 +923,6 @@ mod tests {
         };
         let mut app_structs = BTreeMap::new();
         app_structs.insert("OverviewSettings".to_string(), overview_settings);
-        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -1020,13 +931,14 @@ mod tests {
             &FieldType::Other("OverviewSettings".to_string()),
             &enums,
             &app_structs,
-            &persistable_structs,
             &registry,
         );
 
         assert_eq!(
-            result,
-            "{ row_height: \"Medium\", card_or_row: 'Table', per_page: 10, column_configs: [] }"
+            result.as_deref(),
+            Some(
+                "{ row_height: \"Medium\", card_or_row: 'Table', per_page: 10, column_configs: [] }"
+            )
         );
     }
 
@@ -1047,7 +959,6 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), strategy);
         let app_structs = BTreeMap::new();
-        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -1056,12 +967,11 @@ mod tests {
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
-            &persistable_structs,
             &registry,
         );
 
         // Untagged representation: the default is the payload object itself.
-        assert_eq!(result, "{ threshold: 10, tags: [] }");
+        assert_eq!(result.as_deref(), Some("{ threshold: 10, tags: [] }"));
     }
 
     #[test]
@@ -1083,7 +993,6 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), strategy);
         let app_structs = BTreeMap::new();
-        let persistable_structs = BTreeMap::new();
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
@@ -1092,10 +1001,40 @@ mod tests {
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
-            &persistable_structs,
             &registry,
         );
 
-        assert_eq!(result, "{ kind: 'Custom', threshold: 10, tags: [] }");
+        assert_eq!(
+            result.as_deref(),
+            Some("{ kind: 'Custom', threshold: 10, tags: [] }")
+        );
+    }
+
+    #[test]
+    fn required_link_has_no_default_but_optional_link_defaults_to_null() {
+        let link = FieldType::RecordLink(Box::new(FieldType::Other("Customer".to_string())));
+        let default_of = |field_type: &FieldType| {
+            field_type_to_surql_default(
+                &"customer".to_string(),
+                &"order".to_string(),
+                field_type,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &ForeignTypeRegistry::default(),
+            )
+        };
+
+        assert_eq!(default_of(&link), None);
+        assert_eq!(
+            default_of(&FieldType::Struct(vec![(
+                "owner".to_string(),
+                link.clone()
+            )])),
+            None
+        );
+        assert_eq!(
+            default_of(&FieldType::Option(Box::new(link))).as_deref(),
+            Some("NULL")
+        );
     }
 }

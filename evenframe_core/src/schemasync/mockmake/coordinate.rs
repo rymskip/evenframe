@@ -13,7 +13,7 @@ use crate::schemasync::mockmake::{Mockmaker, format::Format};
 #[cfg(feature = "schemasync")]
 use crate::types::{FieldType, StructField};
 #[cfg(feature = "schemasync")]
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 #[cfg(feature = "schemasync")]
 use rand::RngExt;
 
@@ -25,60 +25,49 @@ pub struct CoordinationId {
 
 #[cfg(feature = "schemasync")]
 impl CoordinationId {
-    /// Parse a field path like "recurrence_rule.recurrence_begins" into (table_name, struct_name) for Mockmaker extraction
-    fn parse_field_path(&self, mockmaker: &Mockmaker<'_>) -> (String, String) {
-        tracing::trace!("Parsing field path {}", &self.field_name);
-        let table_config = mockmaker.tables.get(&self.table_name).unwrap_or_else(|| {
-            tracing::trace!("{:#?}", mockmaker.tables);
-            panic!(
-                "Table {} not in Mockmaker's 'tables' HashMap",
-                self.table_name
-            )
-        });
-
-        let mut obj = &table_config.struct_config;
-
-        for field_path in self.field_name.split('.') {
-            for struct_field in &obj.fields {
-                if struct_field.field_name == field_path {
-                    obj = mockmaker
-                        .objects
-                        .get(&struct_field.field_name)
-                        .unwrap_or_else(|| {
-                            tracing::trace!("{:#?}", mockmaker.objects);
-                            panic!(
-                                "App struct {} not in Mockmaker's 'objects' HashMap",
-                                struct_field.field_name
-                            )
-                        });
-                }
+    /// The field this id names: a field of its table, or one nested in
+    /// objects along a dotted path.
+    pub fn get_field(&self, mockmaker: &Mockmaker<'_>) -> Result<StructField, EvenframeError> {
+        let unknown = |reason: String| {
+            EvenframeError::mock_generation(format!(
+                "coordinated field `{}.{}` {reason}",
+                self.table_name, self.field_name
+            ))
+        };
+        let table = mockmaker
+            .tables
+            .get(&self.table_name)
+            .ok_or_else(|| unknown("is on an unknown table".into()))?
+            .effective();
+        let mut fields = &table.struct_config.fields;
+        let mut segments = self.field_name.split('.').peekable();
+        while let Some(segment) = segments.next() {
+            let field = fields
+                .iter()
+                .find(|f| f.field_name == segment)
+                .ok_or_else(|| unknown(format!("has no field `{segment}`")))?;
+            if segments.peek().is_none() {
+                return Ok(field.clone());
             }
+            fields = &object_name(&field.field_type)
+                .and_then(|name| mockmaker.objects.get(name))
+                .ok_or_else(|| {
+                    unknown(format!("goes through `{segment}`, which is not an object"))
+                })?
+                .effective()
+                .fields;
         }
-
-        (self.table_name.clone(), obj.struct_name.to_owned())
+        Err(unknown("has an empty path".into()))
     }
+}
 
-    pub fn get_field(&self, mockmaker: &Mockmaker<'_>) -> StructField {
-        let (_, object_name) = self.parse_field_path(mockmaker);
-
-        let struct_config = mockmaker.objects.get(&object_name).unwrap_or_else(|| {
-            tracing::trace!("{:#?}", mockmaker.objects);
-            panic!("App struct {object_name} not in Mockmaker's 'objects' HashMap")
-        });
-
-        for struct_field in &struct_config.fields {
-            if struct_field.field_name
-                == self
-                    .field_name
-                    .split('.')
-                    .next_back()
-                    .unwrap_or(&self.field_name)
-            {
-                return struct_field.clone();
-            }
-        }
-
-        unreachable!("Should have matched with a struct field name");
+/// The object type a field holds, looking through `Option`.
+#[cfg(feature = "schemasync")]
+fn object_name(field_type: &FieldType) -> Option<&str> {
+    match field_type {
+        FieldType::Other(name) => Some(name),
+        FieldType::Option(inner) => object_name(inner),
+        _ => None,
     }
 }
 
@@ -101,6 +90,35 @@ pub struct CoordinationGroup {
 /// would produce for `field`: bare numbers for numeric fields (floats with an
 /// `f` suffix), `d'…'` for datetime-formatted non-string fields, and a quoted
 /// string otherwise.
+/// Whether a field holds a date or a date and time.
+#[cfg(feature = "schemasync")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DateKind {
+    Date,
+    DateTime,
+}
+
+/// The kind of date a field holds, from its format or else its type.
+#[cfg(feature = "schemasync")]
+pub(crate) fn date_kind(field: &StructField) -> Option<DateKind> {
+    match field.format {
+        Some(Format::Date) => return Some(DateKind::Date),
+        Some(Format::DateTime | Format::DateWithinDays(_) | Format::AppointmentDateTime) => {
+            return Some(DateKind::DateTime);
+        }
+        _ => {}
+    }
+    let mut ty = &field.field_type;
+    while let FieldType::Option(inner) = ty {
+        ty = inner;
+    }
+    matches!(ty, FieldType::Other(name) if is_datetime_like(name)).then_some(DateKind::DateTime)
+}
+
+/// The first day of generated date sequences and ranges.
+#[cfg(feature = "schemasync")]
+const BASE_DATE: NaiveDate = NaiveDate::from_ymd_opt(2024, 1, 1).expect("2024-01-01 is a date");
+
 #[cfg(feature = "schemasync")]
 pub(crate) fn coordinated_literal(field: &StructField, raw: &str) -> String {
     let mut scalar = &field.field_type;
@@ -115,17 +133,8 @@ pub(crate) fn coordinated_literal(field: &StructField, raw: &str) -> String {
             _ => format!("{}", number.round() as i64),
         };
     }
-    let is_datetime_format = matches!(
-        field.format,
-        Some(
-            Format::DateTime
-                | Format::Date
-                | Format::AppointmentDateTime
-                | Format::DateWithinDays(_)
-        )
-    );
     let escaped = raw.replace('\\', "\\\\").replace('\'', "\\'");
-    if is_datetime_format && !matches!(scalar, FieldType::String) {
+    if date_kind(field).is_some() && !matches!(scalar, FieldType::String) {
         format!("d'{escaped}'")
     } else {
         format!("'{escaped}'")
@@ -148,11 +157,11 @@ pub(crate) fn literal_to_raw(literal: &str) -> String {
 
 #[cfg(feature = "schemasync")]
 impl Mockmaker<'_> {
-    pub fn generate_coordinated_values(&mut self) {
+    pub fn generate_coordinated_values(&mut self) -> Result<(), EvenframeError> {
         tracing::debug!("Generating coordinated values for all tables");
 
         // Build coordination groups from the tables
-        let coordination_groups = self.build_coordination_groups();
+        let coordination_groups = self.build_coordination_groups()?;
 
         // Clear existing coordinated values
         self.coordinated_values.clear();
@@ -163,11 +172,8 @@ impl Mockmaker<'_> {
             let n = coordination_group
                 .tables
                 .iter()
-                .filter_map(|table_name| {
-                    self.tables
-                        .get(table_name)
-                        .and_then(|tc| tc.mock_generation_config.as_ref().map(|c| c.n))
-                })
+                .filter_map(|table_name| self.tables.get(table_name))
+                .map(|table| self.record_count(table.effective()))
                 .max()
                 .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count);
 
@@ -176,21 +182,11 @@ impl Mockmaker<'_> {
                 for coordination_pair in &coordination_group.coordination_pairs {
                     match &coordination_pair.coordination {
                         Coordination::InitializeEqual(_) => {
-                            // Get the table config for the first coordinated field
-                            let first_coord = &coordination_pair.coordinated_fields[0];
-                            let table_config = self
-                                .tables
-                                .get(&first_coord.table_name)
-                                .expect("Table config not found");
-
-                            let value = FieldValueGenerator::builder()
-                                .field(&first_coord.get_field(self))
-                                .id_index(&index)
-                                .mockmaker(self)
-                                .table_config(table_config)
-                                .registry(self.registry)
-                                .build()
-                                .run();
+                            let Some(first_coord) = coordination_pair.coordinated_fields.first()
+                            else {
+                                continue;
+                            };
+                            let value = self.generate_coordinated_field(first_coord, index)?;
 
                             for coordination_id in &coordination_pair.coordinated_fields {
                                 self.coordinated_values
@@ -207,12 +203,11 @@ impl Mockmaker<'_> {
                                 .coordinated_fields
                                 .iter()
                                 .map(|coord_id| coord_id.get_field(self))
-                                .collect();
+                                .collect::<Result<_, _>>()?;
                             let field_refs: Vec<&StructField> = fields.iter().collect();
 
                             // Generate sequential values using the dedicated function
-                            let values =
-                                Self::generate_sequential_values(&field_refs, index, increment);
+                            let values = Self::generate_sequential_values(&field_refs, increment);
 
                             // Store the generated values
                             for coordination_id in &coordination_pair.coordinated_fields {
@@ -223,7 +218,11 @@ impl Mockmaker<'_> {
                                     .unwrap_or(&coordination_id.field_name);
 
                                 if let Some(value) = values.get(field_name) {
-                                    self.store_raw_coordinated_value(index, coordination_id, value);
+                                    self.store_raw_coordinated_value(
+                                        index,
+                                        coordination_id,
+                                        value,
+                                    )?;
                                 }
                             }
                         }
@@ -236,11 +235,11 @@ impl Mockmaker<'_> {
                                 .coordinated_fields
                                 .iter()
                                 .map(|coord_id| coord_id.get_field(self))
-                                .collect();
+                                .collect::<Result<_, _>>()?;
                             let field_refs: Vec<&StructField> = fields.iter().collect();
 
                             // Generate sum values using the dedicated function
-                            let values = Self::generate_sum_values(&field_refs, index, *total);
+                            let values = Self::generate_sum_values(&field_refs, *total);
 
                             // Store the generated values
                             for coordination_id in &coordination_pair.coordinated_fields {
@@ -251,7 +250,11 @@ impl Mockmaker<'_> {
                                     .unwrap_or(&coordination_id.field_name);
 
                                 if let Some(value) = values.get(field_name) {
-                                    self.store_raw_coordinated_value(index, coordination_id, value);
+                                    self.store_raw_coordinated_value(
+                                        index,
+                                        coordination_id,
+                                        value,
+                                    )?;
                                 }
                             }
                         }
@@ -273,7 +276,7 @@ impl Mockmaker<'_> {
                                     .unwrap_or(&coordination_id.field_name);
 
                                 if source_field_names.contains(&field_name.to_string()) {
-                                    source_fields.push(coordination_id.get_field(self));
+                                    source_fields.push(coordination_id.get_field(self)?);
                                     source_coord_ids.push(coordination_id.clone());
                                 } else if field_name == target_field_name {
                                     target_coord_id = Some(coordination_id.clone());
@@ -285,18 +288,7 @@ impl Mockmaker<'_> {
                             for (coord_id, field) in
                                 source_coord_ids.iter().zip(source_fields.iter())
                             {
-                                let table_config = self
-                                    .tables
-                                    .get(&coord_id.table_name)
-                                    .expect("Table config not found");
-                                let value = FieldValueGenerator::builder()
-                                    .field(field)
-                                    .id_index(&index)
-                                    .mockmaker(self)
-                                    .table_config(table_config)
-                                    .registry(self.registry)
-                                    .build()
-                                    .run();
+                                let value = self.generate_coordinated_field(coord_id, index)?;
 
                                 let field_name = field.field_name.clone();
                                 source_values_map.insert(field_name, literal_to_raw(&value));
@@ -318,7 +310,7 @@ impl Mockmaker<'_> {
                             if let (Some(target_id), Some(value)) =
                                 (target_coord_id, derived_values.get(target_field_name))
                             {
-                                self.store_raw_coordinated_value(index, &target_id, value);
+                                self.store_raw_coordinated_value(index, &target_id, value)?;
                             }
                         }
                         Coordination::OneToOne(_) => {
@@ -326,20 +318,7 @@ impl Mockmaker<'_> {
                             // at generation time, not through pre-computed values.
                         }
                         Coordination::InitializeCoherent(coherent_dataset) => {
-                            // Collect the fields for this coordination
-                            let fields: Vec<StructField> = coordination_pair
-                                .coordinated_fields
-                                .iter()
-                                .map(|coord_id| coord_id.get_field(self))
-                                .collect();
-                            let field_refs: Vec<&StructField> = fields.iter().collect();
-
-                            // Generate coherent values using the dedicated function
-                            let values = Self::generate_coherent_values(
-                                &field_refs,
-                                coherent_dataset,
-                                index,
-                            );
+                            let values = Self::generate_coherent_values(coherent_dataset, index);
 
                             // Store the generated values
                             // For coherent datasets, we need to match the field name from the dataset
@@ -354,7 +333,11 @@ impl Mockmaker<'_> {
 
                                 // Try exact match first
                                 if let Some(value) = values.get(field_key) {
-                                    self.store_raw_coordinated_value(index, coordination_id, value);
+                                    self.store_raw_coordinated_value(
+                                        index,
+                                        coordination_id,
+                                        value,
+                                    )?;
                                 } else {
                                     // Try to find a matching key in the values map
                                     for (key, value) in &values {
@@ -365,7 +348,7 @@ impl Mockmaker<'_> {
                                                 index,
                                                 coordination_id,
                                                 value,
-                                            );
+                                            )?;
                                             break;
                                         }
                                     }
@@ -376,6 +359,25 @@ impl Mockmaker<'_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A generated value for the coordinated field `id` of record `index`.
+    fn generate_coordinated_field(
+        &self,
+        id: &CoordinationId,
+        index: usize,
+    ) -> Result<String, EvenframeError> {
+        let field = id.get_field(self)?;
+        let table_config = self.table(&id.table_name)?;
+        FieldValueGenerator::builder()
+            .field(&field)
+            .id_index(&index)
+            .mockmaker(self)
+            .table_config(table_config)
+            .registry(self.registry)
+            .build()
+            .run()
     }
 
     /// Store a raw (unquoted) coordinated value for record `index`, rendered
@@ -385,114 +387,54 @@ impl Mockmaker<'_> {
         index: usize,
         coordination_id: &CoordinationId,
         raw: &str,
-    ) {
-        let field = coordination_id.get_field(self);
+    ) -> Result<(), EvenframeError> {
+        let field = coordination_id.get_field(self)?;
         self.coordinated_values.insert(
             (index, coordination_id.clone()),
             coordinated_literal(&field, raw),
         );
+        Ok(())
     }
 
-    /// Generate sequential values for fields
+    /// Values for `fields` that step by `increment`: dates or datetimes
+    /// from a base, or numbers from a random start.
     pub fn generate_sequential_values(
         fields: &[&StructField],
-        _index: usize,
         increment: &CoordinateIncrement,
     ) -> BTreeMap<String, String> {
         tracing::trace!(field_count = fields.len(), "Generating sequential values");
-        let mut values = BTreeMap::new();
-
-        // Generate base value
-        let first_field = &fields[0];
-
-        match &first_field.format {
-            Some(Format::DateTime) => {
-                // Generate base datetime
-                let base: DateTime<Utc> = Utc::now();
-                values.insert(first_field.field_name.clone(), base.to_rfc3339());
-
-                // Generate subsequent values
-                for (i, field) in fields.iter().skip(1).enumerate() {
-                    let incremented = match increment {
-                        CoordinateIncrement::Days(d) => {
-                            base + Duration::days(*d as i64 * (i + 1) as i64)
-                        }
-                        CoordinateIncrement::Hours(h) => {
-                            base + Duration::hours(*h as i64 * (i + 1) as i64)
-                        }
-                        CoordinateIncrement::Minutes(m) => {
-                            base + Duration::minutes(*m as i64 * (i + 1) as i64)
-                        }
-                        _ => base, // Fallback to base if increment type doesn't match
-                    };
-                    values.insert(field.field_name.clone(), incremented.to_rfc3339());
-                }
+        let Some(first_field) = fields.first() else {
+            return BTreeMap::new();
+        };
+        let kind = date_kind(first_field);
+        let now = Utc::now();
+        let base: f64 = rand::rng().random_range(0.0..100.0);
+        let step = |i: usize| {
+            let i = i as i64;
+            match increment {
+                CoordinateIncrement::Days(d) => Duration::days(i64::from(*d) * i),
+                CoordinateIncrement::Hours(h) => Duration::hours(i64::from(*h) * i),
+                CoordinateIncrement::Minutes(m) => Duration::minutes(i64::from(*m) * i),
+                CoordinateIncrement::Numeric(_) => Duration::zero(),
             }
-            Some(Format::Date) => {
-                // Generate base date
-                let base = NaiveDate::from_ymd_opt(2024, 1, 1)
-                    .or_else(|| NaiveDate::from_ymd_opt(2024, 1, 2))
-                    .or_else(|| NaiveDate::from_ymd_opt(2023, 12, 31))
-                    .expect("At least one of these dates should be valid");
-                values.insert(first_field.field_name.clone(), base.to_string());
-
-                // Generate subsequent values
-                for (i, field) in fields.iter().skip(1).enumerate() {
-                    let incremented = match increment {
-                        CoordinateIncrement::Days(d) => {
-                            base + Duration::days(*d as i64 * (i + 1) as i64)
-                        }
-                        _ => base, // For dates, only day increment makes sense
-                    };
-                    values.insert(field.field_name.clone(), incremented.to_string());
-                }
-            }
-            Some(Format::DateWithinDays(_)) => {
-                // Generate base datetime for DateWithinDays format
-                let base: DateTime<Utc> = Utc::now();
-                values.insert(first_field.field_name.clone(), base.to_rfc3339());
-
-                // Generate subsequent values
-                for (i, field) in fields.iter().skip(1).enumerate() {
-                    let incremented = match increment {
-                        CoordinateIncrement::Days(d) => {
-                            base + Duration::days(*d as i64 * (i + 1) as i64)
-                        }
-                        CoordinateIncrement::Hours(h) => {
-                            base + Duration::hours(*h as i64 * (i + 1) as i64)
-                        }
-                        CoordinateIncrement::Minutes(m) => {
-                            base + Duration::minutes(*m as i64 * (i + 1) as i64)
-                        }
-                        _ => base, // Fallback to base if increment type doesn't match
-                    };
-                    values.insert(field.field_name.clone(), incremented.to_rfc3339());
-                }
-            }
-            _ => {
-                // Numeric sequential
-                let mut rng = rand::rng();
-                let base: f64 = rng.random_range(0.0..100.0);
-
-                for (i, field) in fields.iter().enumerate() {
-                    let value = match increment {
-                        CoordinateIncrement::Numeric(n) => base + (n * i as f64),
-                        _ => base + i as f64,
-                    };
-                    values.insert(field.field_name.clone(), value.to_string());
-                }
-            }
-        }
-
-        values
+        };
+        fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let value = match (kind, increment) {
+                    (Some(DateKind::Date), _) => (BASE_DATE + step(i)).to_string(),
+                    (Some(DateKind::DateTime), _) => (now + step(i)).to_rfc3339(),
+                    (None, CoordinateIncrement::Numeric(n)) => (base + n * i as f64).to_string(),
+                    (None, _) => (base + i as f64).to_string(),
+                };
+                (field.field_name.clone(), value)
+            })
+            .collect()
     }
 
     /// Generate values that sum to a total
-    fn generate_sum_values(
-        fields: &[&StructField],
-        _index: usize,
-        total: f64,
-    ) -> BTreeMap<String, String> {
+    fn generate_sum_values(fields: &[&StructField], total: f64) -> BTreeMap<String, String> {
         tracing::trace!(
             field_count = fields.len(),
             total = total,
@@ -525,21 +467,16 @@ impl Mockmaker<'_> {
             .any(|f| matches!(f.format, Some(Format::Percentage)));
 
         if is_percentage {
-            // For percentages, we need to ensure the formatted values still sum to exactly 100
+            // Round all but the last value, which takes the rest, so the
+            // rounded values still sum to the total.
             let mut formatted_values = Vec::new();
             let mut formatted_sum = 0.0;
-
-            // Format all but the last value
-            for value in generated_values {
-                let formatted = format!("{:.1}", value);
-                let parsed = formatted.parse::<f64>().unwrap_or(value);
-                formatted_sum += parsed;
-                formatted_values.push(formatted);
+            for value in &generated_values[..generated_values.len() - 1] {
+                let rounded = (value * 10.0).round() / 10.0;
+                formatted_sum += rounded;
+                formatted_values.push(format!("{rounded:.1}"));
             }
-
-            // Calculate what the last value should be to maintain exact sum
-            let last_value = total - formatted_sum;
-            formatted_values.push(format!("{:.1}", last_value));
+            formatted_values.push(format!("{:.1}", total - formatted_sum));
 
             // Assign the formatted values
             for (field, formatted_value) in fields.iter().zip(formatted_values.iter()) {
@@ -655,7 +592,6 @@ impl Mockmaker<'_> {
 
     /// Generate coherent values from predefined datasets
     fn generate_coherent_values(
-        _fields: &[&StructField],
         dataset: &crate::schemasync::mockmake::coordinate::CoherentDataset,
         index: usize,
     ) -> BTreeMap<String, String> {
@@ -740,10 +676,7 @@ impl Mockmaker<'_> {
                 end_date,
             } => {
                 // Generate coherent start/end dates
-                let base = NaiveDate::from_ymd_opt(2024, 1, 1)
-                    .or_else(|| NaiveDate::from_ymd_opt(2024, 1, 2))
-                    .or_else(|| NaiveDate::from_ymd_opt(2023, 12, 31))
-                    .expect("At least one of these dates should be valid");
+                let base = BASE_DATE;
                 let start_offset = (index * 7) as i64; // Weekly intervals
                 let duration_days = 14; // 2 week duration
 
@@ -942,48 +875,29 @@ impl Coordination {
             }
 
             Coordination::InitializeSequential { increment, .. } => {
-                // Fields must be compatible with the increment type
                 for (coord_id, field) in &fields {
-                    match increment {
-                        CoordinateIncrement::Days(_)
-                        | CoordinateIncrement::Hours(_)
-                        | CoordinateIncrement::Minutes(_) => match &field.field_type {
-                            FieldType::Other(name) if is_datetime_like(name) => {}
-                            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) =>
-                                {}
-                            _ => {
-                                return Err(EvenframeError::Validation(format!(
-                                    "InitializeSequential with time increment: Field '{}' must be DateTime type, got {:?}",
-                                    coord_id.field_name, field.field_type
-                                )));
-                            }
-                        },
-                        CoordinateIncrement::Numeric(_) => {
-                            if !is_numeric_type(&field.field_type) {
-                                return Err(EvenframeError::Validation(format!(
-                                    "InitializeSequential with numeric increment: Field '{}' must be numeric type, got {:?}",
-                                    coord_id.field_name, field.field_type
-                                )));
-                            }
+                    let fits = match increment {
+                        CoordinateIncrement::Days(_) => date_kind(field).is_some(),
+                        CoordinateIncrement::Hours(_) | CoordinateIncrement::Minutes(_) => {
+                            date_kind(field) == Some(DateKind::DateTime)
                         }
-                        CoordinateIncrement::Custom(_) => {
-                            // Custom increment - we'll allow any type but warn
-                            tracing::warn!(
-                                "Custom increment used for field '{}' - type validation skipped",
-                                coord_id.field_name
-                            );
-                        }
+                        CoordinateIncrement::Numeric(_) => is_numeric_type(&field.field_type),
+                    };
+                    if !fits {
+                        return Err(EvenframeError::Validation(format!(
+                            "InitializeSequential: field '{}' ({:?}, format {:?}) cannot step by {increment:?}; \
+                             days step dates and datetimes, hours and minutes step datetimes, \
+                             and numeric steps need a numeric field",
+                            coord_id.field_name, field.field_type, field.format
+                        )));
                     }
-
-                    // All fields should have the same format
-                    if fields.len() > 1 {
-                        let first_format = &fields[0].1.format;
-                        if &field.format != first_format {
-                            return Err(EvenframeError::Validation(format!(
-                                "InitializeSequential: Field '{}' has format {:?}, but expected format {:?} to match other fields",
-                                coord_id.field_name, field.format, first_format
-                            )));
-                        }
+                    if let Some((_, first)) = fields.first()
+                        && field.format != first.format
+                    {
+                        return Err(EvenframeError::Validation(format!(
+                            "InitializeSequential: field '{}' has format {:?}, but the first field has {:?}",
+                            coord_id.field_name, field.format, first.format
+                        )));
                     }
                 }
             }
@@ -1341,14 +1255,12 @@ fn validate_datetime_field(
                 ))
             })?;
 
-        match &field.1.field_type {
-            FieldType::Other(name) if is_datetime_like(name) => {}
-            FieldType::Option(inner) if matches!(**inner, FieldType::Other(ref name) if is_datetime_like(name)) =>
-                {}
-            _ => {
+        match date_kind(&field.1) {
+            Some(_) => {}
+            None => {
                 return Err(EvenframeError::Validation(format!(
-                    "Coherent dataset field '{}' must be DateTime type, got {:?}",
-                    label, field.1.field_type
+                    "Coherent dataset field '{}' must be a date or datetime, got {:?} with format {:?}",
+                    label, field.1.field_type, field.1.format
                 )));
             }
         }
@@ -1362,7 +1274,6 @@ pub enum CoordinateIncrement {
     Hours(i32),
     Minutes(i32),
     Numeric(f64),
-    Custom(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TryFromExpr)]
@@ -1846,7 +1757,7 @@ mod tests {
         };
 
         for i in 0..100 {
-            let values = Mockmaker::generate_coherent_values(&[], &dataset, i);
+            let values = Mockmaker::generate_coherent_values(&dataset, i);
             let lat: f64 = values["lat"].parse().expect("lat should be a valid f64");
             let lng: f64 = values["lng"].parse().expect("lng should be a valid f64");
 
@@ -1876,7 +1787,7 @@ mod tests {
 
         let mut lats = std::collections::BTreeSet::new();
         for i in 0..20 {
-            let values = Mockmaker::generate_coherent_values(&[], &dataset, i);
+            let values = Mockmaker::generate_coherent_values(&dataset, i);
             lats.insert(values["lat"].clone());
         }
         assert!(
@@ -1884,5 +1795,171 @@ mod tests {
             "GeoRadius should produce varied coordinates, got {} unique values",
             lats.len()
         );
+    }
+}
+
+/// The path generated code names coordination types by.
+fn coordinate_path(name: &str) -> proc_macro2::TokenStream {
+    let ident = proc_macro2::Ident::new(name, proc_macro2::Span::call_site());
+    quote::quote! { ::evenframe::schemasync::coordinate::#ident }
+}
+
+impl quote::ToTokens for Coordination {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let ty = coordinate_path("Coordination");
+        tokens.extend(match self {
+            Coordination::InitializeEqual(fields) => {
+                quote::quote! { #ty::InitializeEqual(vec![#(#fields.to_string()),*]) }
+            }
+            Coordination::InitializeSequential {
+                field_names,
+                increment,
+            } => quote::quote! {
+                #ty::InitializeSequential {
+                    field_names: vec![#(#field_names.to_string()),*],
+                    increment: #increment,
+                }
+            },
+            Coordination::InitializeSum { field_names, total } => quote::quote! {
+                #ty::InitializeSum {
+                    field_names: vec![#(#field_names.to_string()),*],
+                    total: #total,
+                }
+            },
+            Coordination::InitializeDerive {
+                source_field_names,
+                target_field_name,
+                derivation,
+            } => quote::quote! {
+                #ty::InitializeDerive {
+                    source_field_names: vec![#(#source_field_names.to_string()),*],
+                    target_field_name: #target_field_name.to_string(),
+                    derivation: #derivation,
+                }
+            },
+            Coordination::InitializeCoherent(dataset) => {
+                quote::quote! { #ty::InitializeCoherent(#dataset) }
+            }
+            Coordination::OneToOne(field) => {
+                quote::quote! { #ty::OneToOne(#field.to_string()) }
+            }
+        });
+    }
+}
+
+impl quote::ToTokens for CoordinateIncrement {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let ty = coordinate_path("CoordinateIncrement");
+        tokens.extend(match self {
+            CoordinateIncrement::Days(n) => quote::quote! { #ty::Days(#n) },
+            CoordinateIncrement::Hours(n) => quote::quote! { #ty::Hours(#n) },
+            CoordinateIncrement::Minutes(n) => quote::quote! { #ty::Minutes(#n) },
+            CoordinateIncrement::Numeric(n) => quote::quote! { #ty::Numeric(#n) },
+        });
+    }
+}
+
+impl quote::ToTokens for DerivationType {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let ty = coordinate_path("DerivationType");
+        tokens.extend(match self {
+            DerivationType::Concatenate(separator) => {
+                quote::quote! { #ty::Concatenate(#separator.to_string()) }
+            }
+            DerivationType::Extract(extract) => {
+                let variant = proc_macro2::Ident::new(
+                    match extract {
+                        ExtractType::FirstWord => "FirstWord",
+                        ExtractType::LastWord => "LastWord",
+                        ExtractType::Domain => "Domain",
+                        ExtractType::Username => "Username",
+                        ExtractType::Initials => "Initials",
+                    },
+                    proc_macro2::Span::call_site(),
+                );
+                let extract_ty = coordinate_path("ExtractType");
+                quote::quote! { #ty::Extract(#extract_ty::#variant) }
+            }
+            DerivationType::Transform(transform) => {
+                let transform_ty = coordinate_path("TransformType");
+                let transform = match transform {
+                    TransformType::Uppercase => quote::quote! { #transform_ty::Uppercase },
+                    TransformType::Lowercase => quote::quote! { #transform_ty::Lowercase },
+                    TransformType::Capitalize => quote::quote! { #transform_ty::Capitalize },
+                    TransformType::Truncate(n) => quote::quote! { #transform_ty::Truncate(#n) },
+                    TransformType::Hash => quote::quote! { #transform_ty::Hash },
+                };
+                quote::quote! { #ty::Transform(#transform) }
+            }
+        });
+    }
+}
+
+impl quote::ToTokens for CoherentDataset {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let ty = coordinate_path("CoherentDataset");
+        tokens.extend(match self {
+            CoherentDataset::Address {
+                city,
+                state,
+                zip,
+                country,
+            } => quote::quote! {
+                #ty::Address {
+                    city: #city.to_string(),
+                    state: #state.to_string(),
+                    zip: #zip.to_string(),
+                    country: #country.to_string(),
+                }
+            },
+            CoherentDataset::PersonName {
+                first_name,
+                last_name,
+                full_name,
+            } => quote::quote! {
+                #ty::PersonName {
+                    first_name: #first_name.to_string(),
+                    last_name: #last_name.to_string(),
+                    full_name: #full_name.to_string(),
+                }
+            },
+            CoherentDataset::GeoLocation {
+                latitude,
+                longitude,
+                city,
+                country,
+            } => quote::quote! {
+                #ty::GeoLocation {
+                    latitude: #latitude.to_string(),
+                    longitude: #longitude.to_string(),
+                    city: #city.to_string(),
+                    country: #country.to_string(),
+                }
+            },
+            CoherentDataset::DateRange {
+                start_date,
+                end_date,
+            } => quote::quote! {
+                #ty::DateRange {
+                    start_date: #start_date.to_string(),
+                    end_date: #end_date.to_string(),
+                }
+            },
+            CoherentDataset::GeoRadius {
+                latitude,
+                longitude,
+                center_lat,
+                center_lng,
+                radius_km,
+            } => quote::quote! {
+                #ty::GeoRadius {
+                    latitude: #latitude.to_string(),
+                    longitude: #longitude.to_string(),
+                    center_lat: #center_lat,
+                    center_lng: #center_lng,
+                    radius_km: #radius_km,
+                }
+            },
+        });
     }
 }
