@@ -490,8 +490,12 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             }
         } else {
             // App (non-table) struct. Generate a `static_struct_config()` method
-            // and submit it to OBJECT_REGISTRY, so `get_struct_config(name)`
-            // finds app structs as well as tables.
+            // and submit it to OBJECT_REGISTRY so the runtime value-emission path
+            // can walk fields with their real `FieldType`s. Without this,
+            // `get_struct_config(name)` returns `None`, and embedded structs
+            // fall through to `to_surreal_string_inferred` — which doesn't know
+            // a `RecordLink<T>` field is anything other than a generic string,
+            // so it emits `'product:1'` (quoted) instead of `product:1` (record).
             let struct_config_impl = quote! {
                 impl #ident {
                     pub fn static_struct_config() -> ::evenframe::types::StructConfig {
