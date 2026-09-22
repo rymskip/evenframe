@@ -1,3 +1,5 @@
+mod bump;
+
 use clap::{Parser, Subcommand};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -45,6 +47,13 @@ enum Cmd {
         #[arg(long)]
         fail_fast: bool,
     },
+
+    /// Bump the version of every published crate, repin dependencies on
+    /// them, and refresh every tracked lockfile
+    Bump {
+        #[arg(value_enum)]
+        level: bump::BumpLevel,
+    },
 }
 
 #[derive(Subcommand)]
@@ -74,6 +83,7 @@ fn main() -> ExitCode {
         } => cmd_test(snapshot, e2e, derive, &features, &extra),
         Cmd::Snapshot { action } => cmd_snapshot(action),
         Cmd::Verify { fail_fast } => cmd_verify(fail_fast),
+        Cmd::Bump { level } => bump::cmd_bump(level),
     };
 
     if ok {

@@ -28,6 +28,4 @@ pub mod flatbuffers;
 pub mod protobuf;
 
 #[cfg(feature = "macroforge")]
-pub mod effect_template;
-#[cfg(feature = "macroforge")]
 pub mod macroforge;

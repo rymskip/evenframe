@@ -21,6 +21,8 @@ test-derive = "cargo run -p tooling -- test --derive"
 snapshot-accept = "cargo run -p tooling -- snapshot accept"
 snapshot-review = "cargo run -p tooling -- snapshot review"
 snapshot-update = "cargo run -p tooling -- snapshot update"
+# Takes the level: `pixi run bump patch` (or minor, major).
+bump = "cargo run -p tooling -- bump"
 
 [dependencies]
 # Rust toolchain manager from brads-forge. The active rust version, components,
