@@ -1,6 +1,6 @@
 [package]
 name = "evenframe"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -43,7 +43,7 @@ typesync-all = ["evenframe_core/typesync-all"]
 protobuf = ["evenframe_core/protobuf"]
 # FlatBuffers (.fbs) generation. Implies: typesync.
 flatbuffers = ["evenframe_core/flatbuffers"]
-# Macroforge template-based TypeScript generation. Implies: typesync.
+# Macroforge TypeScript interface generation. Implies: typesync.
 macroforge = ["evenframe_core/macroforge"]
 
 # --- Schema synchronization (forwarded to evenframe_core) ---
@@ -70,7 +70,7 @@ full = ["evenframe_core/full"]
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.5.1", path = "../evenframe_core", default-features = false, features = ["cli"] }
+evenframe_core = { version = "0.5.2", path = "../evenframe_core", default-features = false, features = ["cli"] }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }
@@ -83,7 +83,7 @@ serde_json = { workspace = true }
 yaml_serde = "0.10.7"
 url = { workspace = true }
 uuid = { workspace = true }
-evenframe_derive = { version = "0.5.1", path = "../evenframe_derive" }
+evenframe_derive = { version = "0.5.2", path = "../evenframe_derive" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5.0"
 linkme = "0.3.37"

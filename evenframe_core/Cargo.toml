@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_core"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -42,10 +42,9 @@ protobuf = ["typesync"]
 # Implies: typesync
 flatbuffers = ["typesync"]
 
-# Enables Macroforge template-based TypeScript generation with JSDoc annotations.
-# Pulls in the `macroforge_ts` template engine.
+# Enables Macroforge TypeScript interface generation with JSDoc annotations.
 # Implies: typesync
-macroforge = ["typesync", "dep:macroforge_ts"]
+macroforge = ["typesync"]
 
 # Enables all typesync generators: ArkType, Effect-TS, Protocol Buffers,
 # FlatBuffers, and Macroforge.
@@ -141,16 +140,13 @@ bon = "3.10.1"
 rand = "0.10.2"
 rand_distr = "0.6.0"
 uuid = { version = "1.26", features = ["v4", "serde"] }
+strum = { version = "0.28.0", features = ["derive"] }
 
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
 
 # Optional: WASM plugin runtime
 wasmtime = { version = "48", optional = true }
-
-# Optional: typesync generator dependencies
-macroforge_ts = { version = "0.1.84", optional = true }
-strum = { version = "0.28.0", features = ["derive"] }
 
 [dev-dependencies]
 proptest = "1.11"

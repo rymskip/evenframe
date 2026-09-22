@@ -11,7 +11,6 @@ use crate::validator::{
     NumberValidator, StringValidator, Validator,
 };
 use convert_case::{Case, Casing};
-use macroforge_ts::macros::ts_template;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Pick the StructConfig view to emit fields and metadata from.
@@ -293,7 +292,7 @@ fn render_variant_externally_tagged(
             format!(
                 "{{ {}: {} }}",
                 variant.name,
-                field_type_to_typescript(ft, array_style, registry).trim()
+                field_type_to_typescript(ft, array_style, registry)
             )
         }
         None => format!("\"{}\"", variant.name),
@@ -327,7 +326,7 @@ fn render_variant_internally_tagged(
                 "{{ {}: '{}' }} & {}",
                 tag,
                 variant.name,
-                field_type_to_typescript(ft, array_style, registry).trim()
+                field_type_to_typescript(ft, array_style, registry)
             )
         }
         None => format!("{{ {}: '{}' }}", tag, variant.name),
@@ -359,7 +358,7 @@ fn render_variant_adjacently_tagged(
                 tag,
                 variant.name,
                 content,
-                field_type_to_typescript(ft, array_style, registry).trim()
+                field_type_to_typescript(ft, array_style, registry)
             )
         }
         None => format!("{{ {}: '{}' }}", tag, variant.name),
@@ -376,8 +375,6 @@ fn render_variant_untagged(
         Some(VariantData::InlineStruct(s)) => s.struct_name.to_case(Case::Pascal),
         Some(VariantData::DataStructureRef(ft)) => {
             field_type_to_typescript(ft, array_style, registry)
-                .trim()
-                .to_string()
         }
         None => format!("\"{}\"", variant.name),
     }
@@ -436,7 +433,7 @@ fn render_field_block(
         field_type_to_typescript(&field.field_type, array_style, registry)
     };
 
-    lines.push(format!("  {}: {};", field_name, type_str.trim()));
+    lines.push(format!("  {}: {};", field_name, type_str));
 
     lines.join("\n")
 }
@@ -457,45 +454,50 @@ fn field_type_to_typescript(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Check for foreign type in Other variant before using ts_template
-    if let FieldType::Other(type_name) = field_type
-        && let Some(ftc) = registry.lookup(type_name)
-        && !ftc.macroforge.is_empty()
-    {
-        return format!(" {}", ftc.macroforge);
+    let render = |inner: &FieldType| field_type_to_typescript(inner, array_style, registry);
+    match field_type {
+        FieldType::String | FieldType::Char => "string".to_string(),
+        FieldType::Bool => "boolean".to_string(),
+        FieldType::Unit => "null".to_string(),
+        FieldType::F32
+        | FieldType::F64
+        | FieldType::I8
+        | FieldType::I16
+        | FieldType::I32
+        | FieldType::I64
+        | FieldType::I128
+        | FieldType::Isize
+        | FieldType::U8
+        | FieldType::U16
+        | FieldType::U32
+        | FieldType::U64
+        | FieldType::U128
+        | FieldType::Usize => "number".to_string(),
+        FieldType::Option(inner) => {
+            format!("{} | null", wrap_union_type(inner, array_style, registry))
+        }
+        FieldType::Vec(inner) => format_array(inner, array_style, registry),
+        FieldType::Tuple(items) => format!(
+            "[{}]",
+            items.iter().map(render).collect::<Vec<_>>().join(", ")
+        ),
+        FieldType::Struct(fields) => format!(
+            "{{ {} }}",
+            fields
+                .iter()
+                .map(|(name, field)| format!("{name}: {}", render(field)))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        FieldType::RecordLink(inner) => format!("RecordLink<{}>", render(inner)),
+        FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
+            format!("Record<{}, {}>", render(key), render(value))
+        }
+        FieldType::Other(type_name) => match registry.lookup(type_name) {
+            Some(foreign) if !foreign.macroforge.is_empty() => foreign.macroforge.clone(),
+            _ => type_name.to_case(Case::Pascal),
+        },
     }
-    ts_template! {
-        {#match field_type}
-            {:case FieldType::String | FieldType::Char}
-                string
-            {:case FieldType::Bool}
-                boolean
-            {:case FieldType::Unit}
-                null
-            {:case FieldType::F32 | FieldType::F64}
-                number
-            {:case FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 | FieldType::I128 | FieldType::Isize}
-                number
-            {:case FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 | FieldType::U128 | FieldType::Usize}
-                number
-            {:case FieldType::Option(inner)}
-                @{wrap_union_type(inner, array_style, registry)} | null
-            {:case FieldType::Vec(inner)}
-                @{format_array(inner, array_style, registry)}
-            {:case FieldType::Tuple(items)}
-                [@{items.iter().map(|ft| field_type_to_typescript(ft, array_style, registry)).collect::<Vec<_>>().join(", ")}]
-            {:case FieldType::Struct(fields)}
-                { @{fields.iter().map(|(name, ft)| format!("{}: {}", name, field_type_to_typescript(ft, array_style, registry))).collect::<Vec<_>>().join("; ")} }
-            {:case FieldType::RecordLink(inner)}
-                RecordLink<@{field_type_to_typescript(inner, array_style, registry).trim()}>
-            {:case FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value)}
-                Record<@{field_type_to_typescript(key, array_style, registry)}, @{field_type_to_typescript(value, array_style, registry)}>
-            {:case FieldType::Other(type_name)}
-                @{type_name.to_case(Case::Pascal)}
-        {/match}
-    }
-    .source()
-    .to_string()
 }
 
 /// Format a Vec type as either `Type[]` (shorthand) or `Array<Type>` (generic).
@@ -511,7 +513,7 @@ fn format_array(
         ArrayStyle::Generic => {
             format!(
                 "Array<{}>",
-                field_type_to_typescript(inner, array_style, registry).trim()
+                field_type_to_typescript(inner, array_style, registry)
             )
         }
     }
@@ -527,11 +529,10 @@ fn wrap_union_type(
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     let rendered = field_type_to_typescript(ft, array_style, registry);
-    let trimmed = rendered.trim();
     if matches!(ft, FieldType::Option(_)) && array_style == ArrayStyle::Shorthand {
-        format!("({})", trimmed)
+        format!("({rendered})")
     } else {
-        trimmed.to_string()
+        rendered
     }
 }
 
@@ -622,7 +623,7 @@ fn render_field_type(
             return format!(
                 "{} RecordLink<{}>",
                 serde_annotation,
-                field_type_to_typescript(inner, array_style, registry).trim()
+                field_type_to_typescript(inner, array_style, registry)
             );
         }
     }
@@ -1216,11 +1217,22 @@ mod tests {
     fn test_field_type_to_typescript() {
         let registry = crate::types::ForeignTypeRegistry::default();
         let s = ArrayStyle::Shorthand;
-        // ts_template! adds whitespace, so we trim for comparison
-        assert!(field_type_to_typescript(&FieldType::String, s, &registry).trim() == "string");
-        assert!(field_type_to_typescript(&FieldType::Bool, s, &registry).trim() == "boolean");
-        assert!(field_type_to_typescript(&FieldType::I32, s, &registry).trim() == "number");
-        assert!(field_type_to_typescript(&FieldType::F64, s, &registry).trim() == "number");
+        assert_eq!(
+            field_type_to_typescript(&FieldType::String, s, &registry),
+            "string"
+        );
+        assert_eq!(
+            field_type_to_typescript(&FieldType::Bool, s, &registry),
+            "boolean"
+        );
+        assert_eq!(
+            field_type_to_typescript(&FieldType::I32, s, &registry),
+            "number"
+        );
+        assert_eq!(
+            field_type_to_typescript(&FieldType::F64, s, &registry),
+            "number"
+        );
         assert!(
             field_type_to_typescript(
                 &FieldType::Option(Box::new(FieldType::String)),
@@ -1254,12 +1266,12 @@ mod tests {
         assert!(
             vec_output.contains("Array<number>"),
             "Expected Array<number>, got: {}",
-            vec_output.trim()
+            vec_output
         );
         assert!(
             !vec_output.contains("[]"),
             "Generic style should not contain [], got: {}",
-            vec_output.trim()
+            vec_output
         );
         // Vec<Option<String>> → Array<string | null>
         let vec_opt = field_type_to_typescript(
@@ -1270,7 +1282,97 @@ mod tests {
         assert!(
             vec_opt.contains("Array<") && vec_opt.contains("string") && vec_opt.contains("null"),
             "Expected Array<string | null>, got: {}",
-            vec_opt.trim()
+            vec_opt
+        );
+    }
+
+    #[test]
+    fn test_field_type_to_typescript_exact_output() {
+        let registry = make_datetime_registry();
+        let render = |field_type: FieldType, style: ArrayStyle| {
+            field_type_to_typescript(&field_type, style, &registry)
+        };
+        let s = ArrayStyle::Shorthand;
+        let g = ArrayStyle::Generic;
+        assert_eq!(render(FieldType::Unit, s), "null");
+        assert_eq!(render(FieldType::Char, s), "string");
+        assert_eq!(render(FieldType::U64, s), "number");
+        assert_eq!(
+            render(FieldType::Other("user_profile".to_string()), s),
+            "UserProfile"
+        );
+        assert_eq!(
+            render(FieldType::Other("DateTime".to_string()), s),
+            "DateTime.Utc"
+        );
+        assert_eq!(
+            render(FieldType::Option(Box::new(FieldType::String)), s),
+            "string | null"
+        );
+        assert_eq!(
+            render(
+                FieldType::Option(Box::new(FieldType::Vec(Box::new(FieldType::I32)))),
+                s
+            ),
+            "number[] | null"
+        );
+        assert_eq!(
+            render(
+                FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
+                s
+            ),
+            "(string | null)[]"
+        );
+        assert_eq!(
+            render(
+                FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
+                g
+            ),
+            "Array<string | null>"
+        );
+        assert_eq!(
+            render(
+                FieldType::Tuple(vec![
+                    FieldType::String,
+                    FieldType::Option(Box::new(FieldType::I32))
+                ]),
+                s
+            ),
+            "[string, number | null]"
+        );
+        assert_eq!(
+            render(
+                FieldType::Struct(vec![
+                    ("a".to_string(), FieldType::String),
+                    ("b".to_string(), FieldType::Vec(Box::new(FieldType::Bool))),
+                ]),
+                s
+            ),
+            "{ a: string; b: boolean[] }"
+        );
+        assert_eq!(
+            render(
+                FieldType::HashMap(Box::new(FieldType::String), Box::new(FieldType::I64)),
+                s
+            ),
+            "Record<string, number>"
+        );
+        assert_eq!(
+            render(
+                FieldType::BTreeMap(
+                    Box::new(FieldType::String),
+                    Box::new(FieldType::Other("DateTime".to_string()))
+                ),
+                s
+            ),
+            "Record<string, DateTime.Utc>"
+        );
+        assert_eq!(
+            render(
+                FieldType::RecordLink(Box::new(FieldType::Other("user".to_string()))),
+                s
+            ),
+            "RecordLink<User>"
         );
     }
 
@@ -1396,48 +1498,6 @@ mod tests {
         assert!(output.contains("email: string"));
         assert!(output.contains("password: string"));
         assert!(output.contains("age: number"));
-    }
-
-    #[test]
-    fn test_comment_syntax_comparison() {
-        // Both raw and interpolated JSDoc comments survive ts_template! as JSDoc
-        // (older macroforge_ts versions turned raw ones into `#[doc = ...]`).
-
-        // Raw comment syntax - the macro re-emits it as a JSDoc block
-        let raw_comment_output = ts_template! {
-            /** @derive(Deserialize) */
-            export interface Test {}
-        }
-        .source()
-        .to_string();
-
-        // Interpolated comment syntax - preserved as literal string
-        let interpolated_comment_output = ts_template! {
-            @{"/** @derive(Deserialize) */"}
-            export interface Test {}
-        }
-        .source()
-        .to_string();
-
-        println!("Raw comment output: {:?}", raw_comment_output);
-        println!(
-            "Interpolated comment output: {:?}",
-            interpolated_comment_output
-        );
-
-        // Raw comments come back as JSDoc (the macro may pad the closing `*/`)
-        assert!(
-            raw_comment_output.starts_with("/** @derive(Deserialize)")
-                && raw_comment_output.contains("*/")
-                && !raw_comment_output.contains("doc ="),
-            "Raw comments should be re-emitted as JSDoc"
-        );
-
-        // Interpolated comments preserve the JSDoc format
-        assert!(
-            interpolated_comment_output.contains("/** @derive(Deserialize) */"),
-            "Interpolated comments should preserve JSDoc syntax"
-        );
     }
 
     #[test]
