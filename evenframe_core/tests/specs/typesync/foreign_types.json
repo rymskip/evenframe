@@ -17,19 +17,21 @@
   "foreign_types": {
     "DateTime": {
       "rust_type_names": ["DateTime", "chrono::DateTime"],
-      "arktype": "'string'",
-      "effect_schema": "Schema.String",
-      "effect_encoded": "string",
+      "arktype": { "type": "'string'" },
+      "default_value_ts": "\"\"",
+      "effect": { "type": "Schema.String", "encoded": "string" },
       "protobuf": "string",
-      "flatbuffers": "string"
+      "flatbuffers": "string",
+      "macroforge": { "type": "string" }
     },
     "Duration": {
       "rust_type_names": ["Duration", "std::time::Duration"],
-      "arktype": "'number'",
-      "effect_schema": "Schema.Number",
-      "effect_encoded": "number",
+      "arktype": { "type": "'number'" },
+      "default_value_ts": "0",
+      "effect": { "type": "Schema.Number", "encoded": "number" },
       "protobuf": "int64",
-      "flatbuffers": "int64"
+      "flatbuffers": "int64",
+      "macroforge": { "type": "number" }
     }
   }
 }

@@ -8,6 +8,7 @@ Value: [[['string', '|', 'number'], '|', 'boolean'], '|', ['===', 'Nothing']],
 
 });
 
+const exported = bindings.export();
 
 
-export type Value = typeof bindings.Value.infer;
+export type Value = typeof exported.Value.infer;

@@ -2,4 +2,29 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class Address extends Schema.Class<Address>("Address")( { 
+  street: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'City' is required` })
+}) {[key: string]: unknown}
 
+export class Person extends Schema.Class<Person>("Person")( { 
+  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  homeAddress: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home Address' is required` }),
+  workAddress: Schema.OptionFromNullishOr(Address, null)
+}) {[key: string]: unknown}
+
+
+export interface AddressEncoded {
+  readonly street: string;
+  readonly city: string;
+}
+
+export interface PersonEncoded {
+  readonly name: string;
+  readonly homeAddress: AddressEncoded;
+  readonly workAddress: AddressEncoded | null | undefined;
+}
+
+
+export type AddressType = typeof Address.Type;
+export type PersonType = typeof Person.Type;

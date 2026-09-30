@@ -1,4 +1,4 @@
-//! E2E test for the dealdraft test_user WASM plugin.
+//! E2E test for the test_user WASM plugin.
 //!
 //! Verifies that record_index 0 generates the fixed e2e test user credentials
 //! and other indices fall back gracefully.
@@ -47,7 +47,7 @@ mod tests {
         let mut pm = create_plugin_manager();
         let result =
             pm.generate_field_value("test_user", &make_input("email", "Option(String)", 0));
-        assert_eq!(result.unwrap(), "'test@example.com'");
+        assert_eq!(result.unwrap().as_deref(), Some("'test@example.com'"));
     }
 
     #[test]
@@ -55,21 +55,21 @@ mod tests {
         let mut pm = create_plugin_manager();
         let result =
             pm.generate_field_value("test_user", &make_input("password", "Option(String)", 0));
-        assert_eq!(result.unwrap(), "'TestPassword123!'");
+        assert_eq!(result.unwrap().as_deref(), Some("'TestPassword123!'"));
     }
 
     #[test]
     fn test_user_first_name() {
         let mut pm = create_plugin_manager();
         let result = pm.generate_field_value("test_user", &make_input("first_name", "String", 0));
-        assert_eq!(result.unwrap(), "'Test'");
+        assert_eq!(result.unwrap().as_deref(), Some("'Test'"));
     }
 
     #[test]
     fn test_user_last_name() {
         let mut pm = create_plugin_manager();
         let result = pm.generate_field_value("test_user", &make_input("last_name", "String", 0));
-        assert_eq!(result.unwrap(), "'User'");
+        assert_eq!(result.unwrap().as_deref(), Some("'User'"));
     }
 
     #[test]
@@ -77,14 +77,14 @@ mod tests {
         let mut pm = create_plugin_manager();
         let result =
             pm.generate_field_value("test_user", &make_input("role", "Other(UserRole)", 0));
-        assert_eq!(result.unwrap(), "'Administrator'");
+        assert_eq!(result.unwrap().as_deref(), Some("'Administrator'"));
     }
 
     #[test]
     fn test_user_email_verified() {
         let mut pm = create_plugin_manager();
         let result = pm.generate_field_value("test_user", &make_input("email_verified", "Bool", 0));
-        assert_eq!(result.unwrap(), "true");
+        assert_eq!(result.unwrap().as_deref(), Some("true"));
     }
 
     // ===== Record index > 0: falls back to default generation =====
@@ -94,21 +94,23 @@ mod tests {
         let mut pm = create_plugin_manager();
         let result =
             pm.generate_field_value("test_user", &make_input("email", "Option(String)", 1));
-        assert!(
-            result.is_err(),
-            "Index 1 should return error to trigger fallback"
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "Index 1 skips, so evenframe generates the value"
         );
     }
 
     #[test]
     fn test_unknown_field_falls_back() {
         let mut pm = create_plugin_manager();
-        // settings is a complex nested type — plugin skips it, evenframe handles it
+        // settings is a complex nested type: the plugin skips it and evenframe handles it
         let result =
             pm.generate_field_value("test_user", &make_input("settings", "Other(Settings)", 0));
-        assert!(
-            result.is_err(),
-            "Complex fields should fall back to evenframe"
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "Complex fields are skipped, so evenframe generates them"
         );
     }
 }

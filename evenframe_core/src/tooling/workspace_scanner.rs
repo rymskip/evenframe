@@ -46,6 +46,21 @@ pub fn find_manifests(root: &Path) -> Vec<PathBuf> {
     manifests
 }
 
+/// The canonical paths of `manifests`, for telling whether a workspace
+/// member has its own manifest in the scan.
+pub fn canonical_manifests(manifests: &[PathBuf]) -> HashSet<PathBuf> {
+    manifests
+        .iter()
+        .filter_map(|manifest| fs::canonicalize(manifest).ok())
+        .collect()
+}
+
+/// Whether the workspace member at `member_dir` is itself one of the scanned
+/// manifests, so it is scanned as its own package rather than as a member.
+pub fn member_has_own_manifest(member_dir: &Path, known: &HashSet<PathBuf>) -> bool {
+    fs::canonicalize(member_dir.join("Cargo.toml")).is_ok_and(|manifest| known.contains(&manifest))
+}
+
 /// Represents a type found with Evenframe derives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvenframeType {
@@ -217,6 +232,7 @@ impl WorkspaceScanner {
         for manifest in &manifests {
             trace!("Found potential manifest: {:?}", manifest);
         }
+        let known_manifests = canonical_manifests(&manifests);
 
         // Processing strategy depends on whether we're running `cargo expand`:
         //
@@ -234,25 +250,29 @@ impl WorkspaceScanner {
         let mut types: Vec<EvenframeType> = if self.expand_macros {
             let mut all = Vec::new();
             for manifest_path in &manifests {
-                let v = self.process_manifest(manifest_path).map_err(|e| {
-                    EvenframeError::WorkspaceScan(format!(
-                        "expansion-mode scan failed at {:?}: {}",
-                        manifest_path, e
-                    ))
-                })?;
+                let v = self
+                    .process_manifest(manifest_path, &known_manifests)
+                    .map_err(|e| {
+                        EvenframeError::WorkspaceScan(format!(
+                            "expansion-mode scan failed at {:?}: {}",
+                            manifest_path, e
+                        ))
+                    })?;
                 all.extend(v);
             }
             all
         } else {
             manifests
                 .par_iter()
-                .map(|manifest_path| match self.process_manifest(manifest_path) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("Failed to process manifest at {:?}: {}", manifest_path, e);
-                        Vec::new()
-                    }
-                })
+                .map(
+                    |manifest_path| match self.process_manifest(manifest_path, &known_manifests) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Failed to process manifest at {:?}: {}", manifest_path, e);
+                            Vec::new()
+                        }
+                    },
+                )
                 .collect::<Vec<Vec<EvenframeType>>>()
                 .into_iter()
                 .flatten()
@@ -324,7 +344,11 @@ impl WorkspaceScanner {
     /// Processes a Cargo.toml file, determines if it's a workspace or a single
     /// crate, and scans the corresponding source files. Returns the types
     /// found for this manifest only.
-    fn process_manifest(&self, manifest_path: &Path) -> Result<Vec<EvenframeType>> {
+    fn process_manifest(
+        &self,
+        manifest_path: &Path,
+        known_manifests: &HashSet<PathBuf>,
+    ) -> Result<Vec<EvenframeType>> {
         let manifest_dir = manifest_path
             .parent()
             .ok_or_else(|| EvenframeError::InvalidPath {
@@ -347,7 +371,9 @@ impl WorkspaceScanner {
                 // Note: For a full implementation, you might use the `glob` crate
                 // to handle patterns like "crates/*". This example handles direct paths.
                 let member_path = manifest_dir.join(member);
-                if member_path.is_dir() {
+                if member_has_own_manifest(&member_path, known_manifests) {
+                    debug!("Workspace member {member} is scanned as its own package");
+                } else if member_path.is_dir() {
                     let crate_name = member_path
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -1954,11 +1980,42 @@ mod tests {
         let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
 
         let types = scanner
-            .process_manifest(&temp_dir.path().join("Cargo.toml"))
+            .process_manifest(&temp_dir.path().join("Cargo.toml"), &HashSet::new())
             .unwrap();
 
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].name, "User");
+    }
+
+    #[test]
+    fn workspace_members_with_their_own_manifest_are_scanned_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let member_src = temp_dir.path().join("member").join("src");
+        fs::create_dir_all(&member_src).unwrap();
+        create_rust_file(
+            temp_dir.path(),
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        create_rust_file(
+            &temp_dir.path().join("member"),
+            "Cargo.toml",
+            "[package]\nname = \"member_crate\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        create_rust_file(
+            &member_src,
+            "lib.rs",
+            "#[derive(Evenframe)]\npub struct User {\n    pub id: String,\n}\n",
+        )
+        .unwrap();
+
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
+        let types = scanner.scan_for_evenframe_types().unwrap();
+
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].module_path, "member_crate");
     }
 
     #[test]

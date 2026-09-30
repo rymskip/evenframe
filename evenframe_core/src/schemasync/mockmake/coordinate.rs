@@ -4,17 +4,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use try_from_expr::TryFromExpr;
 use uuid::Uuid;
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use crate::error::EvenframeError;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use crate::schemasync::mockmake::field_value::FieldValueGenerator;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use crate::schemasync::mockmake::{Mockmaker, format::Format};
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use crate::types::{FieldType, StructField};
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use chrono::{Duration, NaiveDate, Utc};
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use rand::RngExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, Builder)]
@@ -23,7 +23,7 @@ pub struct CoordinationId {
     pub field_name: String,
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 impl CoordinationId {
     /// The field this id names: a field of its table, or one nested in
     /// objects along a dotted path.
@@ -62,7 +62,7 @@ impl CoordinationId {
 }
 
 /// The object type a field holds, looking through `Option`.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn object_name(field_type: &FieldType) -> Option<&str> {
     match field_type {
         FieldType::Other(name) => Some(name),
@@ -91,7 +91,7 @@ pub struct CoordinationGroup {
 /// `f` suffix), `d'…'` for datetime-formatted non-string fields, and a quoted
 /// string otherwise.
 /// Whether a field holds a date or a date and time.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DateKind {
     Date,
@@ -99,7 +99,7 @@ pub(crate) enum DateKind {
 }
 
 /// The kind of date a field holds, from its format or else its type.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub(crate) fn date_kind(field: &StructField) -> Option<DateKind> {
     match field.format {
         Some(Format::Date) => return Some(DateKind::Date),
@@ -116,10 +116,10 @@ pub(crate) fn date_kind(field: &StructField) -> Option<DateKind> {
 }
 
 /// The first day of generated date sequences and ranges.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 const BASE_DATE: NaiveDate = NaiveDate::from_ymd_opt(2024, 1, 1).expect("2024-01-01 is a date");
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub(crate) fn coordinated_literal(field: &StructField, raw: &str) -> String {
     let mut scalar = &field.field_type;
     while let FieldType::Option(inner) = scalar {
@@ -143,7 +143,7 @@ pub(crate) fn coordinated_literal(field: &StructField, raw: &str) -> String {
 
 /// The raw text of a SurrealQL string or datetime literal (`'a'`, `d'…'`);
 /// other literals are returned unchanged.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub(crate) fn literal_to_raw(literal: &str) -> String {
     let body = literal
         .strip_prefix("d'")
@@ -155,7 +155,7 @@ pub(crate) fn literal_to_raw(literal: &str) -> String {
     }
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 impl Mockmaker<'_> {
     pub fn generate_coordinated_values(&mut self) -> Result<(), EvenframeError> {
         tracing::debug!("Generating coordinated values for all tables");
@@ -761,7 +761,7 @@ pub enum Coordination {
     OneToOne(String),
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 impl Coordination {
     /// Validate that this coordination can be applied to the given fields
     pub fn validate(
@@ -881,7 +881,7 @@ impl Coordination {
                         CoordinateIncrement::Hours(_) | CoordinateIncrement::Minutes(_) => {
                             date_kind(field) == Some(DateKind::DateTime)
                         }
-                        CoordinateIncrement::Numeric(_) => is_numeric_type(&field.field_type),
+                        CoordinateIncrement::Numeric(_) => field.field_type.is_numeric(),
                     };
                     if !fits {
                         return Err(EvenframeError::Validation(format!(
@@ -905,7 +905,7 @@ impl Coordination {
             Coordination::InitializeSum { total, .. } => {
                 // All fields must be numeric
                 for (coord_id, field) in &fields {
-                    if !is_numeric_type(&field.field_type) {
+                    if !field.field_type.is_numeric() {
                         return Err(EvenframeError::Validation(format!(
                             "InitializeSum: Field '{}' must be numeric type to participate in sum, got {:?}",
                             coord_id.field_name, field.field_type
@@ -1134,7 +1134,7 @@ impl Coordination {
 }
 
 // Helper functions for type checking
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     match (type1, type2) {
         (FieldType::Option(inner1), FieldType::Option(inner2)) => {
@@ -1147,35 +1147,13 @@ fn field_types_compatible(type1: &FieldType, type2: &FieldType) -> bool {
     }
 }
 
-#[cfg(feature = "schemasync")]
-fn is_numeric_type(field_type: &FieldType) -> bool {
-    match field_type {
-        FieldType::F32
-        | FieldType::F64
-        | FieldType::I8
-        | FieldType::I16
-        | FieldType::I32
-        | FieldType::I64
-        | FieldType::I128
-        | FieldType::Isize
-        | FieldType::U8
-        | FieldType::U16
-        | FieldType::U32
-        | FieldType::U64
-        | FieldType::U128
-        | FieldType::Usize => true,
-        FieldType::Option(inner) => is_numeric_type(inner),
-        _ => false,
-    }
-}
-
 /// Check if a type name represents a datetime-like type (used for foreign types that replaced FieldType::DateTime)
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn is_datetime_like(name: &str) -> bool {
     name == "DateTime" || name.contains("DateTime")
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn is_string_like(field_type: &FieldType) -> bool {
     match field_type {
         FieldType::String | FieldType::Char => true,
@@ -1184,7 +1162,7 @@ fn is_string_like(field_type: &FieldType) -> bool {
     }
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn validate_string_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1211,7 +1189,7 @@ fn validate_string_field(
     Ok(())
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn validate_numeric_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,
@@ -1228,7 +1206,7 @@ fn validate_numeric_field(
                 ))
             })?;
 
-        if !is_numeric_type(&field.1.field_type) {
+        if !field.1.field_type.is_numeric() {
             return Err(EvenframeError::Validation(format!(
                 "Coherent dataset field '{}' must be numeric type, got {:?}",
                 label, field.1.field_type
@@ -1238,7 +1216,7 @@ fn validate_numeric_field(
     Ok(())
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn validate_datetime_field(
     fields: &[(CoordinationId, StructField)],
     field_name: &str,

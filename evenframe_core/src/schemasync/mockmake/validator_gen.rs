@@ -119,7 +119,7 @@ struct StringConstraints {
 #[derive(Clone, Copy)]
 enum StringShape {
     Email,
-    Uuid,
+    Uuid(uuid::Version),
     Url,
     Ip,
     IpV4,
@@ -176,15 +176,30 @@ fn collect_string_constraints(validators: &[Validator]) -> StringConstraints {
             StringValidator::Literal(s) => c.literal = Some(s.clone()),
             StringValidator::RegexLiteral(fmt) => c.regex_format = Some(fmt.clone()),
             StringValidator::Email => c.shape = c.shape.or(Some(StringShape::Email)),
-            StringValidator::Uuid
-            | StringValidator::UuidV1
-            | StringValidator::UuidV2
-            | StringValidator::UuidV3
-            | StringValidator::UuidV4
-            | StringValidator::UuidV5
-            | StringValidator::UuidV6
-            | StringValidator::UuidV7
-            | StringValidator::UuidV8 => c.shape = c.shape.or(Some(StringShape::Uuid)),
+            StringValidator::Uuid | StringValidator::UuidV4 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Random)))
+            }
+            StringValidator::UuidV1 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Mac)))
+            }
+            StringValidator::UuidV2 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Dce)))
+            }
+            StringValidator::UuidV3 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Md5)))
+            }
+            StringValidator::UuidV5 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Sha1)))
+            }
+            StringValidator::UuidV6 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::SortMac)))
+            }
+            StringValidator::UuidV7 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::SortRand)))
+            }
+            StringValidator::UuidV8 => {
+                c.shape = c.shape.or(Some(StringShape::Uuid(uuid::Version::Custom)))
+            }
             StringValidator::Url => c.shape = c.shape.or(Some(StringShape::Url)),
             StringValidator::Ip => c.shape = c.shape.or(Some(StringShape::Ip)),
             StringValidator::IpV4 => c.shape = c.shape.or(Some(StringShape::IpV4)),
@@ -367,7 +382,12 @@ fn gen_shape(shape: StringShape, target_len: Option<usize>, rng: &mut ThreadRng)
     };
     match shape {
         StringShape::Email => format_via(Format::Email),
-        StringShape::Uuid => format_via(Format::Uuid),
+        StringShape::Uuid(version) => Some(
+            uuid::Builder::from_random_bytes(rng.random())
+                .with_version(version)
+                .into_uuid()
+                .to_string(),
+        ),
         StringShape::Url => format_via(Format::Url("example.com".to_string())),
         StringShape::Ip | StringShape::IpV4 => format_via(Format::IpAddress),
         StringShape::IpV6 => {
@@ -668,6 +688,33 @@ mod tests {
                 "{} not a valid email",
                 inner
             );
+        }
+    }
+
+    #[test]
+    fn string_uuid_shapes_satisfy_their_version() {
+        let mut rng = rand::rng();
+        for validator in [
+            StringValidator::Uuid,
+            StringValidator::UuidV1,
+            StringValidator::UuidV2,
+            StringValidator::UuidV3,
+            StringValidator::UuidV4,
+            StringValidator::UuidV5,
+            StringValidator::UuidV6,
+            StringValidator::UuidV7,
+            StringValidator::UuidV8,
+        ] {
+            let validators = vec![Validator::StringValidator(validator)];
+            for _ in 0..20 {
+                let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
+                    .expect("should produce a UUID");
+                let inner = unquote(&lit);
+                assert!(
+                    validators[0].matches(&MockValue::Str(inner)),
+                    "{inner} does not satisfy {validators:?}"
+                );
+            }
         }
     }
 

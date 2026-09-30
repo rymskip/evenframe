@@ -77,12 +77,76 @@ use surrealdb::{
     opt::auth::Root,
 };
 
+#[cfg(feature = "mockmake")]
+use crate::schemasync::mockmake::Mockmaker;
 #[cfg(feature = "schemasync")]
 use crate::{
     evenframe_log,
-    schemasync::mockmake::Mockmaker,
+    schemasync::compare::SurrealdbComparator,
+    schemasync::database::surql::{
+        access::execute_access_query, remove::generate_remove_statements,
+    },
     types::{StructConfig, TaggedUnion},
 };
+
+/// Rejects settings and annotations that ask for something this build of
+/// evenframe was compiled without, naming the setting and the feature.
+#[cfg(feature = "schemasync")]
+fn check_features(
+    config: &crate::schemasync::config::SchemasyncConfig,
+    tables: &BTreeMap<String, TableConfig>,
+) -> Result<()> {
+    #[cfg(not(feature = "mockmake"))]
+    {
+        let requested = if config.should_generate_mocks {
+            Some("should_generate_mocks = true in [schemasync] asks for mock data".to_string())
+        } else if !config.plugins.is_empty() {
+            Some("[schemasync] plugins configures mock-data plugins".to_string())
+        } else {
+            tables
+                .iter()
+                .find(|(_, table)| table.mock_generation_config.is_some())
+                .map(|(name, _)| format!("table `{name}` has #[mock_data]"))
+        };
+        if let Some(requested) = requested {
+            return Err(EvenframeError::config(format!(
+                "{requested}, but this evenframe was built without the `mockmake` feature, which generates mock data"
+            )));
+        }
+    }
+    #[cfg(all(feature = "mockmake", not(feature = "wasm-plugins")))]
+    {
+        let requested = if !config.plugins.is_empty() {
+            Some("[schemasync] plugins configures mock-data plugins".to_string())
+        } else {
+            table_plugin(tables)
+                .map(|(name, plugin)| format!("table `{name}` uses mock-data plugin `{plugin}`"))
+        };
+        if let Some(requested) = requested {
+            return Err(EvenframeError::config(format!(
+                "{requested}, but this evenframe was built without the `wasm-plugins` feature"
+            )));
+        }
+    }
+    #[cfg(all(feature = "mockmake", feature = "wasm-plugins"))]
+    if let Some((name, plugin)) = table_plugin(tables)
+        && !config.plugins.contains_key(plugin)
+    {
+        return Err(EvenframeError::config(format!(
+            "table `{name}` uses mock-data plugin `{plugin}`, which [schemasync] plugins does not configure"
+        )));
+    }
+    Ok(())
+}
+
+/// The first table whose `#[mock_data]` names a plugin, with the plugin.
+#[cfg(feature = "mockmake")]
+fn table_plugin(tables: &BTreeMap<String, TableConfig>) -> Option<(&String, &String)> {
+    tables.iter().find_map(|(name, table)| {
+        let plugin = table.mock_generation_config.as_ref()?.plugin.as_ref()?;
+        Some((name, plugin))
+    })
+}
 
 /// What a pipeline run needs, once [`Schemasync`] has been set up.
 #[cfg(feature = "schemasync")]
@@ -118,13 +182,12 @@ pub struct Schemasync<'a> {
 #[cfg(feature = "schemasync")]
 pub fn load_connected_config(overrides: &ConnectionOverrides) -> Result<EvenframeConfig> {
     let mut config = EvenframeConfig::new_offline()?;
-    config
-        .schemasync
-        .database
-        .apply_connection_overrides(overrides);
-    if let Some(var) = config.schemasync.database.unresolved_connection_var() {
+    let mut schemasync = config.require_schemasync()?.clone();
+    schemasync.database.apply_connection_overrides(overrides);
+    if let Some(var) = schemasync.database.unresolved_connection_var() {
         return Err(EvenframeError::EnvVarNotSet(var));
     }
+    config.schemasync = Some(schemasync);
     Ok(config)
 }
 
@@ -211,7 +274,7 @@ async fn open_database(
 #[cfg(feature = "schemasync")]
 pub async fn check_database_connectivity() -> Result<()> {
     let config = EvenframeConfig::new()?;
-    let database = &config.schemasync.database;
+    let database = &config.require_schemasync()?.database;
     info!("Connecting to SurrealDB at {}...", database.url);
     connect_database(database).await?;
     info!(
@@ -282,11 +345,12 @@ impl<'a> Schemasync<'a> {
     /// Initialize database connection and config from environment
     async fn initialize(&mut self) -> Result<()> {
         info!("Initializing Schemasync database connection and configuration");
-        let mut config = load_connected_config(&self.connection_overrides)?;
-        config.schemasync.apply_mock_overrides(&self.mock_overrides);
+        let config = load_connected_config(&self.connection_overrides)?;
+        let mut schemasync = config.require_schemasync()?.clone();
+        schemasync.apply_mock_overrides(&self.mock_overrides);
         debug!("Loaded Evenframe configuration successfully");
 
-        let db = connect_database(&config.schemasync.database).await?;
+        let db = connect_database(&schemasync.database).await?;
 
         self.db = Some(db);
         // Build a ForeignTypeRegistry from config if no external registry was provided
@@ -296,7 +360,7 @@ impl<'a> Schemasync<'a> {
             debug!("Built ForeignTypeRegistry from EvenframeConfig foreign_types");
             self.owned_registry = Some(registry);
         }
-        self.schemasync_config = Some(config.schemasync);
+        self.schemasync_config = Some(schemasync);
         debug!("Schemasync initialization completed successfully");
 
         Ok(())
@@ -328,6 +392,7 @@ impl<'a> Schemasync<'a> {
                 "No Evenframe tables found. Ensure your structs have #[derive(Evenframe)] and contain an `id` field.",
             ));
         }
+        check_features(&config, tables)?;
 
         info!(
             "Pipeline validation completed - {} tables, {} objects, {} enums",
@@ -463,17 +528,10 @@ impl<'a> Schemasync<'a> {
             config.mock_gen_config.scripting_asserts,
         );
 
-        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
-        mockmaker.generate_ids().await?;
-
-        if let Some(ref mut comparator) = mockmaker.comparator {
-            comparator.run(&define_statements_string).await?;
-        }
-
-        let schema_changes = mockmaker
-            .comparator
-            .as_ref()
-            .and_then(|c| c.get_schema_changes())
+        let mut comparator = SurrealdbComparator::new(&db, &config);
+        comparator.run(&define_statements_string).await?;
+        let schema_changes = comparator
+            .get_schema_changes()
             .cloned()
             .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
@@ -482,6 +540,7 @@ impl<'a> Schemasync<'a> {
     }
 
     /// Connect to the database and generate mock data without applying schema changes.
+    #[cfg(feature = "mockmake")]
     pub async fn mock_only(
         mut self,
         count_override: Option<usize>,
@@ -532,15 +591,17 @@ impl<'a> Schemasync<'a> {
         );
 
         let mut mockmaker =
-            Mockmaker::new(&db, effective_tables, objects, enums, &config, registry);
+            Mockmaker::new(&db, effective_tables, objects, enums, &config, registry)?;
         mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
 
-        if let Some(ref mut comparator) = mockmaker.comparator {
-            comparator.run(&define_statements_string).await?;
-        }
+        let mut comparator = SurrealdbComparator::new(&db, &config);
+        comparator.run(&define_statements_string).await?;
+        let schema_changes = comparator
+            .get_schema_changes()
+            .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
-        mockmaker.filter_changes().await?;
+        mockmaker.filter_changes(schema_changes);
         mockmaker.generate_coordinated_values()?;
         mockmaker.generate_mock_data().await?;
 
@@ -556,6 +617,7 @@ impl<'a> Schemasync<'a> {
     /// records it keeps, adding the rest and deleting any beyond it. With
     /// `full_refresh_mode`,
     /// every table's records are deleted and all tables are regenerated.
+    #[cfg(feature = "mockmake")]
     pub async fn insert_mock_data(
         mut self,
         count_override: Option<usize>,
@@ -607,12 +669,10 @@ impl<'a> Schemasync<'a> {
             }
         };
 
-        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
+        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry)?;
         mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
-        if full_refresh {
-            mockmaker.remove_old_data().await?;
-        }
+        mockmaker.clear_records_for_full_refresh().await?;
         mockmaker.select_tables_for_insert(selected.as_ref());
         mockmaker.remove_excess_records().await?;
         mockmaker.generate_coordinated_values()?;
@@ -658,30 +718,44 @@ impl<'a> Schemasync<'a> {
             true
         );
 
-        // Create Mockmaker instance (which contains Comparator)
-        info!("Creating Mockmaker instance for data generation and comparison");
-        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry);
-        debug!("Mockmaker instance created successfully");
+        #[cfg(feature = "mockmake")]
+        let mockmaker = if config.should_generate_mocks {
+            let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry)?;
+            mockmaker.generate_ids().await?;
+            Some(mockmaker)
+        } else {
+            None
+        };
 
-        // Run initial ID generation and comparator setup
-        info!("Generating IDs for mock data");
-        mockmaker.generate_ids().await?;
-        debug!("ID generation completed");
-
-        // Run the comparator pipeline
         info!("Running schema comparison pipeline");
-        if let Some(ref mut comparator) = mockmaker.comparator {
-            comparator.run(&define_statements_string).await?;
-        }
-        debug!("Schema comparison completed");
+        let mut comparator = SurrealdbComparator::new(&db, &config);
+        comparator.run(&define_statements_string).await?;
+        let schema_changes = comparator
+            .get_schema_changes()
+            .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
-        // Continue with the rest of the mockmaker pipeline
-        info!("Removing old data from database");
-        mockmaker
-            .remove_old_data()
-            .await
-            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to remove old data: {e}")))?;
-        debug!("Old data removal completed");
+        #[cfg(feature = "mockmake")]
+        if let Some(mockmaker) = &mockmaker {
+            mockmaker
+                .clear_records_for_full_refresh()
+                .await
+                .map_err(|e| EvenframeError::SchemaSync(format!("Failed to clear records: {e}")))?;
+            mockmaker.remove_excess_records().await.map_err(|e| {
+                EvenframeError::SchemaSync(format!("Failed to remove excess records: {e}"))
+            })?;
+        }
+
+        info!("Removing what the models no longer define");
+        let remove_statements = generate_remove_statements(schema_changes);
+        evenframe_log!(&remove_statements, "remove_statements.surql");
+        if !remove_statements.is_empty() {
+            db.query(remove_statements)
+                .await
+                .and_then(|response| response.check())
+                .map_err(|e| {
+                    EvenframeError::SchemaSync(format!("Failed to remove old schema: {e}"))
+                })?;
+        }
 
         // Execution order matters:
         // 1. Access first — defines SIGNUP/SIGNIN on the database (independent of tables)
@@ -691,22 +765,18 @@ impl<'a> Schemasync<'a> {
         //    which require the referenced tables to already exist in the database
 
         info!("Executing access control setup");
-        mockmaker.execute_access().await.map_err(|e| {
-            EvenframeError::SchemaSync(format!("Failed to execute access setup: {e}"))
-        })?;
-        debug!("Access control setup completed");
+        execute_access_query(
+            &db,
+            comparator.get_access_query(),
+            &config.database.database,
+        )
+        .await
+        .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute access setup: {e}")))?;
 
         info!("Executing analyzer definitions");
         self.execute_analyzers(&db, &config)
             .await
             .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute analyzers: {e}")))?;
-        debug!("Analyzer definitions completed");
-
-        let schema_changes = mockmaker
-            .comparator
-            .as_ref()
-            .and_then(|c| c.get_schema_changes())
-            .ok_or_else(|| EvenframeError::config("Schema changes not computed"))?;
 
         info!("Defining database tables and schema");
         self.define_tables(
@@ -717,30 +787,21 @@ impl<'a> Schemasync<'a> {
         )
         .await
         .map_err(|e| EvenframeError::SchemaSync(format!("Failed to define tables: {e}")))?;
-        debug!("Table definitions completed successfully");
 
         info!("Executing function definitions");
         self.execute_functions(&db, &config)
             .await
             .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute functions: {e}")))?;
-        debug!("Function definitions completed");
 
-        info!("Filtering schema changes");
-        mockmaker
-            .filter_changes()
-            .await
-            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to filter changes: {e}")))?;
-        debug!("Schema changes filtering completed");
-
-        if config.should_generate_mocks {
+        #[cfg(feature = "mockmake")]
+        if let Some(mut mockmaker) = mockmaker {
             info!("Generating mock data");
+            mockmaker.filter_changes(schema_changes);
             mockmaker.generate_coordinated_values()?;
             mockmaker.generate_mock_data().await.map_err(|e| {
                 EvenframeError::SchemaSync(format!("Failed to generate mock data: {e}"))
             })?;
         }
-
-        debug!("Mock data generation completed");
 
         info!("Schemasync pipeline execution completed successfully");
         Ok(())
@@ -1071,5 +1132,48 @@ impl<'a> Schemasync<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "mockmake", feature = "wasm-plugins"))]
+mod check_features_tests {
+    use super::*;
+    use crate::schemasync::config::SchemasyncConfig;
+    use crate::schemasync::mockmake::MockGenerationConfig;
+
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        table_config: TableConfig,
+    }
+
+    fn tables_using(plugin: &str) -> BTreeMap<String, TableConfig> {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../tests/specs/surrealql/basic_table.json"))
+                .unwrap();
+        let mut table = fixture.table_config;
+        table.mock_generation_config = Some(MockGenerationConfig {
+            n: 1,
+            coordination_rules: Vec::new(),
+            preservation_mode: PreservationMode::default(),
+            plugin: Some(plugin.to_string()),
+        });
+        BTreeMap::from([("user".to_string(), table)])
+    }
+
+    fn config(plugins: &str) -> SchemasyncConfig {
+        toml::from_str(&format!(
+            "should_generate_mocks = true\n[database]\nurl = \"x\"\n{plugins}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_table_plugin_must_be_configured() {
+        let error = check_features(&config(""), &tables_using("names"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("`names`"), "{error}");
+        let configured = config("[plugins.names]\npath = \"names.wasm\"\n");
+        assert!(check_features(&configured, &tables_using("names")).is_ok());
     }
 }

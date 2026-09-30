@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+/** @serde({ tag: "type" }) */
+export type Shape =
+	| { type: 'Circle' } & { radius: number; }
+	| { type: 'Rectangle' } & { width: number; height: number; }
+	| { type: 'Point' };

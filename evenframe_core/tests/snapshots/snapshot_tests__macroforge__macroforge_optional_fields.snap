@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Profile {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  bio: string | null;
+  age: number | null;
+  rating: number | null;
+  verified: boolean | null;
+}

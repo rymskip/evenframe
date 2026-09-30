@@ -1,0 +1,9 @@
+[general]
+apply_aliases = []
+
+[typesync]
+outputs = [
+  { kind = "arktype", dir = "./generated" },
+  { kind = "effect", dir = "./generated" },
+  { kind = "protobuf", dir = "./generated", import_validate = true },
+]

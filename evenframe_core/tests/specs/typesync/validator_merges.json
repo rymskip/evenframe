@@ -1,0 +1,53 @@
+{
+  "description": "Validators that overlap, intersect or have no protoc-gen-validate rule, as they merge into one rule set per field",
+  "structs": {
+    "Signup": {
+      "struct_name": "Signup",
+      "fields": [
+        { "field_name": "username", "field_type": "String", "validators": [
+          { "StringValidator": "Alphanumeric" },
+          { "StringValidator": "LowerPreformatted" },
+          { "StringValidator": "NonEmpty" },
+          { "StringValidator": { "MinLength": 3 } },
+          { "StringValidator": { "MaxLength": 20 } }
+        ], "always_regenerate": false },
+        { "field_name": "code", "field_type": "String", "validators": [
+          { "StringValidator": "Hex" },
+          { "StringValidator": "Digits" },
+          { "StringValidator": { "StartsWith": "0" } },
+          { "StringValidator": { "StartsWith": "00" } }
+        ], "always_regenerate": false },
+        { "field_name": "token", "field_type": "String", "validators": [
+          { "StringValidator": "UuidV4" },
+          { "StringValidator": "Lowercased" },
+          { "StringValidator": "Json" }
+        ], "always_regenerate": false },
+        { "field_name": "banner", "field_type": { "Option": "String" }, "validators": [
+          { "StringValidator": "CapitalizePreformatted" },
+          { "StringValidator": { "Includes": "!" } }
+        ], "always_regenerate": false },
+        { "field_name": "ratio", "field_type": "F32", "validators": [
+          { "NumberValidator": "Positive" },
+          { "NumberValidator": { "GreaterThanOrEqualTo": 0.001 } },
+          { "NumberValidator": { "LessThan": 1000.0 } },
+          { "NumberValidator": { "LessThanOrEqualTo": 999.999 } },
+          { "NumberValidator": "Finite" }
+        ], "always_regenerate": false },
+        { "field_name": "level", "field_type": "U8", "validators": [
+          { "NumberValidator": { "GreaterThan": 0.5 } },
+          { "NumberValidator": "Uint8" },
+          { "NumberValidator": { "LessThan": 9.5 } }
+        ], "always_regenerate": false },
+        { "field_name": "tags", "field_type": { "Option": { "Vec": "String" } }, "validators": [
+          { "ArrayValidator": { "MinItems": 1 } },
+          { "ArrayValidator": { "MaxItems": 5 } }
+        ], "always_regenerate": false },
+        { "field_name": "address", "field_type": "String", "validators": [
+          { "StringValidator": "Ip" }
+        ], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {}
+}

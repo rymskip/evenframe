@@ -3,9 +3,12 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
+use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
+use crate::typesync::foreign_ts::{RECORD_LINK, Reading, fill, foreign_types_used, import_lines};
+use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -18,10 +21,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `output_override` has two distinct producers in the wild:
 ///
 /// 1. Rule-plugin overrides preserve the struct name and only carry extra
-///    metadata (annotations, derives) — `effective()` returns a same-named
+///    metadata (annotations, derives). `effective()` returns a same-named
 ///    config and we want its content for the emitted interface.
 /// 2. Synthetic projections (partials) redirect to a different struct
-///    entirely — `effective()` returns the parent, but the partial still
+///    entirely. `effective()` returns the parent, but the partial still
 ///    needs its own TS interface with its own fields. Following the
 ///    redirect would emit the parent's content under the partial's name.
 ///
@@ -48,10 +51,8 @@ fn enum_view(enum_def: &TaggedUnion) -> &TaggedUnion {
 pub fn generate_macroforge_type_string(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
-    _print_types: bool,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-    import_style: crate::typesync::config::ImportExtensionStyle,
 ) -> String {
     tracing::info!(
         struct_count = structs.len(),
@@ -85,10 +86,13 @@ pub fn generate_macroforge_type_string(
         .collect();
 
     let mut result = String::new();
-    let extra_imports =
-        compute_extra_imports(&all_type_names, structs, enums, registry, import_style);
-    if !extra_imports.is_empty() {
-        result.push_str(&extra_imports.join("\n"));
+    let extra_imports = compute_extra_imports(&all_type_names, structs, enums, registry);
+    if !extra_imports.lines.is_empty() {
+        result.push_str(&extra_imports.lines.join("\n"));
+        result.push_str("\n\n");
+    }
+    if extra_imports.needs_record_link {
+        result.push_str(RECORD_LINK_TYPE);
         result.push_str("\n\n");
     }
 
@@ -106,6 +110,17 @@ pub fn generate_macroforge_type_string(
         "Macroforge interface generation complete"
     );
     result
+}
+
+/// A record link's TypeScript type: the linked record's id, or the record.
+pub const RECORD_LINK_TYPE: &str = "export type RecordLink<T> = string | T;";
+
+/// Imports a set of types needs beyond each other, and whether evenframe must
+/// declare `RecordLink` for them: they use it and the project configures none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraImports {
+    pub lines: Vec<String>,
+    pub needs_record_link: bool,
 }
 
 /// Generates Macroforge TypeScript interfaces for a specific subset of types (used in per-file mode).
@@ -242,7 +257,7 @@ fn render_variant(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Resolve `output_override` literally — see [`generate_struct_block`].
+    // Resolve `output_override` literally, as [`generate_struct_block`] does.
     let variant = variant.effective();
     let mut all_annotations: Vec<String> = Vec::new();
     all_annotations.extend(variant.annotations.iter().cloned());
@@ -285,7 +300,7 @@ fn render_variant_externally_tagged(
             format!(
                 "{{ {}: {} }}",
                 variant.name,
-                s.struct_name.to_case(Case::Pascal)
+                inline_struct_type(s, array_style, registry)
             )
         }
         Some(VariantData::DataStructureRef(ft)) => {
@@ -300,7 +315,7 @@ fn render_variant_externally_tagged(
 }
 
 /// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
-/// InlineStruct: `{ tag: 'VariantName' } & StructName` intersection.
+/// InlineStruct: `{ tag: 'VariantName' } & { ...fields }` intersection.
 /// DataStructureRef (newtype variants): `{ tag: 'VariantName' } & TypeRef` intersection.
 /// Unit variants: `{ tag: 'VariantName' }`.
 fn render_variant_internally_tagged(
@@ -310,15 +325,12 @@ fn render_variant_internally_tagged(
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            // Use intersection: { tag: 'VariantName' } & StructName
-            format!(
-                "{{ {}: '{}' }} & {}",
-                tag,
-                variant.name,
-                s.struct_name.to_case(Case::Pascal)
-            )
-        }
+        Some(VariantData::InlineStruct(s)) => format!(
+            "{{ {}: '{}' }} & {}",
+            tag,
+            variant.name,
+            inline_struct_type(s, array_style, registry)
+        ),
         Some(VariantData::DataStructureRef(ft)) => {
             // Serde flattens newtype variants wrapping structs when internally tagged.
             // Use an intersection type: `{ tag: 'VariantName' } & TypeRef`
@@ -349,7 +361,7 @@ fn render_variant_adjacently_tagged(
                 tag,
                 variant.name,
                 content,
-                s.struct_name.to_case(Case::Pascal)
+                inline_struct_type(s, array_style, registry)
             )
         }
         Some(VariantData::DataStructureRef(ft)) => {
@@ -372,12 +384,34 @@ fn render_variant_untagged(
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     match &variant.data {
-        Some(VariantData::InlineStruct(s)) => s.struct_name.to_case(Case::Pascal),
+        Some(VariantData::InlineStruct(s)) => inline_struct_type(s, array_style, registry),
         Some(VariantData::DataStructureRef(ft)) => {
             field_type_to_typescript(ft, array_style, registry)
         }
         None => format!("\"{}\"", variant.name),
     }
+}
+
+/// A struct variant's fields as a TypeScript object type, as serde writes
+/// them inline.
+fn inline_struct_type(
+    inline: &StructConfig,
+    array_style: ArrayStyle,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> String {
+    let members = inline
+        .fields
+        .iter()
+        .map(|field| {
+            let field = field.effective();
+            format!(
+                "{}: {};",
+                field.field_name.to_case(Case::Camel),
+                field_type_to_typescript(&field.field_type, array_style, registry)
+            )
+        })
+        .collect::<Vec<_>>();
+    format!("{{ {} }}", members.join(" "))
 }
 
 /// Render a complete field block including annotations, @serde, and the field declaration.
@@ -387,7 +421,7 @@ fn render_field_block(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    // Resolve `output_override` literally — see [`generate_struct_block`].
+    // Resolve `output_override` literally, as [`generate_struct_block`] does.
     let field = field.effective();
     let mut lines: Vec<String> = Vec::new();
 
@@ -489,14 +523,42 @@ fn field_type_to_typescript(
                 .collect::<Vec<_>>()
                 .join("; ")
         ),
-        FieldType::RecordLink(inner) => format!("RecordLink<{}>", render(inner)),
+        FieldType::RecordLink(inner) => record_link_type(render(inner), registry),
         FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
-            format!("Record<{}, {}>", render(key), render(value))
+            let map_key = MapKey::of(key);
+            let key_type = match map_key {
+                Ok(MapKey::Bool) => BOOL_KEYS
+                    .iter()
+                    .map(|key| format!("\"{key}\""))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                _ => render(key),
+            };
+            let record = format!("Record<{key_type}, {}>", render(value));
+            match map_key {
+                Ok(map_key) if map_key.is_finite(registry) => format!("Partial<{record}>"),
+                _ => record,
+            }
         }
-        FieldType::Other(type_name) => match registry.lookup(type_name) {
-            Some(foreign) if !foreign.macroforge.is_empty() => foreign.macroforge.clone(),
-            _ => type_name.to_case(Case::Pascal),
+        FieldType::Other(type_name) => match registry
+            .lookup(type_name)
+            .and_then(|foreign| foreign.macroforge.as_ref())
+        {
+            Some(mapping) => mapping.type_expr.clone(),
+            None => type_name.to_case(Case::Pascal),
         },
+    }
+}
+
+/// A record link to `linked`, as the project's `RecordLink` foreign type
+/// writes it, or as evenframe's own `RecordLink`.
+fn record_link_type(linked: String, registry: &crate::types::ForeignTypeRegistry) -> String {
+    match registry
+        .lookup(RECORD_LINK)
+        .and_then(|record_link| record_link.macroforge.as_ref())
+    {
+        Some(mapping) => fill(&mapping.type_expr, &[linked]),
+        None => format!("RecordLink<{linked}>"),
     }
 }
 
@@ -537,18 +599,26 @@ fn wrap_union_type(
 }
 
 /// Collect validators and format them as a comma-separated string for JSDoc.
-/// For String and bare RecordLink fields, automatically adds "nonEmpty" unless already present.
+/// For String and bare RecordLink fields, automatically adds "nonEmpty" unless already present;
+/// a char field is held to exactly one character.
 fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType) -> String {
     let mut result: Vec<String> = validators
         .iter()
         .filter_map(validator_to_macroforge_string)
         .collect();
 
-    // Add nonEmpty for String/Char fields by default (RecordLink handles this in its own type definition)
-    if matches!(field_type, FieldType::String | FieldType::Char)
-        && !result.iter().any(|v| v == "nonEmpty")
-    {
+    // Add nonEmpty for String fields by default (RecordLink handles this in its own type definition)
+    if matches!(field_type, FieldType::String) && !result.iter().any(|v| v == "nonEmpty") {
         result.insert(0, "nonEmpty".to_string());
+    }
+    if matches!(field_type, FieldType::Char) {
+        result.insert(
+            0,
+            format!(
+                "pattern({})",
+                escape_for_jsdoc(crate::typesync::js_checks::ONE_CHARACTER)
+            ),
+        );
     }
 
     result
@@ -591,7 +661,7 @@ fn build_serde_annotation(
     if !validators_str.is_empty()
         && let Some(format_line) = format_ann
     {
-        // Both validate and format — render as separate lines (validate first)
+        // Both validate and format: render as separate lines (validate first)
         let validate_line = format!("/** @serde({{ validate: [{}] }}) */", validators_str);
         (
             format!("{}\n{}", validate_line, format_line),
@@ -621,258 +691,129 @@ fn render_field_type(
         // For RecordLink, render @serde inline: /** @serde(...) */ RecordLink<Type>
         if let FieldType::RecordLink(inner) = field_type {
             return format!(
-                "{} RecordLink<{}>",
-                serde_annotation,
-                field_type_to_typescript(inner, array_style, registry)
+                "{serde_annotation} {}",
+                record_link_type(
+                    field_type_to_typescript(inner, array_style, registry),
+                    registry
+                )
             );
         }
     }
     field_type_to_typescript(field_type, array_style, registry)
 }
 
-/// Compute the `/** import macro {...} from "@dealdraft/macros"; */` line
-/// from the derives of all types in a file. Collects non-standard derives
-/// (excluding Default, Serialize, Deserialize) and deduplicates them.
-pub fn compute_macro_import_line(
+/// Derives macroforge provides itself, which need no `import macro`.
+const BUILT_IN_DERIVES: [&str; 9] = [
+    "Clone",
+    "Debug",
+    "Default",
+    "Deserialize",
+    "Hash",
+    "Ord",
+    "PartialEq",
+    "PartialOrd",
+    "Serialize",
+];
+
+/// The `import macro` lines for the derives the written types in `type_names` carry,
+/// one per package, with each derive macroforge does not provide imported
+/// from its package in `macros`. A derive with no package there is an error.
+pub fn macro_import_lines(
     type_names: &[String],
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
-) -> Option<String> {
+    macros: &BTreeMap<String, String>,
+) -> Result<Vec<String>> {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
-    let standard_derives: BTreeSet<&str> = ["Default", "Serialize", "Deserialize"]
-        .iter()
-        .copied()
-        .collect();
-
-    let mut extra_derives: Vec<String> = Vec::new();
+    // Read through the views `generate_struct_block` and
+    // `generate_enum_block` write, so the imports match each `@derive(...)`.
+    let derives = structs
+        .values()
+        .filter(|struct_config| {
+            !struct_config.resolve_only
+                && type_set.contains(&struct_config.struct_name.to_case(Case::Pascal))
+        })
+        .flat_map(|struct_config| &struct_view(struct_config).macroforge_derives)
+        .chain(
+            enums
+                .values()
+                .filter(|tagged_union| {
+                    !tagged_union.resolve_only
+                        && type_set.contains(&tagged_union.enum_name.to_case(Case::Pascal))
+                })
+                .flat_map(|tagged_union| &enum_view(tagged_union).macroforge_derives),
+        );
     let mut seen = BTreeSet::new();
-
-    // Match the entry by its own (PascalCase) name and read the derives from
-    // `struct_view` so the import line lines up with what `generate_struct_block`
-    // actually emits in the `@derive(...)` JSDoc.
-    for s in structs.values() {
-        let name = s.struct_name.to_case(Case::Pascal);
-        if type_set.contains(&name) {
-            let view = struct_view(s);
-            for d in &view.macroforge_derives {
-                if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
-                    extra_derives.push(d.clone());
-                }
-            }
+    let mut by_package: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut unimportable = Vec::new();
+    for derive in derives {
+        if BUILT_IN_DERIVES.contains(&derive.as_str()) || !seen.insert(derive.as_str()) {
+            continue;
+        }
+        match macros.get(derive) {
+            Some(package) => by_package.entry(package).or_default().push(derive),
+            None => unimportable.push(format!("`{derive}`")),
         }
     }
-
-    for e in enums.values() {
-        let name = e.enum_name.to_case(Case::Pascal);
-        if type_set.contains(&name) {
-            let view = enum_view(e);
-            for d in &view.macroforge_derives {
-                if !standard_derives.contains(d.as_str()) && seen.insert(d.clone()) {
-                    extra_derives.push(d.clone());
-                }
-            }
-        }
+    if let Some(first) = unimportable.first() {
+        return Err(EvenframeError::config(format!(
+            "the macroforge output derives {}, which macroforge does not provide, and names no \
+             package to import them from. Name each one's package in the output's `macros`, \
+             such as macros = {{ {} = \"@scope/macros\" }}",
+            unimportable.join(", "),
+            first.trim_matches('`')
+        )));
     }
-
-    if extra_derives.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "/** import macro {{{}}} from \"@dealdraft/macros\"; */",
-            extra_derives.join(", ")
-        ))
-    }
+    Ok(by_package
+        .into_iter()
+        .map(|(package, derives)| {
+            format!(
+                "/** import macro {{{}}} from \"{package}\"; */",
+                derives.join(", ")
+            )
+        })
+        .collect())
 }
 
-/// Computes extra import lines needed for a set of types.
+/// The imports a set of types needs for the foreign types they use, each from
+/// where its macroforge mapping says, including a configured `RecordLink`.
 ///
-/// Emits:
-/// - one import line per foreign type referenced by the given types whose
-///   TS import is declared in the passed `registry` (built from the user's
-///   `[general.foreign_types]` config — no foreign types are hardcoded);
-/// - a single `RecordLink` utility import if any field in the types uses it.
-///
-/// Recurses through referenced structs and tagged unions even when those
-/// referenced types live in other type groups: the macroforge Gigaform
-/// expansion inlines variant payloads (e.g. `BigDecimal.BigDecimal` inside
-/// `CommissionRule::FlatAmount`) into the parent's controller getters and
-/// setters, so the parent file needs the foreign-type import even though
-/// it never names the foreign type at the surface level.
+/// Follows referenced structs and enums into other files too: macroforge's
+/// expansion inlines variant payloads into the parent's generated code, so the
+/// parent needs their foreign imports even where it never names them.
 pub fn compute_extra_imports(
     type_names: &[String],
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
-    import_style: crate::typesync::config::ImportExtensionStyle,
-) -> Vec<String> {
-    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
-    let mut needs_record_link = false;
-    let mut foreign_imports: BTreeMap<String, bool> = BTreeMap::new();
-
-    fn collect_foreign_imports_recursive(
-        ft: &FieldType,
-        registry: &crate::types::ForeignTypeRegistry,
-        structs: &BTreeMap<String, StructConfig>,
-        enums: &BTreeMap<String, TaggedUnion>,
-        visited: &mut BTreeSet<String>,
-        fi: &mut BTreeMap<String, bool>,
-        rl: &mut bool,
-    ) {
-        if let FieldType::RecordLink(_) = ft {
-            *rl = true;
-        }
-        if let FieldType::Other(name) = ft {
-            if let Some(ftc) = registry.lookup(name) {
-                if !ftc.ts_import.is_empty() {
-                    fi.insert(ftc.ts_import.name.clone(), ftc.ts_import.is_type_only);
-                }
-            } else if visited.insert(name.clone()) {
-                // Follow the reference into the locally-defined struct or
-                // enum so foreign types reachable through nested variant
-                // payloads bubble up to the importing file.
-                let pascal = name.to_case(Case::Pascal);
-                if let Some(referenced) = structs.get(name).or_else(|| structs.get(&pascal)) {
-                    let view = struct_view(referenced);
-                    for field in &view.fields {
-                        let field = field.effective();
-                        collect_foreign_imports_recursive(
-                            &field.field_type,
-                            registry,
-                            structs,
-                            enums,
-                            visited,
-                            fi,
-                            rl,
-                        );
-                    }
-                } else if let Some(referenced) = enums.get(name).or_else(|| enums.get(&pascal)) {
-                    let view = enum_view(referenced);
-                    for variant in &view.variants {
-                        let variant = variant.effective();
-                        if let Some(data) = &variant.data {
-                            match data {
-                                VariantData::InlineStruct(enum_struct) => {
-                                    for field in &enum_struct.fields {
-                                        collect_foreign_imports_recursive(
-                                            &field.field_type,
-                                            registry,
-                                            structs,
-                                            enums,
-                                            visited,
-                                            fi,
-                                            rl,
-                                        );
-                                    }
-                                }
-                                VariantData::DataStructureRef(inner_ft) => {
-                                    collect_foreign_imports_recursive(
-                                        inner_ft, registry, structs, enums, visited, fi, rl,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        match ft {
-            FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-                collect_foreign_imports_recursive(inner, registry, structs, enums, visited, fi, rl)
-            }
-            FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-                collect_foreign_imports_recursive(k, registry, structs, enums, visited, fi, rl);
-                collect_foreign_imports_recursive(v, registry, structs, enums, visited, fi, rl);
-            }
-            FieldType::Tuple(items) => {
-                for item in items {
-                    collect_foreign_imports_recursive(
-                        item, registry, structs, enums, visited, fi, rl,
-                    );
-                }
-            }
-            FieldType::Struct(fields) => {
-                for (_, inner_ft) in fields {
-                    collect_foreign_imports_recursive(
-                        inner_ft, registry, structs, enums, visited, fi, rl,
-                    );
-                }
-            }
-            _ => {}
-        }
+) -> ExtraImports {
+    let used = foreign_types_used(
+        type_names,
+        structs,
+        enums,
+        registry,
+        &Reading {
+            struct_view,
+            enum_view,
+            expands_held_types: true,
+        },
+    );
+    let configured_record_link = registry
+        .lookup(RECORD_LINK)
+        .and_then(|record_link| record_link.macroforge.as_ref());
+    let mut imports: Vec<&crate::config::TsImport> = used
+        .foreign
+        .values()
+        .filter_map(|foreign| foreign.macroforge.as_ref())
+        .filter_map(|mapping| mapping.import.as_ref())
+        .collect();
+    if used.record_link {
+        imports.extend(configured_record_link.and_then(|mapping| mapping.import.as_ref()));
     }
-
-    let mut visited: BTreeSet<String> = BTreeSet::new();
-    let mut check_field_type = |ft: &FieldType, rl: &mut bool, fi: &mut BTreeMap<String, bool>| {
-        collect_foreign_imports_recursive(ft, registry, structs, enums, &mut visited, fi, rl);
-    };
-
-    // Match by own struct/enum name, walk fields via `*_view` so the imports
-    // line up with the body that `generate_struct_block` / `generate_enum_block`
-    // actually emit.
-    for s in structs.values() {
-        if type_set.contains(&s.struct_name.to_case(Case::Pascal)) {
-            let view = struct_view(s);
-            for field in &view.fields {
-                let field = field.effective();
-                check_field_type(
-                    &field.field_type,
-                    &mut needs_record_link,
-                    &mut foreign_imports,
-                );
-            }
-        }
+    ExtraImports {
+        lines: import_lines(imports),
+        needs_record_link: used.record_link && configured_record_link.is_none(),
     }
-
-    for e in enums.values() {
-        if type_set.contains(&e.enum_name.to_case(Case::Pascal)) {
-            let view = enum_view(e);
-            for variant in &view.variants {
-                let variant = variant.effective();
-                if let Some(data) = &variant.data {
-                    match data {
-                        VariantData::InlineStruct(_) => {
-                            // Inline structs render as intersections, so their
-                            // field-level imports are transitive (belong to the
-                            // struct's own file, not this enum's file).
-                        }
-                        VariantData::DataStructureRef(ft) => {
-                            check_field_type(ft, &mut needs_record_link, &mut foreign_imports);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut lines: Vec<String> = Vec::new();
-
-    // Foreign type imports from effect library
-    if !foreign_imports.is_empty() {
-        let mut sorted_imports: Vec<(String, bool)> = foreign_imports.into_iter().collect();
-        sorted_imports.sort_by(|a, b| a.0.cmp(&b.0));
-        for (import_name, is_type_only) in sorted_imports {
-            let keyword = if is_type_only {
-                "import type"
-            } else {
-                "import"
-            };
-            lines.push(format!("{} {{ {} }} from 'effect';", keyword, import_name));
-        }
-    }
-
-    // RecordLink from local index. The barrel is a plain `.ts` module, so
-    // the resolvable-specifier style points at its built `.js`.
-    if needs_record_link {
-        let index_suffix = match import_style {
-            crate::typesync::config::ImportExtensionStyle::Bare => "",
-            crate::typesync::config::ImportExtensionStyle::Js => ".js",
-        };
-        lines.push(format!(
-            "import type {{ RecordLink }} from './index{index_suffix}';"
-        ));
-    }
-
-    lines
 }
 
 /// Convert a Validator to its Macroforge string representation.
@@ -1478,10 +1419,8 @@ mod tests {
         let output = generate_macroforge_type_string(
             &structs,
             &BTreeMap::new(),
-            true,
             ArrayStyle::default(),
             &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
         );
 
         assert!(output.contains("/** @derive(Deserialize) */"));
@@ -1585,14 +1524,8 @@ mod tests {
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
-        let output = generate_macroforge_type_string(
-            &structs,
-            &enums,
-            true,
-            ArrayStyle::default(),
-            &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
-        );
+        let output =
+            generate_macroforge_type_string(&structs, &enums, ArrayStyle::default(), &registry);
 
         // Struct: custom derives
         assert!(
@@ -1657,10 +1590,8 @@ mod tests {
         let output = generate_macroforge_type_string(
             &structs,
             &BTreeMap::new(),
-            true,
             ArrayStyle::default(),
             &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert!(
             output.contains("/** @derive(Deserialize) */"),
@@ -1679,11 +1610,14 @@ mod tests {
             "DateTime".to_string(),
             ForeignTypeConfig {
                 rust_type_names: vec!["DateTime".to_string()],
-                macroforge: "DateTime.Utc".to_string(),
-                ts_import: crate::config::TsImport {
-                    name: "DateTime".to_string(),
-                    is_type_only: true,
-                },
+                macroforge: Some(crate::config::TsMapping {
+                    type_expr: "DateTime.Utc".to_string(),
+                    import: Some(crate::config::TsImport {
+                        from: "effect".to_string(),
+                        name: "DateTime".to_string(),
+                        type_only: true,
+                    }),
+                }),
                 ..Default::default()
             },
         );
@@ -1691,11 +1625,14 @@ mod tests {
             "Decimal".to_string(),
             ForeignTypeConfig {
                 rust_type_names: vec!["Decimal".to_string()],
-                macroforge: "BigDecimal.BigDecimal".to_string(),
-                ts_import: crate::config::TsImport {
-                    name: "BigDecimal".to_string(),
-                    is_type_only: true,
-                },
+                macroforge: Some(crate::config::TsMapping {
+                    type_expr: "BigDecimal.BigDecimal".to_string(),
+                    import: Some(crate::config::TsImport {
+                        from: "effect".to_string(),
+                        name: "BigDecimal".to_string(),
+                        type_only: true,
+                    }),
+                }),
                 ..Default::default()
             },
         );
@@ -1773,10 +1710,9 @@ mod tests {
             &structs,
             &BTreeMap::new(),
             &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert_eq!(
-            imports,
+            imports.lines,
             vec!["import type { DateTime } from 'effect';".to_string()]
         );
     }
@@ -1811,12 +1747,157 @@ mod tests {
             &structs,
             &BTreeMap::new(),
             &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert_eq!(
-            imports,
+            imports.lines,
             vec!["import type { BigDecimal } from 'effect';".to_string()]
         );
+    }
+
+    #[test]
+    fn derives_are_imported_from_their_configured_packages() {
+        let derived = |struct_name: &str, derives: &[&str]| StructConfig {
+            struct_name: struct_name.to_string(),
+            macroforge_derives: derives.iter().map(|derive| derive.to_string()).collect(),
+            ..Default::default()
+        };
+        let structs = BTreeMap::from([
+            (
+                "Order".to_string(),
+                derived("Order", &["Debug", "Form", "Serialize"]),
+            ),
+            (
+                "Invoice".to_string(),
+                derived("Invoice", &["Overview", "Form", "Audit"]),
+            ),
+        ]);
+        let types = ["Order".to_string(), "Invoice".to_string()];
+        let macros = BTreeMap::from([
+            ("Form".to_string(), "@app/forms".to_string()),
+            ("Overview".to_string(), "@app/forms".to_string()),
+            ("Audit".to_string(), "@app/audit".to_string()),
+        ]);
+        assert_eq!(
+            macro_import_lines(&types, &structs, &BTreeMap::new(), &macros).unwrap(),
+            vec![
+                "/** import macro {Audit} from \"@app/audit\"; */".to_string(),
+                "/** import macro {Overview, Form} from \"@app/forms\"; */".to_string(),
+            ]
+        );
+        let unconfigured = macro_import_lines(&types, &structs, &BTreeMap::new(), &BTreeMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            unconfigured.contains("`Overview`, `Form`, `Audit`") && !unconfigured.contains("Debug"),
+            "{unconfigured}"
+        );
+    }
+
+    #[test]
+    fn imports_follow_embedded_types_but_not_tables() {
+        let registry = make_datetime_registry();
+        let field = |field_name: &str, field_type: FieldType| StructField {
+            field_name: field_name.to_string(),
+            field_type,
+            ..Default::default()
+        };
+        let dated = |struct_name: &str| StructConfig {
+            struct_name: struct_name.to_string(),
+            fields: vec![field("at", FieldType::Other("DateTime".to_string()))],
+            ..Default::default()
+        };
+        let holder = |struct_name: &str, fields: Vec<StructField>| StructConfig {
+            struct_name: struct_name.to_string(),
+            fields,
+            ..Default::default()
+        };
+        let structs = BTreeMap::from([
+            ("event".to_string(), dated("Event")),
+            ("Slot".to_string(), dated("Slot")),
+            (
+                "Booking".to_string(),
+                holder(
+                    "Booking",
+                    vec![field("slot", FieldType::Other("Slot".to_string()))],
+                ),
+            ),
+            (
+                "Invite".to_string(),
+                holder(
+                    "Invite",
+                    vec![
+                        field(
+                            "event",
+                            FieldType::RecordLink(Box::new(FieldType::Other("Event".to_string()))),
+                        ),
+                        field("host", FieldType::Other("Event".to_string())),
+                    ],
+                ),
+            ),
+        ]);
+        let imports_of = |type_name: &str| {
+            compute_extra_imports(
+                &[type_name.to_string()],
+                &structs,
+                &BTreeMap::new(),
+                &registry,
+            )
+            .lines
+        };
+        assert_eq!(
+            imports_of("Booking"),
+            vec!["import type { DateTime } from 'effect';".to_string()]
+        );
+        assert!(imports_of("Invite").is_empty());
+    }
+
+    #[test]
+    fn a_configured_record_link_is_imported_and_not_declared() {
+        use crate::config::{ForeignTypeConfig, TsImport, TsMapping};
+        let registry = crate::types::ForeignTypeRegistry::from_config(&BTreeMap::from([(
+            "RecordLink".to_string(),
+            ForeignTypeConfig {
+                macroforge: Some(TsMapping {
+                    type_expr: "RecordLink<{0}>".to_string(),
+                    import: Some(TsImport {
+                        from: "./index".to_string(),
+                        name: "RecordLink".to_string(),
+                        type_only: true,
+                    }),
+                }),
+                ..Default::default()
+            },
+        )]));
+        let order = StructConfig {
+            struct_name: "Order".to_string(),
+            fields: vec![StructField {
+                field_name: "customer".to_string(),
+                field_type: FieldType::RecordLink(Box::new(FieldType::Other(
+                    "Customer".to_string(),
+                ))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let structs = BTreeMap::from([("Order".to_string(), order)]);
+        let imports = compute_extra_imports(
+            &["Order".to_string()],
+            &structs,
+            &BTreeMap::new(),
+            &registry,
+        );
+        assert_eq!(
+            imports.lines,
+            vec!["import type { RecordLink } from './index';".to_string()]
+        );
+        assert!(!imports.needs_record_link);
+        let without_entry = compute_extra_imports(
+            &["Order".to_string()],
+            &structs,
+            &BTreeMap::new(),
+            &crate::types::ForeignTypeRegistry::default(),
+        );
+        assert!(without_entry.needs_record_link);
     }
 
     #[test]
@@ -1856,10 +1937,9 @@ mod tests {
             &structs,
             &BTreeMap::new(),
             &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
         );
         assert_eq!(
-            imports,
+            imports.lines,
             vec![
                 "import type { BigDecimal } from 'effect';".to_string(),
                 "import type { DateTime } from 'effect';".to_string(),
@@ -1892,14 +1972,10 @@ mod tests {
             },
         );
 
-        let imports = compute_extra_imports(
-            &["User".to_string()],
-            &structs,
-            &BTreeMap::new(),
-            &registry,
-            crate::typesync::config::ImportExtensionStyle::default(),
-        );
-        assert!(imports.is_empty());
+        let imports =
+            compute_extra_imports(&["User".to_string()], &structs, &BTreeMap::new(), &registry);
+        assert!(imports.lines.is_empty());
+        assert!(!imports.needs_record_link);
     }
 
     #[test]

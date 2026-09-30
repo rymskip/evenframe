@@ -119,6 +119,20 @@ impl ToTokens for FieldType {
 }
 
 impl FieldType {
+    /// What serde writes for a tuple variant: a newtype variant writes its one
+    /// field, and any other count, none included, writes an array.
+    pub fn parse_tuple_variant(fields: &syn::FieldsUnnamed) -> FieldType {
+        let items: Vec<FieldType> = fields
+            .unnamed
+            .iter()
+            .map(|field| FieldType::parse_syn_ty(&field.ty))
+            .collect();
+        match <[FieldType; 1]>::try_from(items) {
+            Ok([only]) => only,
+            Err(items) => FieldType::Tuple(items),
+        }
+    }
+
     pub fn parse_syn_ty(ty: &SynType) -> FieldType {
         use quote::ToTokens;
         tracing::trace!("Parsing syn type: {}", ty.to_token_stream());
@@ -456,5 +470,39 @@ impl fmt::Display for FieldType {
             FieldType::RecordLink(inner) => write!(f, "RecordLink({})", inner),
             FieldType::Other(name) => write!(f, "{}", name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FieldType;
+
+    fn variant_types(item: syn::ItemEnum) -> Vec<FieldType> {
+        item.variants
+            .iter()
+            .filter_map(|variant| match &variant.fields {
+                syn::Fields::Unnamed(fields) => Some(FieldType::parse_tuple_variant(fields)),
+                syn::Fields::Named(_) | syn::Fields::Unit => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tuple_variants_are_typed_as_serde_writes_them() {
+        let types = variant_types(syn::parse_quote! {
+            enum Event {
+                Cleared(),
+                Scored(u32),
+                Pinned(f64, String),
+            }
+        });
+        assert_eq!(
+            types,
+            vec![
+                FieldType::Tuple(Vec::new()),
+                FieldType::U32,
+                FieldType::Tuple(vec![FieldType::F64, FieldType::String]),
+            ]
+        );
     }
 }

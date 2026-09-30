@@ -1,0 +1,14 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Appointment {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  title: string;
+  scheduledAt: string;
+  duration: number;
+  cancelledAt: string | null;
+}

@@ -1,0 +1,25 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Booking {
+    // protoc-gen-validate cannot check: trimmed; uppercase
+    string code = 1 [(validate.rules).string = {prefix: "bk`${x}\""}];
+    optional string nickname = 2 [(validate.rules).string = {min_len: 2}];
+    repeated string guests = 3 [(validate.rules).repeated = {max_items: 8}];
+    // protoc-gen-validate cannot check: a valid date; a date from 2024-01-01 to 2030-12-31
+    string starts_on = 4;
+    // protoc-gen-validate cannot check: a decimal of at least 10.50
+    string deposit = 5;
+    // protoc-gen-validate cannot check: an integer below -5
+    string sequence = 6;
+    // protoc-gen-validate cannot check: a duration from 1h30m to 2d
+    int64 stay = 7;
+}

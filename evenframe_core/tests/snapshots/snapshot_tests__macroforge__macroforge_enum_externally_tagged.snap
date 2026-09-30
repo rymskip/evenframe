@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Status =
+	| "Active"
+	| "Inactive"
+	| "Pending"
+	| "Suspended";

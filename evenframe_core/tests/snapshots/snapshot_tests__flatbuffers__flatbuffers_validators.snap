@@ -2,6 +2,8 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+attribute "validate";
+
 table Registration {
     email: string (validate: "email, maxLength(255), minLength(5)");
     username: string (validate: "alphanumeric, minLength(3), maxLength(50)");

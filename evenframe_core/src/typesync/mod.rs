@@ -1,12 +1,17 @@
 // Always compiled (core typesync)
 pub mod arktype;
+pub mod checks;
 pub mod config;
 pub mod doc_comment;
 pub mod effect;
 pub mod file_grouping;
+pub mod foreign_ts;
 pub mod import_resolver;
+pub mod js_checks;
+pub mod map_key;
 pub mod output;
 pub mod plugin_types;
+pub mod struct_variants;
 
 #[cfg(feature = "wasm-plugins")]
 pub mod plugin;
@@ -26,6 +31,8 @@ pub mod flatbuffers;
 
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
+#[cfg(feature = "protobuf")]
+pub mod protobuf_rules;
 
 #[cfg(feature = "macroforge")]
 pub mod macroforge;

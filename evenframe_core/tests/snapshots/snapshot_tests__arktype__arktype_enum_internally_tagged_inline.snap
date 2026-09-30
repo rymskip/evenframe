@@ -1,0 +1,14 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Shape: [[{ type: ['===', 'Circle'], radius: 'number' }, '|', { type: ['===', 'Rectangle'], width: 'number', height: 'number' }], '|', { type: ['===', 'Point'] }],
+
+});
+
+const exported = bindings.export();
+
+
+export type Shape = typeof exported.Shape.infer;

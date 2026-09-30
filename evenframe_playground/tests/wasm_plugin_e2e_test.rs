@@ -52,7 +52,7 @@ mod tests {
         let result = pm.generate_field_value("hello", &input);
         assert!(result.is_ok(), "Should succeed: {:?}", result);
         let value = result.unwrap();
-        assert_eq!(value, "'plugin_username_0'");
+        assert_eq!(value.as_deref(), Some("'plugin_username_0'"));
     }
 
     #[test]
@@ -61,7 +61,7 @@ mod tests {
         let input = make_field_input("email", "String", 5);
         let result = pm.generate_field_value("hello", &input);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "'plugin_email_5'");
+        assert_eq!(result.unwrap().as_deref(), Some("'plugin_email_5'"));
     }
 
     #[test]
@@ -70,7 +70,7 @@ mod tests {
         let input = make_field_input("age", "I32", 3);
         let result = pm.generate_field_value("hello", &input);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "300");
+        assert_eq!(result.unwrap().as_deref(), Some("300"));
     }
 
     #[test]
@@ -79,7 +79,7 @@ mod tests {
         let input = make_field_input("score", "F64", 2);
         let result = pm.generate_field_value("hello", &input);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "3.00");
+        assert_eq!(result.unwrap().as_deref(), Some("3.00"));
     }
 
     #[test]
@@ -88,14 +88,18 @@ mod tests {
 
         let input_even = make_field_input("active", "Bool", 0);
         assert_eq!(
-            pm.generate_field_value("hello", &input_even).unwrap(),
-            "true"
+            pm.generate_field_value("hello", &input_even)
+                .unwrap()
+                .as_deref(),
+            Some("true")
         );
 
         let input_odd = make_field_input("active", "Bool", 1);
         assert_eq!(
-            pm.generate_field_value("hello", &input_odd).unwrap(),
-            "false"
+            pm.generate_field_value("hello", &input_odd)
+                .unwrap()
+                .as_deref(),
+            Some("false")
         );
     }
 
@@ -107,7 +111,7 @@ mod tests {
             let input = make_field_input("name", "String", i);
             let result = pm.generate_field_value("hello", &input);
             assert!(result.is_ok(), "Call {} failed: {:?}", i, result);
-            assert_eq!(result.unwrap(), format!("'plugin_name_{}'", i));
+            assert_eq!(result.unwrap(), Some(format!("'plugin_name_{}'", i)));
         }
     }
 

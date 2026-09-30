@@ -390,7 +390,10 @@ async fn import_via_cli(
     // CLI overrides), falling back to the configured one.
     let connection = match crate::schemasync::active_connection() {
         Some(connection) => connection,
-        None => crate::config::EvenframeConfig::new()?.schemasync.database,
+        None => crate::config::EvenframeConfig::new()?
+            .require_schemasync()?
+            .database
+            .clone(),
     };
     let url = &connection.url;
     let namespace = &connection.namespace;

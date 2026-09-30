@@ -29,7 +29,7 @@ impl Mockmaker<'_> {
 
         for (i, default_id) in ids.iter().enumerate().skip(existing) {
             #[cfg(feature = "wasm-plugins")]
-            let record_id = self.plugin_record_id(table_name, table, i, default_id, ids.len());
+            let record_id = self.plugin_record_id(table_name, table, i, default_id, ids.len())?;
             #[cfg(not(feature = "wasm-plugins"))]
             let record_id = default_id;
             let assignments = table
@@ -111,7 +111,7 @@ impl Mockmaker<'_> {
     }
 
     /// The id of a new record: the pool's id, unless the table's mock plugin
-    /// supplies one.
+    /// supplies one. A plugin that skips the id keeps the pool's.
     #[cfg(feature = "wasm-plugins")]
     fn plugin_record_id(
         &self,
@@ -120,16 +120,19 @@ impl Mockmaker<'_> {
         index: usize,
         default_id: &str,
         total_records: usize,
-    ) -> String {
-        let (Some(plugin_name), Some(pm_cell)) = (
-            table
-                .mock_generation_config
-                .as_ref()
-                .and_then(|c| c.plugin.as_ref()),
-            self.plugin_manager.as_ref(),
-        ) else {
-            return default_id.to_string();
+    ) -> Result<String> {
+        let Some(plugin_name) = table
+            .mock_generation_config
+            .as_ref()
+            .and_then(|c| c.plugin.as_ref())
+        else {
+            return Ok(default_id.to_string());
         };
+        let pm_cell = self.plugin_manager.as_ref().ok_or_else(|| {
+            crate::error::EvenframeError::mock_generation(format!(
+                "`{table_name}` uses mock-data plugin `{plugin_name}`, but no plugins were loaded"
+            ))
+        })?;
         let input = crate::schemasync::mockmake::plugin_types::PluginFieldInput {
             table_name: table_name.to_string(),
             field_name: "id".to_string(),
@@ -138,17 +141,14 @@ impl Mockmaker<'_> {
             total_records,
             record_id: default_id.to_string(),
         };
-        match pm_cell
+        let id = pm_cell
             .borrow_mut()
             .generate_field_value(plugin_name, &input)
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(
-                    "Plugin '{plugin_name}' gave no id for {default_id}, keeping it: {e}"
-                );
-                default_id.to_string()
-            }
-        }
+            .map_err(|error| {
+                crate::error::EvenframeError::mock_generation(format!(
+                    "`{table_name}` record id: {error}"
+                ))
+            })?;
+        Ok(id.unwrap_or_else(|| default_id.to_string()))
     }
 }

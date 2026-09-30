@@ -2,6 +2,11 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+table Address {
+    street: string;
+    city: string;
+}
+
 table Person {
     name: string;
     home_address: Address;

@@ -1,0 +1,16 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Signup {
+    username: string (validate: "alphanumeric, lowercase, nonEmpty, minLength(3), maxLength(20)");
+    code: string (validate: "hex, digits, startsWith(\"0\"), startsWith(\"00\")");
+    token: string (validate: "uuidV4, lowercase, json");
+    banner: string (validate: "capitalized, includes(\"!\")");
+    ratio: float (validate: "positive, greaterThanOrEqualTo(0.001), lessThan(1000), lessThanOrEqualTo(999.999), finite");
+    level: uint8 (validate: "greaterThan(0.5), uint8, lessThan(9.5)");
+    tags: [string] (validate: "minItems(1), maxItems(5)");
+    address: string (validate: "ip");
+}

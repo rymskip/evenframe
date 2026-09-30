@@ -3,7 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 /// Severity levels for log output
-enum LogLevel : byte {
+enum LogLevel : ubyte {
     Debug = 0,
     Info = 1,
     Warn = 2,

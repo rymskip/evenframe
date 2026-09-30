@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Whether to emit all types into a single file or split into per-type files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -15,7 +16,7 @@ pub enum OutputMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArrayStyle {
-    /// Shorthand syntax: `Type[]` — default
+    /// Shorthand syntax: `Type[]` (default)
     #[default]
     Shorthand,
     /// Generic syntax: `Array<Type>`
@@ -28,7 +29,7 @@ pub enum ArrayStyle {
 pub enum FileNamingConvention {
     /// PascalCase (e.g. `UserProfile.ts`)
     Pascal,
-    /// kebab-case (e.g. `user-profile.ts`) — default
+    /// kebab-case (e.g. `user-profile.ts`) (default)
     #[default]
     Kebab,
     /// snake_case (e.g. `user_profile.ts`)
@@ -41,7 +42,7 @@ pub enum FileNamingConvention {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportExtensionStyle {
-    /// Extensionless specifiers (`./user.svelte`) — resolvable only by
+    /// Extensionless specifiers (`./user.svelte`), resolvable only by
     /// lenient resolvers (TypeScript `bundler` mode, Deno sloppy-imports).
     /// Default, matching the historical output.
     #[default]
@@ -64,6 +65,19 @@ pub enum CollisionStrategy {
     /// Automatically prefix the colliding type with its source filename in PascalCase.
     /// e.g. `PaymentMethod` in `invoice.rs` → `InvoicePaymentMethod`.
     AutoRename,
+}
+
+/// How a struct variant's fields are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructVariants {
+    /// As a type named after the variant, which the enum references, so the
+    /// variant's payload can be used on its own. Two payloads with one name
+    /// and different fields are an error.
+    #[default]
+    Named,
+    /// Inline in the enum, so variant names need not be unique across enums.
+    Inline,
 }
 
 /// Per-file output configuration (used under `[typesync.output]`).
@@ -122,6 +136,31 @@ pub enum OutputKind {
 }
 
 impl OutputKind {
+    /// The mappings, by config field name, a foreign type needs for this
+    /// output and `foreign` leaves empty. Without them the output would name
+    /// the Rust type, which is no type in the output's language.
+    pub fn missing_foreign_mappings(
+        self,
+        foreign: &crate::config::ForeignTypeConfig,
+    ) -> Vec<&'static str> {
+        let written = |value: &str| !value.trim().is_empty();
+        let required: Vec<(&'static str, bool)> = match self {
+            OutputKind::Arktype => vec![
+                ("arktype", foreign.arktype.is_some()),
+                ("default_value_ts", written(&foreign.default_value_ts)),
+            ],
+            OutputKind::Effect => vec![("effect", foreign.effect.is_some())],
+            OutputKind::Macroforge => vec![("macroforge", foreign.macroforge.is_some())],
+            OutputKind::Flatbuffers => vec![("flatbuffers", written(&foreign.flatbuffers))],
+            OutputKind::Protobuf => vec![("protobuf", written(&foreign.protobuf))],
+        };
+        required
+            .into_iter()
+            .filter(|(_, present)| !present)
+            .map(|(field, _)| field)
+            .collect()
+    }
+
     /// The name the config and the CLI use for this kind.
     pub fn name(self) -> &'static str {
         match self {
@@ -181,6 +220,10 @@ pub struct TypesyncOutput {
     /// Buffers).
     #[serde(default)]
     pub import_validate: bool,
+    /// The package each derive macroforge does not provide is imported from,
+    /// keyed by derive name (macroforge).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub macros: BTreeMap<String, String>,
 }
 
 /// An output as written, with its file settings inline. Spelled out rather
@@ -204,6 +247,8 @@ struct TypesyncOutputToml {
     package: Option<String>,
     #[serde(default)]
     import_validate: bool,
+    #[serde(default)]
+    macros: BTreeMap<String, String>,
 }
 
 impl From<TypesyncOutputToml> for TypesyncOutput {
@@ -224,6 +269,7 @@ impl From<TypesyncOutputToml> for TypesyncOutput {
             namespace: toml.namespace,
             package: toml.package,
             import_validate: toml.import_validate,
+            macros: toml.macros,
         }
     }
 }
@@ -239,6 +285,7 @@ impl TypesyncOutput {
             namespace: None,
             package: None,
             import_validate: false,
+            macros: BTreeMap::new(),
         }
     }
 
@@ -272,18 +319,25 @@ impl TypesyncOutput {
                 "`package` and `import_validate` only apply to protobuf outputs, not `{kind}`"
             ));
         }
+        if !self.macros.is_empty() && kind != OutputKind::Macroforge {
+            return Err(format!(
+                "`macros` only applies to macroforge outputs, not `{kind}`"
+            ));
+        }
         Ok(())
     }
 }
 
 /// Configuration for Typesync operations (TypeScript/Effect type generation)
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(try_from = "TypesyncToml")]
 pub struct TypesyncConfig {
     /// Every configured output, from `output` (one) or `outputs` (several).
     pub outputs: Vec<TypesyncOutput>,
     /// How to handle type name collisions across different source files.
     pub collision_strategy: CollisionStrategy,
+    /// How a struct variant's fields are written.
+    pub struct_variants: StructVariants,
 }
 
 /// `[typesync]` as written: a single `output` table or an `outputs` array.
@@ -295,6 +349,8 @@ struct TypesyncToml {
     outputs: Vec<TypesyncOutput>,
     #[serde(default)]
     collision_strategy: CollisionStrategy,
+    #[serde(default)]
+    struct_variants: StructVariants,
 }
 
 impl TryFrom<TypesyncToml> for TypesyncConfig {
@@ -314,6 +370,7 @@ impl TryFrom<TypesyncToml> for TypesyncConfig {
         Ok(Self {
             outputs,
             collision_strategy: toml.collision_strategy,
+            struct_variants: toml.struct_variants,
         })
     }
 }

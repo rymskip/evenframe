@@ -1,0 +1,25 @@
+---
+source: evenframe/tests/cli.rs
+expression: transcript
+---
+$ evenframe typesync
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Type sync error: the validators on `Deal.code` contradict each other: the length must be at least 5 and at most 2
+
+$ ls -R generated
+
+
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/project/generated/arktype.ts
+Wrote [PROJECT]/project/generated/bindings.ts
+Wrote [PROJECT]/project/generated/schema.proto
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts
+generated/bindings.ts
+generated/schema.proto

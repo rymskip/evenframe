@@ -54,10 +54,8 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &single,
             &empty_enums,
-            false,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
-            evenframe_core::typesync::config::ImportExtensionStyle::default(),
         );
         entry["generated_typesync"] = serde_json::Value::String(generated);
 
@@ -106,10 +104,8 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &empty_structs,
             &single_enum,
-            false,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
-            evenframe_core::typesync::config::ImportExtensionStyle::default(),
         );
         entry["generated_typesync"] = serde_json::Value::String(generated);
 

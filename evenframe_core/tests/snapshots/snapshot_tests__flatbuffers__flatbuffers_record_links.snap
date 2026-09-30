@@ -2,6 +2,11 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+table Author {
+    id: string;
+    name: string;
+}
+
 table Post {
     id: string;
     title: string;

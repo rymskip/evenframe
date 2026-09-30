@@ -2,4 +2,9 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export const Value = Schema.Union(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), Schema.Number, Schema.Boolean, Schema.Literal("Nothing")).annotations({ identifier: `Value` });
 
+export type ValueEncoded = string | number | boolean | "Nothing";
+
+
+export type ValueType = typeof Value.Type;

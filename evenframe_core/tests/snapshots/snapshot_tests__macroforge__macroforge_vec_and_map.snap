@@ -1,0 +1,31 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export type RecordLink<T> = string | T;
+
+/** @derive(Deserialize) */
+export interface Collection {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  tags: string[];
+  scores: number[];
+  metadata: Record<string, string>;
+  sortedData: Record<string, number>;
+  notesByRank: Record<number, string | null>;
+  relatedByName: Record<string, RecordLink<Collection>>;
+  balanceByOffset: Record<number, number>;
+  countByLetter: Record<string, number>;
+  ownerByRole: Partial<Record<Role, string>>;
+  labelByAccount: Record<string, string>;
+  grid: Record<number, Record<number, boolean>>;
+  /** @serde({ validate: ["pattern(^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$)"] }) */
+  initial: string;
+  noteByFlag: Partial<Record<"true" | "false", string>>;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Role =
+	| "Admin"
+	| "Member";

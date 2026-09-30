@@ -10,65 +10,28 @@ use evenframe_core::types::{FieldType, Pipeline, StructConfig, StructField, Tagg
 use evenframe_core::typesync::synthetic_plugin::SyntheticItemPluginManager;
 use evenframe_core::typesync::synthetic_plugin_types::SyntheticPluginInput;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
-// ============================================================================
-// WASM plugin build harness
-// ============================================================================
+#[path = "support/plugins.rs"]
+mod plugins;
 
-fn build_synthetic_test_plugin() -> &'static Path {
-    static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let playground_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let plugin_root = playground_root.join("test_plugins/synthetic_test");
-        let installed = playground_root.join(".evenframe/plugins/synthetic_test.wasm");
-
-        if let Some(parent) = installed.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create plugins dir");
-        }
-
-        let status = Command::new("cargo")
-            .args(["build", "--manifest-path"])
-            .arg(plugin_root.join("Cargo.toml"))
-            .args(["--target", "wasm32-unknown-unknown", "--release"])
-            .status()
-            .expect("failed to spawn cargo for synthetic_test plugin build");
-
-        assert!(
-            status.success(),
-            "cargo build failed for synthetic_test plugin. \
-             Ensure the wasm32-unknown-unknown target is installed: \
-             `rustup target add wasm32-unknown-unknown`"
-        );
-
-        let built = plugin_root.join("target/wasm32-unknown-unknown/release/synthetic_test.wasm");
-        assert!(
-            built.exists(),
-            "synthetic_test build succeeded but .wasm not found at {:?}",
-            built
-        );
-
-        std::fs::copy(&built, &installed)
-            .unwrap_or_else(|e| panic!("failed to copy {:?} to {:?}: {}", built, installed, e));
-
-        installed
-    })
-}
+use plugins::build_plugin;
 
 fn playground_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn load_manager() -> SyntheticItemPluginManager {
-    let _ = build_synthetic_test_plugin();
-
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
     let mut plugins = BTreeMap::new();
     plugins.insert(
         "synthetic_test".to_string(),
         SyntheticItemPluginConfig {
-            path: ".evenframe/plugins/synthetic_test.wasm".to_string(),
+            path: BUILT
+                .get_or_init(|| build_plugin("synthetic_test"))
+                .display()
+                .to_string(),
         },
     );
     SyntheticItemPluginManager::new(&plugins, &playground_root())
@@ -76,7 +39,7 @@ fn load_manager() -> SyntheticItemPluginManager {
 }
 
 // ============================================================================
-// Input helpers — build real configs, not summaries
+// Input helpers: real configs, not summaries
 // ============================================================================
 
 fn make_struct(name: &str, fields: Vec<StructField>) -> StructConfig {

@@ -100,16 +100,27 @@ impl Mockmaker<'_> {
         Ok(())
     }
 
+    /// The type a value of `ty` links through when it is stored as a link: a
+    /// `RecordLink`, or a table held by value, which the schema stores as a
+    /// link to it.
+    fn linked_type<'t>(&self, ty: &'t FieldType) -> Option<&'t str> {
+        match ty {
+            FieldType::RecordLink(inner) => match inner.as_ref() {
+                FieldType::Other(type_name) => Some(type_name),
+                _ => None,
+            },
+            FieldType::Other(name)
+                if !self.enums.contains_key(name) && !self.link_target_tables(name).is_empty() =>
+            {
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
     fn named(&self, name: &str) -> Option<Named<'_>> {
         if let Some(object) = self.objects.get(name) {
             return Some(Named::Object(&object.effective().fields));
-        }
-        if let Some(table) = self
-            .tables
-            .values()
-            .find(|t| t.effective().struct_config.struct_name == name)
-        {
-            return Some(Named::Object(&table.effective().struct_config.fields));
         }
         self.enums
             .values()
@@ -147,15 +158,12 @@ impl Mockmaker<'_> {
         depth: usize,
         visiting: &mut Vec<String>,
     ) -> Result<Option<String>, RepointError> {
+        if let Some(type_name) = self.linked_type(ty) {
+            let deleted = self.excess_of(type_name);
+            return Ok((!deleted.is_empty()).then(|| format!("({v} IN [{}])", deleted.join(", "))));
+        }
         let x = format!("$x{depth}");
         Ok(match ty {
-            FieldType::RecordLink(inner) => match inner.as_ref() {
-                FieldType::Other(type_name) => {
-                    let deleted = self.excess_of(type_name);
-                    (!deleted.is_empty()).then(|| format!("({v} IN [{}])", deleted.join(", ")))
-                }
-                _ => None,
-            },
             FieldType::Option(inner) => self
                 .holds_excess(inner, v, depth, visiting)?
                 .map(|c| format!("({v} != NULL AND {v} != NONE AND {c})")),
@@ -250,11 +258,10 @@ impl Mockmaker<'_> {
 
     /// Whether a value of `ty` can hold a deleted id at any depth.
     fn reaches_excess(&self, ty: &FieldType, seen: &mut BTreeSet<String>) -> bool {
+        if let Some(type_name) = self.linked_type(ty) {
+            return !self.excess_of(type_name).is_empty();
+        }
         match ty {
-            FieldType::RecordLink(inner) => match inner.as_ref() {
-                FieldType::Other(type_name) => !self.excess_of(type_name).is_empty(),
-                _ => false,
-            },
             FieldType::Option(inner) | FieldType::Vec(inner) => self.reaches_excess(inner, seen),
             FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => {
                 self.reaches_excess(value, seen)
@@ -321,24 +328,21 @@ impl Mockmaker<'_> {
         depth: usize,
         visiting: &mut Vec<String>,
     ) -> Result<String, RepointError> {
+        if let Some(type_name) = self.linked_type(ty) {
+            let kept = self.kept_of(type_name);
+            if kept.is_empty() {
+                return Err(RepointError::Unfillable(
+                    self.link_target_tables(type_name).join(" or "),
+                ));
+            }
+            return Ok(format!(
+                "(IF {v} IN [{}] THEN rand::enum([{}]) ELSE {v} END)",
+                self.excess_of(type_name).join(", "),
+                kept.join(", ")
+            ));
+        }
         let x = format!("$x{depth}");
         match ty {
-            FieldType::RecordLink(inner) => {
-                let FieldType::Other(type_name) = inner.as_ref() else {
-                    return Ok(v.to_string());
-                };
-                let kept = self.kept_of(type_name);
-                if kept.is_empty() {
-                    return Err(RepointError::Unfillable(
-                        self.link_target_tables(type_name).join(" or "),
-                    ));
-                }
-                Ok(format!(
-                    "(IF {v} IN [{}] THEN rand::enum([{}]) ELSE {v} END)",
-                    self.excess_of(type_name).join(", "),
-                    kept.join(", ")
-                ))
-            }
             FieldType::Option(inner) => match self.repointed(inner, v, depth, visiting) {
                 Ok(r) => Ok(format!(
                     "(IF {v} = NULL OR {v} = NONE THEN {v} ELSE {r} END)"

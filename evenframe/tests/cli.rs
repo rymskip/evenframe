@@ -209,3 +209,38 @@ fn info_reports_each_section_in_every_format() {
         &transcript,
     );
 }
+
+#[test]
+fn typesync_reports_each_unresolved_reference_with_its_fix() {
+    let dir = TempDir::new().unwrap();
+    copy_dir(&fixture("references"), dir.path());
+    let root = dir.path().join("project");
+    let mut transcript = run(&root, &["typesync"]);
+    transcript += &files_under(&root, "generated");
+    fs::copy(dir.path().join("fixed.rs"), root.join("src/lib.rs")).unwrap();
+    fs::copy(dir.path().join("fixed.toml"), root.join("evenframe.toml")).unwrap();
+    transcript += &run(&root, &["typesync"]);
+    transcript += &files_under(&root, "generated");
+    assert_transcript(
+        dir.path(),
+        "typesync_reports_each_unresolved_reference_with_its_fix",
+        &transcript,
+    );
+}
+
+#[test]
+fn typesync_writes_no_output_when_any_output_fails() {
+    let dir = TempDir::new().unwrap();
+    copy_dir(&fixture("contradiction"), dir.path());
+    let root = dir.path().join("project");
+    let mut transcript = run(&root, &["typesync"]);
+    transcript += &files_under(&root, "generated");
+    fs::copy(dir.path().join("fixed.rs"), root.join("src/lib.rs")).unwrap();
+    transcript += &run(&root, &["typesync"]);
+    transcript += &files_under(&root, "generated");
+    assert_transcript(
+        dir.path(),
+        "typesync_writes_no_output_when_any_output_fails",
+        &transcript,
+    );
+}

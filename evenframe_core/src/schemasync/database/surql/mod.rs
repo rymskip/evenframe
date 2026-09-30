@@ -4,6 +4,7 @@ pub mod access;
 pub mod assert;
 pub mod define;
 pub mod execute;
+#[cfg(feature = "mockmake")]
 pub mod mock_records;
 pub mod remove;
 mod type_mapper;

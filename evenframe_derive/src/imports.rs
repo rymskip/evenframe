@@ -24,7 +24,6 @@ pub fn generate_table_config_imports() -> proc_macro2::TokenStream {
                 TableConfig,
             },
         };
-        use convert_case::{Case, Casing};
     }
 }
 
@@ -51,7 +50,6 @@ pub fn generate_deserialize_imports() -> proc_macro2::TokenStream {
 pub fn generate_registry_imports() -> proc_macro2::TokenStream {
     quote! {
         use evenframe::registry;
-        use evenframe::prelude::linkme;
     }
 }
 

@@ -1,0 +1,25 @@
+---
+source: evenframe/tests/cli.rs
+expression: transcript
+---
+$ evenframe typesync
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Type sync error: 4 problems stop typesync before it writes anything:
+  - `Deal.address` names `Address`, which comes from a `resolve_only` entry in `general.include_files`, so no output declares it. Remove `resolve_only` from that entry to generate it here.
+  - `Deal.cache` names `CacheRow`, which derives `Schemasync`, so it is left out of typesync. Derive `Evenframe` or `Typesync` on it instead.
+  - `Deal.party` names `Party`, which is neither a scanned type nor a foreign type. Derive `Evenframe` on it, directly or through an `#[apply(alias)]` whose alias is listed in `general.apply_aliases`; if it is defined outside the scanned directory, add its file or directory to `general.include_files`; if it comes from another crate, map it in `general.foreign_types`.
+  - `Status::Blocked` names `Reason`, which is neither a scanned type nor a foreign type. Derive `Evenframe` on it, directly or through an `#[apply(alias)]` whose alias is listed in `general.apply_aliases`; if it is defined outside the scanned directory, add its file or directory to `general.include_files`; if it comes from another crate, map it in `general.foreign_types`.
+
+$ ls -R generated
+
+
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/project/generated/arktype.ts
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts

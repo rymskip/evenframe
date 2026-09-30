@@ -145,7 +145,10 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                 let registry = evenframe_core::types::ForeignTypeRegistry::from_config(
                     &config.general.foreign_types,
                 );
-                let allow_scripting = config.schemasync.mock_gen_config.scripting_asserts;
+                let allow_scripting = config
+                    .require_schemasync()?
+                    .mock_gen_config
+                    .scripting_asserts;
 
                 let tables_surql = evenframe_core::schemasync::dump::tables_surql(
                     &tables,
@@ -163,7 +166,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     ),
                     None => (
                         evenframe_core::schemasync::dump::schema_surql(
-                            &config.schemasync.database,
+                            &config.require_schemasync()?.database,
                             &tables_surql,
                         ),
                         dump_args.file.unwrap_or_else(|| {

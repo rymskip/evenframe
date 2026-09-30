@@ -4,23 +4,44 @@ expression: output
 ---
 export const bindings = scope({
 
+Role: [['===', 'Admin'], '|', ['===', 'Member']],
 Collection: {
   id: 'string',
   tags: ['string', '[]'],
   scores: ['number', '[]'],
-  metadata: 'Record<string, string>',
-  sortedData: 'Record<string, number>'
+  metadata: { '+': 'reject', "[string]": 'string' },
+  sortedData: { '+': 'reject', "[string]": 'number' },
+  notesByRank: { '+': 'reject', "[string.integer]": [['string', '|', 'undefined'], '|', 'null'] },
+  relatedByName: { '+': 'reject', "[string]": ['Collection', "|",  "string"] },
+  balanceByOffset: { '+': 'reject', "[string.integer]": 'number' },
+  countByLetter: { '+': 'reject', "[/^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$/]": 'number' },
+  ownerByRole: { '+': 'reject', "Admin?": 'string', "Member?": 'string' },
+  labelByAccount: { '+': 'reject', "[string]": 'string' },
+  grid: { '+': 'reject', "[string.integer]": { '+': 'reject', "[string.integer]": 'boolean' } },
+  initial: new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$"),
+  noteByFlag: { '+': 'reject', "true?": 'string', "false?": 'string' }
 },
 
 });
 
+const exported = bindings.export();
 
 export const defaultCollection: Collection = {
 id: "",
 tags: [],
 scores: [],
 metadata: {},
-sortedData: {}
+sortedData: {},
+notesByRank: {},
+relatedByName: {},
+balanceByOffset: {},
+countByLetter: {},
+ownerByRole: {},
+labelByAccount: {},
+grid: {},
+initial: "",
+noteByFlag: {}
 };
 
-export type Collection = typeof bindings.Collection.infer;
+export type Role = typeof exported.Role.infer;
+export type Collection = typeof exported.Collection.infer;

@@ -1,5 +1,5 @@
 {
-  "description": "Struct with Vec, HashMap, and BTreeMap fields",
+  "description": "Struct with Vec, HashMap, and BTreeMap fields, keyed every way serde_json can write a map key",
   "structs": {
     "Collection": {
       "struct_name": "Collection",
@@ -8,10 +8,38 @@
         { "field_name": "tags", "field_type": { "Vec": "String" }, "validators": [], "always_regenerate": false },
         { "field_name": "scores", "field_type": { "Vec": "F64" }, "validators": [], "always_regenerate": false },
         { "field_name": "metadata", "field_type": { "HashMap": ["String", "String"] }, "validators": [], "always_regenerate": false },
-        { "field_name": "sorted_data", "field_type": { "BTreeMap": ["String", "I32"] }, "validators": [], "always_regenerate": false }
+        { "field_name": "sorted_data", "field_type": { "BTreeMap": ["String", "I32"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "notes_by_rank", "field_type": { "BTreeMap": ["U32", { "Option": "String" }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "related_by_name", "field_type": { "HashMap": ["String", { "RecordLink": { "Other": "Collection" } }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "balance_by_offset", "field_type": { "HashMap": ["I64", "F64"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "count_by_letter", "field_type": { "BTreeMap": ["Char", "U32"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "owner_by_role", "field_type": { "HashMap": [{ "Other": "Role" }, "String"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "label_by_account", "field_type": { "HashMap": [{ "Other": "AccountId" }, "String"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "grid", "field_type": { "BTreeMap": ["U8", { "BTreeMap": ["U8", "Bool"] }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "initial", "field_type": "Char", "validators": [], "always_regenerate": false },
+        { "field_name": "note_by_flag", "field_type": { "HashMap": ["Bool", "String"] }, "validators": [], "always_regenerate": false }
       ],
       "validators": []
     }
   },
-  "enums": {}
+  "enums": {
+    "Role": {
+      "enum_name": "Role",
+      "variants": [
+        { "name": "Admin", "data": null },
+        { "name": "Member", "data": null }
+      ]
+    }
+  },
+  "foreign_types": {
+    "AccountId": {
+      "rust_type_names": ["AccountId"],
+      "arktype": { "type": "'string'" },
+      "effect": { "type": "Schema.String", "encoded": "string" },
+      "default_value_ts": "\"\"",
+      "macroforge": { "type": "string" },
+      "protobuf": "string",
+      "flatbuffers": "string"
+    }
+  }
 }

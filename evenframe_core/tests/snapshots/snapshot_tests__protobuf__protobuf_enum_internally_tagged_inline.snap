@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Shape {
+    message Circle {
+        double radius = 1;
+    }
+    message Rectangle {
+        double width = 1;
+        double height = 2;
+    }
+    message Point {
+    }
+    oneof variant {
+        Circle circle = 1;
+        Rectangle rectangle = 2;
+        Point point = 3;
+    }
+}

@@ -1,6 +1,6 @@
 use crate::imports::generate_deserialize_imports;
 use convert_case::{Case, Casing};
-use evenframe_core::derive::validator_parser::parse_field_validators_with_logic;
+use evenframe_core::derive::validator_parser::parse_field_validators;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, spanned::Spanned};
 
@@ -63,30 +63,24 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
         let field_type = &field.ty;
         let enum_variant = quote::format_ident!("{}", field_name.to_string().to_case(Case::Pascal));
 
-        // Create a temporary variable name for validation
-        let temp_var_name = format!("__temp_{}", field_name);
+        let validators = match parse_field_validators(&field.attrs) {
+            Ok(validators) => validators,
+            Err(err) => return err.to_compile_error(),
+        };
 
-        // Parse validators and get both validator tokens and logic tokens
-        let (_, validation_logic_tokens) =
-            match parse_field_validators_with_logic(&field.attrs, &temp_var_name, Some(field_type))
+        if !validators.is_empty() {
+            let temp_var = quote::format_ident!("__temp_{}", field_name);
+            let read = match validators.read_tokens(&temp_var, field_type, &field_name.to_string())
             {
-                Ok(tokens) => tokens,
-                Err(err) => {
-                    return err.to_compile_error();
-                }
+                Ok(read) => read,
+                Err(err) => return err.to_compile_error(),
             };
-
-        if !validation_logic_tokens.is_empty() {
-            let temp_var = quote::format_ident!("{}", temp_var_name);
-            // Generate validation code with better error context
             quote! {
                 Field::#enum_variant => {
                     if #field_name.is_some() {
                         return Err(de::Error::duplicate_field(stringify!(#field_name)));
                     }
-                    let mut #temp_var: #field_type = map.next_value()?;
-                    // Apply validators - any validation errors will be converted to deserialization errors
-                    #(#validation_logic_tokens)*
+                    #read
                     #field_name = Some(#temp_var);
                 }
             }

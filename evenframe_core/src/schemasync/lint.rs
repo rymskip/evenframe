@@ -20,7 +20,7 @@
 //! - Any other struct in `objects` is always inlined; settings other than
 //!   `default` are definitively discarded. `default` *is* honored: the parent's
 //!   `DEFAULT` walk uses each subfield's `define_config.default`
-//!   (see [`crate::default::field_type_to_surql_default`]).
+//!   (see `crate::default::field_type_to_surql_default`).
 //! - Fields of an enum variant's *inline* payload struct
 //!   ([`VariantData::InlineStruct`]) are inlined into the enum's literal type.
 //!   Their `default`s are honored only for the variant the `DEFAULT` walk

@@ -2,4 +2,20 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class ClickData extends Schema.Class<ClickData>("ClickData")( { 
+  x: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'X' is required` }),
+  y: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Y' is required` })
+}) {[key: string]: unknown}
 
+export const Event = Schema.Union(Schema.Struct({ t: Schema.Literal("Click"), c: ClickData }), Schema.Struct({ t: Schema.Literal("KeyPress"), c: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }), Schema.Struct({ t: Schema.Literal("Scroll") })).annotations({ identifier: `Event` });
+
+export interface ClickDataEncoded {
+  readonly x: number;
+  readonly y: number;
+}
+
+export type EventEncoded = { readonly t: "Click"; readonly c: ClickDataEncoded; } | { readonly t: "KeyPress"; readonly c: string; } | { readonly t: "Scroll"; };
+
+
+export type ClickDataType = typeof ClickData.Type;
+export type EventType = typeof Event.Type;

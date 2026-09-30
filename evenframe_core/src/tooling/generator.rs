@@ -3,8 +3,9 @@
 use super::{BuildConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects};
 use crate::error::EvenframeError;
 use crate::types::ForeignTypeRegistry;
+use crate::typesync::checks::check_types;
 use crate::typesync::config::TypesyncOutput;
-use crate::typesync::output::{GeneratedFile, OutputTypes, write_output};
+use crate::typesync::output::{GeneratedFile, OutputTypes, render_output};
 use tracing::{debug, info};
 
 /// Report of the generation process.
@@ -47,9 +48,10 @@ impl TypeGenerator {
     fn generate(&self, outputs: &[TypesyncOutput]) -> Result<GenerationReport, EvenframeError> {
         info!("Starting type generation");
         let (enums, tables, objects) = build_all_configs(&self.config)?;
+        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
+        check_types(&enums, &tables, &objects, &registry)?;
         let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
         let structs = merge_tables_and_objects(&tables, &objects);
-        let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         debug!(
             "Processing {} enums, {} tables, {} objects",
             enums.len(),
@@ -62,10 +64,22 @@ impl TypeGenerator {
             enums: &enums,
             registry: &registry,
         };
+        // Every output renders before any is written, so one that fails
+        // leaves every output's files as they were.
+        let rendered = outputs
+            .iter()
+            .map(|output| {
+                render_output(
+                    output,
+                    &output.resolve_dir(&self.config.scan_path),
+                    None,
+                    &types,
+                )
+            })
+            .collect::<Result<Vec<_>, EvenframeError>>()?;
         let mut files = Vec::new();
-        for output in outputs {
-            let dir = output.resolve_dir(&self.config.scan_path);
-            files.extend(write_output(output, &dir, None, &types)?);
+        for output in &rendered {
+            files.extend(output.write()?);
         }
         info!("Generation complete. Generated {} files", files.len());
 

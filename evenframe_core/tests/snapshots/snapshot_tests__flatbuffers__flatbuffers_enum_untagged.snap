@@ -3,7 +3,23 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 union Value {
-    string,
-    double,
-    bool,
+    ValueText,
+    ValueNumber,
+    ValueFlag,
+    ValueNothing
+}
+
+table ValueText {
+    value: string;
+}
+
+table ValueNumber {
+    value: double;
+}
+
+table ValueFlag {
+    value: bool;
+}
+
+table ValueNothing {
 }

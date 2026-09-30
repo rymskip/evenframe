@@ -1,10 +1,10 @@
+use crate::error::{EvenframeError, Result};
 #[cfg(feature = "surrealdb")]
 use crate::schemasync::TableConfig;
 #[cfg(feature = "surrealdb")]
 use crate::types::StructField;
 use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
-use rand::{rng, seq::IndexedRandom};
 use std::collections::BTreeMap;
 use tracing::{debug, trace};
 
@@ -13,7 +13,7 @@ pub fn field_type_to_default_value(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     trace!("Generating default value for field type: {:?}", field_type);
     let result = match field_type {
         FieldType::String | FieldType::Char => {
@@ -26,7 +26,8 @@ pub fn field_type_to_default_value(
         }
         FieldType::Unit => {
             trace!("Generating default for Unit type");
-            "undefined".to_string()
+            // serde writes `()` as `null`.
+            "null".to_string()
         }
         FieldType::F32
         | FieldType::F64
@@ -50,10 +51,10 @@ pub fn field_type_to_default_value(
                 "Generating default for Tuple with {} types",
                 inner_types.len()
             );
-            let tuple_defaults: Vec<String> = inner_types
+            let tuple_defaults = inner_types
                 .iter()
                 .map(|ty| field_type_to_default_value(ty, structs, enums, registry))
-                .collect();
+                .collect::<Result<Vec<String>>>()?;
             format!("[{}]", tuple_defaults.join(", "))
         }
         FieldType::Struct(fields) => {
@@ -61,13 +62,13 @@ pub fn field_type_to_default_value(
             let fields_str = fields
                 .iter()
                 .map(|(name, ftype)| {
-                    format!(
+                    Ok(format!(
                         "{}: {}",
                         name.to_case(Case::Camel),
-                        field_type_to_default_value(ftype, structs, enums, registry)
-                    )
+                        field_type_to_default_value(ftype, structs, enums, registry)?
+                    ))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>>>()?
                 .join(", ");
             format!("{{ {} }}", fields_str)
         }
@@ -103,96 +104,30 @@ pub fn field_type_to_default_value(
         }
 
         FieldType::RecordLink(inner) => {
-            // Could produce "null" or "0" depending on your usage pattern.
-            // We'll pick "null" for "unlinked".
+            // An unlinked record is an empty id.
             trace!("Generating default for RecordLink with inner: {:?}", inner);
             "''".to_string()
         }
         FieldType::Other(name) => {
             // 0) Check if it's a configured foreign type
             if let Some(ftc) = registry.lookup(name) {
-                return ftc.default_value_ts.clone();
+                if ftc.default_value_ts.trim().is_empty() {
+                    return Err(EvenframeError::config(format!(
+                        "foreign type '{name}' has no `default_value_ts`, which the arktype output needs for its default values"
+                    )));
+                }
+                return Ok(ftc.default_value_ts.clone());
             }
 
-            // 1) If this is an enum, pick a random variant.
-            // 2) Otherwise if it matches a known table, produce a default object for that table.
-            // 3) If neither, fall back to 'undefined'.
+            // An enum defaults to its `#[default]` variant, else its first; a
+            // struct to an object of its fields' defaults.
             debug!("Generating default for Other type: {}", name);
 
-            // First check for an enum of this name
-            if let Some(enum_schema) = enums.values().find(|e| e.enum_name == *name) {
-                debug!(
-                    "Found enum {} with {} variants",
-                    name,
-                    enum_schema.variants.len()
-                );
-                let mut rng = rng();
-                let chosen_variant = enum_schema
-                    .variants
-                    .iter()
-                    .find(|v| v.is_default)
-                    .or_else(|| enum_schema.variants.choose(&mut rng));
-                if let Some(chosen_variant) = chosen_variant {
-                    trace!("Chosen variant: {}", chosen_variant.name);
-                    // If the variant has data, generate a default for it.
-                    if let Some(variant_data) = &chosen_variant.data {
-                        let inner_default = match variant_data {
-                            VariantData::InlineStruct(enum_struct) => field_type_to_default_value(
-                                &FieldType::Other(enum_struct.struct_name.clone()),
-                                structs,
-                                enums,
-                                registry,
-                            ),
-                            VariantData::DataStructureRef(field_type) => {
-                                field_type_to_default_value(field_type, structs, enums, registry)
-                            }
-                        };
-                        return match &enum_schema.representation {
-                            EnumRepresentation::ExternallyTagged => {
-                                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
-                            }
-                            EnumRepresentation::InternallyTagged { tag } => {
-                                if let VariantData::InlineStruct(_) = variant_data {
-                                    // Merge tag into the struct — strip outer braces and prepend tag
-                                    let trimmed = inner_default.trim();
-                                    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                                        let inner = &trimmed[1..trimmed.len() - 1];
-                                        format!(
-                                            "{{ {}: '\"{}\"', {} }}",
-                                            tag,
-                                            chosen_variant.name,
-                                            inner.trim()
-                                        )
-                                    } else {
-                                        format!("{{ {}: '\"{}\"' }}", tag, chosen_variant.name)
-                                    }
-                                } else {
-                                    // DataStructureRef — serde doesn't support this, fall back to external
-                                    format!("{{ {}: {} }}", chosen_variant.name, inner_default)
-                                }
-                            }
-                            EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                                format!(
-                                    "{{ {}: '\"{}\"', {}: {} }}",
-                                    tag, chosen_variant.name, content, inner_default
-                                )
-                            }
-                            EnumRepresentation::Untagged => inner_default,
-                        };
-                    } else {
-                        // A unit variant without data
-                        return match &enum_schema.representation {
-                            EnumRepresentation::InternallyTagged { tag }
-                            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                                format!("{{ {}: '\"{}\"' }}", tag, chosen_variant.name)
-                            }
-                            _ => format!("'\"{}\"", chosen_variant.name),
-                        };
-                    }
-                } else {
-                    // If no variants, fallback to undefined
-                    return "undefined".to_string();
-                }
+            if let Some(enum_schema) = enums
+                .values()
+                .find(|e| e.enum_name.to_case(Case::Pascal) == name.to_case(Case::Pascal))
+            {
+                return enum_default(enum_schema, structs, enums, registry);
             }
 
             if let Some(struct_config) = structs.values().find(|struct_config| {
@@ -203,37 +138,104 @@ pub fn field_type_to_default_value(
                     name,
                     struct_config.fields.len()
                 );
-                // We treat this similarly to a struct:
-                let fields_str = struct_config
-                    .fields
-                    .iter()
-                    .map(|table_field| {
-                        format!(
-                            "{}: {}",
-                            table_field.field_name.to_case(Case::Camel),
-                            field_type_to_default_value(
-                                &table_field.field_type,
-                                structs,
-                                enums,
-                                registry
-                            )
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{ {} }}", fields_str)
+                struct_fields_default(&struct_config.fields, structs, enums, registry)?
             } else {
-                // Not an enum or known table
-                trace!(
-                    "Type {} not found in enums or structs, returning undefined",
-                    name
-                );
-                "undefined".to_string()
+                return Err(EvenframeError::type_sync(format!(
+                    "`{name}` is neither a scanned type nor a foreign type, so it has no default \
+                     value"
+                )));
             }
         }
     };
     trace!("Generated default value: {}", result);
-    result
+    Ok(result)
+}
+
+/// The TypeScript default for an enum: its `#[default]` variant, else its
+/// first, in the enum's serde representation.
+fn enum_default(
+    enum_schema: &TaggedUnion,
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    let variant = enum_schema
+        .variants
+        .iter()
+        .find(|variant| variant.is_default)
+        .or_else(|| enum_schema.variants.first())
+        .ok_or_else(|| {
+            EvenframeError::config(format!(
+                "enum '{}' has no variants, so it has no default value",
+                enum_schema.enum_name
+            ))
+        })?;
+    let name = serde_json::to_string(&variant.name).map_err(|error| {
+        EvenframeError::config(format!("cannot encode variant {:?}: {error}", variant.name))
+    })?;
+    let representation = &enum_schema.representation;
+    let Some(data) = &variant.data else {
+        return Ok(match representation {
+            EnumRepresentation::InternallyTagged { tag }
+            | EnumRepresentation::AdjacentlyTagged { tag, .. } => format!("{{ {tag}: {name} }}"),
+            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => name,
+        });
+    };
+    let payload = match data {
+        VariantData::InlineStruct(inline) => {
+            let entries = struct_default_entries(&inline.fields, structs, enums, registry)?;
+            if let EnumRepresentation::InternallyTagged { tag } = representation {
+                let mut merged = vec![format!("{tag}: {name}")];
+                merged.extend(entries);
+                return Ok(format!("{{ {} }}", merged.join(", ")));
+            }
+            format!("{{ {} }}", entries.join(", "))
+        }
+        VariantData::DataStructureRef(field_type) => {
+            field_type_to_default_value(field_type, structs, enums, registry)?
+        }
+    };
+    Ok(match representation {
+        EnumRepresentation::ExternallyTagged => format!("{{ {}: {payload} }}", variant.name),
+        // serde writes the tag into the struct or map the variant holds.
+        EnumRepresentation::InternallyTagged { tag } => {
+            format!("{{ {tag}: {name}, ...{payload} }}")
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            format!("{{ {tag}: {name}, {content}: {payload} }}")
+        }
+        EnumRepresentation::Untagged => payload,
+    })
+}
+
+/// A struct's fields as TypeScript default object entries.
+fn struct_default_entries(
+    fields: &[crate::types::StructField],
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<Vec<String>> {
+    fields
+        .iter()
+        .map(|field| {
+            Ok(format!(
+                "{}: {}",
+                field.field_name.to_case(Case::Camel),
+                field_type_to_default_value(&field.field_type, structs, enums, registry)?
+            ))
+        })
+        .collect()
+}
+
+/// The TypeScript default object for a struct's fields.
+fn struct_fields_default(
+    fields: &[crate::types::StructField],
+    structs: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    let entries = struct_default_entries(fields, structs, enums, registry)?;
+    Ok(format!("{{ {} }}", entries.join(", ")))
 }
 
 #[cfg(feature = "surrealdb")]
@@ -821,6 +823,53 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn unit_defaults_to_null_as_serde_writes_it() {
+        let default = field_type_to_default_value(
+            &FieldType::Unit,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &ForeignTypeRegistry::default(),
+        )
+        .unwrap();
+        assert_eq!(default, "null");
+    }
+
+    #[test]
+    fn an_enum_named_in_any_case_gets_its_default() {
+        let enums = BTreeMap::from([(
+            "Role".to_string(),
+            tagged_union(
+                "Role",
+                vec![variant("Admin", false), variant("Member", true)],
+            ),
+        )]);
+        let default = field_type_to_default_value(
+            &FieldType::Other("role".to_string()),
+            &BTreeMap::new(),
+            &enums,
+            &ForeignTypeRegistry::default(),
+        )
+        .unwrap();
+        assert_eq!(default, "\"Member\"");
+    }
+
+    #[test]
+    fn an_unknown_type_has_no_default() {
+        let error = field_type_to_default_value(
+            &FieldType::Other("Missing".to_string()),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &ForeignTypeRegistry::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("`Missing` is neither a scanned type"),
+            "{error}"
+        );
     }
 
     #[test]

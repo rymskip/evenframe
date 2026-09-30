@@ -1,0 +1,16 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface ClickData {
+  x: number;
+  y: number;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ tag: "t", content: "c" }) */
+export type Event =
+	| { t: 'Click'; c: ClickData }
+	| { t: 'KeyPress'; c: string }
+	| { t: 'Scroll' };

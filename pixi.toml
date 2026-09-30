@@ -33,6 +33,10 @@ bump = "cargo run -p tooling -- bump"
 # but surreal is intentionally NOT a pixi dependency here (no public conda
 # package) — it's expected on PATH from a global install.
 rustup = "*"
+cargo-insta = ">=1.48.0,<2"
+libprotobuf = ">=7.36.2,<8"
+flatbuffers = ">=25.12.19,<26"
+deno = ">=2.9.5,<2.10"
 
 [activation.env]
 RUSTUP_HOME = "$HOME/.pixi/envs/rustup/.rustup"

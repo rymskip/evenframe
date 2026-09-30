@@ -1,4 +1,6 @@
-use crate::schemasync::{compare::SchemaChanges, mockmake::Mockmaker};
+use crate::schemasync::compare::SchemaChanges;
+#[cfg(feature = "mockmake")]
+use crate::schemasync::mockmake::Mockmaker;
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
@@ -90,6 +92,7 @@ pub fn generate_remove_event_statements(schema_changes: &SchemaChanges) -> Strin
     output
 }
 
+#[cfg(feature = "mockmake")]
 impl Mockmaker<'_> {
     /// DELETE statements for the records beyond each table's count. Links
     /// are only generated to ids kept in the pool, so no new record points at
@@ -105,97 +108,92 @@ impl Mockmaker<'_> {
         }
         output
     }
+}
 
-    /// REMOVE statements for what `schema_changes` removed from the schema,
-    /// and DELETE statements for the records beyond each table's count.
-    pub fn generate_remove_statements(&self, schema_changes: &SchemaChanges) -> String {
-        info!("Generating remove statements based on schema changes");
-        debug!(
-            "Schema changes before remove statement gen: {:?}",
-            schema_changes
-        );
-        let mut output = String::new();
+/// REMOVE statements for what `schema_changes` removed from the schema.
+pub fn generate_remove_statements(schema_changes: &SchemaChanges) -> String {
+    info!("Generating remove statements based on schema changes");
+    debug!(
+        "Schema changes before remove statement gen: {:?}",
+        schema_changes
+    );
+    let mut output = String::new();
 
-        // Process removed accesses first
-        if !schema_changes.modified_accesses.is_empty()
-            || !schema_changes.removed_accesses.is_empty()
-        {
-            let mut has_accesses_to_remove = false;
+    // Process removed accesses first
+    if !schema_changes.modified_accesses.is_empty() || !schema_changes.removed_accesses.is_empty() {
+        let mut has_accesses_to_remove = false;
 
-            // Always remove fully removed accesses
-            for access_name in &schema_changes.removed_accesses {
+        // Always remove fully removed accesses
+        for access_name in &schema_changes.removed_accesses {
+            output.push_str(&format!(
+                "REMOVE ACCESS IF EXISTS {} ON DATABASE;\n",
+                access_name
+            ));
+            has_accesses_to_remove = true;
+        }
+
+        // For modified accesses, check if changes are only ignorable (JWT/Issuer key changes)
+        for access_change in &schema_changes.modified_accesses {
+            // Check if all changes are ignorable (using the enum's is_ignorable method)
+            let only_ignorable_changes = access_change
+                .changes
+                .iter()
+                .all(|change| change.is_ignorable());
+
+            // Only remove and recreate if there are changes that aren't ignorable
+            if !only_ignorable_changes {
                 output.push_str(&format!(
                     "REMOVE ACCESS IF EXISTS {} ON DATABASE;\n",
-                    access_name
+                    access_change.access_name
                 ));
                 has_accesses_to_remove = true;
             }
-
-            // For modified accesses, check if changes are only ignorable (JWT/Issuer key changes)
-            for access_change in &schema_changes.modified_accesses {
-                // Check if all changes are ignorable (using the enum's is_ignorable method)
-                let only_ignorable_changes = access_change
-                    .changes
-                    .iter()
-                    .all(|change| change.is_ignorable());
-
-                // Only remove and recreate if there are changes that aren't ignorable
-                if !only_ignorable_changes {
-                    output.push_str(&format!(
-                        "REMOVE ACCESS IF EXISTS {} ON DATABASE;\n",
-                        access_change.access_name
-                    ));
-                    has_accesses_to_remove = true;
-                }
-            }
-
-            if has_accesses_to_remove {
-                output.push('\n');
-            }
         }
 
-        output.push_str(&self.excess_record_deletes());
-
-        // Process removed indexes before removed fields: SurrealDB rejects
-        // `REMOVE FIELD` on a column that still has a live index referencing
-        // it, so orphan indexes must be dropped first. Events can reference
-        // fields via $before/$after/$value, so drop orphan events here too.
-        output.push_str(&generate_remove_index_statements(schema_changes));
-        output.push_str(&generate_remove_event_statements(schema_changes));
-
-        // Process removed fields first (before removing tables)
-        for table_change in &schema_changes.modified_tables {
-            if !table_change.removed_fields.is_empty() {
-                let table_name = table_change.table_name.to_case(Case::Snake);
-                output.push_str(&format!("-- Removing fields from table {}\n", table_name));
-
-                for field_name in &table_change.removed_fields {
-                    output.push_str(&format!(
-                        "REMOVE FIELD IF EXISTS {} ON TABLE {};\n",
-                        field_name, table_name
-                    ));
-                }
-                output.push('\n');
-            }
+        if has_accesses_to_remove {
+            output.push('\n');
         }
+    }
 
-        // Process removed tables
-        if !schema_changes.removed_tables.is_empty() {
-            output.push_str("-- Removing tables\n");
-            for table_name in &schema_changes.removed_tables {
-                let table_name_snake = table_name.to_case(Case::Snake);
-                output.push_str(&format!("REMOVE TABLE IF EXISTS {};\n", table_name_snake));
+    // Process removed indexes before removed fields: SurrealDB rejects
+    // `REMOVE FIELD` on a column that still has a live index referencing
+    // it, so orphan indexes must be dropped first. Events can reference
+    // fields via $before/$after/$value, so drop orphan events here too.
+    output.push_str(&generate_remove_index_statements(schema_changes));
+    output.push_str(&generate_remove_event_statements(schema_changes));
+
+    // Process removed fields first (before removing tables)
+    for table_change in &schema_changes.modified_tables {
+        if !table_change.removed_fields.is_empty() {
+            let table_name = table_change.table_name.to_case(Case::Snake);
+            output.push_str(&format!("-- Removing fields from table {}\n", table_name));
+
+            for field_name in &table_change.removed_fields {
+                output.push_str(&format!(
+                    "REMOVE FIELD IF EXISTS {} ON TABLE {};\n",
+                    field_name, table_name
+                ));
             }
             output.push('\n');
         }
-
-        // Process removed analyzers last: SurrealDB rejects `REMOVE ANALYZER`
-        // while any index (including those on tables removed above) still
-        // references it.
-        output.push_str(&generate_remove_analyzer_statements(schema_changes));
-
-        output
     }
+
+    // Process removed tables
+    if !schema_changes.removed_tables.is_empty() {
+        output.push_str("-- Removing tables\n");
+        for table_name in &schema_changes.removed_tables {
+            let table_name_snake = table_name.to_case(Case::Snake);
+            output.push_str(&format!("REMOVE TABLE IF EXISTS {};\n", table_name_snake));
+        }
+        output.push('\n');
+    }
+
+    // Process removed analyzers last: SurrealDB rejects `REMOVE ANALYZER`
+    // while any index (including those on tables removed above) still
+    // references it.
+    output.push_str(&generate_remove_analyzer_statements(schema_changes));
+
+    output
 }
 
 #[cfg(test)]

@@ -1,0 +1,23 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export type RecordLink<T> = string | T;
+
+/** @derive(Deserialize) */
+export interface Author {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  name: string;
+}
+
+/** @derive(Deserialize) */
+export interface Post {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  title: string;
+  author: RecordLink<Author>;
+  relatedPosts: RecordLink<Post>[];
+}

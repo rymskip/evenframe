@@ -9,7 +9,7 @@ use evenframe_core::{
             find_duplicate_index_name, indexable_fields, parse_annotation_attributes,
             parse_event_attributes, parse_field_index_attributes, parse_format_attribute,
             parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
-            parse_relation_attribute, parse_rust_derives,
+            parse_relation_attribute, parse_rust_derives, parse_table_validators,
         },
         validator_parser::parse_field_validators,
     },
@@ -59,16 +59,20 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             Err(err) => return err.to_compile_error(),
         };
 
-        // Parse table-level validators using the same parser as field validators
-        let table_validators = match parse_field_validators(&input.attrs) {
-            Ok(validators) => validators,
-            Err(err) => {
-                return syn::Error::new(
-                    input.span(),
-                    format!("Failed to parse table validators: {}\n\nExample usage:\n#[validators(StringValidator::MinLength(5))]\nstruct MyStruct {{ ... }}", err)
-                )
-                .to_compile_error();
-            }
+        // Table-level validators are SurrealQL expressions, carried as the
+        // scanner carries them.
+        let table_validators = match parse_table_validators(&input.attrs) {
+            Ok(expressions) => expressions
+                .iter()
+                .map(|expression| {
+                    quote! {
+                        ::evenframe::validator::Validator::StringValidator(
+                            ::evenframe::validator::StringValidator::StringEmbedded(#expression.to_string()),
+                        )
+                    }
+                })
+                .collect::<Vec<_>>(),
+            Err(err) => return err.to_compile_error(),
         };
 
         // Parse relation attribute
@@ -211,11 +215,11 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
             // Parse field-level validators
             let field_validators = match parse_field_validators(&field.attrs) {
-                Ok(v) => v,
+                Ok(validators) => validators.config_tokens(),
                 Err(err) => {
                     return syn::Error::new(
-                        field.span(),
-                        format!("Failed to parse validators for field '{}': {}\n\nExample usage:\n#[validate(min_length = 3, max_length = 50)]\npub name: String\n\n#[validate(email)]\npub email: String", field_name, err)
+                        err.span(),
+                        format!("Failed to parse validators for field '{}': {}\n\nExample usage:\n#[validators(StringValidator::MinLength(3), StringValidator::MaxLength(50))]\npub name: String\n\n#[validators(StringValidator::Email)]\npub email: String", field_name, err)
                     )
                     .to_compile_error();
                 }
@@ -446,17 +450,17 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // No trait implementation needed for app structs - the derive macro itself is the marker
 
-        // Check if any field has validators
-        // We check this to determine if we need to generate custom deserialization
+        // A validators attribute that failed to parse is already a compile
+        // error above, so its presence alone says the field has validators.
         let has_field_validators = fields_named.named.iter().any(|field| {
-            match parse_field_validators(&field.attrs) {
-                Ok(validators) => !validators.is_empty(),
-                Err(_) => true, // If parsing fails, assume validators exist to be safe
-            }
+            field
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("validators"))
         });
 
         // Generate custom deserialization if there are field validators
-        let deserialize_impl = if has_field_validators || !table_validators.is_empty() {
+        let deserialize_impl = if has_field_validators {
             generate_custom_deserialize(&input)
         } else {
             quote! {}
@@ -470,6 +474,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             );
             let registry_submission = quote! {
                 #[::evenframe::linkme::distributed_slice(::evenframe::registry::TABLE_REGISTRY_ENTRIES)]
+                #[linkme(crate = ::evenframe::linkme)]
                 static #registry_var_name: ::evenframe::registry::TableRegistryEntry = ::evenframe::registry::TableRegistryEntry {
                     type_name: #struct_name,
                     table_config_fn: || #ident::static_table_config(),
@@ -522,6 +527,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             );
             let registry_submission = quote! {
                 #[::evenframe::linkme::distributed_slice(::evenframe::registry::OBJECT_REGISTRY_ENTRIES)]
+                #[linkme(crate = ::evenframe::linkme)]
                 static #registry_var_name: ::evenframe::registry::ObjectRegistryEntry = ::evenframe::registry::ObjectRegistryEntry {
                     type_name: #struct_name,
                     struct_config_fn: || #ident::static_struct_config(),
@@ -529,14 +535,12 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 };
             };
 
-            // App structs only need `StructField`/`FieldType` and the registry
-            // distributed-slice. Avoid pulling in the full table import block
-            // (convert_case, schemasync) — consumer crates that derive only on
-            // app structs (e.g. `Typesync`) may not depend on those.
+            // App structs only need `StructField`/`FieldType` and the registry,
+            // not the table import block's schemasync types, which a crate
+            // deriving only `Typesync` may not build.
             let app_imports = quote! {
                 use ::evenframe::types::{StructConfig, StructField, FieldType};
                 use ::evenframe::registry;
-                use ::evenframe::prelude::linkme;
             };
 
             quote! {

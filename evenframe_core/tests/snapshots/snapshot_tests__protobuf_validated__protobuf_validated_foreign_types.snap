@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Appointment {
+    string id = 1;
+    string title = 2;
+    string scheduled_at = 3;
+    int64 duration = 4;
+    optional string cancelled_at = 5;
+}

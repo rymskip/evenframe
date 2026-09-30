@@ -6,15 +6,13 @@ use std::path::Path;
 use tracing::{debug, info};
 use wasmtime::*;
 
-use super::plugin_types::{
-    PluginFieldInput, PluginFieldOutput, PluginTableInput, PluginTableOutput,
-};
+use crate::typesync::plugin_runtime::LoadedPlugin;
 
-/// A loaded and instantiated WASM plugin.
-struct LoadedPlugin {
-    store: Store<()>,
-    instance: Instance,
-    memory: Memory,
+use super::plugin_types::{PluginFieldInput, PluginFieldOutput};
+
+/// A loaded mock-data plugin.
+struct MockPlugin {
+    runtime: LoadedPlugin,
     /// Config-supplied parameters forwarded to the plugin on every call.
     params: BTreeMap<String, String>,
 }
@@ -28,93 +26,13 @@ struct WithParams<'a, T: serde::Serialize> {
     params: &'a BTreeMap<String, String>,
 }
 
-impl LoadedPlugin {
-    /// Get the `alloc` export.
-    fn alloc(&mut self, size: i32) -> Result<i32, EvenframeError> {
-        let func = self
-            .instance
-            .get_typed_func::<i32, i32>(&mut self.store, "alloc")
-            .map_err(|e| EvenframeError::plugin(format!("Missing 'alloc' export: {}", e)))?;
-        func.call(&mut self.store, size)
-            .map_err(|e| EvenframeError::plugin(format!("alloc failed: {}", e)))
-    }
-
-    /// Get the `dealloc` export.
-    fn dealloc(&mut self, ptr: i32, len: i32) -> Result<(), EvenframeError> {
-        let func = self
-            .instance
-            .get_typed_func::<(i32, i32), ()>(&mut self.store, "dealloc")
-            .map_err(|e| EvenframeError::plugin(format!("Missing 'dealloc' export: {}", e)))?;
-        func.call(&mut self.store, (ptr, len))
-            .map_err(|e| EvenframeError::plugin(format!("dealloc failed: {}", e)))
-    }
-
-    /// Write input bytes into WASM memory and call a function, returning the output string.
-    fn call_plugin_fn(
-        &mut self,
-        fn_name: &str,
-        input_json: &[u8],
-    ) -> Result<String, EvenframeError> {
-        // Allocate space in WASM memory for the input
-        let input_len = input_json.len() as i32;
-        let input_ptr = self.alloc(input_len)?;
-
-        // Write input bytes into WASM linear memory
-        let mem_data = self.memory.data_mut(&mut self.store);
-        let start = input_ptr as usize;
-        let end = start + input_json.len();
-        if end > mem_data.len() {
-            return Err(EvenframeError::plugin(format!(
-                "WASM memory too small: need {} bytes at offset {}, have {}",
-                input_json.len(),
-                start,
-                mem_data.len()
-            )));
-        }
-        mem_data[start..end].copy_from_slice(input_json);
-
-        // Call the plugin function
-        let func = self
-            .instance
-            .get_typed_func::<(i32, i32), i64>(&mut self.store, fn_name)
-            .map_err(|e| EvenframeError::plugin(format!("Missing '{}' export: {}", fn_name, e)))?;
-
-        let packed = func
-            .call(&mut self.store, (input_ptr, input_len))
-            .map_err(|e| {
-                EvenframeError::plugin(format!("Plugin function '{}' trapped: {}", fn_name, e))
-            })?;
-
-        // Unpack pointer and length from i64
-        let out_ptr = (packed >> 32) as i32;
-        let out_len = (packed & 0xFFFF_FFFF) as i32;
-
-        // Read output from WASM memory
-        let mem_data = self.memory.data(&self.store);
-        let out_start = out_ptr as usize;
-        let out_end = out_start + out_len as usize;
-        if out_end > mem_data.len() {
-            return Err(EvenframeError::plugin(format!(
-                "Plugin returned out-of-bounds pointer: {}+{} > {}",
-                out_start,
-                out_len,
-                mem_data.len()
-            )));
-        }
-        let output_bytes = mem_data[out_start..out_end].to_vec();
-
-        // Deallocate the output in WASM
-        let _ = self.dealloc(out_ptr, out_len);
-
-        String::from_utf8(output_bytes)
-            .map_err(|e| EvenframeError::plugin(format!("Plugin returned invalid UTF-8: {}", e)))
-    }
-}
+/// The error a plugin returns to leave a field to the default generator.
+const SKIP: &str = "skip";
 
 /// Manages WASM plugin loading, caching, and invocation.
 pub struct PluginManager {
     _engine: Engine,
-    plugins: BTreeMap<String, LoadedPlugin>,
+    plugins: BTreeMap<String, MockPlugin>,
 }
 
 impl std::fmt::Debug for PluginManager {
@@ -177,31 +95,25 @@ impl PluginManager {
                     EvenframeError::plugin(format!("Plugin '{}': missing 'dealloc' export", name))
                 })?;
 
-            // Verify at least one generation function exists
-            let has_field = instance
+            // Mock data is generated field by field, so a plugin must export
+            // `generate_field`; a table-level `generate_table` is not called.
+            instance
                 .get_typed_func::<(i32, i32), i64>(&mut store, "generate_field")
-                .is_ok();
-            let has_table = instance
-                .get_typed_func::<(i32, i32), i64>(&mut store, "generate_table")
-                .is_ok();
-            if !has_field && !has_table {
-                return Err(EvenframeError::plugin(format!(
-                    "Plugin '{}': exports neither 'generate_field' nor 'generate_table'",
-                    name
-                )));
-            }
-
-            debug!(
-                "Plugin '{}' loaded: generate_field={}, generate_table={}",
-                name, has_field, has_table
-            );
+                .map_err(|_| {
+                    EvenframeError::plugin(format!(
+                        "Plugin '{name}': mock-data plugins must export 'generate_field'"
+                    ))
+                })?;
+            debug!("Plugin '{}' loaded", name);
 
             plugins.insert(
                 name.clone(),
-                LoadedPlugin {
-                    store,
-                    instance,
-                    memory,
+                MockPlugin {
+                    runtime: LoadedPlugin {
+                        store,
+                        instance,
+                        memory,
+                    },
                     params: config.params.clone(),
                 },
             );
@@ -214,12 +126,13 @@ impl PluginManager {
         })
     }
 
-    /// Generate a field value using a named plugin.
+    /// A field value from a named plugin, or `None` when the plugin skips
+    /// the field and leaves it to the default generator.
     pub fn generate_field_value(
         &mut self,
         plugin_name: &str,
         input: &PluginFieldInput,
-    ) -> Result<String, EvenframeError> {
+    ) -> Result<Option<String>, EvenframeError> {
         let plugin = self
             .plugins
             .get_mut(plugin_name)
@@ -231,7 +144,9 @@ impl PluginManager {
         })
         .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
 
-        let output_str = plugin.call_plugin_fn("generate_field", &input_json)?;
+        let output_str = plugin
+            .runtime
+            .call_plugin_fn("generate_field", &input_json)?;
 
         let output: PluginFieldOutput = serde_json::from_str(&output_str).map_err(|e| {
             EvenframeError::plugin(format!(
@@ -240,57 +155,20 @@ impl PluginManager {
             ))
         })?;
 
-        if let Some(err) = output.error {
-            return Err(EvenframeError::plugin(format!(
-                "Plugin '{}' error: {}",
-                plugin_name, err
-            )));
+        match output.error.as_deref() {
+            Some(SKIP) => return Ok(None),
+            Some(err) => {
+                return Err(EvenframeError::plugin(format!(
+                    "Plugin '{}' error: {}",
+                    plugin_name, err
+                )));
+            }
+            None => {}
         }
 
-        output.value.ok_or_else(|| {
+        output.value.map(Some).ok_or_else(|| {
             EvenframeError::plugin(format!(
                 "Plugin '{}' returned neither value nor error",
-                plugin_name
-            ))
-        })
-    }
-
-    /// Generate all field values for a table record using a named plugin.
-    pub fn generate_table_values(
-        &mut self,
-        plugin_name: &str,
-        input: &PluginTableInput,
-    ) -> Result<BTreeMap<String, String>, EvenframeError> {
-        let plugin = self
-            .plugins
-            .get_mut(plugin_name)
-            .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
-
-        let input_json = serde_json::to_vec(&WithParams {
-            input,
-            params: &plugin.params,
-        })
-        .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
-
-        let output_str = plugin.call_plugin_fn("generate_table", &input_json)?;
-
-        let output: PluginTableOutput = serde_json::from_str(&output_str).map_err(|e| {
-            EvenframeError::plugin(format!(
-                "Plugin '{}' returned invalid JSON: {} (raw: {})",
-                plugin_name, e, output_str
-            ))
-        })?;
-
-        if let Some(err) = output.error {
-            return Err(EvenframeError::plugin(format!(
-                "Plugin '{}' error: {}",
-                plugin_name, err
-            )));
-        }
-
-        output.fields.ok_or_else(|| {
-            EvenframeError::plugin(format!(
-                "Plugin '{}' returned neither fields nor error",
                 plugin_name
             ))
         })

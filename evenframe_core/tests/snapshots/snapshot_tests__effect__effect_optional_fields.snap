@@ -2,4 +2,22 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class Profile extends Schema.Class<Profile>("Profile")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  bio: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null),
+  age: Schema.OptionFromNullishOr(Schema.Number, null),
+  rating: Schema.OptionFromNullishOr(Schema.Number, null),
+  verified: Schema.OptionFromNullishOr(Schema.Boolean, null)
+}) {[key: string]: unknown}
 
+
+export interface ProfileEncoded {
+  readonly id: string;
+  readonly bio: string | null | undefined;
+  readonly age: number | null | undefined;
+  readonly rating: number | null | undefined;
+  readonly verified: boolean | null | undefined;
+}
+
+
+export type ProfileType = typeof Profile.Type;

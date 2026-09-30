@@ -2,7 +2,9 @@
 
 use crate::config::ForeignTypeConfig;
 use crate::error::EvenframeError;
-use crate::typesync::config::{CollisionStrategy, OutputKind, TypesyncConfig, TypesyncOutput};
+use crate::typesync::config::{
+    CollisionStrategy, OutputKind, StructVariants, TypesyncConfig, TypesyncOutput,
+};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -29,6 +31,9 @@ pub struct BuildConfig {
     /// How to handle type name collisions across files.
     pub collision_strategy: CollisionStrategy,
 
+    /// How a struct variant's fields are written.
+    pub struct_variants: StructVariants,
+
     /// Foreign type configurations, keyed by canonical type name.
     pub foreign_types: BTreeMap<String, ForeignTypeConfig>,
 
@@ -53,6 +58,7 @@ impl Default for BuildConfig {
             expand_macros: false,
             outputs: vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")],
             collision_strategy: CollisionStrategy::Error,
+            struct_variants: StructVariants::Named,
             foreign_types: BTreeMap::new(),
             output_rule_plugins: BTreeMap::new(),
             synthetic_item_plugins: BTreeMap::new(),
@@ -184,6 +190,7 @@ impl BuildConfig {
             })?;
             config.outputs = typesync.outputs;
             config.collision_strategy = typesync.collision_strategy;
+            config.struct_variants = typesync.struct_variants;
         }
 
         // Set scan_path to the project root
@@ -293,7 +300,7 @@ mod tests {
 apply_aliases = ["MyMacro"]
 
 [typesync]
-output = { kind = "macroforge", dir = "./generated", mode = "per_file", file_extension = ".svelte.ts", import_extension = "js" }
+output = { kind = "macroforge", dir = "./generated", mode = "per_file", file_extension = ".svelte.ts", import_extension = "js", macros = { Form = "@app/forms" } }
 "#,
         )
         .unwrap();
@@ -324,6 +331,7 @@ outputs = [
             "output = { kind = \"arktype\", dir = \"g\" }\noutputs = [{ kind = \"effect\", dir = \"e\" }]",
             "output = { kind = \"arktype\", dir = \"g\", mode = \"per_file\" }",
             "output = { kind = \"effect\", dir = \"g\", package = \"com.example\" }",
+            "output = { kind = \"effect\", dir = \"g\", macros = { Form = \"@app/forms\" } }",
             "output = { kind = \"effect\", dir = \"g\", mode = \"per_file\", file = \"x.ts\" }",
             "output = { kind = \"macroforge\", dir = \"g\", file_naming = \"kebabcase\" }",
             "collision_strategy = \"autorename\"",

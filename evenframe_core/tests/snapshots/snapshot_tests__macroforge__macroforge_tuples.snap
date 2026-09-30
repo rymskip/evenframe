@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Geometry {
+  point2D: [number, number];
+  point3D: [number, number, number];
+  labeled: [string, number];
+}

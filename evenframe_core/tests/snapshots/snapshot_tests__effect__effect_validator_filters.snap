@@ -1,0 +1,27 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Booking extends Schema.Class<Booking>("Booking")( { 
+  code: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })).pipe(Schema.filter((v) => v.startsWith("bk`${x}\""), { message: () => `'Code' must be a value starting with "bk\`\${x}""` })).pipe(Schema.filter((v) => v.trim() === v, { message: () => `'Code' must be trimmed` })).pipe(Schema.filter((v) => v.toUpperCase() === v, { message: () => `'Code' must be uppercase` }))).annotations({ missingMessage: () => `'Code' is required` }),
+  nickname: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })).pipe(Schema.minLength(2, { message: () => `'Nickname' must be at least 2 characters long` })), null),
+  guests: Schema.propertySignature(Schema.Array(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).pipe(Schema.maxItems(8, { message: () => `'Guests' must contain at most 8 items` }))).annotations({ missingMessage: () => `'Guests' is required` }),
+  startsOn: Schema.propertySignature(Schema.Date.pipe(Schema.validDate({ message: () => `'Starts On' must be a valid date` })).pipe(Schema.betweenDate(new Date("2024-01-01"), new Date("2030-12-31"), { message: () => `'Starts On' must be between 2024-01-01 and 2030-12-31` }))).annotations({ missingMessage: () => `'Starts On' is required` }),
+  deposit: Schema.propertySignature(Schema.BigDecimal.pipe(Schema.greaterThanOrEqualToBigDecimal(Schema.decodeSync(Schema.BigDecimal)("10.50"), { message: () => `'Deposit' must be greater than or equal to 10.50` }))).annotations({ missingMessage: () => `'Deposit' is required` }),
+  sequence: Schema.propertySignature(Schema.BigInt.pipe(Schema.lessThanBigInt(-5n, { message: () => `'Sequence' must be less than -5` }))).annotations({ missingMessage: () => `'Sequence' is required` }),
+  stay: Schema.propertySignature(Schema.DurationFromNanos.pipe(Schema.betweenDuration(5400000000000n, 172800000000000n, { message: () => `'Stay' must be between 1h30m and 2d long` }))).annotations({ missingMessage: () => `'Stay' is required` })
+}) {[key: string]: unknown}
+
+
+export interface BookingEncoded {
+  readonly code: string;
+  readonly nickname: string | null | undefined;
+  readonly guests: ReadonlyArray<string>;
+  readonly startsOn: string;
+  readonly deposit: string;
+  readonly sequence: string;
+  readonly stay: bigint;
+}
+
+
+export type BookingType = typeof Booking.Type;

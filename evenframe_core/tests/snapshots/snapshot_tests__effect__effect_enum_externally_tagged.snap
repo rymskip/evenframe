@@ -2,4 +2,9 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export const Status = Schema.Union(Schema.Literal("Active"), Schema.Literal("Inactive"), Schema.Literal("Pending"), Schema.Literal("Suspended")).annotations({ identifier: `Status` });
 
+export type StatusEncoded = "Active" | "Inactive" | "Pending" | "Suspended";
+
+
+export type StatusType = typeof Status.Type;

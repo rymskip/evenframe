@@ -90,6 +90,7 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
         );
         let registry_submission = quote! {
             #[::evenframe::linkme::distributed_slice(::evenframe::registry::UNION_OF_TABLES_REGISTRY_ENTRIES)]
+            #[linkme(crate = ::evenframe::linkme)]
             static #registry_var_name: ::evenframe::registry::UnionOfTablesRegistryEntry = ::evenframe::registry::UnionOfTablesRegistryEntry {
                 type_name: #union_name,
                 table_names: &[#(#table_names_static),*],

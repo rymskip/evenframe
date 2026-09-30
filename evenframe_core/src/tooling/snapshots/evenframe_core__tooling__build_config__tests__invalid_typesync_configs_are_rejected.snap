@@ -1,9 +1,8 @@
 ---
 source: evenframe_core/src/tooling/build_config.rs
-assertion_line: 338
 expression: "errors.join(\"\\n\\n\")"
 ---
-Configuration error: Failed to parse [typesync]: unknown field `should_generate_arktype_types`, expected one of `output`, `outputs`, `collision_strategy`
+Configuration error: Failed to parse [typesync]: unknown field `should_generate_arktype_types`, expected one of `output`, `outputs`, `collision_strategy`, `struct_variants`
 
 
 Configuration error: Failed to parse [typesync]: unknown variant `arcktype`, expected one of `arktype`, `effect`, `macroforge`, `flatbuffers`, `protobuf`
@@ -17,6 +16,9 @@ Configuration error: Failed to parse [typesync]: the `arktype` output cannot use
 
 
 Configuration error: Failed to parse [typesync]: `package` and `import_validate` only apply to protobuf outputs, not `effect`
+
+
+Configuration error: Failed to parse [typesync]: `macros` only applies to macroforge outputs, not `effect`
 
 
 Configuration error: Failed to parse [typesync]: `file` names a single output file, but the `effect` output is per-file

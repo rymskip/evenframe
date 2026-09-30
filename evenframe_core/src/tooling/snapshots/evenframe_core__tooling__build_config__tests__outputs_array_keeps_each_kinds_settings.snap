@@ -1,6 +1,5 @@
 ---
 source: evenframe_core/src/tooling/build_config.rs
-assertion_line: 316
 expression: config.outputs
 ---
 [
@@ -21,6 +20,7 @@ expression: config.outputs
         namespace: None,
         package: None,
         import_validate: false,
+        macros: {},
     },
     TypesyncOutput {
         kind: Protobuf,
@@ -39,5 +39,6 @@ expression: config.outputs
             "com.example",
         ),
         import_validate: true,
+        macros: {},
     },
 ]

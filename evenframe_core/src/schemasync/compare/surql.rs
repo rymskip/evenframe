@@ -170,15 +170,13 @@ impl<'a> SurrealdbComparator<'a> {
         Ok(())
     }
 
-    // Getters for Mockmaker to access the results
-    pub fn get_new_schema(&self) -> Option<&Surreal<Db>> {
-        self.new_schema.as_ref()
-    }
-
+    /// The access definitions the models declare, to apply to the database.
     pub fn get_access_query(&self) -> &str {
         &self.access_query
     }
 
+    /// The changes between the database's schema and the models', once the
+    /// comparison has run.
     pub fn get_schema_changes(&self) -> Option<&SchemaChanges> {
         self.schema_changes.as_ref()
     }

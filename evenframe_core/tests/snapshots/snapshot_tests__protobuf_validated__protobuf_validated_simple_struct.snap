@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message User {
+    string id = 1;
+    string email = 2;
+    uint32 age = 3;
+    double score = 4;
+    bool is_active = 5;
+}
