@@ -55,14 +55,16 @@ pub fn analyse_recursion(
         tracing::trace!(enum_name = %from, "Processing enum dependencies");
         let entry = deps.entry(from.clone()).or_default();
         for v in &e.variants {
-            if let Some(variant_data) = &v.data {
-                let variant_data_field_type = match variant_data {
-                    VariantData::InlineStruct(enum_struct) => {
-                        &FieldType::Other(enum_struct.struct_name.clone())
+            match &v.data {
+                Some(VariantData::InlineStruct(inline)) => {
+                    for field in &inline.fields {
+                        collect_refs(&field.field_type, &known, entry);
                     }
-                    VariantData::DataStructureRef(field_type) => field_type,
-                };
-                collect_refs(variant_data_field_type, &known, entry);
+                }
+                Some(VariantData::DataStructureRef(field_type)) => {
+                    collect_refs(field_type, &known, entry);
+                }
+                None => {}
             }
         }
     }
@@ -141,16 +143,12 @@ pub fn deps_of(
         for v in &e.variants {
             if let Some(variant_data) = &v.data {
                 match variant_data {
-                    VariantData::InlineStruct(enum_struct) => {
-                        // Inline structs are now rendered as intersection types
-                        // (e.g., `{ variant: 'X' } & StructName`), so only the
-                        // struct name is a direct dependency. Field-level deps
-                        // are transitive and belong to the struct's own file.
-                        collect_refs(
-                            &FieldType::Other(enum_struct.struct_name.clone()),
-                            &known,
-                            &mut acc,
-                        );
+                    VariantData::InlineStruct(inline) => {
+                        // A struct variant's fields are written inline, so
+                        // their types are the enum's own dependencies.
+                        for field in &inline.fields {
+                            collect_refs(&field.field_type, &known, &mut acc);
+                        }
                     }
                     VariantData::DataStructureRef(field_type) => {
                         collect_refs(field_type, &known, &mut acc);
@@ -387,19 +385,16 @@ pub fn collect_field_type_dependencies(
                 for variant in &enum_def.variants {
                     if let Some(variant_data) = &variant.data {
                         match variant_data {
-                            VariantData::InlineStruct(enum_struct) => {
-                                // Recursively analyze inline struct
-                                if let Some(obj) = objects.get(&enum_struct.struct_name) {
-                                    for field in &obj.fields {
-                                        collect_field_type_dependencies(
-                                            &field.field_type,
-                                            tables,
-                                            objects,
-                                            enums,
-                                            dependencies,
-                                            visited_types,
-                                        );
-                                    }
+                            VariantData::InlineStruct(inline) => {
+                                for field in &inline.fields {
+                                    collect_field_type_dependencies(
+                                        &field.field_type,
+                                        tables,
+                                        objects,
+                                        enums,
+                                        dependencies,
+                                        visited_types,
+                                    );
                                 }
                             }
                             VariantData::DataStructureRef(ref_type) => {

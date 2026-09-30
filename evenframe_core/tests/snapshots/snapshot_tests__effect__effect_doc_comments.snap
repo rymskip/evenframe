@@ -2,4 +2,20 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+/** Severity levels for log output */export const LogLevel = Schema.Union(Schema.Literal("Debug"), Schema.Literal("Info"), Schema.Literal("Warn"), Schema.Literal("Error")).annotations({ identifier: `LogLevel` });
+/** Application configuration settings */export class Config extends Schema.Class<Config>("Config")( { 
+  /** The API key used for authentication */  apiKey: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Api Key' is required` }),
+  /** Request timeout in milliseconds */  timeoutMs: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Timeout Ms' is required` })
+}) {[key: string]: unknown}
 
+
+export type LogLevelEncoded = "Debug" | "Info" | "Warn" | "Error";
+
+export interface ConfigEncoded {
+  readonly apiKey: string;
+  readonly timeoutMs: number;
+}
+
+
+export type LogLevelType = typeof LogLevel.Type;
+export type ConfigType = typeof Config.Type;

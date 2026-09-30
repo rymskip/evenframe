@@ -80,7 +80,7 @@ impl<'a> FieldValueGenerator<'a> {
         while let Some(work_item) = work_stack.pop() {
             match work_item {
                 WorkItem::Generate(ctx) => {
-                    // Tier 0: WASM plugin override (table-level #[mock_data(plugin = ...)])
+                    // Tier 0: the table's mock-data plugin, when it gives a value.
                     #[cfg(feature = "wasm-plugins")]
                     if let Some(plugin_name) = self
                         .table_config
@@ -88,78 +88,48 @@ impl<'a> FieldValueGenerator<'a> {
                         .as_ref()
                         .and_then(|c| c.plugin.as_ref())
                     {
-                        if let Some(ref pm_cell) = self.mockmaker.plugin_manager {
-                            let pm = &mut *pm_cell.borrow_mut();
-                            let record_id = self
-                                .mockmaker
-                                .id_map
-                                .get(&self.table_config.table_name)
-                                .and_then(|ids| ids.get(*self.id_index))
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    tracing::warn!(
-                                        "No record id at index {} of `{}` for plugin '{}'",
-                                        self.id_index,
-                                        self.table_config.table_name,
-                                        plugin_name
-                                    );
-                                    String::new()
-                                });
-                            let input = super::plugin_types::PluginFieldInput {
-                                table_name: self.table_config.table_name.to_string(),
-                                field_name: ctx.field_path.clone(),
-                                field_type: format!("{:?}", ctx.field_type),
-                                record_index: *self.id_index,
-                                total_records: self.mockmaker.record_count(self.table_config),
-                                record_id,
-                            };
-                            match pm.generate_field_value(plugin_name, &input) {
-                                Ok(value) => {
-                                    value_stack.push(value);
-                                    continue;
-                                }
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("skip") {
-                                        tracing::trace!(
-                                            "Plugin '{}' skipped field '{}', using default",
-                                            plugin_name,
-                                            ctx.field_path,
-                                        );
-                                    } else {
-                                        tracing::warn!(
-                                            "Plugin '{}' failed for field '{}': {}, falling back",
-                                            plugin_name,
-                                            ctx.field_path,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            tracing::warn!(
-                                "Field '{}' references plugin '{}' but wasm-plugins feature has no PluginManager initialized",
-                                ctx.field_path,
-                                plugin_name
-                            );
+                        let pm_cell = self.mockmaker.plugin_manager.as_ref().ok_or_else(|| {
+                            EvenframeError::mock_generation(format!(
+                                "`{}` uses mock-data plugin `{plugin_name}`, but no plugins were loaded",
+                                self.table_config.table_name
+                            ))
+                        })?;
+                        let record_id = self
+                            .mockmaker
+                            .id_map
+                            .get(&self.table_config.table_name)
+                            .and_then(|ids| ids.get(*self.id_index))
+                            .cloned()
+                            .ok_or_else(|| {
+                                EvenframeError::mock_generation(format!(
+                                    "no record id at index {} of `{}`",
+                                    self.id_index, self.table_config.table_name
+                                ))
+                            })?;
+                        let input = super::plugin_types::PluginFieldInput {
+                            table_name: self.table_config.table_name.to_string(),
+                            field_name: ctx.field_path.clone(),
+                            field_type: format!("{:?}", ctx.field_type),
+                            record_index: *self.id_index,
+                            total_records: self.mockmaker.record_count(self.table_config),
+                            record_id,
+                        };
+                        let generated = pm_cell
+                            .borrow_mut()
+                            .generate_field_value(plugin_name, &input)
+                            .map_err(|error| {
+                                EvenframeError::mock_generation(format!(
+                                    "`{}`: {error}",
+                                    ctx.field_path
+                                ))
+                            })?;
+                        if let Some(value) = generated {
+                            value_stack.push(value);
+                            continue;
                         }
                     }
 
-                    // Tier 0 (no wasm-plugins feature): warn and fall through
-                    #[cfg(not(feature = "wasm-plugins"))]
-                    if self
-                        .table_config
-                        .mock_generation_config
-                        .as_ref()
-                        .and_then(|c| c.plugin.as_ref())
-                        .is_some()
-                    {
-                        tracing::warn!(
-                            "Field '{}' has a plugin configured but wasm-plugins feature is not enabled",
-                            ctx.field_path
-                        );
-                    }
-
+                    let location = format!("{}.{}", self.table_config.table_name, ctx.field_path);
                     if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(&(
                         *self.id_index,
                         CoordinationId::builder()
@@ -173,6 +143,7 @@ impl<'a> FieldValueGenerator<'a> {
                             format,
                             ctx.field_type,
                             &ctx.field.validators,
+                            &location,
                         )?);
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
@@ -184,8 +155,8 @@ impl<'a> FieldValueGenerator<'a> {
                         match ctx.field_type {
                             FieldType::String => value_stack.push(generate_string_with_retry(
                                 &ctx.field.validators,
-                                &ctx.field_path,
-                            )),
+                                &location,
+                            )?),
                             FieldType::Char => value_stack
                                 .push(format!("'{}'", rng.random_range(32u8..=126u8) as char)),
                             FieldType::Bool => {
@@ -195,9 +166,9 @@ impl<'a> FieldValueGenerator<'a> {
                             FieldType::F32 | FieldType::F64 => {
                                 value_stack.push(generate_float_with_retry(
                                     &ctx.field.validators,
-                                    &ctx.field_path,
+                                    &location,
                                     &mut rng,
-                                ))
+                                )?)
                             }
                             FieldType::I8
                             | FieldType::I16
@@ -213,9 +184,9 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::Usize => value_stack.push(generate_integer_with_retry(
                                 ctx.field_type,
                                 &ctx.field.validators,
-                                &ctx.field_path,
+                                &location,
                                 &mut rng,
-                            )),
+                            )?),
                             FieldType::Option(inner_type) => {
                                 // An optional value holding a link with nothing to
                                 // point at stays null.
@@ -318,19 +289,11 @@ impl<'a> FieldValueGenerator<'a> {
                                                 ctx.field_path
                                             )));
                                         }
-                                        let ids: Vec<&String> = targets
-                                            .iter()
-                                            .filter_map(|t| self.mockmaker.id_map.get(t))
-                                            .flatten()
-                                            .collect();
-                                        let id = ids.choose(&mut rng).ok_or_else(|| {
-                                            EvenframeError::mock_generation(format!(
-                                                "`{}` must link to {}, which has no records",
-                                                ctx.field_path,
-                                                targets.join(" or ")
-                                            ))
-                                        })?;
-                                        value_stack.push(format!("r'{id}'"));
+                                        value_stack.push(self.random_link(
+                                            &targets,
+                                            &ctx.field_path,
+                                            &mut rng,
+                                        )?);
                                     }
                                     _ => {
                                         return Err(EvenframeError::mock_generation(format!(
@@ -432,24 +395,20 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
 
                                 let snake_case_name = type_name.to_case(Case::Snake);
-                                if let Some((table_name, _)) = self
-                                    .mockmaker
-                                    .tables
-                                    .iter()
-                                    .find(|(_, tc)| &tc.table_name == type_name)
+                                // A table held by value is stored as a link to it, as the
+                                // schema defines it; an enum held by value is written inline.
+                                let table_targets = if self.mockmaker.enums.contains_key(type_name)
                                 {
-                                    let id = self
-                                        .mockmaker
-                                        .id_map
-                                        .get(table_name)
-                                        .and_then(|ids| ids.choose(&mut rng))
-                                        .ok_or_else(|| {
-                                            EvenframeError::mock_generation(format!(
-                                                "`{}` must link to {table_name}, which has no records",
-                                                ctx.field_path
-                                            ))
-                                        })?;
-                                    value_stack.push(format!("r'{id}'"));
+                                    Vec::new()
+                                } else {
+                                    self.mockmaker.link_target_tables(type_name)
+                                };
+                                if !table_targets.is_empty() {
+                                    value_stack.push(self.random_link(
+                                        &table_targets,
+                                        &ctx.field_path,
+                                        &mut rng,
+                                    )?);
                                 } else if let Some(struct_config) = self
                                     .mockmaker
                                     .objects
@@ -495,16 +454,7 @@ impl<'a> FieldValueGenerator<'a> {
                                     if let Some(ref variant_data) = variant.data {
                                         match variant_data {
                                             VariantData::InlineStruct(enum_struct) => {
-                                                let struct_config = self
-                                                    .mockmaker
-                                                    .objects
-                                                    .get(&enum_struct.struct_name)
-                                                    .ok_or_else(|| {
-                                                        EvenframeError::mock_generation(format!(
-                                                            "the variant `{}` of `{type_name}` has no object definition `{}`",
-                                                            variant.name, enum_struct.struct_name
-                                                        ))
-                                                    })?;
+                                                let struct_config = enum_struct.effective();
                                                 let field_names: Vec<String> = struct_config
                                                     .fields
                                                     .iter()
@@ -708,6 +658,7 @@ impl<'a> FieldValueGenerator<'a> {
         format: &Format,
         target: &FieldType,
         validators: &[Validator],
+        location: &str,
     ) -> Result<String, EvenframeError> {
         let mut scalar = target;
         while let FieldType::Option(inner) = scalar {
@@ -721,10 +672,8 @@ impl<'a> FieldValueGenerator<'a> {
         // path, falling back to a bounded bare number.
         if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
             let mut rng = rand::rng();
-            if let Some(value) =
-                validator_gen::generate_with_validators(scalar, validators, &mut rng)
-            {
-                return Ok(value);
+            if !validators.is_empty() {
+                return generate_scalar_with_retry(scalar, validators, location, &mut rng);
             }
             return Ok(match format {
                 Format::CurrencyAmount => format!("{:.2}", rng.random_range(0.0..1000.0)),
@@ -751,12 +700,7 @@ impl<'a> FieldValueGenerator<'a> {
                     .all(|v| v.matches(&MockValue::Str(&generated)))
             };
             if !satisfied {
-                let mut rng = rand::rng();
-                if let Some(value) =
-                    validator_gen::generate_with_validators(scalar, validators, &mut rng)
-                {
-                    return Ok(value);
-                }
+                return generate_scalar_with_retry(scalar, validators, location, &mut rand::rng());
             }
         }
 
@@ -775,6 +719,28 @@ impl<'a> FieldValueGenerator<'a> {
             }
             _ => format!("'{}'", generated),
         })
+    }
+
+    /// A random record from `targets`, the tables a link at `field_path` can
+    /// point at.
+    fn random_link(
+        &self,
+        targets: &[String],
+        field_path: &str,
+        rng: &mut ThreadRng,
+    ) -> Result<String, EvenframeError> {
+        let ids: Vec<&String> = targets
+            .iter()
+            .filter_map(|table| self.mockmaker.id_map.get(table))
+            .flatten()
+            .collect();
+        let id = ids.choose(rng).ok_or_else(|| {
+            EvenframeError::mock_generation(format!(
+                "`{field_path}` must link to {}, which has no records",
+                targets.join(" or ")
+            ))
+        })?;
+        Ok(format!("r'{id}'"))
     }
 
     fn handle_record_id(
@@ -844,38 +810,72 @@ fn take_last(stack: &mut Vec<String>, count: usize) -> Result<Vec<String>, Evenf
     Ok(stack.split_off(start))
 }
 
-/// Cap on retry attempts when the default generator produces a value that
-/// fails the field's validator set. After this many tries we emit the last
-/// candidate anyway and log — the alternative (panic / silently substitute)
-/// hides the constraint conflict from the user.
+/// Cap on retry attempts when a generator produces a value that fails the
+/// field's validator set.
 const RETRY_ATTEMPTS: usize = 32;
 
-fn generate_string_with_retry(validators: &[Validator], field_path: &str) -> String {
-    if validators.is_empty() {
-        return format!("'{}'", Mockmaker::random_string(8));
+fn unsatisfied(location: &str, validators: &[Validator]) -> EvenframeError {
+    let expected = validators
+        .iter()
+        .map(Validator::describe)
+        .collect::<Vec<_>>()
+        .join(", ");
+    EvenframeError::mock_generation(format!(
+        "no value generated for `{location}` in {RETRY_ATTEMPTS} attempts is all of: {expected}. \
+         Check that these validators can hold at once"
+    ))
+}
+
+/// A value of `scalar` satisfying `validators`, generated from the validators
+/// themselves where they can be solved and by rejection sampling otherwise.
+fn generate_scalar_with_retry(
+    scalar: &FieldType,
+    validators: &[Validator],
+    location: &str,
+    rng: &mut ThreadRng,
+) -> Result<String, EvenframeError> {
+    match scalar {
+        FieldType::String => validator_gen::generate_with_validators(scalar, validators, rng)
+            .map_or_else(|| generate_string_with_retry(validators, location), Ok),
+        FieldType::F32 | FieldType::F64 => generate_float_with_retry(validators, location, rng),
+        FieldType::I8
+        | FieldType::I16
+        | FieldType::I32
+        | FieldType::I64
+        | FieldType::I128
+        | FieldType::Isize
+        | FieldType::U8
+        | FieldType::U16
+        | FieldType::U32
+        | FieldType::U64
+        | FieldType::U128
+        | FieldType::Usize => generate_integer_with_retry(scalar, validators, location, rng),
+        _ => Err(unsatisfied(location, validators)),
     }
-    let mut last = Mockmaker::random_string(8);
-    for _ in 0..RETRY_ATTEMPTS {
-        if validators.iter().all(|v| v.matches(&MockValue::Str(&last))) {
-            return format!("'{}'", last);
-        }
-        last = Mockmaker::random_string(8);
-    }
-    tracing::warn!(
-        field = %field_path,
-        attempts = RETRY_ATTEMPTS,
-        "validator-aware string generation exhausted attempts; emitting last candidate"
-    );
-    format!("'{}'", last)
+}
+
+fn generate_string_with_retry(
+    validators: &[Validator],
+    location: &str,
+) -> Result<String, EvenframeError> {
+    (0..RETRY_ATTEMPTS)
+        .map(|_| Mockmaker::random_string(8))
+        .find(|candidate| {
+            validators
+                .iter()
+                .all(|validator| validator.matches(&MockValue::Str(candidate)))
+        })
+        .map(|candidate| format!("'{candidate}'"))
+        .ok_or_else(|| unsatisfied(location, validators))
 }
 
 fn generate_float_with_retry(
     validators: &[Validator],
-    field_path: &str,
+    location: &str,
     rng: &mut ThreadRng,
-) -> String {
+) -> Result<String, EvenframeError> {
     if validators.is_empty() {
-        return format!("{:.2}f", rng.random_range(0.0..100.0));
+        return Ok(format!("{:.2}f", rng.random_range(0.0..100.0)));
     }
     // The validator-driven generator derives its sample range from the
     // validators themselves, so constraints a fixed 0..100 loop can never
@@ -884,55 +884,44 @@ fn generate_float_with_retry(
         if let Some(value) =
             validator_gen::generate_with_validators(&FieldType::F64, validators, rng)
         {
-            return value;
+            return Ok(value);
         }
     }
-    let mut last = rng.random_range(0.0..100.0);
-    for _ in 0..RETRY_ATTEMPTS {
-        if validators.iter().all(|v| v.matches(&MockValue::Num(last))) {
-            return format!("{:.2}f", last);
-        }
-        last = rng.random_range(0.0..100.0);
-    }
-    tracing::warn!(
-        field = %field_path,
-        attempts = RETRY_ATTEMPTS,
-        "validator-aware float generation exhausted attempts; emitting last candidate"
-    );
-    format!("{:.2}f", last)
+    (0..RETRY_ATTEMPTS)
+        .map(|_| rng.random_range(0.0..100.0))
+        .find(|candidate| {
+            validators
+                .iter()
+                .all(|validator| validator.matches(&MockValue::Num(*candidate)))
+        })
+        .map(|candidate| format!("{candidate:.2}f"))
+        .ok_or_else(|| unsatisfied(location, validators))
 }
 
 fn generate_integer_with_retry(
     field_type: &FieldType,
     validators: &[Validator],
-    field_path: &str,
+    location: &str,
     rng: &mut ThreadRng,
-) -> String {
+) -> Result<String, EvenframeError> {
     if validators.is_empty() {
-        return format!("{}", rng.random_range(0..100));
+        return Ok(format!("{}", rng.random_range(0..100)));
     }
     // The validator-driven generator derives its sample range from the
     // validators themselves, so constraints a fixed 0..100 loop can never
     // hit (Negative, GreaterThan(1000), …) still converge.
     for _ in 0..RETRY_ATTEMPTS {
         if let Some(value) = validator_gen::generate_with_validators(field_type, validators, rng) {
-            return value;
+            return Ok(value);
         }
     }
-    let mut last: i64 = rng.random_range(0..100);
-    for _ in 0..RETRY_ATTEMPTS {
-        if validators
-            .iter()
-            .all(|v| v.matches(&MockValue::Num(last as f64)))
-        {
-            return format!("{}", last);
-        }
-        last = rng.random_range(0..100);
-    }
-    tracing::warn!(
-        field = %field_path,
-        attempts = RETRY_ATTEMPTS,
-        "validator-aware integer generation exhausted attempts; emitting last candidate"
-    );
-    format!("{}", last)
+    (0..RETRY_ATTEMPTS)
+        .map(|_| rng.random_range(0i64..100))
+        .find(|candidate| {
+            validators
+                .iter()
+                .all(|validator| validator.matches(&MockValue::Num(*candidate as f64)))
+        })
+        .map(|candidate| candidate.to_string())
+        .ok_or_else(|| unsatisfied(location, validators))
 }

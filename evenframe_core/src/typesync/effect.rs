@@ -1,9 +1,20 @@
+use crate::config::{EffectMapping, ForeignTypeConfig};
 use crate::dependency::{RecursionInfo, analyse_recursion, deps_of};
-use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::error::{EvenframeError, Result};
+use crate::types::{
+    EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData,
+};
 use crate::typesync::doc_comment::format_jsdoc;
+use crate::typesync::foreign_ts::{RECORD_LINK, fill};
+use crate::typesync::js_checks::{
+    self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal, template_literal,
+};
+use crate::typesync::map_key::{BOOL_KEYS, MapKey};
+use crate::validator::keywords;
+use crate::validator::string_rules::{StringParse, StringRule, StringTransform};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-    NumberValidator, StringValidator, Validator,
+    NumberValidator, StringValidator, Validator, bounds,
 };
 use convert_case::{Case, Casing};
 use petgraph::{algo::toposort, graphmap::DiGraphMap};
@@ -15,7 +26,7 @@ pub fn generate_effect_schema_string(
     enums: &BTreeMap<String, TaggedUnion>,
     print_types: bool,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     tracing::info!(
         struct_count = structs.len(),
         enum_count = enums.len(),
@@ -32,6 +43,10 @@ pub fn generate_effect_schema_string(
     //     `Schema.suspend` outside of recursive strongly connected components (SCCs).
     tracing::debug!("Performing topological sort of components");
     let mut condensation = DiGraphMap::<usize, ()>::new();
+    // Every component is a node, so a type with no dependency edges is still emitted.
+    for &comp_id in rec.meta.keys() {
+        condensation.add_node(comp_id);
+    }
     for (t1, _tos) in rec
         .meta
         .values()
@@ -60,7 +75,7 @@ pub fn generate_effect_schema_string(
     let mut processed = BTreeSet::<String>::new();
 
     // Helper closure for field conversion that has access to `rec`.
-    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> String {
+    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> Result<String> {
         field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 
@@ -104,9 +119,16 @@ pub fn generate_effect_schema_string(
                     .variants
                     .iter()
                     .map(|v| {
-                        enum_variant_to_schema(v, &e.representation, &name, &to_schema, &processed)
+                        enum_variant_to_schema(
+                            v,
+                            &e.representation,
+                            &name,
+                            &to_schema,
+                            &processed,
+                            structs,
+                        )
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>>>()?
                     .join(", ");
                 out_classes.push_str(&variants);
                 out_classes.push_str(&format!(").annotations({{ identifier: `{}` }});\n", name));
@@ -118,7 +140,7 @@ pub fn generate_effect_schema_string(
                 ));
 
                 // Generate the `...Encoded` type alias for the enum.
-                out_encoded.push_str(&encoded_alias_for_enum(e, registry));
+                out_encoded.push_str(&encoded_alias_for_enum(e, registry)?);
             } else if let Some(struct_config) = structs
                 .values()
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
@@ -135,39 +157,18 @@ pub fn generate_effect_schema_string(
                     name, name, name
                 ));
                 for (idx, f) in struct_config.fields.iter().enumerate() {
-                    let schema = to_schema(&f.field_type, &name, &processed);
-                    let schema_with_validators =
-                        apply_validators_to_schema(schema, &f.validators, &f.field_name);
-                    let field_name_camel = f.field_name.to_case(Case::Camel);
-                    let field_name_title = f.field_name.to_case(Case::Title);
-
-                    let is_optional = matches!(f.field_type, FieldType::Option(_));
-
-                    // Write field doc comment if present
                     if let Some(ref doc) = f.doccom {
                         out_classes.push_str(&format_jsdoc(doc, "  "));
                     }
-
-                    let final_schema = if !is_optional {
-                        format!(
-                            "Schema.propertySignature({}).annotations({{ missingMessage: () => `'{}' is required` }})",
-                            schema_with_validators, field_name_title
-                        )
+                    let entry = field_schema_entry(f, |field_type| {
+                        to_schema(field_type, &name, &processed)
+                    })?;
+                    let separator = if idx + 1 == struct_config.fields.len() {
+                        ""
                     } else {
-                        schema_with_validators
+                        ","
                     };
-
-                    out_classes.push_str(&format!(
-                        "  {}: {}{}",
-                        field_name_camel,
-                        final_schema,
-                        if idx + 1 == struct_config.fields.len() {
-                            ""
-                        } else {
-                            ","
-                        }
-                    ));
-                    out_classes.push('\n');
+                    out_classes.push_str(&format!("  {entry}{separator}\n"));
                 }
                 out_classes.push_str("}) {[key: string]: unknown}\n\n");
 
@@ -178,7 +179,7 @@ pub fn generate_effect_schema_string(
                 ));
 
                 // Generate the `...Encoded` interface for the struct.
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry));
+                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry)?);
             }
             processed.insert(name);
         }
@@ -194,140 +195,150 @@ pub fn generate_effect_schema_string(
         output_length = result.len(),
         "Effect Schema generation complete"
     );
-    result
+    Ok(result)
 }
 
 // ----- Encoded Type Generation Helpers -------------------------------------
+
+/// A struct field as an `...Encoded` entry, `readonly name: type;`.
+fn encoded_field_entry(
+    field: &StructField,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    let encoded = match (&field.field_type, parses_string_input(field)) {
+        (FieldType::Option(_), true) => "string | null | undefined".to_owned(),
+        (_, true) => "string".to_owned(),
+        (field_type, false) => field_type_to_ts_encoded(field_type, registry)?,
+    };
+    Ok(format!(
+        "readonly {}: {encoded};",
+        field.field_name.to_case(Case::Camel)
+    ))
+}
 
 /// Generates an `...Encoded` TypeScript interface for a given struct.
 fn encoded_interface_for_struct(
     struct_config: &StructConfig,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     let name = struct_config.struct_name.to_case(Case::Pascal);
     let body = struct_config
         .fields
         .iter()
-        .map(|f| {
-            format!(
-                "  readonly {}: {};",
-                f.field_name.to_case(Case::Camel),
-                field_type_to_ts_encoded(&f.field_type, registry)
-            )
-        })
-        .collect::<Vec<_>>()
+        .map(|field| Ok(format!("  {}", encoded_field_entry(field, registry)?)))
+        .collect::<Result<Vec<_>>>()?
         .join("\n");
 
-    format!("export interface {}Encoded {{\n{}\n}}\n\n", name, body)
+    Ok(format!(
+        "export interface {}Encoded {{\n{}\n}}\n\n",
+        name, body
+    ))
 }
 
 /// Generates an `...Encoded` TypeScript type alias for a given enum/union.
 fn encoded_alias_for_enum(
     en: &TaggedUnion,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     tracing::trace!(enum_name = %en.enum_name, "Creating encoded alias for enum");
     let name = en.enum_name.to_case(Case::Pascal);
-    let union = en
+    let body = en
         .variants
         .iter()
         .map(|v| enum_variant_to_encoded(v, &en.representation, registry))
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>>>()?
         .join(" | ");
-
-    format!("export type {}Encoded = {};\n\n", name, union)
+    Ok(format!("export type {}Encoded = {};\n\n", name, body))
 }
 
 // ----- Representation-Aware Variant Helpers --------------------------------
 
+/// A struct field as a schema entry, `name: schema`, with its validators. A
+/// required field reports a missing value by its title.
+fn field_schema_entry(
+    field: &StructField,
+    schema_of: impl Fn(&FieldType) -> Result<String>,
+) -> Result<String> {
+    let schema = validated_field_schema(field, schema_of)?;
+    let entry = if matches!(field.field_type, FieldType::Option(_)) {
+        schema
+    } else {
+        format!(
+            "Schema.propertySignature({schema}).annotations({{ missingMessage: () => {} }})",
+            template_literal(&format!(
+                "'{}' is required",
+                field.field_name.to_case(Case::Title)
+            ))
+        )
+    };
+    Ok(format!(
+        "{}: {entry}",
+        field.field_name.to_case(Case::Camel)
+    ))
+}
+
 /// Converts a single enum variant into its Effect Schema representation,
-/// taking the serde `EnumRepresentation` into account.
+/// taking the serde `EnumRepresentation` into account. An internally tagged
+/// variant's tag is merged with the fields of the struct it holds, as serde
+/// writes them.
 fn enum_variant_to_schema<F>(
     v: &crate::types::Variant,
     repr: &EnumRepresentation,
     enum_name: &str,
     to_schema: &F,
     processed: &BTreeSet<String>,
-) -> String
+    structs: &BTreeMap<String, StructConfig>,
+) -> Result<String>
 where
-    F: Fn(&FieldType, &str, &BTreeSet<String>) -> String,
+    F: Fn(&FieldType, &str, &BTreeSet<String>) -> Result<String>,
 {
-    match repr {
-        EnumRepresentation::ExternallyTagged => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "Schema.Struct({{ {}: {} }})",
-                    v.name,
-                    v.name.to_case(Case::Pascal)
-                )
+    let tag_entry = |tag: &str| format!("{tag}: Schema.Literal(\"{}\")", v.name);
+    let Some(data) = &v.data else {
+        return Ok(match repr {
+            EnumRepresentation::InternallyTagged { tag }
+            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                format!("Schema.Struct({{ {} }})", tag_entry(tag))
             }
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "Schema.Struct({{ {}: {} }})",
-                    v.name,
-                    to_schema(field_type, enum_name, processed)
-                )
+            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
+                format!("Schema.Literal(\"{}\")", v.name)
             }
-            None => format!("Schema.Literal(\"{}\")", v.name),
-        },
-        EnumRepresentation::InternallyTagged { tag } => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "Schema.extend({}, Schema.Struct({{ {}: Schema.Literal(\"{}\") }}))",
-                    v.name.to_case(Case::Pascal),
-                    tag,
-                    v.name
-                )
-            }
-            // InternallyTagged with DataStructureRef falls back to externally-tagged
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "Schema.Struct({{ {}: {} }})",
-                    v.name,
-                    to_schema(field_type, enum_name, processed)
-                )
-            }
-            None => {
-                format!(
-                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
-                    tag, v.name
-                )
-            }
-        },
-        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
-                    tag,
-                    v.name,
-                    content,
-                    v.name.to_case(Case::Pascal)
-                )
-            }
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "Schema.Struct({{ {}: Schema.Literal(\"{}\"), {}: {} }})",
-                    tag,
-                    v.name,
-                    content,
-                    to_schema(field_type, enum_name, processed)
-                )
-            }
-            None => {
-                format!(
-                    "Schema.Struct({{ {}: Schema.Literal(\"{}\") }})",
-                    tag, v.name
-                )
-            }
-        },
-        EnumRepresentation::Untagged => match &v.data {
-            Some(VariantData::InlineStruct(_)) => v.name.to_case(Case::Pascal),
-            Some(VariantData::DataStructureRef(field_type)) => {
+        });
+    };
+    let fields_schema = |fields: &[StructField], tag: Option<&str>| -> Result<String> {
+        let mut entries: Vec<String> = tag.map(tag_entry).into_iter().collect();
+        for field in fields {
+            entries.push(field_schema_entry(field, |field_type| {
                 to_schema(field_type, enum_name, processed)
-            }
-            None => format!("Schema.Literal(\"{}\")", v.name),
+            })?);
+        }
+        Ok(format!("Schema.Struct({{ {} }})", entries.join(", ")))
+    };
+    let tag = match repr {
+        EnumRepresentation::InternallyTagged { tag } => Some(tag.as_str()),
+        _ => None,
+    };
+    let payload = match data {
+        VariantData::InlineStruct(inline) => match tag {
+            Some(tag) => return fields_schema(&inline.fields, Some(tag)),
+            None => fields_schema(&inline.fields, None)?,
         },
-    }
+        VariantData::DataStructureRef(field_type) => match tag {
+            Some(tag) => return fields_schema(held_struct_fields(field_type, structs)?, Some(tag)),
+            None => to_schema(field_type, enum_name, processed)?,
+        },
+    };
+    Ok(match repr {
+        EnumRepresentation::ExternallyTagged | EnumRepresentation::InternallyTagged { .. } => {
+            format!("Schema.Struct({{ {}: {payload} }})", v.name)
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            format!(
+                "Schema.Struct({{ {}, {content}: {payload} }})",
+                tag_entry(tag)
+            )
+        }
+        EnumRepresentation::Untagged => payload,
+    })
 }
 
 /// Converts a single enum variant into its TypeScript Encoded type representation,
@@ -336,82 +347,144 @@ fn enum_variant_to_encoded(
     v: &crate::types::Variant,
     repr: &EnumRepresentation,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match repr {
-        EnumRepresentation::ExternallyTagged => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "{{ readonly {}: {}Encoded }}",
-                    v.name,
-                    v.name.to_case(Case::Pascal)
-                )
+) -> Result<String> {
+    let tag_entry = |tag: &str| format!("readonly {tag}: \"{}\";", v.name);
+    let Some(data) = &v.data else {
+        return Ok(match repr {
+            EnumRepresentation::InternallyTagged { tag }
+            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                format!("{{ {} }}", tag_entry(tag))
             }
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "{{ readonly {}: {} }}",
-                    v.name,
-                    field_type_to_ts_encoded(field_type, registry)
-                )
+            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
+                format!("\"{}\"", v.name)
             }
-            None => format!("\"{}\"", v.name),
-        },
-        EnumRepresentation::InternallyTagged { tag } => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "{}Encoded & {{ readonly {}: \"{}\" }}",
-                    v.name.to_case(Case::Pascal),
-                    tag,
-                    v.name
-                )
+        });
+    };
+    let payload = match data {
+        VariantData::InlineStruct(inline) => {
+            let entries = inline
+                .fields
+                .iter()
+                .map(|field| encoded_field_entry(field, registry))
+                .collect::<Result<Vec<String>>>()?;
+            if let EnumRepresentation::InternallyTagged { tag } = repr {
+                return Ok(format!("{{ {} {} }}", tag_entry(tag), entries.join(" ")));
             }
-            // InternallyTagged with DataStructureRef falls back to externally-tagged
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "{{ readonly {}: {} }}",
-                    v.name,
-                    field_type_to_ts_encoded(field_type, registry)
-                )
+            format!("{{ {} }}", entries.join(" "))
+        }
+        VariantData::DataStructureRef(field_type) => {
+            let payload = field_type_to_ts_encoded(field_type, registry)?;
+            // serde writes the tag into the struct the variant holds.
+            if let EnumRepresentation::InternallyTagged { tag } = repr {
+                return Ok(format!("({{ {} }} & {payload})", tag_entry(tag)));
             }
-            None => {
-                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
-            }
-        },
-        EnumRepresentation::AdjacentlyTagged { tag, content } => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!(
-                    "{{ readonly {}: \"{}\", readonly {}: {}Encoded }}",
-                    tag,
-                    v.name,
-                    content,
-                    v.name.to_case(Case::Pascal)
-                )
-            }
-            Some(VariantData::DataStructureRef(field_type)) => {
-                format!(
-                    "{{ readonly {}: \"{}\", readonly {}: {} }}",
-                    tag,
-                    v.name,
-                    content,
-                    field_type_to_ts_encoded(field_type, registry)
-                )
-            }
-            None => {
-                format!("{{ readonly {}: \"{}\" }}", tag, v.name)
-            }
-        },
-        EnumRepresentation::Untagged => match &v.data {
-            Some(VariantData::InlineStruct(_)) => {
-                format!("{}Encoded", v.name.to_case(Case::Pascal))
-            }
-            Some(VariantData::DataStructureRef(field_type)) => {
-                field_type_to_ts_encoded(field_type, registry)
-            }
-            None => format!("\"{}\"", v.name),
-        },
-    }
+            payload
+        }
+    };
+    Ok(match repr {
+        EnumRepresentation::ExternallyTagged | EnumRepresentation::InternallyTagged { .. } => {
+            format!("{{ readonly {}: {payload} }}", v.name)
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => {
+            format!("{{ {} readonly {content}: {payload}; }}", tag_entry(tag))
+        }
+        EnumRepresentation::Untagged => payload,
+    })
+}
+
+/// The fields of the struct an internally tagged newtype variant holds. serde
+/// writes the tag into that struct's object, which only a struct can take.
+fn held_struct_fields<'a>(
+    field_type: &FieldType,
+    structs: &'a BTreeMap<String, StructConfig>,
+) -> Result<&'a [StructField]> {
+    let held = match field_type {
+        FieldType::Other(name) => {
+            let pascal = name.to_case(Case::Pascal);
+            structs
+                .values()
+                .find(|struct_config| struct_config.struct_name.to_case(Case::Pascal) == pascal)
+        }
+        _ => None,
+    };
+    held.map(|struct_config| struct_config.effective().fields.as_slice())
+        .ok_or_else(|| {
+            EvenframeError::type_sync(format!(
+                "an internally tagged newtype variant holds `{}`, but serde can only write the \
+                 tag into a struct",
+                field_type.canonical_name()
+            ))
+        })
 }
 
 // ----- Schema and Type Conversion Logic ------------------------------------
+
+/// A foreign type's Effect mapping, which a foreign type the Effect output
+/// names must have.
+fn effect_mapping<'a>(name: &str, foreign: &'a ForeignTypeConfig) -> Result<&'a EffectMapping> {
+    foreign.effect.as_ref().ok_or_else(|| {
+        EvenframeError::type_sync(format!("the foreign type `{name}` has no effect mapping"))
+    })
+}
+
+/// The Effect mapping a project configures for the record link, if any.
+fn record_link_mapping(registry: &crate::types::ForeignTypeRegistry) -> Option<&EffectMapping> {
+    registry
+        .lookup(RECORD_LINK)
+        .and_then(|record_link| record_link.effect.as_ref())
+}
+
+/// A `char`: a string of exactly one character.
+fn char_schema() -> Result<String> {
+    Ok(format!(
+        "Schema.String.pipe(Schema.pattern(new RegExp({})))",
+        string_literal(ONE_CHARACTER)?
+    ))
+}
+
+/// A map key as the string schema a `Schema.Record` key must be. JSON keys are
+/// strings, so an integer key is a string of decimal digits.
+fn map_key_schema(key: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> Result<String> {
+    Ok(match MapKey::require(key)? {
+        MapKey::Text => "Schema.String".to_string(),
+        MapKey::Char => char_schema()?,
+        MapKey::Bool => format!(
+            "Schema.Literal({})",
+            BOOL_KEYS
+                .into_iter()
+                .map(string_literal)
+                .collect::<Result<Vec<_>>>()?
+                .join(", ")
+        ),
+        MapKey::Integer => format!(
+            "Schema.String.pipe(Schema.pattern(new RegExp({})))",
+            string_literal(keywords::INTEGER)?
+        ),
+        MapKey::Named(name) => match registry.lookup(name) {
+            Some(foreign) => effect_mapping(name, foreign)?.type_expr.clone(),
+            None => name.to_case(Case::Pascal),
+        },
+    })
+}
+
+/// A map key's type in an `...Encoded` interface.
+fn map_key_encoded(
+    key: &FieldType,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    Ok(match MapKey::require(key)? {
+        MapKey::Text | MapKey::Char | MapKey::Integer => "string".to_string(),
+        MapKey::Bool => BOOL_KEYS
+            .into_iter()
+            .map(string_literal)
+            .collect::<Result<Vec<_>>>()?
+            .join(" | "),
+        MapKey::Named(name) => match registry.lookup(name) {
+            Some(foreign) => effect_mapping(name, foreign)?.encoded.clone(),
+            None => format!("{}Encoded", name.to_case(Case::Pascal)),
+        },
+    })
+}
 
 /// Converts a `FieldType` into its corresponding Effect `Schema` representation.
 fn field_type_to_effect_schema(
@@ -421,7 +494,7 @@ fn field_type_to_effect_schema(
     rec: &RecursionInfo,
     processed: &BTreeSet<String>,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     enum WorkItem<'a> {
         Generate(&'a FieldType),
         AssembleOption,
@@ -429,7 +502,7 @@ fn field_type_to_effect_schema(
         AssembleTuple { count: usize },
         AssembleStruct { field_names: Vec<String> },
         AssembleRecordLink,
-        AssembleMap,
+        AssembleMap { key: String, finite_keys: bool },
     }
 
     let mut work_stack: Vec<WorkItem> = Vec::new();
@@ -440,15 +513,11 @@ fn field_type_to_effect_schema(
     while let Some(work_item) = work_stack.pop() {
         match work_item {
             WorkItem::Generate(field_type) => match field_type {
-                FieldType::String => {
-                    value_stack.push(
-                        "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
-                            .to_string(),
-                    )
-                }
-                FieldType::Char => {
-                    value_stack.push("Schema.String.pipe(Schema.maxLength(1))".to_string())
-                }
+                FieldType::String => value_stack.push(
+                    "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
+                        .to_string(),
+                ),
+                FieldType::Char => value_stack.push(char_schema()?),
                 FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
                 FieldType::Unit => value_stack.push("Schema.Null".to_string()),
                 FieldType::F32 | FieldType::F64 => value_stack.push("Schema.Number".to_string()),
@@ -491,17 +560,18 @@ fn field_type_to_effect_schema(
                     work_stack.push(WorkItem::Generate(i));
                 }
                 FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-                    work_stack.push(WorkItem::AssembleMap);
+                    work_stack.push(WorkItem::AssembleMap {
+                        key: map_key_schema(k, registry)?,
+                        finite_keys: MapKey::require(k)?.is_finite(registry),
+                    });
                     work_stack.push(WorkItem::Generate(v));
-                    work_stack.push(WorkItem::Generate(k));
                 }
                 FieldType::Other(name) => {
-                    // Check foreign type registry first
-                    if let Some(ftc) = registry.lookup(name)
-                        && !ftc.effect_schema.is_empty() {
-                            value_stack.push(ftc.effect_schema.clone());
-                            continue;
-                        }
+                    if let Some(foreign) = registry.lookup(name) {
+                        let mapping = effect_mapping(name, foreign)?;
+                        value_stack.push(mapping.type_expr.clone());
+                        continue;
+                    }
 
                     let pascal = name.to_case(Case::Pascal);
                     let wrap_id = format!("{}Ref", pascal);
@@ -552,18 +622,30 @@ fn field_type_to_effect_schema(
             }
             WorkItem::AssembleRecordLink => {
                 let inner = value_stack.pop().unwrap();
-                value_stack.push(format!(
-                    "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
+                value_stack.push(match record_link_mapping(registry) {
+                    Some(mapping) => fill(&mapping.type_expr, &[inner]),
+                    None => format!(
+                        "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
                 message: `Please enter a valid value`,
                 override: true,
             }}), }})",
-                    inner
-                ));
+                        inner
+                    ),
+                });
             }
-            WorkItem::AssembleMap => {
+            WorkItem::AssembleMap { key, finite_keys } => {
                 let v = value_stack.pop().unwrap();
-                let k = value_stack.pop().unwrap();
-                value_stack.push(format!("Schema.Record({{ key: {}, value: {} }})", k, v));
+                // A map keyed by a bool or an enum holds any subset of its values.
+                let partial = if finite_keys {
+                    ".pipe(Schema.partialWith({ exact: true }))"
+                } else {
+                    ""
+                };
+                // serde rejects a key outside the key type, so the record does too.
+                value_stack.push(format!(
+                    "Schema.Record({{ key: {}, value: {} }}){partial}.annotations({{ parseOptions: {{ onExcessProperty: \"error\" }} }})",
+                    key, v
+                ));
             }
         }
     }
@@ -573,14 +655,14 @@ fn field_type_to_effect_schema(
         1,
         "Generation ended with not exactly one value on the stack."
     );
-    value_stack.pop().unwrap()
+    Ok(value_stack.pop().unwrap())
 }
 
 /// Converts a `FieldType` into its corresponding raw TypeScript type for the `...Encoded` interface.
 fn field_type_to_ts_encoded(
     ft: &FieldType,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     enum WorkItem<'a> {
         Generate(&'a FieldType),
         AssembleOption,
@@ -588,7 +670,7 @@ fn field_type_to_ts_encoded(
         AssembleTuple { count: usize },
         AssembleStruct { field_names: Vec<String> },
         AssembleRecordLink,
-        AssembleMap,
+        AssembleMap { key: String, finite_keys: bool },
     }
 
     let mut work_stack: Vec<WorkItem> = Vec::new();
@@ -643,9 +725,11 @@ fn field_type_to_ts_encoded(
                         }
                     }
                     FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-                        work_stack.push(WorkItem::AssembleMap);
+                        work_stack.push(WorkItem::AssembleMap {
+                            key: map_key_encoded(k, registry)?,
+                            finite_keys: MapKey::require(k)?.is_finite(registry),
+                        });
                         work_stack.push(WorkItem::Generate(v));
-                        work_stack.push(WorkItem::Generate(k));
                     }
                     FieldType::RecordLink(inner) => {
                         work_stack.push(WorkItem::AssembleRecordLink);
@@ -654,11 +738,9 @@ fn field_type_to_ts_encoded(
 
                     // User-defined types
                     FieldType::Other(name) => {
-                        // Check foreign type registry first
-                        if let Some(ftc) = registry.lookup(name)
-                            && !ftc.effect_encoded.is_empty()
-                        {
-                            value_stack.push(ftc.effect_encoded.clone());
+                        if let Some(foreign) = registry.lookup(name) {
+                            let mapping = effect_mapping(name, foreign)?;
+                            value_stack.push(mapping.encoded.clone());
                             continue;
                         }
                         value_stack.push(format!("{}Encoded", name.to_case(Case::Pascal)))
@@ -687,14 +769,21 @@ fn field_type_to_ts_encoded(
                     .collect();
                 value_stack.push(format!("{{\n{}\n}}", assignments.join("\n")));
             }
-            WorkItem::AssembleMap => {
+            WorkItem::AssembleMap { key, finite_keys } => {
                 let v = value_stack.pop().unwrap();
-                let k = value_stack.pop().unwrap();
-                value_stack.push(format!("Record<{}, {}>", k, v));
+                let record = format!("Record<{}, {}>", key, v);
+                value_stack.push(if finite_keys {
+                    format!("Partial<{record}>")
+                } else {
+                    record
+                });
             }
             WorkItem::AssembleRecordLink => {
                 let inner = value_stack.pop().unwrap();
-                value_stack.push(format!("string | {}", inner));
+                value_stack.push(match record_link_mapping(registry) {
+                    Some(mapping) => fill(&mapping.encoded, &[inner]),
+                    None => format!("string | {}", inner),
+                });
             }
         }
     }
@@ -704,7 +793,7 @@ fn field_type_to_ts_encoded(
         1,
         "Generation ended with not exactly one value on the stack."
     );
-    value_stack.pop().unwrap()
+    Ok(value_stack.pop().unwrap())
 }
 
 /// Generates Effect Schema code for a specific subset of types (used in per-file mode).
@@ -716,7 +805,7 @@ pub fn generate_effect_schema_for_types(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
 
     // Analyse recursion across ALL types (needed for correct SCC detection).
@@ -724,6 +813,10 @@ pub fn generate_effect_schema_for_types(
 
     // Build condensation graph for topological ordering.
     let mut condensation = DiGraphMap::<usize, ()>::new();
+    // Every component is a node, so a type with no dependency edges is still emitted.
+    for &comp_id in rec.meta.keys() {
+        condensation.add_node(comp_id);
+    }
     for (t1, _) in rec
         .meta
         .values()
@@ -755,7 +848,7 @@ pub fn generate_effect_schema_for_types(
         .collect();
     let mut processed: BTreeSet<String> = all_types.difference(&type_set).cloned().collect();
 
-    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> String {
+    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> Result<String> {
         field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
     };
 
@@ -783,9 +876,16 @@ pub fn generate_effect_schema_for_types(
                     .variants
                     .iter()
                     .map(|v| {
-                        enum_variant_to_schema(v, &e.representation, &name, &to_schema, &processed)
+                        enum_variant_to_schema(
+                            v,
+                            &e.representation,
+                            &name,
+                            &to_schema,
+                            &processed,
+                            structs,
+                        )
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>>>()?
                     .join(", ");
                 out_classes.push_str(&variants);
                 out_classes.push_str(&format!(").annotations({{ identifier: `{}` }});\n", name));
@@ -793,7 +893,7 @@ pub fn generate_effect_schema_for_types(
                     "export type {}Type = typeof {}.Type;\n",
                     name, name
                 ));
-                out_encoded.push_str(&encoded_alias_for_enum(e, registry));
+                out_encoded.push_str(&encoded_alias_for_enum(e, registry)?);
             } else if let Some(struct_config) = structs
                 .values()
                 .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
@@ -806,317 +906,462 @@ pub fn generate_effect_schema_for_types(
                     name, name, name
                 ));
                 for (idx, f) in struct_config.fields.iter().enumerate() {
-                    let schema = to_schema(&f.field_type, &name, &processed);
-                    let schema_with_validators =
-                        apply_validators_to_schema(schema, &f.validators, &f.field_name);
-                    let field_name_camel = f.field_name.to_case(Case::Camel);
-                    let field_name_title = f.field_name.to_case(Case::Title);
-
-                    let is_optional = matches!(f.field_type, FieldType::Option(_));
-
                     if let Some(ref doc) = f.doccom {
                         out_classes.push_str(&format_jsdoc(doc, "  "));
                     }
-
-                    let final_schema = if !is_optional {
-                        format!(
-                            "Schema.propertySignature({}).annotations({{ missingMessage: () => `'{}' is required` }})",
-                            schema_with_validators, field_name_title
-                        )
+                    let entry = field_schema_entry(f, |field_type| {
+                        to_schema(field_type, &name, &processed)
+                    })?;
+                    let separator = if idx + 1 == struct_config.fields.len() {
+                        ""
                     } else {
-                        schema_with_validators
+                        ","
                     };
-
-                    out_classes.push_str(&format!(
-                        "  {}: {}{}",
-                        field_name_camel,
-                        final_schema,
-                        if idx + 1 == struct_config.fields.len() {
-                            ""
-                        } else {
-                            ","
-                        }
-                    ));
-                    out_classes.push('\n');
+                    out_classes.push_str(&format!("  {entry}{separator}\n"));
                 }
                 out_classes.push_str("}) {[key: string]: unknown}\n\n");
                 out_classes.push_str(&format!(
                     "export type {}Type = typeof {}.Type;\n",
                     name, name
                 ));
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry));
+                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry)?);
             }
             processed.insert(name);
         }
     }
 
-    format!("{out_classes}\n{out_encoded}")
+    Ok(format!("{out_classes}\n{out_encoded}"))
 }
 
 // ----- Validator Application Logic -----------------------------------------
 
-/// Applies a series of validators to a schema string by chaining `.pipe()` calls.
+/// A field's schema with its validators applied. An optional field's
+/// validators constrain the present value, as the Rust deserializer does, so
+/// they go on the inner schema before it is wrapped.
+fn validated_field_schema(
+    field: &StructField,
+    schema_of: impl Fn(&FieldType) -> Result<String>,
+) -> Result<String> {
+    match &field.field_type {
+        FieldType::Option(inner) if !field.validators.is_empty() => Ok(format!(
+            "Schema.OptionFromNullishOr({}, null)",
+            apply_validators_to_schema(schema_of(inner)?, &field.validators, &field.field_name)?
+        )),
+        field_type => {
+            apply_validators_to_schema(schema_of(field_type)?, &field.validators, &field.field_name)
+        }
+    }
+}
+
+/// Whether a field is read through a parse morph, so its encoded form is a
+/// string whatever its Rust type.
+fn parses_string_input(field: &StructField) -> bool {
+    matches!(
+        field.validators.first(),
+        Some(Validator::StringValidator(validator))
+            if matches!(validator.rule(), StringRule::Parse(_))
+    )
+}
+
+/// `schema` with `validators` applied in order. A parse morph replaces the
+/// schema with one that decodes a string into the field's type.
 fn apply_validators_to_schema(
     schema: String,
     validators: &[Validator],
     field_name: &str,
-) -> String {
-    if validators.is_empty() {
-        return schema;
-    }
+) -> Result<String> {
+    let title = field_name.to_case(Case::Title);
+    let message = |rule: &str| {
+        format!(
+            "{{ message: () => {} }}",
+            template_literal(&format!("'{title}' {rule}"))
+        )
+    };
+    let expected = |expectation: &str| message(&format!("must be {expectation}"));
+    let pattern = |source: &str, expectation: &str| -> Result<String> {
+        Ok(format!(
+            "Schema.pattern(new RegExp({}), {})",
+            string_literal(source)?,
+            expected(expectation)
+        ))
+    };
 
+    bounds::check_validators(validators)
+        .map_err(|problem| EvenframeError::config(format!("field '{field_name}': {problem}")))?;
     let mut result = schema;
-    let field_name_title = field_name.to_case(Case::Title);
-
     for validator in validators {
-        result = match validator {
-            // String validators
-            Validator::StringValidator(sv) => match sv {
-                StringValidator::MinLength(len) => format!(
-                    "{}.pipe(Schema.minLength({}, {{ message: () => `{}` must be at least {} characters long` }}))",
-                    result, len, field_name_title, len
-                ),
-                StringValidator::MaxLength(len) => format!(
-                    "{}.pipe(Schema.maxLength({}, {{ message: () => `{}` must be at most {} characters long` }}))",
-                    result, len, field_name_title, len
-                ),
-                StringValidator::Length(len) => format!(
-                    "{}.pipe(Schema.length({}, {{ message: () => `{}` must be exactly {} characters long` }}))",
-                    result, len, field_name_title, len
-                ),
-                StringValidator::NonEmpty => format!(
-                    "{}.pipe(Schema.nonEmptyString({{ message: () => `{}` Please enter a value` }}))",
-                    result, field_name_title
-                ),
-                StringValidator::StartsWith(prefix) => format!(
-                    "{}.pipe(Schema.startsWith(\"{}\", {{ message: () => `{}` must start with \"{}\" }})",
-                    result, prefix, field_name_title, prefix
-                ),
-                StringValidator::EndsWith(suffix) => format!(
-                    "{}.pipe(Schema.endsWith(\"{}\", {{ message: () => `{}` must end with \"{}\" }})",
-                    result, suffix, field_name_title, suffix
-                ),
-                StringValidator::Includes(substring) => format!(
-                    "{}.pipe(Schema.includes(\"{}\", {{ message: () => `{}` must include \"{}\" }})",
-                    result, substring, field_name_title, substring
-                ),
-                StringValidator::Trimmed => format!("{}.pipe(Schema.trimmed)", result),
-                StringValidator::Lowercased => format!("{}.pipe(Schema.toLowerCase", result),
-                StringValidator::Uppercased => format!("{}.pipe(Schema.toUpperCase", result),
-                StringValidator::Capitalized => format!("{}.pipe(Schema.capitalize", result),
-                StringValidator::Uncapitalized => format!("{}.pipe(Schema.uncapitalize", result),
-                StringValidator::RegexLiteral(format_variant) => format!(
-                    "{}.pipe(Schema.pattern(/{}/, {{ message: () => `{}` has an invalid format` }}))",
-                    result,
-                    format_variant.pattern(),
-                    field_name_title
-                ),
-                _ => result,
+        let filters: Vec<String> = match validator {
+            Validator::StringValidator(sv) => match sv.rule() {
+                StringRule::Carrier => continue,
+                StringRule::Parse(parse) => {
+                    let input = expected(sv.description());
+                    result = match parse {
+                        StringParse::Integer => format!(
+                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between({}, {}, {input}))",
+                            pattern(keywords::INTEGER, sv.description())?,
+                            -keywords::MAX_SAFE_INTEGER,
+                            keywords::MAX_SAFE_INTEGER
+                        ),
+                        StringParse::Numeric => format!(
+                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString))",
+                            pattern(keywords::NUMERIC, sv.description())?
+                        ),
+                        StringParse::Date => "Schema.Date".to_owned(),
+                        StringParse::DateIso => format!(
+                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.Date))",
+                            pattern(keywords::ISO_8601, sv.description())?
+                        ),
+                        StringParse::DateEpoch => {
+                            let check = js_checks::string_check(&StringValidator::DateEpoch)?;
+                            let Some(JsCheck::Predicate(predicate)) = check else {
+                                return Err(EvenframeError::config(
+                                    "the epoch check is a predicate".to_owned(),
+                                ));
+                            };
+                            format!(
+                                "Schema.String.pipe(Schema.filter((v) => {predicate}, {input})).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber))"
+                            )
+                        }
+                        StringParse::Json => format!("Schema.parseJson({result})"),
+                        StringParse::Url => "Schema.URL".to_owned(),
+                    };
+                    continue;
+                }
+                StringRule::Transform(transform) => vec![format!(
+                    "Schema.compose({})",
+                    match transform {
+                        StringTransform::Lower => "Schema.Lowercase".to_owned(),
+                        StringTransform::Upper => "Schema.Uppercase".to_owned(),
+                        StringTransform::Trim => "Schema.Trim".to_owned(),
+                        StringTransform::Capitalize => "Schema.Capitalize".to_owned(),
+                        StringTransform::Normalize(form) => format!(
+                            "Schema.transform(Schema.String, Schema.String, {{ strict: true, decode: (s) => s.normalize(\"{}\"), encode: (s) => s }})",
+                            form.name()
+                        ),
+                    }
+                )],
+                StringRule::Check => match js_checks::string_check(sv)? {
+                    Some(JsCheck::Pattern(source)) => vec![format!(
+                        "Schema.pattern(new RegExp({}), {})",
+                        string_literal(&source)?,
+                        expected(&sv.expectation())
+                    )],
+                    Some(JsCheck::Predicate(predicate)) => vec![format!(
+                        "Schema.filter((v) => {predicate}, {})",
+                        expected(&sv.expectation())
+                    )],
+                    Some(JsCheck::Length(LengthCheck::Exactly(length))) => vec![format!(
+                        "Schema.length({length}, {})",
+                        message(&format!("must be exactly {length} characters long"))
+                    )],
+                    Some(JsCheck::Length(LengthCheck::AtLeast(length))) => vec![format!(
+                        "Schema.minLength({length}, {})",
+                        message(&format!("must be at least {length} characters long"))
+                    )],
+                    Some(JsCheck::Length(LengthCheck::AtMost(length))) => vec![format!(
+                        "Schema.maxLength({length}, {})",
+                        message(&format!("must be at most {length} characters long"))
+                    )],
+                    None => continue,
+                },
             },
 
-            // Number validators
             Validator::NumberValidator(nv) => match nv {
-                NumberValidator::GreaterThan(value) => format!(
-                    "{}.pipe(Schema.greaterThan({}, {{ message: () => `{}` must be greater than {}` }}))",
-                    result, value.0, field_name_title, value.0
-                ),
-                NumberValidator::GreaterThanOrEqualTo(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualTo({}, {{ message: () => `{}` must be greater than or equal to {}` }}))",
-                    result, value.0, field_name_title, value.0
-                ),
-                NumberValidator::LessThan(value) => format!(
-                    "{}.pipe(Schema.lessThan({}, {{ message: () => `{}` must be less than {}` }}))",
-                    result, value.0, field_name_title, value.0
-                ),
-                NumberValidator::LessThanOrEqualTo(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualTo({}, {{ message: () => `{}` must be less than or equal to {}` }}))",
-                    result, value.0, field_name_title, value.0
-                ),
-                NumberValidator::Between(start, end) => format!(
-                    "{}.pipe(Schema.between({}, {}, {{ message: () => `{}` must be between {} and {}` }}))",
-                    result, start.0, end.0, field_name_title, start.0, end.0
-                ),
-                NumberValidator::Int => format!(
-                    "{}.pipe(Schema.int({{ message: () => `{}` must be an integer` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::NonNaN => format!(
-                    "{}.pipe(Schema.nonNaN({{ message: () => `{}` must not be NaN` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::Finite => format!(
-                    "{}.pipe(Schema.finite({{ message: () => `{}` must be a finite number` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::Positive => format!(
-                    "{}.pipe(Schema.positive({{ message: () => `{}` must be a positive number` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::NonNegative => format!(
-                    "{}.pipe(Schema.nonNegative({{ message: () => `{}` must be a non-negative number` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::Negative => format!(
-                    "{}.pipe(Schema.negative({{ message: () => `{}` must be a negative number` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::NonPositive => format!(
-                    "{}.pipe(Schema.nonPositive({{ message: () => `{}` must be a non-positive number` }}))",
-                    result, field_name_title
-                ),
-                NumberValidator::MultipleOf(value) => format!(
-                    "{}.pipe(Schema.multipleOf({}, {{ message: () => `{}` must be a multiple of {}` }}))",
-                    result, value.0, field_name_title, value.0
-                ),
-                NumberValidator::Uint8 => result,
+                NumberValidator::GreaterThan(value) => vec![format!(
+                    "Schema.greaterThan({}, {})",
+                    value.0,
+                    message(&format!("must be greater than {}", value.0))
+                )],
+                NumberValidator::GreaterThanOrEqualTo(value) => vec![format!(
+                    "Schema.greaterThanOrEqualTo({}, {})",
+                    value.0,
+                    message(&format!("must be greater than or equal to {}", value.0))
+                )],
+                NumberValidator::LessThan(value) => vec![format!(
+                    "Schema.lessThan({}, {})",
+                    value.0,
+                    message(&format!("must be less than {}", value.0))
+                )],
+                NumberValidator::LessThanOrEqualTo(value) => vec![format!(
+                    "Schema.lessThanOrEqualTo({}, {})",
+                    value.0,
+                    message(&format!("must be less than or equal to {}", value.0))
+                )],
+                NumberValidator::Between(start, end) => vec![format!(
+                    "Schema.between({}, {}, {})",
+                    start.0,
+                    end.0,
+                    message(&format!("must be between {} and {}", start.0, end.0))
+                )],
+                NumberValidator::Int => {
+                    vec![format!("Schema.int({})", message("must be an integer"))]
+                }
+                NumberValidator::NonNaN => {
+                    vec![format!("Schema.nonNaN({})", message("must not be NaN"))]
+                }
+                NumberValidator::Finite => {
+                    vec![format!(
+                        "Schema.finite({})",
+                        message("must be a finite number")
+                    )]
+                }
+                NumberValidator::Positive => {
+                    vec![format!(
+                        "Schema.positive({})",
+                        message("must be a positive number")
+                    )]
+                }
+                NumberValidator::NonNegative => vec![format!(
+                    "Schema.nonNegative({})",
+                    message("must be a non-negative number")
+                )],
+                NumberValidator::Negative => {
+                    vec![format!(
+                        "Schema.negative({})",
+                        message("must be a negative number")
+                    )]
+                }
+                NumberValidator::NonPositive => vec![format!(
+                    "Schema.nonPositive({})",
+                    message("must be a non-positive number")
+                )],
+                NumberValidator::MultipleOf(value) => vec![format!(
+                    "Schema.multipleOf({}, {})",
+                    value.0,
+                    message(&format!("must be a multiple of {}", value.0))
+                )],
+                NumberValidator::Uint8 => vec![
+                    format!("Schema.int({})", message("must be an integer")),
+                    format!(
+                        "Schema.between(0, 255, {})",
+                        message("must be between 0 and 255")
+                    ),
+                ],
             },
 
-            // Array validators
-            Validator::ArrayValidator(av) => match av {
+            Validator::ArrayValidator(av) => vec![match av {
                 ArrayValidator::MinItems(count) => format!(
-                    "{}.pipe(Schema.minItems({}, {{ message: () => `{}` must contain at least {} items` }}))",
-                    result, count, field_name_title, count
+                    "Schema.minItems({count}, {})",
+                    message(&format!("must contain at least {count} items"))
                 ),
                 ArrayValidator::MaxItems(count) => format!(
-                    "{}.pipe(Schema.maxItems({}, {{ message: () => `{}` must contain at most {} items` }}))",
-                    result, count, field_name_title, count
+                    "Schema.maxItems({count}, {})",
+                    message(&format!("must contain at most {count} items"))
                 ),
                 ArrayValidator::ItemsCount(count) => format!(
-                    "{}.pipe(Schema.itemsCount({}, {{ message: () => `{}` must contain exactly {} items` }}))",
-                    result, count, field_name_title, count
+                    "Schema.itemsCount({count}, {})",
+                    message(&format!("must contain exactly {count} items"))
                 ),
-            },
+            }],
 
-            // Date validators
-            Validator::DateValidator(dv) => match dv {
-                DateValidator::ValidDate => format!("{}.pipe(Schema.ValidDate)", result),
+            Validator::DateValidator(dv) => vec![match dv {
+                DateValidator::ValidDate => {
+                    format!("Schema.validDate({})", message("must be a valid date"))
+                }
                 DateValidator::GreaterThanDate(date) => format!(
-                    "{}.pipe(Schema.greaterThan(new Date(\"{}\"), {{ message: () => `{}` must be after `{}` }}))",
-                    result, date, field_name_title, date
+                    "Schema.greaterThanDate({}, {})",
+                    date_literal(date)?,
+                    message(&format!("must be after {date}"))
                 ),
                 DateValidator::GreaterThanOrEqualToDate(date) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualTo(new Date(\"{}\"), {{ message: () => `{}` must be on or after `{}` }}))",
-                    result, date, field_name_title, date
+                    "Schema.greaterThanOrEqualToDate({}, {})",
+                    date_literal(date)?,
+                    message(&format!("must be on or after {date}"))
                 ),
                 DateValidator::LessThanDate(date) => format!(
-                    "{}.pipe(Schema.lessThan(new Date(\"{}\"), {{ message: () => `{}` must be before `{}` }}))",
-                    result, date, field_name_title, date
+                    "Schema.lessThanDate({}, {})",
+                    date_literal(date)?,
+                    message(&format!("must be before {date}"))
                 ),
                 DateValidator::LessThanOrEqualToDate(date) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualTo(new Date(\"{}\"), {{ message: () => `{}` must be on or before `{}` }}))",
-                    result, date, field_name_title, date
+                    "Schema.lessThanOrEqualToDate({}, {})",
+                    date_literal(date)?,
+                    message(&format!("must be on or before {date}"))
                 ),
                 DateValidator::BetweenDate(start, end) => format!(
-                    "{}.pipe(Schema.between(new Date(\"{}\"), new Date(\"{}\"), {{ message: () => `{}` must be between `{}` and `{}` }}))",
-                    result, start, end, field_name_title, start, end
+                    "Schema.betweenDate({}, {}, {})",
+                    date_literal(start)?,
+                    date_literal(end)?,
+                    message(&format!("must be between {start} and {end}"))
                 ),
-            },
+            }],
 
-            // BigInt validators
-            Validator::BigIntValidator(biv) => match biv {
+            Validator::BigIntValidator(biv) => vec![match biv {
                 BigIntValidator::GreaterThanBigInt(value) => format!(
-                    "{}.pipe(Schema.greaterThanBigInt({}n, {{ message: () => `{}` must be greater than {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanBigInt({}, {})",
+                    bigint_literal(value)?,
+                    message(&format!("must be greater than {value}"))
                 ),
                 BigIntValidator::GreaterThanOrEqualToBigInt(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToBigInt({}n, {{ message: () => `{}` must be greater than or equal to {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanOrEqualToBigInt({}, {})",
+                    bigint_literal(value)?,
+                    message(&format!("must be greater than or equal to {value}"))
                 ),
                 BigIntValidator::LessThanBigInt(value) => format!(
-                    "{}.pipe(Schema.lessThanBigInt({}n, {{ message: () => `{}` must be less than {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanBigInt({}, {})",
+                    bigint_literal(value)?,
+                    message(&format!("must be less than {value}"))
                 ),
                 BigIntValidator::LessThanOrEqualToBigInt(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToBigInt({}n, {{ message: () => `{}` must be less than or equal to {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanOrEqualToBigInt({}, {})",
+                    bigint_literal(value)?,
+                    message(&format!("must be less than or equal to {value}"))
                 ),
                 BigIntValidator::BetweenBigInt(start, end) => format!(
-                    "{}.pipe(Schema.betweenBigInt({}n, {}n, {{ message: () => `{}` must be between {} and {}` }}))",
-                    result, start, end, field_name_title, start, end
+                    "Schema.betweenBigInt({}, {}, {})",
+                    bigint_literal(start)?,
+                    bigint_literal(end)?,
+                    message(&format!("must be between {start} and {end}"))
                 ),
-                BigIntValidator::PositiveBigInt => format!(
-                    "{}.pipe(Schema.positiveBigInt({{ message: () => `{}` must be a positive BigInt` }}))",
-                    result, field_name_title
-                ),
-                BigIntValidator::NonNegativeBigInt => format!(
-                    "{}.pipe(Schema.nonNegativeBigInt({{ message: () => `{}` must be a non-negative BigInt` }}))",
-                    result, field_name_title
-                ),
-                BigIntValidator::NegativeBigInt => format!(
-                    "{}.pipe(Schema.negativeBigInt({{ message: () => `{}` must be a negative BigInt` }}))",
-                    result, field_name_title
-                ),
-                BigIntValidator::NonPositiveBigInt => format!(
-                    "{}.pipe(Schema.nonPositiveBigInt({{ message: () => `{}` must be a non-positive BigInt` }}))",
-                    result, field_name_title
-                ),
-            },
+                BigIntValidator::PositiveBigInt => {
+                    format!("Schema.positiveBigInt({})", message("must be positive"))
+                }
+                BigIntValidator::NonNegativeBigInt => {
+                    format!(
+                        "Schema.nonNegativeBigInt({})",
+                        message("must be non-negative")
+                    )
+                }
+                BigIntValidator::NegativeBigInt => {
+                    format!("Schema.negativeBigInt({})", message("must be negative"))
+                }
+                BigIntValidator::NonPositiveBigInt => {
+                    format!(
+                        "Schema.nonPositiveBigInt({})",
+                        message("must be non-positive")
+                    )
+                }
+            }],
 
-            // BigDecimal validators
-            Validator::BigDecimalValidator(bdv) => match bdv {
+            Validator::BigDecimalValidator(bdv) => vec![match bdv {
                 BigDecimalValidator::GreaterThanBigDecimal(value) => format!(
-                    "{}.pipe(Schema.greaterThanBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be greater than {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanBigDecimal({}, {})",
+                    big_decimal_literal(value)?,
+                    message(&format!("must be greater than {value}"))
                 ),
                 BigDecimalValidator::GreaterThanOrEqualToBigDecimal(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be greater than or equal to {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanOrEqualToBigDecimal({}, {})",
+                    big_decimal_literal(value)?,
+                    message(&format!("must be greater than or equal to {value}"))
                 ),
                 BigDecimalValidator::LessThanBigDecimal(value) => format!(
-                    "{}.pipe(Schema.lessThanBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be less than {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanBigDecimal({}, {})",
+                    big_decimal_literal(value)?,
+                    message(&format!("must be less than {value}"))
                 ),
                 BigDecimalValidator::LessThanOrEqualToBigDecimal(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToBigDecimal(BigDecimal.fromNumber({}), {{ message: () => `{}` must be less than or equal to {}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanOrEqualToBigDecimal({}, {})",
+                    big_decimal_literal(value)?,
+                    message(&format!("must be less than or equal to {value}"))
                 ),
                 BigDecimalValidator::BetweenBigDecimal(start, end) => format!(
-                    "{}.pipe(Schema.betweenBigDecimal(BigDecimal.fromNumber({}), BigDecimal.fromNumber({}), {{ message: () => `{}` must be between {} and {}` }}))",
-                    result, start, end, field_name_title, start, end
+                    "Schema.betweenBigDecimal({}, {}, {})",
+                    big_decimal_literal(start)?,
+                    big_decimal_literal(end)?,
+                    message(&format!("must be between {start} and {end}"))
                 ),
-                BigDecimalValidator::PositiveBigDecimal => format!(
-                    "{}.pipe(Schema.positiveBigDecimal({{ message: () => `{}` must be a positive BigDecimal` }}))",
-                    result, field_name_title
-                ),
+                BigDecimalValidator::PositiveBigDecimal => {
+                    format!("Schema.positiveBigDecimal({})", message("must be positive"))
+                }
                 BigDecimalValidator::NonNegativeBigDecimal => format!(
-                    "{}.pipe(Schema.nonNegativeBigDecimal({{ message: () => `{}` must be a non-negative BigDecimal` }}))",
-                    result, field_name_title
+                    "Schema.nonNegativeBigDecimal({})",
+                    message("must be non-negative")
                 ),
-                BigDecimalValidator::NegativeBigDecimal => format!(
-                    "{}.pipe(Schema.negativeBigDecimal({{ message: () => `{}` must be a negative BigDecimal` }}))",
-                    result, field_name_title
-                ),
+                BigDecimalValidator::NegativeBigDecimal => {
+                    format!("Schema.negativeBigDecimal({})", message("must be negative"))
+                }
                 BigDecimalValidator::NonPositiveBigDecimal => format!(
-                    "{}.pipe(Schema.nonPositiveBigDecimal({{ message: () => `{}` must be a non-positive BigDecimal` }}))",
-                    result, field_name_title
+                    "Schema.nonPositiveBigDecimal({})",
+                    message("must be non-positive")
                 ),
-            },
+            }],
 
-            // Duration validators
-            Validator::DurationValidator(dv) => match dv {
+            Validator::DurationValidator(dv) => vec![match dv {
                 DurationValidator::GreaterThanDuration(value) => format!(
-                    "{}.pipe(Schema.greaterThanDuration(\"{}\", {{ message: () => `{}` must be longer than `{}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanDuration({}, {})",
+                    duration_literal(value)?,
+                    message(&format!("must be longer than {value}"))
                 ),
                 DurationValidator::GreaterThanOrEqualToDuration(value) => format!(
-                    "{}.pipe(Schema.greaterThanOrEqualToDuration(\"{}\", {{ message: () => `{}` must be at least `{}` long` }}))",
-                    result, value, field_name_title, value
+                    "Schema.greaterThanOrEqualToDuration({}, {})",
+                    duration_literal(value)?,
+                    message(&format!("must be at least {value} long"))
                 ),
                 DurationValidator::LessThanDuration(value) => format!(
-                    "{}.pipe(Schema.lessThanDuration(\"{}\", {{ message: () => `{}` must be shorter than `{}` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanDuration({}, {})",
+                    duration_literal(value)?,
+                    message(&format!("must be shorter than {value}"))
                 ),
                 DurationValidator::LessThanOrEqualToDuration(value) => format!(
-                    "{}.pipe(Schema.lessThanOrEqualToDuration(\"{}\", {{ message: () => `{}` must be at most `{}` long` }}))",
-                    result, value, field_name_title, value
+                    "Schema.lessThanOrEqualToDuration({}, {})",
+                    duration_literal(value)?,
+                    message(&format!("must be at most {value} long"))
                 ),
                 DurationValidator::BetweenDuration(start, end) => format!(
-                    "{}.pipe(Schema.betweenDuration(\"{}\", \"{}\", {{ message: () => `{}` must be between `{}` and `{}` long` }}))",
-                    result, start, end, field_name_title, start, end
+                    "Schema.betweenDuration({}, {}, {})",
+                    duration_literal(start)?,
+                    duration_literal(end)?,
+                    message(&format!("must be between {start} and {end} long"))
                 ),
-            },
+            }],
         };
+        for filter in filters {
+            result.push_str(&format!(".pipe({filter})"));
+        }
     }
 
-    result
+    Ok(result)
+}
+
+/// A date bound as a TypeScript `Date`.
+fn date_literal(date: &str) -> Result<String> {
+    bounds::date(date).map_err(EvenframeError::config)?;
+    Ok(format!("new Date({})", string_literal(date)?))
+}
+
+/// An integer bound as a TypeScript bigint literal.
+fn bigint_literal(value: &str) -> Result<String> {
+    bounds::big_int(value)
+        .map(|number| format!("{number}n"))
+        .map_err(EvenframeError::config)
+}
+
+/// A decimal bound decoded exactly, never through a float.
+fn big_decimal_literal(value: &str) -> Result<String> {
+    bounds::decimal(value).map_err(EvenframeError::config)?;
+    Ok(format!(
+        "Schema.decodeSync(Schema.BigDecimal)({})",
+        string_literal(value)?
+    ))
+}
+
+/// A duration bound as bigint nanoseconds, which Effect accepts as a
+/// `DurationInput`.
+fn duration_literal(value: &str) -> Result<String> {
+    bounds::duration(value)
+        .map(|nanos| format!("{nanos}n"))
+        .map_err(EvenframeError::config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unparsable_validator_bounds() {
+        let validators = [
+            Validator::DurationValidator(DurationValidator::GreaterThanDuration("soon".into())),
+            Validator::DateValidator(DateValidator::LessThanDate("tomorrow".into())),
+            Validator::BigIntValidator(BigIntValidator::GreaterThanBigInt("1.5".into())),
+            Validator::BigDecimalValidator(BigDecimalValidator::LessThanBigDecimal("1e5".into())),
+        ];
+        for validator in validators {
+            let result = apply_validators_to_schema(
+                "Schema.String".into(),
+                std::slice::from_ref(&validator),
+                "field",
+            );
+            assert!(result.is_err(), "{validator:?} was accepted");
+        }
+    }
 }

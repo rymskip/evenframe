@@ -1,4 +1,5 @@
 mod bump;
+mod generated;
 
 use clap::{Parser, Subcommand};
 use std::process::{Command, ExitCode, Stdio};
@@ -114,6 +115,10 @@ fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[St
         }) {
             return false;
         }
+        header("generated output (deno, protoc, flatc)");
+        if !generated::check() {
+            return false;
+        }
     }
 
     if !specific || derive {
@@ -214,6 +219,31 @@ fn cmd_verify(fail_fast: bool) -> bool {
             }),
         ),
         (
+            "fmt (playground)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["fmt", "--all", "--", "--check"])
+                        .current_dir(playground_dir());
+                })
+            }),
+        ),
+        (
+            "clippy (playground, all features, all targets)",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args([
+                        "clippy",
+                        "--all-targets",
+                        "--all-features",
+                        "--",
+                        "-D",
+                        "warnings",
+                    ])
+                    .current_dir(playground_dir());
+                })
+            }),
+        ),
+        (
             "evenframe_core unit tests (full)",
             Box::new(|| {
                 run("cargo", |c| {
@@ -234,6 +264,18 @@ fn cmd_verify(fail_fast: bool) -> bool {
                         "--test",
                         "snapshot_tests",
                     ]);
+                })
+            }),
+        ),
+        (
+            "generated output (deno, protoc, flatc)",
+            Box::new(generated::check),
+        ),
+        (
+            "evenframe CLI tests",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["test", "-p", "evenframe"]);
                 })
             }),
         ),

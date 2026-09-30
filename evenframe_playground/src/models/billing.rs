@@ -1,5 +1,5 @@
 //! Tables whose links can have nothing to point at, a link through a
-//! persistable union, links nested in objects, lists, enums and maps, and
+//! persistable union, a table held by value, links nested in objects, lists, enums and maps, and
 //! a table using every mock data coordination: an optional and a list link
 //! to a table that generates no records, which itself links to another such
 //! table.
@@ -45,6 +45,8 @@ pub struct BilledItem {
     pub id: String,
     pub description: String,
     pub billable: RecordLink<Billable>,
+    /// A table held by value, which the schema stores as a link to it.
+    pub provider: Service,
     pub serial_batch_bundle: Option<RecordLink<SerialBatchBundle>>,
     pub bundles: Vec<RecordLink<SerialBatchBundle>>,
 }

@@ -9,6 +9,14 @@
         { "field_name": "work_address", "field_type": { "Option": { "Other": "Address" } }, "validators": [], "always_regenerate": false }
       ],
       "validators": []
+    },
+    "Address": {
+      "struct_name": "Address",
+      "fields": [
+        { "field_name": "street", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "city", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
     }
   },
   "enums": {}

@@ -1,6 +1,7 @@
-//! Shared WASM runtime used by the output-rule and synthetic-item plugin managers.
+//! Shared WASM runtime used by the output-rule, synthetic-item and mock-data
+//! plugin managers.
 //!
-//! Both plugin categories use the same pointer-length calling convention:
+//! All plugin categories use the same pointer-length calling convention:
 //!
 //! - The plugin exports `alloc(size: i32) -> i32`, `dealloc(ptr: i32, len: i32)`,
 //!   and a `memory` export.
@@ -15,8 +16,7 @@ use wasmtime::{Instance, Memory, Store};
 
 /// A single WASM plugin that has been instantiated and is ready to be called.
 ///
-/// Both `OutputRulePluginManager` and `SyntheticItemPluginManager` hold one
-/// of these per loaded plugin.
+/// Each plugin manager holds one of these per loaded plugin.
 pub(crate) struct LoadedPlugin {
     pub store: Store<()>,
     pub instance: Instance,
@@ -75,6 +75,9 @@ impl LoadedPlugin {
             .map_err(|e| {
                 EvenframeError::plugin(format!("Plugin function '{}' trapped: {}", fn_name, e))
             })?;
+        // The guest only borrows the input, so the host frees it; otherwise
+        // guest memory grows with every call.
+        self.dealloc(input_ptr, input_len)?;
 
         let out_ptr = (packed >> 32) as i32;
         let out_len = (packed & 0xFFFF_FFFF) as i32;
@@ -91,7 +94,7 @@ impl LoadedPlugin {
             )));
         }
         let output_bytes = mem_data[out_start..out_end].to_vec();
-        let _ = self.dealloc(out_ptr, out_len);
+        self.dealloc(out_ptr, out_len)?;
 
         String::from_utf8(output_bytes)
             .map_err(|e| EvenframeError::plugin(format!("Plugin returned invalid UTF-8: {}", e)))

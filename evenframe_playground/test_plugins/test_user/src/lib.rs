@@ -1,4 +1,4 @@
-//! Dealdraft e2e test user plugin.
+//! E2E test user plugin.
 //!
 //! Record 0 gets fixed test credentials, all others fall back to evenframe defaults.
 

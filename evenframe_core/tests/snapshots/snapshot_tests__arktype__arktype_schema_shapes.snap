@@ -1,0 +1,71 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Event: [[[[[[['===', 'Opened'], '|', { Moved: 'Moved' }], '|', { Tagged: ['string', '[]'] }], '|', { Visited: 'Place' }], '|', { Scored: 'number' }], '|', { Pinned: ['number', 'number'] }], '|', { Cleared: [] }],
+Moved: {
+  from: 'Place',
+  to: 'Place'
+},
+Place: {
+  name: 'string'
+},
+Shapes: {
+  maybeTags: [[['string', '[]'], '|', 'undefined'], '|', 'null'],
+  matrix: [['number', '[]'], '[]'],
+  gaps: [[['number', '|', 'undefined'], '|', 'null'], '[]'],
+  triState: [[[['boolean', '|', 'undefined'], '|', 'null'], '|', 'undefined'], '|', 'null'],
+  maybeCount: [['number', '|', 'undefined'], '|', 'null'],
+  listsByName: { '+': 'reject', "[string]": ['string', '[]'] },
+  optionalByName: { '+': 'reject', "[string]": [['number', '|', 'undefined'], '|', 'null'] },
+  mapsByName: { '+': 'reject', "[string]": { '+': 'reject', "[string.integer]": 'boolean' } },
+  pair: ['string', 'number'],
+  pairs: [['number', 'number'], '[]'],
+  corner: { x: 'number', y: 'number' },
+  nothing: 'null',
+  huge: 'number',
+  hugeById: { '+': 'reject', "[string.integer]": 'string' },
+  event: 'Event',
+  events: ['Event', '[]'],
+  lastEvent: [['Event', '|', 'undefined'], '|', 'null'],
+  eventsByName: { '+': 'reject', "[string]": 'Event' }
+},
+
+});
+
+const exported = bindings.export();
+
+export const defaultMoved: Moved = {
+from: { name: "" },
+to: { name: "" }
+};
+export const defaultPlace: Place = {
+name: ""
+};
+export const defaultShapes: Shapes = {
+maybeTags: null,
+matrix: [],
+gaps: [],
+triState: null,
+maybeCount: null,
+listsByName: {},
+optionalByName: {},
+mapsByName: {},
+pair: ["", 0],
+pairs: [],
+corner: { x: 0, y: 0 },
+nothing: null,
+huge: 0,
+hugeById: {},
+event: "Opened",
+events: [],
+lastEvent: null,
+eventsByName: {}
+};
+
+export type Event = typeof exported.Event.infer;
+export type Moved = typeof exported.Moved.infer;
+export type Place = typeof exported.Place.infer;
+export type Shapes = typeof exported.Shapes.infer;

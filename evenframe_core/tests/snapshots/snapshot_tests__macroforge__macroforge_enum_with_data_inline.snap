@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Coordinates {
+  lat: number;
+  lng: number;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Location =
+	| { Address: string }
+	| { Coords: Coordinates }
+	| { Inline: { label: string; value: number; } }
+	| "Unknown";

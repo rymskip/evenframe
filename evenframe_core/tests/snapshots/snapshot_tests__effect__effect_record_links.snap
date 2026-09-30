@@ -2,4 +2,37 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class Author extends Schema.Class<Author>("Author")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` })
+}) {[key: string]: unknown}
 
+export class Post extends Schema.Class<Post>("Post")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
+  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
+                message: `Please enter a valid value`,
+                override: true,
+            }), })).annotations({ missingMessage: () => `'Author' is required` }),
+  relatedPosts: Schema.propertySignature(Schema.Array(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Schema.suspend((): Schema.Schema<Post, PostEncoded> => Post).annotations({ identifier: `PostRef` })).annotations({ message: () => ({
+                message: `Please enter a valid value`,
+                override: true,
+            }), }))).annotations({ missingMessage: () => `'Related Posts' is required` })
+}) {[key: string]: unknown}
+
+
+export interface AuthorEncoded {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface PostEncoded {
+  readonly id: string;
+  readonly title: string;
+  readonly author: string | AuthorEncoded;
+  readonly relatedPosts: ReadonlyArray<string | PostEncoded>;
+}
+
+
+export type AuthorType = typeof Author.Type;
+export type PostType = typeof Post.Type;

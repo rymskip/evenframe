@@ -1,0 +1,48 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Moved {
+  from: Place;
+  to: Place;
+}
+
+/** @derive(Deserialize) */
+export interface Place {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  name: string;
+}
+
+/** @derive(Deserialize) */
+export interface Shapes {
+  maybeTags: string[] | null;
+  matrix: number[][];
+  gaps: (number | null)[];
+  triState: (boolean | null) | null;
+  maybeCount: number | null;
+  listsByName: Record<string, string[]>;
+  optionalByName: Record<string, number | null>;
+  mapsByName: Record<string, Record<number, boolean>>;
+  pair: [string, number];
+  pairs: [number, number][];
+  corner: { x: number; y: number };
+  nothing: null;
+  huge: number;
+  hugeById: Record<number, string>;
+  event: Event;
+  events: Event[];
+  lastEvent: Event | null;
+  eventsByName: Record<string, Event>;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Event =
+	| "Opened"
+	| { Moved: Moved }
+	| { Tagged: string[] }
+	| { Visited: Place }
+	| { Scored: number }
+	| { Pinned: [number, number] }
+	| { Cleared: [] };

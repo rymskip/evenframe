@@ -1,0 +1,57 @@
+{
+  "description": "Field shapes schema formats cannot write directly: nested and optional collections, tuples, inline structs, unit, 128-bit integers and data-carrying enums",
+  "structs": {
+    "Place": {
+      "struct_name": "Place",
+      "fields": [
+        { "field_name": "name", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "Shapes": {
+      "struct_name": "Shapes",
+      "fields": [
+        { "field_name": "maybe_tags", "field_type": { "Option": { "Vec": "String" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "matrix", "field_type": { "Vec": { "Vec": "I32" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "gaps", "field_type": { "Vec": { "Option": "F64" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "tri_state", "field_type": { "Option": { "Option": "Bool" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "maybe_count", "field_type": { "Option": "U16" }, "validators": [], "always_regenerate": false },
+        { "field_name": "lists_by_name", "field_type": { "HashMap": ["String", { "Vec": "String" }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "optional_by_name", "field_type": { "HashMap": ["String", { "Option": "I64" }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "maps_by_name", "field_type": { "BTreeMap": ["String", { "HashMap": ["U32", "Bool"] }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "pair", "field_type": { "Tuple": ["String", "I64"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "pairs", "field_type": { "Vec": { "Tuple": ["U8", "U8"] } }, "validators": [], "always_regenerate": false },
+        { "field_name": "corner", "field_type": { "Struct": [["x", "F32"], ["y", "F32"]] }, "validators": [], "always_regenerate": false },
+        { "field_name": "nothing", "field_type": "Unit", "validators": [], "always_regenerate": false },
+        { "field_name": "huge", "field_type": "I128", "validators": [], "always_regenerate": false },
+        { "field_name": "huge_by_id", "field_type": { "BTreeMap": ["U128", "String"] }, "validators": [], "always_regenerate": false },
+        { "field_name": "event", "field_type": { "Other": "Event" }, "validators": [], "always_regenerate": false },
+        { "field_name": "events", "field_type": { "Vec": { "Other": "Event" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "last_event", "field_type": { "Option": { "Other": "Event" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "events_by_name", "field_type": { "HashMap": ["String", { "Other": "Event" }] }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Event": {
+      "enum_name": "Event",
+      "variants": [
+        { "name": "Opened", "data": null },
+        { "name": "Moved", "data": { "InlineStruct": {
+          "struct_name": "Moved",
+          "fields": [
+            { "field_name": "from", "field_type": { "Other": "Place" }, "validators": [], "always_regenerate": false },
+            { "field_name": "to", "field_type": { "Other": "Place" }, "validators": [], "always_regenerate": false }
+          ],
+          "validators": []
+        } } },
+        { "name": "Tagged", "data": { "DataStructureRef": { "Vec": "String" } } },
+        { "name": "Visited", "data": { "DataStructureRef": { "Other": "Place" } } },
+        { "name": "Scored", "data": { "DataStructureRef": "U32" } },
+        { "name": "Pinned", "data": { "DataStructureRef": { "Tuple": ["F64", "F64"] } } },
+        { "name": "Cleared", "data": { "DataStructureRef": { "Tuple": [] } } }
+      ]
+    }
+  }
+}

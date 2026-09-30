@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** Application configuration settings */
+/** @derive(Deserialize) */
+export interface Config {
+  /** The API key used for authentication */
+  /** @serde({ validate: ["nonEmpty"] }) */
+  apiKey: string;
+  /** Request timeout in milliseconds */
+  timeoutMs: number;
+}
+
+/** Severity levels for log output */
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type LogLevel =
+	| "Debug"
+	| "Info"
+	| "Warn"
+	| "Error";

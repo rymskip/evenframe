@@ -1,0 +1,169 @@
+{
+  "description": "Validators whose bounds need quoting or conversion, and validators on an optional field",
+  "structs": {
+    "Booking": {
+      "struct_name": "Booking",
+      "fields": [
+        {
+          "field_name": "code",
+          "field_type": "String",
+          "validators": [
+            {
+              "StringValidator": {
+                "StartsWith": "bk`${x}\""
+              }
+            },
+            {
+              "StringValidator": "Trimmed"
+            },
+            {
+              "StringValidator": "Uppercased"
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "nickname",
+          "field_type": {
+            "Option": "String"
+          },
+          "validators": [
+            {
+              "StringValidator": {
+                "MinLength": 2
+              }
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "guests",
+          "field_type": {
+            "Vec": "String"
+          },
+          "validators": [
+            {
+              "ArrayValidator": {
+                "MaxItems": 8
+              }
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "starts_on",
+          "field_type": {
+            "Other": "DateTime"
+          },
+          "validators": [
+            {
+              "DateValidator": "ValidDate"
+            },
+            {
+              "DateValidator": {
+                "BetweenDate": [
+                  "2024-01-01",
+                  "2030-12-31"
+                ]
+              }
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "deposit",
+          "field_type": {
+            "Other": "Decimal"
+          },
+          "validators": [
+            {
+              "BigDecimalValidator": {
+                "GreaterThanOrEqualToBigDecimal": "10.50"
+              }
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "sequence",
+          "field_type": {
+            "Other": "BigInt"
+          },
+          "validators": [
+            {
+              "BigIntValidator": {
+                "LessThanBigInt": "-5"
+              }
+            }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "stay",
+          "field_type": {
+            "Other": "Duration"
+          },
+          "validators": [
+            {
+              "DurationValidator": {
+                "BetweenDuration": [
+                  "1h30m",
+                  "2d"
+                ]
+              }
+            }
+          ],
+          "always_regenerate": false
+        }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {},
+  "foreign_types": {
+    "DateTime": {
+      "rust_type_names": [
+        "DateTime"
+      ],
+      "arktype": { "type": "'string'" },
+      "effect": { "type": "Schema.Date", "encoded": "string" },
+      "default_value_ts": "\"\"",
+      "macroforge": { "type": "string" },
+      "protobuf": "string",
+      "flatbuffers": "string"
+    },
+    "Decimal": {
+      "rust_type_names": [
+        "Decimal"
+      ],
+      "arktype": { "type": "'string'" },
+      "effect": { "type": "Schema.BigDecimal", "encoded": "string" },
+      "default_value_ts": "\"0\"",
+      "macroforge": { "type": "string" },
+      "protobuf": "string",
+      "flatbuffers": "string"
+    },
+    "BigInt": {
+      "rust_type_names": [
+        "BigInt"
+      ],
+      "arktype": { "type": "'string'" },
+      "effect": { "type": "Schema.BigInt", "encoded": "string" },
+      "default_value_ts": "\"0\"",
+      "macroforge": { "type": "string" },
+      "protobuf": "string",
+      "flatbuffers": "string"
+    },
+    "Duration": {
+      "rust_type_names": [
+        "Duration"
+      ],
+      "arktype": { "type": "'string'" },
+      "effect": { "type": "Schema.DurationFromNanos", "encoded": "bigint" },
+      "default_value_ts": "\"0s\"",
+      "macroforge": { "type": "bigint" },
+      "protobuf": "int64",
+      "flatbuffers": "long"
+    }
+  }
+}

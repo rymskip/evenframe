@@ -187,6 +187,7 @@ pub fn scan_inputs(config: &BuildConfig) -> Result<BTreeMap<String, String>> {
     let mut files: Vec<PathBuf> = Vec::new();
 
     let manifests = super::find_manifests(root);
+    let known_manifests = super::canonical_manifests(&manifests);
     for manifest in &manifests {
         files.push(manifest.clone());
         let manifest_dir = manifest
@@ -205,7 +206,10 @@ pub fn scan_inputs(config: &BuildConfig) -> Result<BTreeMap<String, String>> {
             .and_then(|m| m.as_array())
         {
             for member in members.iter().filter_map(|m| m.as_str()) {
-                collect_src_files(&manifest_dir.join(member).join("src"), &mut files)?;
+                let member_dir = manifest_dir.join(member);
+                if !super::member_has_own_manifest(&member_dir, &known_manifests) {
+                    collect_src_files(&member_dir.join("src"), &mut files)?;
+                }
             }
         }
         if value.get("package").is_some() {

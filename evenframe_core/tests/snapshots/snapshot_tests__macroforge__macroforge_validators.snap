@@ -1,0 +1,15 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Registration {
+  /** @serde({ validate: ["nonEmpty", "email", "maxLength(255)", "minLength(5)"] }) */
+  email: string;
+  /** @serde({ validate: ["nonEmpty", "alphanumeric", "minLength(3)", "maxLength(50)"] }) */
+  username: string;
+  /** @serde({ validate: ["greaterThanOrEqualTo(13)", "lessThanOrEqualTo(150)"] }) */
+  age: number;
+  /** @serde({ validate: ["url"] }) */
+  website: string | null;
+}

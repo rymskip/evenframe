@@ -639,7 +639,9 @@ mod tests {
             true,
         );
         assert!(
-            stmt.contains("ASSERT string::is_email($value) AND string::len($value) <= 50"),
+            stmt.contains(
+                "ASSERT string::matches($value, \"^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\\\.[A-Za-z]{2,}$\") AND string::len($value) <= 50"
+            ),
             "validator ASSERT missing; got: {stmt}"
         );
 
@@ -652,24 +654,26 @@ mod tests {
             true,
         );
         assert!(
-            stmt.contains("ASSERT ($value != NONE) AND (string::is_email($value))"),
+            stmt.contains(
+                "ASSERT ($value != NONE) AND (string::matches($value, \"^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\\\.[A-Za-z]{2,}$\"))"
+            ),
             "merged manual+validator ASSERT missing; got: {stmt}"
         );
 
         // A scripting-only validator is emitted as embedded JS when allowed and
         // omitted entirely when scripting is disabled.
-        let cc = || {
+        let json = || {
             make(
-                vec![Validator::StringValidator(StringValidator::CreditCard)],
+                vec![Validator::StringValidator(StringValidator::Json)],
                 None,
             )
         };
         assert!(
-            gen_stmt(cc(), true).contains("ASSERT function($value)"),
+            gen_stmt(json(), true).contains("ASSERT function($value)"),
             "JS ASSERT missing when scripting enabled"
         );
         assert!(
-            !gen_stmt(cc(), false).contains("ASSERT"),
+            !gen_stmt(json(), false).contains("ASSERT"),
             "JS ASSERT must be omitted when scripting disabled"
         );
     }

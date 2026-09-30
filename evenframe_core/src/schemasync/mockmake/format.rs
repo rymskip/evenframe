@@ -4,9 +4,9 @@ use regex::Regex;
 use tracing;
 use try_from_expr::TryFromExpr;
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use super::regex_val_gen::RegexValGen;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use rand::RngExt;
 
 /// Generate a regex pattern for dates within a specified number of days from now
@@ -197,7 +197,7 @@ pub enum Format {
 }
 
 /// A day in 2020 through 2029, the years the date patterns allow.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 fn random_date(rng: &mut impl RngExt) -> chrono::NaiveDate {
     const FIRST: chrono::NaiveDate =
         chrono::NaiveDate::from_ymd_opt(2020, 1, 1).expect("2020-01-01 is a date");
@@ -205,15 +205,16 @@ fn random_date(rng: &mut impl RngExt) -> chrono::NaiveDate {
     FIRST + Duration::days(rng.random_range(0..days_in_decade))
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 impl Format {
     /// A value matching this format's pattern.
     pub fn generate_formatted_value(&self) -> crate::error::Result<String> {
         tracing::debug!(format = ?self, "Generating formatted value");
-        // The date patterns allow day 31 in every month, so dates come from
-        // the calendar instead.
+        // UUIDs carry a real version and variant, and dates come from the
+        // calendar because the date patterns allow day 31 in every month.
         let mut rng = rand::rng();
         match self {
+            Format::Uuid => return Ok(uuid::Uuid::new_v4().to_string()),
             Format::Date => return Ok(random_date(&mut rng).to_string()),
             Format::DateTime => {
                 return Ok(format!(
@@ -556,7 +557,7 @@ mod pattern_tests {
     }
 }
 
-#[cfg(all(test, feature = "schemasync"))]
+#[cfg(all(test, feature = "mockmake"))]
 mod tests {
     use super::*;
 

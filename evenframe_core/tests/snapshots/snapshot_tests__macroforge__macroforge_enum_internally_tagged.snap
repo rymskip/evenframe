@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface CircleData {
+  radius: number;
+}
+
+/** @derive(Deserialize) */
+export interface RectangleData {
+  width: number;
+  height: number;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ tag: "type" }) */
+export type Shape =
+	| { type: 'Circle' } & CircleData
+	| { type: 'Rectangle' } & RectangleData
+	| { type: 'Point' };

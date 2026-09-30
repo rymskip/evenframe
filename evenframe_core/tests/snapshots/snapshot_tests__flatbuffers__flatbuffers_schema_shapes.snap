@@ -1,0 +1,138 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Event {
+    EventOpened,
+    EventMoved,
+    EventTagged,
+    EventVisited,
+    EventScored,
+    EventPinned,
+    EventCleared
+}
+
+table Moved {
+    from: Place;
+    to: Place;
+}
+
+table Place {
+    name: string;
+}
+
+table Shapes {
+    maybe_tags: [string];
+    matrix: [ShapesMatrixItem];
+    gaps: [ShapesGapsItem];
+    tri_state: ShapesTriState;
+    maybe_count: uint16 = null;
+    lists_by_name: [ShapesListsByNameEntry];
+    optional_by_name: [ShapesOptionalByNameEntry];
+    maps_by_name: [ShapesMapsByNameEntry];
+    pair: ShapesPair;
+    pairs: [ShapesPairsItem];
+    corner: ShapesCorner;
+    nothing: ShapesNothing;
+    huge: string;
+    huge_by_id: [ShapesHugeByIdEntry];
+    event: Event;
+    events: [Event];
+    last_event: Event;
+    events_by_name: [ShapesEventsByNameEntry];
+}
+
+table EventOpened {
+}
+
+table EventMoved {
+    value: Moved;
+}
+
+table EventTagged {
+    value: [string];
+}
+
+table EventVisited {
+    value: Place;
+}
+
+table EventScored {
+    value: uint32;
+}
+
+table EventPinnedValue {
+    item_0: double;
+    item_1: double;
+}
+
+table EventPinned {
+    value: EventPinnedValue;
+}
+
+table EventClearedValue {
+}
+
+table EventCleared {
+    value: EventClearedValue;
+}
+
+table ShapesMatrixItem {
+    value: [int32];
+}
+
+table ShapesGapsItem {
+    value: double = null;
+}
+
+table ShapesTriState {
+    value: bool = null;
+}
+
+table ShapesListsByNameEntry {
+    key: string (key);
+    value: [string];
+}
+
+table ShapesOptionalByNameEntry {
+    key: string (key);
+    value: int64 = null;
+}
+
+table ShapesMapsByNameValueEntry {
+    key: uint32 (key);
+    value: bool;
+}
+
+table ShapesMapsByNameEntry {
+    key: string (key);
+    value: [ShapesMapsByNameValueEntry];
+}
+
+table ShapesPair {
+    item_0: string;
+    item_1: int64;
+}
+
+table ShapesPairsItem {
+    item_0: uint8;
+    item_1: uint8;
+}
+
+table ShapesCorner {
+    x: float;
+    y: float;
+}
+
+table ShapesNothing {
+}
+
+table ShapesHugeByIdEntry {
+    key: string (key);
+    value: string;
+}
+
+table ShapesEventsByNameEntry {
+    key: string (key);
+    value: Event;
+}

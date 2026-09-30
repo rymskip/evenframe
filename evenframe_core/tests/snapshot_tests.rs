@@ -1,5 +1,7 @@
 use evenframe_core::config::ForeignTypeConfig;
 use evenframe_core::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
+use evenframe_core::typesync::config::StructVariants;
+use evenframe_core::typesync::struct_variants::declare_payloads;
 use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
@@ -8,6 +10,8 @@ struct TypesyncFixture {
     enums: BTreeMap<String, TaggedUnion>,
     #[serde(default)]
     foreign_types: BTreeMap<String, ForeignTypeConfig>,
+    #[serde(default)]
+    struct_variants: StructVariants,
 }
 
 fn load_typesync_fixture(
@@ -18,7 +22,10 @@ fn load_typesync_fixture(
     ForeignTypeRegistry,
 ) {
     let input = std::fs::read_to_string(path).unwrap();
-    let fixture: TypesyncFixture = serde_json::from_str(&input).unwrap();
+    let mut fixture: TypesyncFixture = serde_json::from_str(&input).unwrap();
+    if fixture.struct_variants == StructVariants::Named {
+        declare_payloads(&mut fixture.structs, &mut fixture.enums).unwrap();
+    }
     let registry = ForeignTypeRegistry::from_config(&fixture.foreign_types);
     (fixture.structs, fixture.enums, registry)
 }
@@ -32,8 +39,9 @@ mod arktype {
     ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::arktype::generate_arktype_type_string(
-            &structs, &enums, true, &registry,
-        );
+            &structs, &enums, &registry,
+        )
+        .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()
@@ -55,7 +63,8 @@ mod effect {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::effect::generate_effect_schema_string(
             &structs, &enums, true, &registry,
-        );
+        )
+        .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()
@@ -65,6 +74,32 @@ mod effect {
     }
 
     tests_macros::gen_tests! { "tests/specs/typesync/*.json", crate::effect::run, "typesync" }
+}
+
+#[cfg(feature = "macroforge")]
+mod macroforge {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
+        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let output = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
+            &structs,
+            &enums,
+            Default::default(),
+            &registry,
+        );
+        let name = std::path::Path::new(spec_input_file)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        insta::assert_snapshot!(format!("macroforge_{name}"), output);
+    }
+
+    tests_macros::gen_tests! { "tests/specs/typesync/*.json", crate::macroforge::run, "typesync" }
 }
 
 #[cfg(feature = "protobuf")]
@@ -78,7 +113,8 @@ mod protobuf {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::protobuf::generate_protobuf_schema_string(
             &structs, &enums, None, false, &registry,
-        );
+        )
+        .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()
@@ -88,6 +124,32 @@ mod protobuf {
     }
 
     tests_macros::gen_tests! { "tests/specs/typesync/*.json", crate::protobuf::run, "typesync" }
+}
+
+/// The protobuf output with protoc-gen-validate rules, which only
+/// `import_validate` writes.
+#[cfg(feature = "protobuf")]
+mod protobuf_validated {
+    pub fn run(
+        spec_input_file: &str,
+        _expected_file: &str,
+        _test_directory: &str,
+        _file_type: &str,
+    ) {
+        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let output = evenframe_core::typesync::protobuf::generate_protobuf_schema_string(
+            &structs, &enums, None, true, &registry,
+        )
+        .unwrap();
+        let name = std::path::Path::new(spec_input_file)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        insta::assert_snapshot!(format!("protobuf_validated_{name}"), output);
+    }
+
+    tests_macros::gen_tests! { "tests/specs/typesync/*.json", crate::protobuf_validated::run, "typesync" }
 }
 
 #[cfg(feature = "flatbuffers")]
@@ -101,7 +163,8 @@ mod flatbuffers {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::flatbuffers::generate_flatbuffers_schema_string(
             &structs, &enums, None, &registry,
-        );
+        )
+        .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()

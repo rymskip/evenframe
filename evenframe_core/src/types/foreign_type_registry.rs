@@ -13,7 +13,7 @@ pub struct ForeignTypeRegistry {
 
 impl ForeignTypeRegistry {
     /// Build a registry from the user's config.
-    /// No built-in defaults — if foreign_types is empty, the registry is empty.
+    /// No built-in defaults: if foreign_types is empty, the registry is empty.
     pub fn from_config(foreign_types: &BTreeMap<String, ForeignTypeConfig>) -> Self {
         let mut registry = Self::default();
 
@@ -42,6 +42,11 @@ impl ForeignTypeRegistry {
         self.name_to_canonical
             .get(rust_type_name)
             .and_then(|canonical| self.configs.get(canonical))
+    }
+
+    /// Every configured foreign type, by canonical name.
+    pub fn configs(&self) -> &BTreeMap<String, ForeignTypeConfig> {
+        &self.configs
     }
 
     /// Check if a type name is a configured foreign type.
@@ -74,7 +79,10 @@ mod tests {
             ForeignTypeConfig {
                 rust_type_names: vec!["DateTime".to_string(), "chrono::DateTime".to_string()],
                 surrealdb: "datetime".to_string(),
-                arktype: "'string'".to_string(),
+                arktype: Some(crate::config::TsMapping {
+                    type_expr: "'string'".to_string(),
+                    import: None,
+                }),
                 ..Default::default()
             },
         );
@@ -82,7 +90,13 @@ mod tests {
         let registry = ForeignTypeRegistry::from_config(&foreign_types);
         let config = registry.lookup("DateTime").unwrap();
         assert_eq!(config.surrealdb, "datetime");
-        assert_eq!(config.arktype, "'string'");
+        assert_eq!(
+            config
+                .arktype
+                .as_ref()
+                .map(|mapping| mapping.type_expr.as_str()),
+            Some("'string'")
+        );
     }
 
     #[test]

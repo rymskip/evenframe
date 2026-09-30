@@ -12,36 +12,38 @@ EvenframeConfig {
         output_rule_plugins: {},
         synthetic_item_plugins: {},
     },
-    schemasync: SchemasyncConfig {
-        database: DatabaseConfig {
-            provider: Surrealdb,
-            url: "${SURREALDB_URL}",
-            namespace: "${SURREALDB_NS}",
-            database: "${SURREALDB_DB}",
-            timeout: 60,
-            accesses: Inline(
-                [],
-            ),
-            functions: None,
-            analyzers: None,
-            resolved: ResolvedDatabaseItems {
-                access_surql: None,
-                functions_surql: None,
-                analyzers_surql: None,
+    schemasync: Some(
+        SchemasyncConfig {
+            database: DatabaseConfig {
+                provider: Surrealdb,
+                url: "${SURREALDB_URL}",
+                namespace: "${SURREALDB_NS}",
+                database: "${SURREALDB_DB}",
+                timeout: 60,
+                accesses: Inline(
+                    [],
+                ),
+                functions: None,
+                analyzers: None,
+                resolved: ResolvedDatabaseItems {
+                    access_surql: None,
+                    functions_surql: None,
+                    analyzers_surql: None,
+                },
+            },
+            should_generate_mocks: true,
+            mock_gen_config: SchemasyncMockGenConfig {
+                default_record_count: 10,
+                default_preservation_mode: Smart,
+                full_refresh_mode: false,
+                scripting_asserts: true,
+            },
+            plugins: {},
+            lint: LintConfig {
+                silence_unverifiable_annotations: false,
             },
         },
-        should_generate_mocks: true,
-        mock_gen_config: SchemasyncMockGenConfig {
-            default_record_count: 10,
-            default_preservation_mode: Smart,
-            full_refresh_mode: false,
-            scripting_asserts: true,
-        },
-        plugins: {},
-        lint: LintConfig {
-            silence_unverifiable_annotations: false,
-        },
-    },
+    ),
     typesync: TypesyncConfig {
         outputs: [
             TypesyncOutput {
@@ -59,9 +61,11 @@ EvenframeConfig {
                 namespace: None,
                 package: None,
                 import_validate: false,
+                macros: {},
             },
         ],
         collision_strategy: Error,
+        struct_variants: Named,
     },
     config_file_path: "",
 }

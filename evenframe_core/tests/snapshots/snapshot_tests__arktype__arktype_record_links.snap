@@ -4,16 +4,25 @@ expression: output
 ---
 export const bindings = scope({
 
+Author: {
+  id: 'string',
+  name: 'string'
+},
 Post: {
   id: 'string',
   title: 'string',
-  author: ['author', "|",  "string"],
-  relatedPosts: [['post', "|",  "string"], '[]']
+  author: ['Author', "|",  "string"],
+  relatedPosts: [['Post', "|",  "string"], '[]']
 },
 
 });
 
+const exported = bindings.export();
 
+export const defaultAuthor: Author = {
+id: "",
+name: ""
+};
 export const defaultPost: Post = {
 id: "",
 title: "",
@@ -21,4 +30,5 @@ author: '',
 relatedPosts: []
 };
 
-export type Post = typeof bindings.Post.infer;
+export type Author = typeof exported.Author.infer;
+export type Post = typeof exported.Post.infer;

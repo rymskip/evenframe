@@ -80,7 +80,10 @@ impl ConfigSummary {
         let config = EvenframeConfig::new_offline()?;
         Ok(Self {
             outputs: config.typesync.outputs,
-            mock_generation: config.schemasync.should_generate_mocks,
+            mock_generation: config
+                .schemasync
+                .as_ref()
+                .is_some_and(|schemasync| schemasync.should_generate_mocks),
             apply_aliases: config.general.apply_aliases,
         })
     }

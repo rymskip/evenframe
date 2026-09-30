@@ -2,4 +2,20 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class Registration extends Schema.Class<Registration>("Registration")( { 
+  email: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })).pipe(Schema.pattern(new RegExp("^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\.[A-Za-z]{2,}$"), { message: () => `'Email' must be an email address` })).pipe(Schema.maxLength(255, { message: () => `'Email' must be at most 255 characters long` })).pipe(Schema.minLength(5, { message: () => `'Email' must be at least 5 characters long` }))).annotations({ missingMessage: () => `'Email' is required` }),
+  username: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })).pipe(Schema.pattern(new RegExp("^[0-9A-Za-z]*$"), { message: () => `'Username' must be only letters and digits 0-9` })).pipe(Schema.minLength(3, { message: () => `'Username' must be at least 3 characters long` })).pipe(Schema.maxLength(50, { message: () => `'Username' must be at most 50 characters long` }))).annotations({ missingMessage: () => `'Username' is required` }),
+  age: Schema.propertySignature(Schema.Number.pipe(Schema.greaterThanOrEqualTo(13, { message: () => `'Age' must be greater than or equal to 13` })).pipe(Schema.lessThanOrEqualTo(150, { message: () => `'Age' must be less than or equal to 150` }))).annotations({ missingMessage: () => `'Age' is required` }),
+  website: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })).pipe(Schema.filter((v) => URL.canParse(v), { message: () => `'Website' must be a URL string` })), null)
+}) {[key: string]: unknown}
 
+
+export interface RegistrationEncoded {
+  readonly email: string;
+  readonly username: string;
+  readonly age: number;
+  readonly website: string | null | undefined;
+}
+
+
+export type RegistrationType = typeof Registration.Type;

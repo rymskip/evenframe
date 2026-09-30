@@ -4,10 +4,20 @@ expression: output
 ---
 export const bindings = scope({
 
-Event: [[{ t: ['===', 'Click'], c: 'clickData' }, '|', { t: ['===', 'KeyPress'], c: 'string' }], '|', { t: ['===', 'Scroll'] }],
+Event: [[{ t: ['===', 'Click'], c: 'ClickData' }, '|', { t: ['===', 'KeyPress'], c: 'string' }], '|', { t: ['===', 'Scroll'] }],
+ClickData: {
+  x: 'number',
+  y: 'number'
+},
 
 });
 
+const exported = bindings.export();
 
+export const defaultClickData: ClickData = {
+x: 0,
+y: 0
+};
 
-export type Event = typeof bindings.Event.infer;
+export type Event = typeof exported.Event.infer;
+export type ClickData = typeof exported.ClickData.infer;

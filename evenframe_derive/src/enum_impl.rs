@@ -74,56 +74,9 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     quote! { None }
                 }
                 Fields::Unnamed(fields) => {
-                    if fields.unnamed.len() == 1 {
-                        let field_type = &fields.unnamed.first().unwrap().ty;
-                        let field_type_parsed = FieldType::parse_syn_ty(field_type);
-                        quote! {
-                            Some(VariantData::DataStructureRef(#field_type_parsed))
-                        }
-                    } else {
-                        // Multiple unnamed fields - create an inline struct
-                        let struct_fields: Vec<_> = fields
-                            .unnamed
-                            .iter()
-                            .enumerate()
-                            .map(|(i, field)| {
-                                let field_name = format!("field_{}", i);
-                                let field_type = FieldType::parse_syn_ty(&field.ty);
-                                quote! {
-                                    StructField {
-                                        field_name: #field_name.to_string(),
-                                        field_type: #field_type,
-                                        edge_config: None,
-                                        define_config: None,
-                                        format: None,
-                                        validators: vec![],
-                                        always_regenerate: false,
-                                        doccom: None,
-                                        annotations: vec![],
-                                        unique: false,
-                                        output_override: None,
-                                        raw_attributes: std::collections::BTreeMap::new(),
-                                    }
-                                }
-                            })
-                            .collect();
-
-                        let pipeline_tokens_inner = pipeline.to_tokens();
-                        quote! {
-                            Some(VariantData::InlineStruct(StructConfig {
-                                struct_name: format!("{}_{}", #enum_name, #variant_name),
-                                fields: vec![#(#struct_fields),*],
-                                validators: vec![],
-                                doccom: None,
-                                macroforge_derives: vec![],
-                                annotations: vec![],
-                                pipeline: #pipeline_tokens_inner,
-                                rust_derives: vec![],
-                                output_override: None,
-                                raw_attributes: std::collections::BTreeMap::new(),
-                                resolve_only: false,
-                            }))
-                        }
+                    let field_type = FieldType::parse_tuple_variant(fields);
+                    quote! {
+                        Some(VariantData::DataStructureRef(#field_type))
                     }
                 }
                 Fields::Named(fields) => {
@@ -198,6 +151,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
         );
         let registry_submission = quote! {
             #[::evenframe::linkme::distributed_slice(::evenframe::registry::ENUM_REGISTRY_ENTRIES)]
+            #[linkme(crate = ::evenframe::linkme)]
             static #registry_var_name: ::evenframe::registry::EnumRegistryEntry = ::evenframe::registry::EnumRegistryEntry {
                 type_name: #enum_name,
                 tagged_union_fn: || #ident::variants(),

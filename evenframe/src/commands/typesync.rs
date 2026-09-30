@@ -8,8 +8,9 @@ use evenframe_core::{
     schemasync::table::TableConfig,
     types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
     typesync::{
+        checks::check_types,
         config::{OutputKind, OutputMode, TypesyncOutput},
-        output::{OutputTypes, write_output},
+        output::{OutputTypes, render_output},
     },
 };
 use std::collections::BTreeMap;
@@ -35,9 +36,10 @@ pub(crate) fn generate(
     objects: BTreeMap<String, StructConfig>,
 ) -> Result<()> {
     info!("Starting type generation");
+    let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
+    check_types(&enums, &tables, &objects, &registry)?;
     let (enums, tables, objects) = config_builders::filter_for_typesync(enums, tables, objects);
     let structs = config_builders::merge_tables_and_objects(&tables, &objects);
-    let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
     let types = OutputTypes {
         structs: &structs,
         enums: &enums,
@@ -68,13 +70,22 @@ pub(crate) fn generate(
         (None, _) => None,
     };
 
-    for output in &outputs {
-        // `--output` is taken as given (relative to where the command runs);
-        // a configured `dir` is relative to the project root.
-        let dir = dir_override
-            .clone()
-            .unwrap_or_else(|| output.resolve_dir(config.project_root()));
-        let written = write_output(output, &dir, file.as_deref(), &types)?;
+    // Every output renders before any is written, so one that fails leaves
+    // every output's files as they were.
+    let rendered = outputs
+        .iter()
+        .map(|output| {
+            // `--output` is taken as given (relative to where the command
+            // runs); a configured `dir` is relative to the project root.
+            let dir = dir_override
+                .clone()
+                .unwrap_or_else(|| output.resolve_dir(config.project_root()));
+            let rendered = render_output(output, &dir, file.as_deref(), &types)?;
+            Ok((output, dir, rendered))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (output, dir, rendered) in rendered {
+        let written = rendered.write()?;
         match output.files.mode {
             OutputMode::Single => {
                 for generated in &written {

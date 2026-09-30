@@ -1,10 +1,11 @@
 use crate::validator::Validator;
+use crate::validator::string_rules::{StringParse, StringRule};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
+use syn::punctuated::Punctuated;
 use syn::{Attribute, Error, Result};
-use tracing;
 
-/// Check if a syn::Type represents an Option<T> type
+/// Whether `ty` is an `Option<T>`.
 fn is_option_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
@@ -14,26 +15,24 @@ fn is_option_type(ty: &syn::Type) -> bool {
     false
 }
 
-/// Helper function to suggest validator corrections based on common mistakes
-fn suggest_validator_correction(expr_str: &str) -> String {
-    let lower = expr_str.to_lowercase();
-
-    // Common typos and their corrections
-    let suggestions = vec![
+/// A hint for a validator expression that failed to parse.
+fn suggest_validator_correction(expression: &str) -> String {
+    let lower = expression.to_lowercase();
+    let suggestions = [
         ("email", "StringValidator::Email"),
         ("minlength", "StringValidator::MinLength(n)"),
         ("maxlength", "StringValidator::MaxLength(n)"),
         ("min_length", "StringValidator::MinLength(n)"),
         ("max_length", "StringValidator::MaxLength(n)"),
-        ("pattern", "StringValidator::Pattern(\"regex\")"),
-        ("regex", "StringValidator::Pattern(\"regex\")"),
+        ("pattern", "StringValidator::RegexLiteral(Format::...)"),
+        ("regex", "StringValidator::RegexLiteral(Format::...)"),
         (
             "min",
-            "NumberValidator::Min(n) or StringValidator::MinLength(n)",
+            "NumberValidator::GreaterThanOrEqualTo(n) or StringValidator::MinLength(n)",
         ),
         (
             "max",
-            "NumberValidator::Max(n) or StringValidator::MaxLength(n)",
+            "NumberValidator::LessThanOrEqualTo(n) or StringValidator::MaxLength(n)",
         ),
         ("between", "NumberValidator::Between(min, max)"),
         ("range", "NumberValidator::Between(min, max)"),
@@ -41,244 +40,240 @@ fn suggest_validator_correction(expr_str: &str) -> String {
         ("maxitems", "ArrayValidator::MaxItems(n)"),
         ("min_items", "ArrayValidator::MinItems(n)"),
         ("max_items", "ArrayValidator::MaxItems(n)"),
-        ("unique", "ArrayValidator::Unique"),
         (
             "required",
             "This is typically handled by Option<T> types, not validators",
         ),
     ];
-
-    for (pattern, suggestion) in suggestions {
-        if lower.contains(pattern) {
-            return format!("\n\nDid you mean: {}?", suggestion);
-        }
-    }
-
-    String::new()
+    suggestions
+        .iter()
+        .find(|(pattern, _)| lower.contains(pattern))
+        .map(|(_, suggestion)| format!("\n\nDid you mean: {suggestion}?"))
+        .unwrap_or_default()
 }
 
-pub fn parse_field_validators_with_logic(
-    attrs: &[Attribute],
-    value_ident: &str,
-    field_type: Option<&syn::Type>,
-) -> Result<(Vec<TokenStream>, Vec<TokenStream>)> {
-    tracing::debug!(attr_count = attrs.len(), value_ident = %value_ident, "Parsing field validators with logic");
-    let is_optional = field_type.map(is_option_type).unwrap_or(false);
+/// A field's `#[validators(...)]`, parsed once.
+#[derive(Debug, Clone, Default)]
+pub struct FieldValidators {
+    pub validators: Vec<Validator>,
+    /// The parse morph the field is read through, when its first validator
+    /// is one.
+    pub parse: Option<StringParse>,
+}
 
-    // Check for common attribute mistakes
-    for attr in attrs {
-        if attr.path().is_ident("validator") {
-            return Err(Error::new_spanned(
-                attr,
-                "Invalid attribute name 'validator'. Did you mean 'validators' (plural)?\n\n\
-                Example: #[validators(StringValidator::Email)]",
-            ));
-        }
-        if attr.path().is_ident("validate") {
-            return Err(Error::new_spanned(
-                attr,
-                "Invalid attribute name 'validate'. Did you mean 'validators'?\n\n\
-                Example: #[validators(StringValidator::MinLength(5))]",
-            ));
-        }
-        if attr.path().is_ident("validation") {
-            return Err(Error::new_spanned(
-                attr,
-                "Invalid attribute name 'validation'. Did you mean 'validators'?\n\n\
-                Example: #[validators(NumberValidator::Min(0.0))]",
-            ));
-        }
+impl FieldValidators {
+    pub fn is_empty(&self) -> bool {
+        self.validators.is_empty()
     }
 
-    for attr in attrs {
-        if attr.path().is_ident("validators") {
-            // Parse the validator expression
-            let parse_result = attr.parse_args_with(|input: syn::parse::ParseStream| {
-                // Try to parse as a comma-separated list of expressions
-                syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_separated_nonempty(
-                    input,
-                )
-            });
+    /// The validators as tokens for the field's static config.
+    pub fn config_tokens(&self) -> Vec<TokenStream> {
+        self.validators
+            .iter()
+            .map(|validator| quote! { #validator })
+            .collect()
+    }
 
-            match parse_result {
-                Ok(validators_list) => {
-                    let mut validator_tokens = Vec::new();
-                    let mut logic_tokens = Vec::new();
-                    for validator_expr in validators_list {
-                        let (val_tokens, log_tokens) = parse_validator_enum_with_logic(
-                            &validator_expr,
-                            value_ident,
-                            is_optional,
-                        )?;
-                        validator_tokens.extend(val_tokens);
-                        logic_tokens.extend(log_tokens);
+    /// Statements that read the field from `map` into `temp` and validate
+    /// it. A parse morph reads a string and parses it into the field's type;
+    /// on an `Option` field every validator applies to the present value.
+    pub fn read_tokens(
+        &self,
+        temp: &syn::Ident,
+        field_type: &syn::Type,
+        field_name: &str,
+    ) -> Result<TokenStream> {
+        let optional = is_option_type(field_type);
+        let rejection = quote! {
+            |rejection| ::serde::de::Error::custom(::std::format!("{}: {}", #field_name, rejection))
+        };
+        let read = match self.parse {
+            None => quote! { map.next_value()? },
+            Some(parse) => {
+                let function = format_ident!("{}", parse.runtime_function());
+                if optional {
+                    quote! {
+                        map.next_value::<::std::option::Option<::std::string::String>>()?
+                            .as_deref()
+                            .map(::evenframe::validator::runtime::#function)
+                            .transpose()
+                            .map_err(#rejection)?
                     }
-                    return Ok((validator_tokens, logic_tokens));
-                }
-                Err(_err) => {
-                    // Try parsing as a single expression for backwards compatibility
-                    match attr.parse_args::<syn::Expr>() {
-                        Ok(expr) => {
-                            return parse_validator_enum_with_logic(
-                                &expr,
-                                value_ident,
-                                is_optional,
-                            );
-                        }
-                        Err(parse_err) => {
-                            return Err(Error::new_spanned(
-                                attr,
-                                format!(
-                                    "Failed to parse validators attribute. Expected either a single validator \
-                                    expression or a comma-separated list of validators. \n\n\
-                                    Examples:\n\
-                                    - #[validators(StringValidator::Email)]\n\
-                                    - #[validators(StringValidator::MinLength(5), StringValidator::MaxLength(50))]\n\n\
-                                    Parse error: {}",
-                                    parse_err
-                                ),
-                            ));
-                        }
+                } else {
+                    quote! {
+                        ::evenframe::validator::runtime::#function(
+                            &map.next_value::<::std::string::String>()?,
+                        )
+                        .map_err(#rejection)?
                     }
                 }
             }
-        }
+        };
+
+        let checked = if self.parse.is_some() {
+            &self.validators[1..]
+        } else {
+            &self.validators[..]
+        };
+        let transforms = checked.iter().any(|validator| {
+            matches!(
+                validator,
+                Validator::StringValidator(string_validator)
+                    if matches!(string_validator.rule(), StringRule::Transform(_))
+            )
+        });
+        let inner = format_ident!("{}_inner", temp);
+        let place = if optional {
+            quote! { (*#inner) }
+        } else {
+            quote! { #temp }
+        };
+        let checks = checked
+            .iter()
+            .map(|validator| {
+                validator
+                    .validation_tokens(&place, field_name)
+                    .map_err(|message| Error::new_spanned(field_type, message))
+            })
+            .collect::<Result<Vec<TokenStream>>>()?;
+
+        let binding = if transforms {
+            quote! { let mut #temp: #field_type = #read; }
+        } else {
+            quote! { let #temp: #field_type = #read; }
+        };
+        let validation = match (optional, checks.is_empty(), transforms) {
+            (_, true, _) => TokenStream::new(),
+            (false, false, _) => quote! { #(#checks)* },
+            (true, false, true) => quote! {
+                if let ::std::option::Option::Some(#inner) = &mut #temp { #(#checks)* }
+            },
+            (true, false, false) => quote! {
+                if let ::std::option::Option::Some(#inner) = &#temp { #(#checks)* }
+            },
+        };
+        Ok(quote! { #binding #validation })
     }
-    Ok((vec![], vec![]))
 }
 
-pub fn parse_field_validators(attrs: &[Attribute]) -> Result<Vec<TokenStream>> {
-    tracing::debug!(attr_count = attrs.len(), "Parsing field validators");
-    let (validator_tokens, _) = parse_field_validators_with_logic(attrs, "value", None)?;
-    Ok(validator_tokens)
-}
-
-// Parse a validator enum expression and return both validator tokens and validation logic
-pub fn parse_validator_enum_with_logic(
-    expr: &syn::Expr,
-    value_ident: &str,
-    is_optional: bool,
-) -> Result<(Vec<TokenStream>, Vec<TokenStream>)> {
-    tracing::trace!(value_ident = %value_ident, is_optional = %is_optional, "Parsing validator enum with logic");
-    let mut validator_tokens = Vec::new();
-    let mut logic_tokens = Vec::new();
-
-    // Handle array of validators
-    if let syn::Expr::Array(array_expr) = expr {
-        if array_expr.elems.is_empty() {
+/// Parses every `#[validators(...)]` on `attrs`, rejecting misspelled
+/// attributes, unknown validators, unparsable bounds and a parse morph that
+/// is not first.
+pub fn parse_field_validators(attrs: &[Attribute]) -> Result<FieldValidators> {
+    for attr in attrs {
+        let misspelling = ["validator", "validate", "validation"]
+            .into_iter()
+            .find(|name| attr.path().is_ident(name));
+        if let Some(name) = misspelling {
             return Err(Error::new_spanned(
-                expr,
-                "Empty validator array. Please provide at least one validator.\n\n\
-                Example: #[validators([StringValidator::Email, StringValidator::MinLength(5)])]",
-            ));
-        }
-
-        for (idx, elem) in array_expr.elems.iter().enumerate() {
-            match parse_validator_enum_with_logic(elem, value_ident, is_optional) {
-                Ok((val_tokens, log_tokens)) => {
-                    validator_tokens.extend(val_tokens);
-                    logic_tokens.extend(log_tokens);
-                }
-                Err(err) => {
-                    return Err(Error::new_spanned(
-                        elem,
-                        format!("Error in validator at index {}: {}", idx, err),
-                    ));
-                }
-            }
-        }
-        return Ok((validator_tokens, logic_tokens));
-    }
-
-    // Handle parenthesized expressions
-    if let syn::Expr::Paren(paren) = expr {
-        return parse_validator_enum_with_logic(&paren.expr, value_ident, is_optional);
-    }
-
-    // Try to parse the expression into a Validator enum using the SynEnum derive
-    match Validator::try_from(expr) {
-        Ok(validator) => {
-            // Get the validation logic tokens
-            let validation_logic = if is_optional {
-                // For Option<T> types, we take a reference to the option, then match on it.
-                // Inside the match, we get a reference to the inner value (&T).
-                // We then clone/copy the inner value to get an owned T for validation.
-                // This works for both:
-                // - String: Clone gives owned String, methods work on it
-                // - Numeric types: Copy gives owned value, casting works
-                let inner_ident = format!("{}_inner", value_ident);
-                let inner_ref_ident = format!("{}_inner_ref", value_ident);
-                let value_token = syn::Ident::new(value_ident, proc_macro2::Span::call_site());
-                let inner_token = syn::Ident::new(&inner_ident, proc_macro2::Span::call_site());
-                let inner_ref_token =
-                    syn::Ident::new(&inner_ref_ident, proc_macro2::Span::call_site());
-                let inner_validation = validator.get_validation_logic_tokens(&inner_ident);
-                quote! {
-                    if let Some(ref #inner_ref_token) = #value_token {
-                        // Clone/copy the inner value for validation
-                        // This works for both Copy types (integers) and Clone types (String)
-                        let #inner_token = #inner_ref_token.clone();
-                        #inner_validation
-                    }
-                }
-            } else {
-                validator.get_validation_logic_tokens(value_ident)
-            };
-            logic_tokens.push(validation_logic);
-
-            validator_tokens.push(quote! {#validator});
-        }
-        Err(err) => {
-            // Provide more specific error messages based on the expression type
-            let expr_str = quote!(#expr).to_string();
-            let suggestion = suggest_validator_correction(&expr_str);
-
-            return Err(Error::new_spanned(
-                expr,
+                attr,
                 format!(
-                    "Failed to parse validator expression: {}{}\n\n\
-                    Common validator examples:\n\
-                    - StringValidator::Email\n\
-                    - StringValidator::MinLength(5)\n\
-                    - StringValidator::MaxLength(100)\n\
-                    - StringValidator::Pattern(\"^[A-Z]\")\n\
-                    - NumberValidator::Min(0.0)\n\
-                    - NumberValidator::Max(100.0)\n\
-                    - NumberValidator::Between(0.0, 100.0)\n\
-                    - ArrayValidator::MinItems(1)\n\
-                    - ArrayValidator::MaxItems(10)\n\n\
-                    Make sure the validator enum is imported and spelled correctly.",
-                    err, suggestion
+                    "Invalid attribute name '{name}'. Did you mean 'validators'?\n\n\
+                    Example: #[validators(StringValidator::Email)]"
                 ),
             ));
         }
     }
 
-    Ok((validator_tokens, logic_tokens))
-}
-
-/// Parse field validators and return them as Validator enums.
-/// This is useful for runtime introspection and schema generation.
-pub fn parse_field_validators_as_enums(attrs: &[Attribute]) -> Vec<Validator> {
-    use syn::punctuated::Punctuated;
-
-    let mut validators = Vec::new();
-
-    for attr in attrs {
-        if attr.path().is_ident("validators")
-            && let Ok(nested) =
-                attr.parse_args_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
-        {
-            for expr in nested {
-                if let Ok(validator) = Validator::try_from(&expr) {
-                    tracing::trace!("Parsed validator enum: {:?}", validator);
-                    validators.push(validator);
-                } else {
-                    tracing::warn!("Failed to parse validator expression in runtime context");
-                }
-            }
+    let mut spanned = Vec::new();
+    for attr in attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("validators"))
+    {
+        let expressions = attr
+            .parse_args_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_separated_nonempty)
+            .map_err(|parse_error| {
+                Error::new_spanned(
+                    attr,
+                    format!(
+                        "Failed to parse validators attribute: expected a comma-separated list of validators.\n\n\
+                        Examples:\n\
+                        - #[validators(StringValidator::Email)]\n\
+                        - #[validators(StringValidator::MinLength(5), StringValidator::MaxLength(50))]\n\n\
+                        Parse error: {parse_error}"
+                    ),
+                )
+            })?;
+        for expression in &expressions {
+            collect_validators(expression, &mut spanned)?;
         }
     }
 
-    validators
+    let is_parse = |validator: &Validator| {
+        matches!(
+            validator,
+            Validator::StringValidator(string_validator)
+                if matches!(string_validator.rule(), StringRule::Parse(_))
+        )
+    };
+    if let Some((misplaced, span)) = spanned
+        .iter()
+        .skip(1)
+        .find(|(validator, _)| is_parse(validator))
+    {
+        return Err(Error::new(
+            *span,
+            format!(
+                "{misplaced:?} parses the field's input, so it must be the first validator and appear once"
+            ),
+        ));
+    }
+    let validators: Vec<Validator> = spanned
+        .into_iter()
+        .map(|(validator, _)| validator)
+        .collect();
+    let parse = match validators.first() {
+        Some(Validator::StringValidator(first)) => match first.rule() {
+            StringRule::Parse(parse) => Some(parse),
+            StringRule::Check | StringRule::Transform(_) | StringRule::Carrier => None,
+        },
+        _ => None,
+    };
+    Ok(FieldValidators { validators, parse })
+}
+
+/// Adds the validators `expression` names, with their spans: one validator,
+/// or an array or parenthesized group of them.
+fn collect_validators(
+    expression: &syn::Expr,
+    validators: &mut Vec<(Validator, proc_macro2::Span)>,
+) -> Result<()> {
+    match expression {
+        syn::Expr::Array(array) if array.elems.is_empty() => Err(Error::new_spanned(
+            expression,
+            "Empty validator array. Please provide at least one validator.\n\n\
+            Example: #[validators([StringValidator::Email, StringValidator::MinLength(5)])]",
+        )),
+        syn::Expr::Array(array) => array
+            .elems
+            .iter()
+            .try_for_each(|element| collect_validators(element, validators)),
+        syn::Expr::Paren(paren) => collect_validators(&paren.expr, validators),
+        _ => {
+            let validator = Validator::try_from(expression).map_err(|error| {
+                let suggestion = suggest_validator_correction(&quote!(#expression).to_string());
+                Error::new_spanned(
+                    expression,
+                    format!(
+                        "Failed to parse validator expression: {error}{suggestion}\n\n\
+                        Common validator examples:\n\
+                        - StringValidator::Email\n\
+                        - StringValidator::MinLength(5)\n\
+                        - StringValidator::MaxLength(100)\n\
+                        - StringValidator::Lower\n\
+                        - StringValidator::IntegerParse\n\
+                        - NumberValidator::GreaterThanOrEqualTo(0.0)\n\
+                        - NumberValidator::Between(0.0, 100.0)\n\
+                        - ArrayValidator::MinItems(1)\n\n\
+                        Make sure the validator enum is imported and spelled correctly."
+                    ),
+                )
+            })?;
+            validator
+                .check_bounds()
+                .map_err(|message| Error::new_spanned(expression, message))?;
+            validators.push((validator, syn::spanned::Spanned::span(expression)));
+            Ok(())
+        }
+    }
 }

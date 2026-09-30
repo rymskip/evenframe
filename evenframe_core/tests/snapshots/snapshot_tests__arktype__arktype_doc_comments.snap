@@ -12,11 +12,12 @@ export const bindings = scope({
 
 });
 
+const exported = bindings.export();
 
 export const defaultConfig: Config = {
 apiKey: "",
 timeoutMs: 0
 };
 
-export type LogLevel = typeof bindings.LogLevel.infer;
-export type Config = typeof bindings.Config.infer;
+export type LogLevel = typeof exported.LogLevel.infer;
+export type Config = typeof exported.Config.infer;

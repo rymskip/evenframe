@@ -1,44 +1,42 @@
 pub mod coordinate;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub mod field_value;
 pub mod format;
-#[cfg(feature = "wasm-plugins")]
+#[cfg(all(feature = "mockmake", feature = "wasm-plugins"))]
 pub mod plugin;
 pub mod plugin_types;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub mod regex_val_gen;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 mod repoint;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 pub mod validator_gen;
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use crate::{
     dependency::sort_tables_by_dependencies,
     evenframe_log,
+    schemasync::PreservationMode,
     schemasync::TableConfig,
-    schemasync::compare::surql::SurrealdbComparator,
+    schemasync::compare::SchemaChanges,
     schemasync::mockmake::coordinate::{
         CoherentDataset, Coordination, CoordinationGroup, CoordinationId, CoordinationPair,
     },
-    schemasync::{PreservationMode, database::surql::access::execute_access_query},
     types::{FieldType, StructConfig, StructField, TaggedUnion},
 };
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use rand::RngExt;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use surrealdb::Surreal;
-#[cfg(feature = "schemasync")]
-use surrealdb::engine::local::Db;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use surrealdb::engine::remote::http::Client;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 use uuid::Uuid;
 
 /// The mock data one table receives in a run.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 #[derive(Debug, Clone)]
 pub struct TableMocks {
     /// How many records to add, with every field. They take the last
@@ -51,7 +49,7 @@ pub struct TableMocks {
     pub rewrite_fields: Vec<StructField>,
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 #[derive(Debug)]
 pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
@@ -59,7 +57,6 @@ pub struct Mockmaker<'a> {
     pub(super) objects: &'a BTreeMap<String, StructConfig>,
     enums: &'a BTreeMap<String, TaggedUnion>,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
-    pub comparator: Option<SurrealdbComparator<'a>>,
     pub(super) registry: &'a crate::types::ForeignTypeRegistry,
 
     // Runtime state
@@ -77,7 +74,7 @@ pub struct Mockmaker<'a> {
     pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
 
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "mockmake")]
 impl<'a> Mockmaker<'a> {
     pub fn new(
         db: &'a Surreal<Client>,
@@ -86,14 +83,27 @@ impl<'a> Mockmaker<'a> {
         enums: &'a BTreeMap<String, TaggedUnion>,
         schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
         registry: &'a crate::types::ForeignTypeRegistry,
-    ) -> Self {
-        Self {
+    ) -> crate::error::Result<Self> {
+        #[cfg(feature = "wasm-plugins")]
+        let plugin_manager = if schemasync_config.plugins.is_empty() {
+            None
+        } else {
+            let project_root = crate::config::EvenframeConfig::find_project_root().ok_or_else(|| {
+                crate::error::EvenframeError::config(
+                    "[schemasync] plugins are resolved against the project root, but no evenframe.toml was found",
+                )
+            })?;
+            Some(std::cell::RefCell::new(plugin::PluginManager::new(
+                &schemasync_config.plugins,
+                &project_root,
+            )?))
+        };
+        Ok(Self {
             db,
             tables,
             objects,
             enums,
             schemasync_config,
-            comparator: Some(SurrealdbComparator::new(db, schemasync_config)),
             registry,
             id_map: BTreeMap::new(),
             new_records: BTreeMap::new(),
@@ -102,22 +112,8 @@ impl<'a> Mockmaker<'a> {
             coordinated_values: BTreeMap::new(),
             count_override: None,
             #[cfg(feature = "wasm-plugins")]
-            plugin_manager: {
-                if schemasync_config.plugins.is_empty() {
-                    None
-                } else {
-                    // Resolve project root from config
-                    let project_root = std::env::current_dir().unwrap_or_default();
-                    match plugin::PluginManager::new(&schemasync_config.plugins, &project_root) {
-                        Ok(pm) => Some(std::cell::RefCell::new(pm)),
-                        Err(e) => {
-                            tracing::error!("Failed to initialize WASM plugins: {}", e);
-                            None
-                        }
-                    }
-                }
-            },
-        }
+            plugin_manager,
+        })
     }
 
     /// [`crate::types::link_target_tables`] over this run's types.
@@ -347,59 +343,27 @@ impl<'a> Mockmaker<'a> {
     }
 
     /// Remove old data based on schema changes
-    pub async fn remove_old_data(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::trace!("Removing old data based on schema changes");
-        let full_refresh = self.schemasync_config.mock_gen_config.full_refresh_mode;
-        let mut statements = String::new();
-
-        // Records are only replaced when mock data is generated.
-        if full_refresh && self.schemasync_config.should_generate_mocks {
-            let defined_tables = self.defined_tables().await?;
-            for table_name in self.tables.keys().filter(|t| defined_tables.contains(*t)) {
-                statements.push_str(&format!("DELETE {table_name};\n"));
-            }
+    /// Delete every table's records before a full refresh regenerates them.
+    pub async fn clear_records_for_full_refresh(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.schemasync_config.mock_gen_config.full_refresh_mode {
+            return Ok(());
         }
-
-        // Fields removed from the models are removed in every mode: DEFINE
-        // FIELD OVERWRITE does not drop stale ones. Mockmake's full refresh
-        // runs without a schema comparison and only clears the tables.
-        match self.schema_changes() {
-            Ok(schema_changes) => {
-                statements.push_str(&self.generate_remove_statements(schema_changes))
-            }
-            Err(_) if full_refresh => {}
-            Err(e) => return Err(e.into()),
-        }
-
+        let defined_tables = self.defined_tables().await?;
+        let statements: String = self
+            .tables
+            .keys()
+            .filter(|table| defined_tables.contains(*table))
+            .map(|table| format!("DELETE {table};\n"))
+            .collect();
         evenframe_log!(&statements, "remove_statements.surql");
         if !statements.is_empty() {
             self.db
                 .query(statements)
                 .await
                 .and_then(|response| response.check())
-                .map_err(|e| format!("removing old data: {e}"))?;
+                .map_err(|e| format!("clearing records for a full refresh: {e}"))?;
         }
-        tracing::trace!("Old data removal complete");
         Ok(())
-    }
-
-    /// Execute access query on main database
-    pub async fn execute_access(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::trace!("Executing access definitions");
-        let access_query = self
-            .comparator
-            .as_ref()
-            .ok_or("the schema comparison has not run")?
-            .get_access_query();
-
-        tracing::debug!(query_length = access_query.len(), "Executing access query");
-
-        execute_access_query(
-            self.db,
-            access_query,
-            &self.schemasync_config.database.database,
-        )
-        .await
     }
 
     /// Target the `selected` tables (every table when `None`) for mock data,
@@ -452,18 +416,10 @@ impl<'a> Mockmaker<'a> {
         Ok(())
     }
 
-    /// The schema changes the comparison found.
-    fn schema_changes(&self) -> Result<&crate::schemasync::compare::SchemaChanges, String> {
-        self.comparator
-            .as_ref()
-            .and_then(|c| c.get_schema_changes())
-            .ok_or_else(|| "the schema comparison has not run".to_string())
-    }
-
     /// Plan the mock data each table receives from the schema changes: new
     /// records up to each table's count, and existing records rewritten where
     /// their fields changed. A full refresh writes every table from scratch.
-    pub async fn filter_changes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn filter_changes(&mut self, schema_changes: &SchemaChanges) {
         tracing::trace!("Planning mock data from the schema comparison");
         self.table_mocks = if self.schemasync_config.mock_gen_config.full_refresh_mode {
             self.tables
@@ -477,12 +433,11 @@ impl<'a> Mockmaker<'a> {
                 })
                 .collect()
         } else {
-            self.plan_table_mocks(self.schema_changes()?)
+            self.plan_table_mocks(schema_changes)
         };
 
         tracing::info!(tables = self.table_mocks.len(), "Mock data planned");
         evenframe_log!(format!("{:#?}", self.table_mocks), "filtered.log");
-        Ok(())
     }
 
     pub(super) async fn generate_mock_data(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -556,11 +511,6 @@ impl<'a> Mockmaker<'a> {
         self.repoint_links_to_excess().await?;
         tracing::info!("Mock data generation complete");
         Ok(())
-    }
-
-    // Getter for new_schema so Schemasync can access it
-    pub fn get_new_schema(&self) -> Option<&Surreal<Db>> {
-        self.comparator.as_ref()?.get_new_schema()
     }
 
     pub fn random_string(len: usize) -> String {
@@ -870,9 +820,8 @@ impl<'a> Mockmaker<'a> {
     }
 }
 
-// Import for MockGenerationConfig (always available, but avoid duplicates with
-// the schemasync-gated engine imports above)
-#[cfg(not(feature = "schemasync"))]
+// MockGenerationConfig needs this in every build; the engine imports it above.
+#[cfg(not(feature = "mockmake"))]
 use crate::schemasync::PreservationMode;
 
 /// A table's `#[mock_data(...)]` settings.
@@ -890,7 +839,10 @@ impl Default for MockGenerationConfig {
     fn default() -> Self {
         // Only mock settings are read, so the connection env vars aren't needed.
         let mock_gen_config = match crate::config::EvenframeConfig::new_offline() {
-            Ok(config) => config.schemasync.mock_gen_config,
+            Ok(config) => config
+                .schemasync
+                .map(|schemasync| schemasync.mock_gen_config)
+                .unwrap_or_default(),
             Err(e) => {
                 tracing::warn!("Using default mock settings; the configuration did not load: {e}");
                 crate::schemasync::config::SchemasyncMockGenConfig::default()

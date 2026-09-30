@@ -5,14 +5,15 @@ expression: output
 export const bindings = scope({
 
 Registration: {
-  email: 'string',
-  username: 'string',
-  age: 'number',
-  website: [['string', '|', 'undefined'], '|', 'null']
+  email: [[['string', '&', 'string.email'], '&', 'string <= 255'], '&', 'string >= 5'],
+  username: [[['string', '&', 'string.alphanumeric'], '&', 'string >= 3'], '&', 'string <= 50'],
+  age: [['number', '&', 'number >= 13'], '&', 'number <= 150'],
+  website: [[['string', '&', 'string.url'], '|', 'undefined'], '|', 'null']
 },
 
 });
 
+const exported = bindings.export();
 
 export const defaultRegistration: Registration = {
 email: "",
@@ -21,4 +22,4 @@ age: 0,
 website: null
 };
 
-export type Registration = typeof bindings.Registration.infer;
+export type Registration = typeof exported.Registration.infer;

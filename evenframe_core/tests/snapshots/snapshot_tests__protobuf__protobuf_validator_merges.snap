@@ -1,0 +1,19 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Signup {
+    message Tags {
+        repeated string value = 1;
+    }
+    string username = 1;
+    string code = 2;
+    string token = 3;
+    optional string banner = 4;
+    float ratio = 5;
+    uint32 level = 6;
+    optional Tags tags = 7;
+    string address = 8;
+}

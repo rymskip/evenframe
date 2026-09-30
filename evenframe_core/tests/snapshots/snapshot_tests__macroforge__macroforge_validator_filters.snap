@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Booking {
+  /** @serde({ validate: ["nonEmpty", "startsWith("bk`${x}\"")", "trimmed", "uppercase"] }) */
+  code: string;
+  /** @serde({ validate: ["minLength(2)"] }) */
+  nickname: string | null;
+  /** @serde({ validate: ["maxItems(8)"] }) */
+  guests: string[];
+  /** @serde({ validate: ["validDate", "betweenDate("2024-01-01", "2030-12-31")"] }) */
+  startsOn: string;
+  /** @serde({ validate: ["greaterThanOrEqualToBigDecimal("10.50")"] }) */
+  deposit: string;
+  /** @serde({ validate: ["lessThanBigInt("-5")"] }) */
+  sequence: string;
+  /** @serde({ validate: ["betweenDuration("1h30m", "2d")"] }) */
+  stay: bigint;
+}

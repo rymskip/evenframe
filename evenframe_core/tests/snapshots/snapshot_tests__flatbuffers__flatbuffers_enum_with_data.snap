@@ -3,12 +3,33 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 union Location {
-    string,
-    Coordinates,
-    InlineData,
+    LocationAddress,
+    LocationCoords,
+    LocationInline,
+    LocationUnknown
 }
 
 table Coordinates {
     lat: double;
     lng: double;
+}
+
+table InlineData {
+    label: string;
+    value: int64;
+}
+
+table LocationAddress {
+    value: string;
+}
+
+table LocationCoords {
+    value: Coordinates;
+}
+
+table LocationInline {
+    value: InlineData;
+}
+
+table LocationUnknown {
 }

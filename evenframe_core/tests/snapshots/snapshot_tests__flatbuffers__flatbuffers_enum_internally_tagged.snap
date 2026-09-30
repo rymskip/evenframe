@@ -3,6 +3,27 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 union Shape {
-    CircleData,
-    RectangleData,
+    ShapeCircle,
+    ShapeRectangle,
+    ShapePoint
+}
+
+table CircleData {
+    radius: double;
+}
+
+table RectangleData {
+    width: double;
+    height: double;
+}
+
+table ShapeCircle {
+    value: CircleData;
+}
+
+table ShapeRectangle {
+    value: RectangleData;
+}
+
+table ShapePoint {
 }

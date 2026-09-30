@@ -1,0 +1,23 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Deserialize) */
+export interface Signup {
+  /** @serde({ validate: ["alphanumeric", "lowercase", "nonEmpty", "minLength(3)", "maxLength(20)"] }) */
+  username: string;
+  /** @serde({ validate: ["nonEmpty", "hex", "digits", "startsWith("0")", "startsWith("00")"] }) */
+  code: string;
+  /** @serde({ validate: ["nonEmpty", "uuid", "lowercase", "json"] }) */
+  token: string;
+  /** @serde({ validate: ["capitalized", "includes("!")"] }) */
+  banner: string | null;
+  /** @serde({ validate: ["positive", "greaterThanOrEqualTo(0.001)", "lessThan(1000)", "lessThanOrEqualTo(999.999)", "finite"] }) */
+  ratio: number;
+  /** @serde({ validate: ["greaterThan(0.5)", "uint8", "lessThan(9.5)"] }) */
+  level: number;
+  /** @serde({ validate: ["minItems(1)", "maxItems(5)"] }) */
+  tags: string[] | null;
+  /** @serde({ validate: ["nonEmpty", "ip"] }) */
+  address: string;
+}

@@ -2,10 +2,79 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+enum Role : ubyte {
+    Admin = 0,
+    Member = 1
+}
+
 table Collection {
     id: string;
     tags: [string];
     scores: [double];
-    metadata: [StringStringEntry];
-    sorted_data: [StringInt32Entry];
+    metadata: [CollectionMetadataEntry];
+    sorted_data: [CollectionSortedDataEntry];
+    notes_by_rank: [CollectionNotesByRankEntry];
+    related_by_name: [CollectionRelatedByNameEntry];
+    balance_by_offset: [CollectionBalanceByOffsetEntry];
+    count_by_letter: [CollectionCountByLetterEntry];
+    owner_by_role: [CollectionOwnerByRoleEntry];
+    label_by_account: [CollectionLabelByAccountEntry];
+    grid: [CollectionGridEntry];
+    initial: string;
+    note_by_flag: [CollectionNoteByFlagEntry];
+}
+
+table CollectionMetadataEntry {
+    key: string (key);
+    value: string;
+}
+
+table CollectionSortedDataEntry {
+    key: string (key);
+    value: int32;
+}
+
+table CollectionNotesByRankEntry {
+    key: uint32 (key);
+    value: string;
+}
+
+table CollectionRelatedByNameEntry {
+    key: string (key);
+    value: Collection;
+}
+
+table CollectionBalanceByOffsetEntry {
+    key: int64 (key);
+    value: double;
+}
+
+table CollectionCountByLetterEntry {
+    key: string (key);
+    value: uint32;
+}
+
+table CollectionOwnerByRoleEntry {
+    key: Role (key);
+    value: string;
+}
+
+table CollectionLabelByAccountEntry {
+    key: string (key);
+    value: string;
+}
+
+table CollectionGridValueEntry {
+    key: uint8 (key);
+    value: bool;
+}
+
+table CollectionGridEntry {
+    key: uint8 (key);
+    value: [CollectionGridValueEntry];
+}
+
+table CollectionNoteByFlagEntry {
+    key: bool (key);
+    value: string;
 }

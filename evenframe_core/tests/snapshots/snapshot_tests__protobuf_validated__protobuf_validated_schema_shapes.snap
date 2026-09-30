@@ -1,0 +1,93 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Event {
+    message Opened {
+    }
+    message Tagged {
+        repeated string value = 1;
+    }
+    message Pinned {
+        double item_0 = 1;
+        double item_1 = 2;
+    }
+    message Cleared {
+    }
+    oneof variant {
+        Opened opened = 1;
+        .Moved moved = 2;
+        Tagged tagged = 3;
+        .Place visited = 4;
+        uint32 scored = 5;
+        Pinned pinned = 6;
+        Cleared cleared = 7;
+    }
+}
+
+message Moved {
+    .Place from = 1;
+    .Place to = 2;
+}
+
+message Place {
+    string name = 1;
+}
+
+message Shapes {
+    message MaybeTags {
+        repeated string value = 1;
+    }
+    message MatrixItem {
+        repeated int32 value = 1;
+    }
+    message GapsItem {
+        optional double value = 1;
+    }
+    message TriState {
+        optional bool value = 1;
+    }
+    message ListsByNameValue {
+        repeated string value = 1;
+    }
+    message OptionalByNameValue {
+        optional int64 value = 1;
+    }
+    message MapsByNameValue {
+        map<uint32, bool> value = 1;
+    }
+    message Pair {
+        string item_0 = 1;
+        int64 item_1 = 2;
+    }
+    message PairsItem {
+        uint32 item_0 = 1;
+        uint32 item_1 = 2;
+    }
+    message Corner {
+        float x = 1;
+        float y = 2;
+    }
+    message Nothing {
+    }
+    optional MaybeTags maybe_tags = 1;
+    repeated MatrixItem matrix = 2;
+    repeated GapsItem gaps = 3;
+    optional TriState tri_state = 4;
+    optional uint32 maybe_count = 5;
+    map<string, ListsByNameValue> lists_by_name = 6;
+    map<string, OptionalByNameValue> optional_by_name = 7;
+    map<string, MapsByNameValue> maps_by_name = 8;
+    Pair pair = 9;
+    repeated PairsItem pairs = 10;
+    Corner corner = 11;
+    Nothing nothing = 12;
+    string huge = 13;
+    map<string, string> huge_by_id = 14;
+    .Event event = 15;
+    repeated .Event events = 16;
+    optional .Event last_event = 17;
+    map<string, .Event> events_by_name = 18;
+}

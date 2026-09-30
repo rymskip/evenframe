@@ -11,12 +11,13 @@ use crate::{
             parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
             parse_table_validators,
         },
-        validator_parser::parse_field_validators_as_enums,
+        validator_parser::parse_field_validators,
     },
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, PermissionsConfig},
     types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData},
-    typesync::config::CollisionStrategy,
+    typesync::config::{CollisionStrategy, StructVariants},
+    typesync::struct_variants::declare_payloads,
     validator::{StringValidator, Validator},
 };
 use convert_case::{Case, Casing};
@@ -68,6 +69,13 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         table_configs.len()
     );
 
+    reject_scanned_record_link(&struct_configs, &enum_configs)?;
+
+    // Before the plugins, so a named payload gets the rules any struct gets.
+    if config.struct_variants == StructVariants::Named {
+        declare_payloads(&mut struct_configs, &mut enum_configs)?;
+    }
+
     // Apply output rule plugins to enrich configs with convention-based defaults
     #[cfg(feature = "wasm-plugins")]
     {
@@ -79,6 +87,13 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
             debug!("  Output rule plugin '{}' -> {}", name, cfg.path);
         }
     }
+    #[cfg(not(feature = "wasm-plugins"))]
+    if !config.output_rule_plugins.is_empty() || !config.synthetic_item_plugins.is_empty() {
+        return Err(crate::error::EvenframeError::config(
+            "[general] configures output-rule or synthetic-item plugins, but this evenframe was \
+             built without the `wasm-plugins` feature",
+        ));
+    }
     #[cfg(feature = "wasm-plugins")]
     if !config.output_rule_plugins.is_empty() {
         apply_rule_plugins(
@@ -86,10 +101,10 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
             &mut table_configs,
             &mut struct_configs,
             &mut enum_configs,
-        );
+        )?;
     }
 
-    // Apply synthetic-item plugins — these add new structs/enums/tables
+    // Apply synthetic-item plugins. These add new structs/enums/tables
     // derived from the (now finalized) scanner+rule-plugin state.
     #[cfg(feature = "wasm-plugins")]
     if !config.synthetic_item_plugins.is_empty() {
@@ -114,64 +129,32 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
     Ok((enum_configs, table_configs, struct_configs))
 }
 
-/// Builds all configurations from the workspace using default configuration.
-///
-/// This loads config from `evenframe.toml` if available, otherwise uses defaults.
-/// Returns a tuple of (enums, tables, objects).
-pub fn build_all_configs_default() -> AllConfigs {
-    debug!("Starting build_all_configs_default");
-    let mut enum_configs = BTreeMap::new();
-    let mut table_configs = BTreeMap::new();
-    let mut struct_configs = BTreeMap::new();
-
-    // Try to load config, fall back to defaults
-    let config = match BuildConfig::from_toml() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            warn!("Error loading configuration: {}, using defaults", e);
-            BuildConfig::default()
-        }
-    };
-
-    debug!("Creating workspace scanner");
-    let scanner = WorkspaceScanner::with_path(
-        config.scan_path.clone(),
-        config.apply_aliases.clone(),
-        config.expand_macros,
-    );
-
-    let types = match scanner.scan_for_evenframe_types() {
-        Ok(types) => {
-            info!("Found {} Evenframe types", types.len());
-            types
-        }
-        Err(e) => {
-            warn!("Error scanning workspace: {}", e);
-            return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-        }
-    };
-
-    if let Err(e) = process_types(
-        &types,
-        &mut enum_configs,
-        &mut table_configs,
-        &mut struct_configs,
-        CollisionStrategy::Error,
-    ) {
-        warn!("Error processing types: {}", e);
-        return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+/// A scanned type named `RecordLink` in the schemasync pipeline would stand
+/// in for evenframe's record link, which schemasync links tables through.
+fn reject_scanned_record_link(
+    struct_configs: &BTreeMap<String, crate::types::StructConfig>,
+    enum_configs: &BTreeMap<String, TaggedUnion>,
+) -> Result<()> {
+    let record_link = crate::typesync::foreign_ts::RECORD_LINK;
+    let scanned = struct_configs
+        .values()
+        .filter(|struct_config| struct_config.struct_name == record_link)
+        .map(|struct_config| struct_config.pipeline)
+        .chain(
+            enum_configs
+                .values()
+                .filter(|tagged_union| tagged_union.enum_name == record_link)
+                .map(|tagged_union| tagged_union.pipeline),
+        )
+        .any(|pipeline| pipeline.includes_schemasync());
+    if scanned {
+        return Err(crate::error::EvenframeError::config(format!(
+            "a scanned type is named `{record_link}`, which is evenframe's record link type in \
+             schemasync. Rename it; to own the TypeScript `{record_link}`, point \
+             foreign_types.{record_link} at your definition instead"
+        )));
     }
-
-    info!(
-        "First pass complete. Found {} struct configs, {} enum configs, {} table configs",
-        struct_configs.len(),
-        enum_configs.len(),
-        table_configs.len()
-    );
-
-    resolve_relation_endpoints(&mut table_configs, &enum_configs, &struct_configs);
-
-    (enum_configs, table_configs, struct_configs)
+    Ok(())
 }
 
 /// Resolves `from`/`to` on relation tables by inspecting `in`/`out` field types.
@@ -268,7 +251,7 @@ fn resolve_field_to_tables(
         _ => return None,
     };
 
-    // Try direct table match — first by literal snake_case, then via the
+    // Try direct table match: first by literal snake_case, then via the
     // struct's `effective()` so a synthetic projection whose
     // `output_override` points at another struct still resolves to the
     // parent's table.
@@ -285,15 +268,14 @@ fn resolve_field_to_tables(
     if let Some(tagged) = enum_configs.get(&inner_type_name) {
         let mut tables = Vec::new();
         for variant in &tagged.variants {
-            if let Some(data) = &variant.data {
-                let struct_name = match data {
-                    VariantData::InlineStruct(s) => &s.struct_name,
-                    VariantData::DataStructureRef(FieldType::Other(name)) => name,
-                    _ => continue,
-                };
-                let t = variant_table_name(struct_name, struct_configs);
-                if known_tables.contains(&t) {
-                    tables.push(t);
+            if let Some(linked) = variant
+                .data
+                .as_ref()
+                .and_then(VariantData::linked_type_name)
+            {
+                let table = variant_table_name(linked, struct_configs);
+                if known_tables.contains(&table) {
+                    tables.push(table);
                 }
             }
         }
@@ -374,140 +356,150 @@ fn process_types(
                         file_types.iter().find(|&t| item_struct.ident == t.name)
                     {
                         debug!("Found Evenframe struct: {:?}", item_struct.ident);
-                        if let Some(mut struct_config) = parse_struct_config(&item_struct) {
-                            struct_config.pipeline = evenframe_type.pipeline;
-                            struct_config.resolve_only = evenframe_type.resolve_only;
-                            // Check for name collision
-                            if let Some(existing_file) =
-                                struct_origins.get(&struct_config.struct_name)
-                            {
-                                match collision_strategy {
-                                    CollisionStrategy::Error => {
-                                        return Err(crate::error::EvenframeError::Config(format!(
-                                            "Type name collision: '{}' is defined in both '{}' and '{}'. \
-                                             Rename one of them, or set collision_strategy = \"auto_rename\" \
-                                             in [typesync] config.",
-                                            struct_config.struct_name, existing_file, file_path
-                                        )));
-                                    }
-                                    CollisionStrategy::AutoRename => {
-                                        let stem = Path::new(file_path)
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("unknown");
-                                        let prefix = stem.to_case(Case::Pascal);
-                                        let old_name = struct_config.struct_name.clone();
-                                        let new_name = format!("{}{}", prefix, old_name);
-                                        warn!(
-                                            "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
-                                            old_name, file_path, new_name, existing_file
-                                        );
-                                        struct_config.struct_name = new_name.clone();
-                                        renames.insert(old_name, new_name);
-                                    }
+                        let mut struct_config = parse_struct_config(&item_struct).map_err(|e| {
+                            crate::error::EvenframeError::parse_error(
+                                file_path,
+                                format!("struct '{}': {}", item_struct.ident, e),
+                            )
+                        })?;
+                        struct_config.pipeline = evenframe_type.pipeline;
+                        struct_config.resolve_only = evenframe_type.resolve_only;
+                        // Check for name collision
+                        if let Some(existing_file) = struct_origins.get(&struct_config.struct_name)
+                        {
+                            match collision_strategy {
+                                CollisionStrategy::Error => {
+                                    return Err(crate::error::EvenframeError::Config(format!(
+                                        "Type name collision: '{}' is defined in both '{}' and '{}'. \
+                                         Rename one of them, or set collision_strategy = \"auto_rename\" \
+                                         in [typesync] config.",
+                                        struct_config.struct_name, existing_file, file_path
+                                    )));
+                                }
+                                CollisionStrategy::AutoRename => {
+                                    let stem = Path::new(file_path)
+                                        .file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("unknown");
+                                    let prefix = stem.to_case(Case::Pascal);
+                                    let old_name = struct_config.struct_name.clone();
+                                    let new_name = format!("{}{}", prefix, old_name);
+                                    warn!(
+                                        "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
+                                        old_name, file_path, new_name, existing_file
+                                    );
+                                    struct_config.struct_name = new_name.clone();
+                                    renames.insert(old_name, new_name);
                                 }
                             }
+                        }
 
-                            struct_origins
-                                .insert(struct_config.struct_name.clone(), file_path.clone());
-                            trace!(
-                                "Inserting struct config {:?}: {:#?}",
-                                &struct_config.struct_name, &struct_config
+                        struct_origins.insert(struct_config.struct_name.clone(), file_path.clone());
+                        trace!(
+                            "Inserting struct config {:?}: {:#?}",
+                            &struct_config.struct_name, &struct_config
+                        );
+                        struct_configs
+                            .insert(struct_config.struct_name.clone(), struct_config.clone());
+
+                        // A `resolve_only` struct is registered for resolution
+                        // (kept in `struct_configs` above, so referencing fields
+                        // inline its shape) but is never materialized as a managed
+                        // table: no `DEFINE TABLE`, mock, or diff in this database.
+                        if evenframe_type.has_id_field && !evenframe_type.resolve_only {
+                            let table_name = struct_config.struct_name.to_case(Case::Snake);
+                            debug!(
+                                "Building table config for: {} (snake_case: {})",
+                                struct_config.struct_name, &table_name
                             );
-                            struct_configs
-                                .insert(struct_config.struct_name.clone(), struct_config.clone());
 
-                            // A `resolve_only` struct is registered for resolution
-                            // (kept in `struct_configs` above, so referencing fields
-                            // inline its shape) but is never materialized as a managed
-                            // table — no `DEFINE TABLE`, mock, or diff in this database.
-                            if evenframe_type.has_id_field && !evenframe_type.resolve_only {
-                                let table_name = struct_config.struct_name.to_case(Case::Snake);
-                                debug!(
-                                    "Building table config for: {} (snake_case: {})",
-                                    struct_config.struct_name, &table_name
-                                );
+                            let mock_generation_config = parse_mock_data_attribute(
+                                &item_struct.attrs,
+                            )
+                            .map_err(|e| {
+                                crate::error::EvenframeError::Config(format!(
+                                    "Failed to parse #[mock_data(...)] on struct '{}' in '{}': {}",
+                                    struct_config.struct_name, file_path, e
+                                ))
+                            })?;
 
-                                let mock_generation_config =
-                                    parse_mock_data_attribute(&item_struct.attrs).ok().flatten();
+                            let events =
+                                parse_event_attributes(&item_struct.attrs).map_err(|e| {
+                                    crate::error::EvenframeError::Config(format!(
+                                        "Failed to parse #[event(...)] on struct '{}' in '{}': {}",
+                                        struct_config.struct_name, file_path, e
+                                    ))
+                                })?;
 
-                                let events = match parse_event_attributes(&item_struct.attrs) {
-                                    Ok(events) => events,
-                                    Err(e) => {
-                                        warn!(
-                                            error = %e,
-                                            struct_name = %struct_config.struct_name,
-                                            "Failed to parse event attributes, skipping"
-                                        );
-                                        Vec::new()
-                                    }
+                            let known_field_names = indexable_fields(&item_struct.fields);
+                            let mut indexes = parse_index_attributes(
+                                &item_struct.attrs,
+                                &known_field_names,
+                            )
+                            .map_err(|e| {
+                                crate::error::EvenframeError::Config(format!(
+                                    "Failed to parse #[indexes(...)] on struct '{}' in '{}': {}",
+                                    struct_config.struct_name, file_path, e
+                                ))
+                            })?
+                            .into_iter()
+                            .map(|(index, _span)| index)
+                            .collect::<Vec<_>>();
+                            for field in &item_struct.fields {
+                                let Some(ident) = &field.ident else {
+                                    continue;
                                 };
-
-                                let known_field_names = indexable_fields(&item_struct.fields);
-                                let mut indexes = parse_index_attributes(
-                                    &item_struct.attrs,
-                                    &known_field_names,
+                                let field_name = ident.to_string();
+                                let field_indexes = parse_field_index_attributes(
+                                    field_name.trim_start_matches("r#"),
+                                    &field.attrs,
                                 )
                                 .map_err(|e| {
                                     crate::error::EvenframeError::Config(format!(
-                                        "Failed to parse #[indexes(...)] on struct '{}' in '{}': {}",
-                                        struct_config.struct_name, file_path, e
+                                        "Failed to parse index attribute on field '{}.{}' in '{}': {}",
+                                        struct_config.struct_name, field_name, file_path, e
                                     ))
-                                })?
-                                .into_iter()
-                                .map(|(index, _span)| index)
-                                .collect::<Vec<_>>();
-                                for field in &item_struct.fields {
-                                    let Some(ident) = &field.ident else {
-                                        continue;
-                                    };
-                                    let field_name = ident.to_string();
-                                    let field_indexes = parse_field_index_attributes(
-                                        field_name.trim_start_matches("r#"),
-                                        &field.attrs,
-                                    )
-                                    .map_err(|e| {
-                                        crate::error::EvenframeError::Config(format!(
-                                            "Failed to parse index attribute on field '{}.{}' in '{}': {}",
-                                            struct_config.struct_name, field_name, file_path, e
-                                        ))
-                                    })?;
-                                    indexes.extend(
-                                        field_indexes.into_iter().map(|(index, _span)| index),
-                                    );
-                                }
-                                if let Some((_, name)) =
-                                    find_duplicate_index_name(&table_name, &indexes)
-                                {
-                                    return Err(crate::error::EvenframeError::Config(format!(
-                                        "Another index on struct '{}' in '{}' already uses the name '{}'; give one of them `name = \"...\"`",
-                                        struct_config.struct_name, file_path, name
-                                    )));
-                                }
-
-                                let table_config = TableConfig {
-                                    table_name: table_name.clone(),
-                                    struct_config: struct_config.clone(),
-                                    relation: parse_relation_attribute(&item_struct.attrs)
-                                        .ok()
-                                        .flatten(),
-                                    permissions: PermissionsConfig::parse(&item_struct.attrs)
-                                        .ok()
-                                        .flatten(),
-                                    mock_generation_config,
-                                    events: events
-                                        .into_iter()
-                                        .map(|statement| EventConfig { statement })
-                                        .collect(),
-                                    indexes,
-                                    output_override: None,
-                                };
-                                trace!(
-                                    "Inserting table config {:?}: {:#?}",
-                                    &table_config.table_name, &struct_config
-                                );
-                                table_configs.insert(table_name, table_config);
+                                })?;
+                                indexes
+                                    .extend(field_indexes.into_iter().map(|(index, _span)| index));
                             }
+                            if let Some((_, name)) =
+                                find_duplicate_index_name(&table_name, &indexes)
+                            {
+                                return Err(crate::error::EvenframeError::Config(format!(
+                                    "Another index on struct '{}' in '{}' already uses the name '{}'; give one of them `name = \"...\"`",
+                                    struct_config.struct_name, file_path, name
+                                )));
+                            }
+
+                            let table_config = TableConfig {
+                                table_name: table_name.clone(),
+                                struct_config: struct_config.clone(),
+                                relation: parse_relation_attribute(&item_struct.attrs).map_err(|e| {
+                                crate::error::EvenframeError::Config(format!(
+                                    "Failed to parse #[relation(...)] on struct '{}' in '{}': {}",
+                                    struct_config.struct_name, file_path, e
+                                ))
+                            })?,
+                                permissions: PermissionsConfig::parse(&item_struct.attrs).map_err(|e| {
+                                crate::error::EvenframeError::Config(format!(
+                                    "Failed to parse #[permissions(...)] on struct '{}' in '{}': {}",
+                                    struct_config.struct_name, file_path, e
+                                ))
+                            })?,
+                                mock_generation_config,
+                                events: events
+                                    .into_iter()
+                                    .map(|statement| EventConfig { statement })
+                                    .collect(),
+                                indexes,
+                                output_override: None,
+                            };
+                            trace!(
+                                "Inserting table config {:?}: {:#?}",
+                                &table_config.table_name, &struct_config
+                            );
+                            table_configs.insert(table_name, table_config);
                         }
                     }
                 }
@@ -516,57 +508,49 @@ fn process_types(
                         file_types.iter().find(|&t| item_enum.ident == t.name)
                     {
                         debug!("Found Evenframe enum: {}", item_enum.ident);
-                        if let Some(mut tagged_union) = parse_enum_config(&item_enum) {
-                            tagged_union.pipeline = evenframe_type.pipeline;
-                            tagged_union.resolve_only = evenframe_type.resolve_only;
-                            // Check for name collision
-                            if let Some(existing_file) = enum_origins.get(&tagged_union.enum_name) {
-                                match collision_strategy {
-                                    CollisionStrategy::Error => {
-                                        return Err(crate::error::EvenframeError::Config(format!(
-                                            "Type name collision: '{}' is defined in both '{}' and '{}'. \
-                                             Rename one of them, or set collision_strategy = \"auto_rename\" \
-                                             in [typesync] config.",
-                                            tagged_union.enum_name, existing_file, file_path
-                                        )));
-                                    }
-                                    CollisionStrategy::AutoRename => {
-                                        let stem = Path::new(file_path)
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("unknown");
-                                        let prefix = stem.to_case(Case::Pascal);
-                                        let old_name = tagged_union.enum_name.clone();
-                                        let new_name = format!("{}{}", prefix, old_name);
-                                        warn!(
-                                            "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
-                                            old_name, file_path, new_name, existing_file
-                                        );
-                                        tagged_union.enum_name = new_name.clone();
-                                        renames.insert(old_name, new_name);
-                                    }
+                        let mut tagged_union = parse_enum_config(&item_enum).map_err(|e| {
+                            crate::error::EvenframeError::parse_error(
+                                file_path,
+                                format!("enum '{}': {}", item_enum.ident, e),
+                            )
+                        })?;
+                        tagged_union.pipeline = evenframe_type.pipeline;
+                        tagged_union.resolve_only = evenframe_type.resolve_only;
+                        // Check for name collision
+                        if let Some(existing_file) = enum_origins.get(&tagged_union.enum_name) {
+                            match collision_strategy {
+                                CollisionStrategy::Error => {
+                                    return Err(crate::error::EvenframeError::Config(format!(
+                                        "Type name collision: '{}' is defined in both '{}' and '{}'. \
+                                         Rename one of them, or set collision_strategy = \"auto_rename\" \
+                                         in [typesync] config.",
+                                        tagged_union.enum_name, existing_file, file_path
+                                    )));
                                 }
-                            }
-
-                            enum_origins.insert(tagged_union.enum_name.clone(), file_path.clone());
-                            trace!(
-                                "Inserting enum config {:?}: {:#?}",
-                                &tagged_union.enum_name, &tagged_union
-                            );
-                            enum_configs
-                                .insert(tagged_union.enum_name.clone(), tagged_union.clone());
-
-                            for variant in &tagged_union.variants {
-                                if let Some(VariantData::InlineStruct(ref enum_struct)) =
-                                    variant.data
-                                {
-                                    struct_configs.insert(
-                                        enum_struct.struct_name.clone(),
-                                        enum_struct.clone(),
+                                CollisionStrategy::AutoRename => {
+                                    let stem = Path::new(file_path)
+                                        .file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("unknown");
+                                    let prefix = stem.to_case(Case::Pascal);
+                                    let old_name = tagged_union.enum_name.clone();
+                                    let new_name = format!("{}{}", prefix, old_name);
+                                    warn!(
+                                        "Type '{}' in '{}' renamed to '{}' to avoid collision with '{}'",
+                                        old_name, file_path, new_name, existing_file
                                     );
+                                    tagged_union.enum_name = new_name.clone();
+                                    renames.insert(old_name, new_name);
                                 }
                             }
                         }
+
+                        enum_origins.insert(tagged_union.enum_name.clone(), file_path.clone());
+                        trace!(
+                            "Inserting enum config {:?}: {:#?}",
+                            &tagged_union.enum_name, &tagged_union
+                        );
+                        enum_configs.insert(tagged_union.enum_name.clone(), tagged_union.clone());
                     }
                 }
                 _ => {}
@@ -624,7 +608,7 @@ fn rename_field_type(field_type: &mut FieldType, renames: &BTreeMap<String, Stri
     }
 }
 
-fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
+fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
     let struct_name = item_struct.ident.to_string();
     trace!("Parsing struct config for: {}", struct_name);
     let mut fields = Vec::new();
@@ -635,24 +619,18 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
             fields_named.named.len(),
             struct_name
         );
-        fields = process_struct_fields(fields_named);
+        fields = process_struct_fields(fields_named)?;
     }
 
-    let table_validators = parse_table_validators(&item_struct.attrs)
-        .ok()
-        .unwrap_or_default();
+    let table_validators = parse_table_validators(&item_struct.attrs)?;
 
-    let doccom = parse_doccom_attribute(&item_struct.attrs).ok().flatten();
-    let macroforge_derives = parse_macroforge_derive_attribute(&item_struct.attrs)
-        .ok()
-        .unwrap_or_default();
-    let annotations = parse_annotation_attributes(&item_struct.attrs)
-        .ok()
-        .unwrap_or_default();
+    let doccom = parse_doccom_attribute(&item_struct.attrs)?;
+    let macroforge_derives = parse_macroforge_derive_attribute(&item_struct.attrs)?;
+    let annotations = parse_annotation_attributes(&item_struct.attrs)?;
     let rust_derives = parse_rust_derives(&item_struct.attrs);
     let raw_attributes = collect_raw_attributes(&item_struct.attrs);
 
-    Some(StructConfig {
+    Ok(StructConfig {
         struct_name,
         fields,
         validators: table_validators
@@ -670,61 +648,38 @@ fn parse_struct_config(item_struct: &ItemStruct) -> Option<StructConfig> {
     })
 }
 
-fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
+fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
     let enum_name = item_enum.ident.to_string();
     trace!("Parsing enum config for: {}", enum_name);
     let mut variants = Vec::new();
 
-    let enum_doccom = parse_doccom_attribute(&item_enum.attrs).ok().flatten();
-    let enum_macroforge_derives = parse_macroforge_derive_attribute(&item_enum.attrs)
-        .ok()
-        .unwrap_or_default();
-    let enum_annotations = parse_annotation_attributes(&item_enum.attrs)
-        .ok()
-        .unwrap_or_default();
+    let enum_doccom = parse_doccom_attribute(&item_enum.attrs)?;
+    let enum_macroforge_derives = parse_macroforge_derive_attribute(&item_enum.attrs)?;
+    let enum_annotations = parse_annotation_attributes(&item_enum.attrs)?;
     let representation =
-        crate::derive::attributes::parse_serde_enum_representation(&item_enum.attrs)
-            .ok()
-            .unwrap_or_default();
+        crate::derive::attributes::parse_serde_enum_representation(&item_enum.attrs)?;
     let enum_rust_derives = parse_rust_derives(&item_enum.attrs);
 
     for variant in &item_enum.variants {
         let variant_name = variant.ident.to_string();
         trace!("Processing variant: {} in enum {}", variant_name, enum_name);
 
-        let variant_doccom = parse_doccom_attribute(&variant.attrs).ok().flatten();
-        let variant_annotations = parse_annotation_attributes(&variant.attrs)
-            .ok()
-            .unwrap_or_default();
-        let variant_macroforge_derives = parse_macroforge_derive_attribute(&variant.attrs)
-            .ok()
-            .unwrap_or_default();
+        let variant_doccom = parse_doccom_attribute(&variant.attrs)?;
+        let variant_annotations = parse_annotation_attributes(&variant.attrs)?;
+        let variant_macroforge_derives = parse_macroforge_derive_attribute(&variant.attrs)?;
 
         let data = match &variant.fields {
             Fields::Unit => None,
-            Fields::Unnamed(fields) => {
-                if fields.unnamed.is_empty() {
-                    None
-                } else if fields.unnamed.len() == 1 {
-                    let field = &fields.unnamed[0];
-                    let field_type = FieldType::parse_syn_ty(&field.ty);
-                    Some(VariantData::DataStructureRef(field_type))
-                } else {
-                    let field_types: Vec<_> = fields
-                        .unnamed
-                        .iter()
-                        .map(|f| FieldType::parse_syn_ty(&f.ty))
-                        .collect();
-                    Some(VariantData::DataStructureRef(FieldType::Tuple(field_types)))
-                }
-            }
+            Fields::Unnamed(fields) => Some(VariantData::DataStructureRef(
+                FieldType::parse_tuple_variant(fields),
+            )),
             Fields::Named(fields_named) => {
                 debug!(
                     "Processing {} fields for enum struct {}",
                     fields_named.named.len(),
                     variant_name
                 );
-                let struct_fields = process_struct_fields(fields_named);
+                let struct_fields = process_struct_fields(fields_named)?;
 
                 Some(VariantData::InlineStruct(StructConfig {
                     struct_name: variant_name.clone(),
@@ -751,7 +706,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
 
     let enum_raw_attributes = collect_raw_attributes(&item_enum.attrs);
 
-    Some(TaggedUnion {
+    Ok(TaggedUnion {
         enum_name,
         variants,
         representation,
@@ -766,7 +721,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> Option<TaggedUnion> {
     })
 }
 
-fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
+fn process_struct_fields(fields_named: &FieldsNamed) -> syn::Result<Vec<StructField>> {
     let mut struct_fields = Vec::new();
     for field in &fields_named.named {
         let field_name = field
@@ -778,14 +733,12 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
 
         let field_type = FieldType::parse_syn_ty(&field.ty);
 
-        let edge_config = EdgeConfig::parse(field).ok().flatten();
-        let define_config = DefineConfig::parse(field).ok().flatten();
-        let format = parse_format_attribute_bin(&field.attrs).ok().flatten();
-        let validators = parse_field_validators_as_enums(&field.attrs);
-        let doccom = parse_doccom_attribute(&field.attrs).ok().flatten();
-        let annotations = parse_annotation_attributes(&field.attrs)
-            .ok()
-            .unwrap_or_default();
+        let edge_config = EdgeConfig::parse(field)?;
+        let define_config = DefineConfig::parse(field)?;
+        let format = parse_format_attribute_bin(&field.attrs)?;
+        let validators = parse_field_validators(&field.attrs)?.validators;
+        let doccom = parse_doccom_attribute(&field.attrs)?;
+        let annotations = parse_annotation_attributes(&field.attrs)?;
 
         let field_raw_attributes = collect_raw_attributes(&field.attrs);
 
@@ -809,7 +762,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> Vec<StructField> {
             raw_attributes: field_raw_attributes,
         });
     }
-    struct_fields
+    Ok(struct_fields)
 }
 
 /// Attributes that evenframe's own attribute parsers handle. Everything
@@ -897,8 +850,8 @@ pub fn merge_tables_and_objects(
     // Drop the PascalCase duplicate before inserting the table entry so
     // downstream consumers that dedup by PascalCase `struct_name` (e.g.
     // `generate_macroforge_for_types` via its `seen_structs` set) see
-    // exactly one entry per table — the authoritative one from the table
-    // loop — rather than racing HashMap iteration order.
+    // exactly one entry per table (the authoritative one from the table
+    // loop) rather than racing HashMap iteration order.
     for (name, table_config) in tables {
         trace!("Merging table config for: {}", name);
         struct_configs.remove(&table_config.struct_config.struct_name);
@@ -972,7 +925,7 @@ pub fn filter_for_schemasync(
 ///
 /// For each table/struct/enum, calls the plugin and sets the `output_override`
 /// field directly. The typesync and schemasync generators check this field
-/// before computing output — if set, they use the override string directly.
+/// before computing output. If set, they use the override string directly.
 #[cfg(feature = "wasm-plugins")]
 #[cfg(feature = "wasm-plugins")]
 fn apply_rule_plugins(
@@ -980,17 +933,13 @@ fn apply_rule_plugins(
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
-) {
+) -> Result<()> {
     use crate::typesync::plugin::OutputRulePluginManager;
 
-    let mut pm = match OutputRulePluginManager::new(&config.output_rule_plugins, &config.scan_path)
-    {
-        Ok(pm) => pm,
-        Err(e) => {
-            warn!("Failed to load output rule plugins: {}", e);
-            return;
-        }
-    };
+    let mut pm = OutputRulePluginManager::new(&config.output_rule_plugins, &config.scan_path)
+        .map_err(|e| {
+            crate::error::EvenframeError::Plugin(format!("Failed to load output rule plugins: {e}"))
+        })?;
 
     // Process table configs (handler structs)
     let table_names: Vec<String> = table_configs.keys().cloned().collect();
@@ -1005,15 +954,17 @@ fn apply_rule_plugins(
         for plugin_name in pm.plugin_names().to_vec() {
             match pm.transform_type(&plugin_name, &input) {
                 Ok(plugin_output) => {
-                    if plugin_output.error.is_some() {
-                        continue;
+                    if let Some(error) = &plugin_output.error {
+                        return Err(crate::error::EvenframeError::Plugin(format!(
+                            "Output rule plugin '{plugin_name}' reported an error for table '{table_name}': {error}"
+                        )));
                     }
                     let tc = table_configs.get_mut(table_name).unwrap();
                     let to = &plugin_output.type_override;
                     // Apply field-level overrides FIRST so the type-level
                     // override snapshot below captures fields-with-overrides.
                     // Consumers read the struct via `effective()`, which returns
-                    // the snapshot — if we cloned before writing the field
+                    // the snapshot. If we cloned before writing the field
                     // overrides, the snapshot's fields would have no overrides
                     // and the plugin's field annotations would be dropped.
                     for (field_name, field_override) in &plugin_output.field_overrides {
@@ -1061,10 +1012,9 @@ fn apply_rule_plugins(
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Output rule plugin '{}' failed for table '{}': {}",
-                        plugin_name, table_name, e
-                    );
+                    return Err(crate::error::EvenframeError::Plugin(format!(
+                        "Output rule plugin '{plugin_name}' failed for table '{table_name}': {e}"
+                    )));
                 }
             }
         }
@@ -1083,8 +1033,10 @@ fn apply_rule_plugins(
         for plugin_name in pm.plugin_names().to_vec() {
             match pm.transform_type(&plugin_name, &input) {
                 Ok(plugin_output) => {
-                    if plugin_output.error.is_some() {
-                        continue;
+                    if let Some(error) = &plugin_output.error {
+                        return Err(crate::error::EvenframeError::Plugin(format!(
+                            "Output rule plugin '{plugin_name}' reported an error for struct '{struct_name}': {error}"
+                        )));
                     }
                     let sc = struct_configs.get_mut(struct_name).unwrap();
                     let to = &plugin_output.type_override;
@@ -1118,10 +1070,9 @@ fn apply_rule_plugins(
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Output rule plugin '{}' failed for struct '{}': {}",
-                        plugin_name, struct_name, e
-                    );
+                    return Err(crate::error::EvenframeError::Plugin(format!(
+                        "Output rule plugin '{plugin_name}' failed for struct '{struct_name}': {e}"
+                    )));
                 }
             }
         }
@@ -1137,13 +1088,15 @@ fn apply_rule_plugins(
         for plugin_name in pm.plugin_names().to_vec() {
             match pm.transform_type(&plugin_name, &input) {
                 Ok(plugin_output) => {
-                    if plugin_output.error.is_some() {
-                        continue;
+                    if let Some(error) = &plugin_output.error {
+                        return Err(crate::error::EvenframeError::Plugin(format!(
+                            "Output rule plugin '{plugin_name}' reported an error for enum '{enum_name}': {error}"
+                        )));
                     }
                     let ec = enum_configs.get_mut(enum_name).unwrap();
                     let to = &plugin_output.type_override;
                     // Apply per-variant annotations FIRST so the type-level
-                    // snapshot below captures the variant overrides — otherwise
+                    // snapshot below captures the variant overrides. Otherwise
                     // downstream `.effective()` reads return the cloned enum
                     // without them. Mirrors the struct branch above.
                     for (variant_name, field_override) in &plugin_output.field_overrides {
@@ -1175,16 +1128,16 @@ fn apply_rule_plugins(
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Output rule plugin '{}' failed for enum '{}': {}",
-                        plugin_name, enum_name, e
-                    );
+                    return Err(crate::error::EvenframeError::Plugin(format!(
+                        "Output rule plugin '{plugin_name}' failed for enum '{enum_name}': {e}"
+                    )));
                 }
             }
         }
     }
 
     info!("Output rule plugins applied to all configs");
+    Ok(())
 }
 
 #[cfg(feature = "wasm-plugins")]
@@ -1326,6 +1279,25 @@ fn merge_synthetic_output(
 ) -> Result<()> {
     let prefix = plugin_name.to_case(Case::Pascal);
 
+    let new_fields = output
+        .new_structs
+        .iter()
+        .chain(output.new_tables.iter().map(|table| &table.struct_config))
+        .flat_map(|struct_config| {
+            struct_config
+                .fields
+                .iter()
+                .map(move |field| (&struct_config.struct_name, field))
+        });
+    for (struct_name, field) in new_fields {
+        crate::validator::bounds::check_validators(&field.validators).map_err(|problem| {
+            crate::error::EvenframeError::Plugin(format!(
+                "Synthetic-item plugin '{plugin_name}' produced field '{struct_name}.{}' with invalid validators: {problem}",
+                field.field_name
+            ))
+        })?;
+    }
+
     for mut sc in output.new_structs {
         let original = sc.struct_name.clone();
         if struct_configs.contains_key(&sc.struct_name) {
@@ -1419,6 +1391,33 @@ fn merge_synthetic_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scanned_record_link_is_rejected_in_schemasync() {
+        let record_link = |pipeline| crate::types::StructConfig {
+            struct_name: "RecordLink".to_string(),
+            pipeline,
+            ..Default::default()
+        };
+        let structs =
+            |pipeline| BTreeMap::from([("RecordLink".to_string(), record_link(pipeline))]);
+        let error =
+            reject_scanned_record_link(&structs(crate::types::Pipeline::Both), &BTreeMap::new())
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+        assert!(
+            error.contains("evenframe's record link type in schemasync"),
+            "{error}"
+        );
+        assert!(
+            reject_scanned_record_link(
+                &structs(crate::types::Pipeline::Typesync),
+                &BTreeMap::new()
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn test_process_struct_fields_parses_unique_attribute() {

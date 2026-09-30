@@ -524,44 +524,44 @@ fn test_enum_structure() {
     assert!(enum_count > 0, "Schema should contain at least one enum");
 }
 
-/// Test that fields end with semicolons
+/// Test that table fields end with semicolons, and that enum and union
+/// entries are separated by commas (the last may omit its own).
 #[test]
 fn test_field_semicolons() {
     let content = read_flatbuffers_schema();
     let mut in_table = false;
-    let mut in_enum = false;
+    let mut entries: Option<Vec<String>> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
         if trimmed.starts_with("table ") {
             in_table = true;
-            in_enum = false;
         } else if trimmed.starts_with("enum ") || trimmed.starts_with("union ") {
-            in_table = false;
-            in_enum = true;
+            entries = Some(Vec::new());
         } else if trimmed == "}" {
             in_table = false;
-            in_enum = false;
+            if let Some(block) = entries.take()
+                && let Some((_, separated)) = block.split_last()
+            {
+                for entry in separated {
+                    assert!(
+                        entry.ends_with(','),
+                        "Enum or union entry should end with a comma: {entry}"
+                    );
+                }
+            }
         } else if in_table && !trimmed.is_empty() && trimmed != "{" {
             assert!(
                 trimmed.ends_with(';'),
                 "Table field should end with semicolon: {}",
                 trimmed
             );
-        } else if in_enum && !trimmed.is_empty() && trimmed != "{" && trimmed != "}" {
-            // Enum variants can end with comma or nothing (last variant)
-            assert!(
-                trimmed.ends_with(',')
-                    || trimmed.ends_with('0')
-                    || trimmed.ends_with('1')
-                    || trimmed.ends_with('2')
-                    || trimmed.ends_with('3')
-                    || trimmed.ends_with('4')
-                    || trimmed.ends_with('5'),
-                "Enum variant should have proper format: {}",
-                trimmed
-            );
+        } else if let Some(block) = entries.as_mut()
+            && !trimmed.is_empty()
+            && trimmed != "{"
+        {
+            block.push(trimmed.to_string());
         }
     }
 }

@@ -20,7 +20,7 @@
 //!   that dropped `define_config`, `edge_config`, `mock_plugin`, and
 //!   other per-field metadata.
 //!
-//! Synthetic plugins (see [`super::synthetic_plugin_types`]) solved the
+//! Synthetic plugins (see `super::synthetic_plugin_types`) solved the
 //! same problem by round-tripping the real serde tree. Output rule
 //! plugins now use the same approach: plugins get exactly the
 //! `StructConfig` + `TableConfig` (or `TaggedUnion`) the host is holding

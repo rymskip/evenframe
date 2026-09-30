@@ -1,0 +1,18 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Registration {
+    string email = 1 [(validate.rules).string = {min_len: 5, max_len: 255, pattern: "^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\.[A-Za-z]{2,}$"}];
+    string username = 2 [(validate.rules).string = {min_len: 3, max_len: 50, pattern: "^[0-9A-Za-z]*$"}];
+    uint32 age = 3 [(validate.rules).uint32 = {gte: 13, lte: 150}];
+    // protoc-gen-validate cannot check: a URL string
+    optional string website = 4;
+}

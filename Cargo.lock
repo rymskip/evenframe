@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "clap",
  "convert_case",
@@ -1516,7 +1516,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "syn 3.0.5",
  "tempfile",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
@@ -1530,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "bon",
@@ -1541,6 +1540,7 @@ dependencies = [
  "derive-syn-parse",
  "derive_more",
  "dotenvy",
+ "fancy-regex",
  "futures",
  "heck 0.5.0",
  "ignore",
@@ -1572,14 +1572,17 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "try_from_expr",
+ "unicode-normalization",
+ "url",
  "uuid",
  "wasmtime",
 ]
 
 [[package]]
 name = "evenframe_derive"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
+ "chrono",
  "convert_case",
  "evenframe",
  "evenframe_core",
@@ -1588,7 +1591,7 @@ dependencies = [
  "proc-macro2",
  "proptest",
  "quote",
- "regex",
+ "serde",
  "serde_json",
  "syn 3.0.5",
  "trybuild",
@@ -1596,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_plugin"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1633,6 +1636,17 @@ dependencies = [
  "rmp-serde",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -5769,6 +5783,15 @@ name = "unicode-ident"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab72a15cf68d77cb0987d3684aa8a45c5ef827e8cb49ee2f30bfd7ba2feb519f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

@@ -9,6 +9,7 @@ use binary::{copy_playground, evenframe};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use surrealdb::Surreal;
 use surrealdb::engine::remote::http::{Client, Http};
@@ -29,6 +30,8 @@ struct Project {
 impl Project {
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
+        static ORPHANS: Once = Once::new();
+        ORPHANS.call_once(remove_orphaned_namespaces);
         let dir = TempDir::new().unwrap();
         copy_playground(dir.path());
         let namespace = format!(
@@ -180,7 +183,61 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
         .block_on(future)
 }
 
-async fn connect(namespace: &str) -> Surreal<Client> {
+/// Removes the namespaces of earlier runs that were killed before their
+/// `Project`s dropped. A namespace whose process still runs belongs to a run
+/// in progress and is left alone.
+fn remove_orphaned_namespaces() {
+    block_on(async {
+        // The SDK sends no query without a namespace, and selecting one
+        // creates it, so this run's own is removed again at the end.
+        let own = format!("evenframe_e2e_{}_preflight", std::process::id());
+        let db = connect(&own).await;
+        let mut response = db
+            .query("RETURN object::keys((INFO FOR ROOT).namespaces)")
+            .await
+            .and_then(|response| response.check())
+            .unwrap_or_else(|e| panic!("listing namespaces failed: {e}"));
+        let namespaces: Vec<String> = response.take(0).unwrap();
+        for namespace in namespaces {
+            let Some(pid) = namespace
+                .strip_prefix("evenframe_e2e_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|pid| pid.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if pid == std::process::id() || process_runs(pid) {
+                continue;
+            }
+            match db
+                .query(format!("REMOVE NAMESPACE IF EXISTS {namespace}"))
+                .await
+                .and_then(|response| response.check())
+            {
+                Ok(_) => eprintln!("removed namespace {namespace} left by an earlier killed run"),
+                Err(e) => eprintln!("failed to remove orphaned namespace {namespace}: {e}"),
+            }
+        }
+        if let Err(e) = db
+            .query(format!("REMOVE NAMESPACE IF EXISTS {own}"))
+            .await
+            .and_then(|response| response.check())
+        {
+            eprintln!("failed to remove namespace {own}: {e}");
+        }
+    });
+}
+
+/// Whether a process with this id is running.
+fn process_runs(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or_else(|e| panic!("checking whether process {pid} runs failed: {e}"))
+}
+
+async fn connect_root() -> Surreal<Client> {
     let url = env_or("SURREALDB_URL", "http://localhost:8000");
     let endpoint = url
         .trim_start_matches("https://")
@@ -194,6 +251,11 @@ async fn connect(namespace: &str) -> Surreal<Client> {
     })
     .await
     .unwrap();
+    db
+}
+
+async fn connect(namespace: &str) -> Surreal<Client> {
+    let db = connect_root().await;
     db.use_ns(namespace).use_db("playground").await.unwrap();
     db
 }
@@ -237,6 +299,14 @@ fn assert_links_point_at_existing_records(project: &Project) {
         ),
         0,
         "union links should point at a product or a service"
+    );
+    assert_eq!(
+        project.count(
+            "SELECT id FROM billed_item WHERE provider.id = NONE \
+             OR record::tb(provider) != 'service'"
+        ),
+        0,
+        "a table held by value should link to one of its records"
     );
 }
 

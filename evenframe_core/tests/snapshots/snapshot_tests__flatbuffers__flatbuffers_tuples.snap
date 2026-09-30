@@ -3,7 +3,23 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 table Geometry {
-    point_2_d: Tuple2;
-    point_3_d: Tuple3;
-    labeled: Tuple2;
+    point_2_d: GeometryPoint2D;
+    point_3_d: GeometryPoint3D;
+    labeled: GeometryLabeled;
+}
+
+table GeometryPoint2D {
+    item_0: double;
+    item_1: double;
+}
+
+table GeometryPoint3D {
+    item_0: double;
+    item_1: double;
+    item_2: double;
+}
+
+table GeometryLabeled {
+    item_0: string;
+    item_1: int32;
 }

@@ -8,6 +8,7 @@ Status: [[[['===', 'Active'], '|', ['===', 'Inactive']], '|', ['===', 'Pending']
 
 });
 
+const exported = bindings.export();
 
 
-export type Status = typeof bindings.Status.infer;
+export type Status = typeof exported.Status.infer;

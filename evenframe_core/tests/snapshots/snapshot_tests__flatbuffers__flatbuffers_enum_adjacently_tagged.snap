@@ -3,6 +3,23 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 union Event {
-    ClickData,
-    string,
+    EventClick,
+    EventKeyPress,
+    EventScroll
+}
+
+table ClickData {
+    x: int32;
+    y: int32;
+}
+
+table EventClick {
+    value: ClickData;
+}
+
+table EventKeyPress {
+    value: string;
+}
+
+table EventScroll {
 }

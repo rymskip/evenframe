@@ -9,42 +9,53 @@ use std::{
 use toml;
 use tracing::{debug, info, trace, warn};
 
-/// TypeScript import configuration for a foreign type.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Where a foreign type's TypeScript definition comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TsImport {
-    /// The symbol name to import (e.g., "DateTime", "BigDecimal"). Empty = no import.
-    #[serde(default)]
+    /// The module to import from: a package name, or a path relative to each
+    /// generated file.
+    pub from: String,
+    /// The name the module exports.
     pub name: String,
-    /// If true (default), emits `import type { X }`. If false, emits `import { X }`
-    /// which is needed for namespace types accessed as `X.Y` (e.g., `DateTime.Utc`).
+    /// Whether to write `import type`. A namespace used as a value, such as
+    /// `DateTime.Utc`, needs a plain `import`.
     #[serde(default = "default_true")]
-    pub is_type_only: bool,
-}
-
-impl Default for TsImport {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            is_type_only: true,
-        }
-    }
-}
-
-impl TsImport {
-    pub fn is_empty(&self) -> bool {
-        self.name.is_empty()
-    }
+    pub type_only: bool,
 }
 
 fn default_true() -> bool {
     true
 }
 
+/// A foreign type in a TypeScript output: its type, where `{0}`, `{1}` and so
+/// on stand for its generic parameters, and the import it needs when it is
+/// not native TypeScript.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TsMapping {
+    #[serde(rename = "type")]
+    pub type_expr: String,
+    #[serde(default)]
+    pub import: Option<TsImport>,
+}
+
+/// A foreign type in the Effect output: its schema, the type it is encoded
+/// as, and the import it needs when it is not part of Effect's `Schema`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectMapping {
+    #[serde(rename = "type")]
+    pub type_expr: String,
+    pub encoded: String,
+    #[serde(default)]
+    pub import: Option<TsImport>,
+}
+
 /// Configuration for a single foreign (external crate) type.
 /// Defines how a Rust type from an external crate maps to each database
 /// and TypeScript target.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ForeignTypeConfig {
     /// Source crate name (for documentation/provenance)
@@ -56,7 +67,7 @@ pub struct ForeignTypeConfig {
     #[serde(default)]
     pub rust_type_names: Vec<String>,
 
-    /// If true, generic params like <Utc> are ignored during parsing
+    /// If true, generic params like `<Utc>` are ignored during parsing
     #[serde(default)]
     pub ignore_generic_params: bool,
 
@@ -64,23 +75,20 @@ pub struct ForeignTypeConfig {
     #[serde(default)]
     pub surrealdb: String,
 
-    /// SurrealDB format when field is `id`, e.g. "record<{table_name}>"
+    /// SurrealDB format when field is `id`, e.g. `record<{table_name}>`
     #[serde(default)]
     pub surrealdb_id_format: Option<String>,
-    /// SurrealDB format when field is NOT `id`, e.g. "record<any>"
+    /// SurrealDB format when field is NOT `id`, e.g. `record<any>`
     #[serde(default)]
     pub surrealdb_non_id_format: Option<String>,
 
     // --- TypeSync mappings ---
     #[serde(default)]
-    pub arktype: String,
+    pub arktype: Option<TsMapping>,
     #[serde(default)]
-    pub effect_schema: String,
-    /// The "encoded" representation for Effect TS type declarations
+    pub effect: Option<EffectMapping>,
     #[serde(default)]
-    pub effect_encoded: String,
-    #[serde(default)]
-    pub macroforge: String,
+    pub macroforge: Option<TsMapping>,
     #[serde(default)]
     pub flatbuffers: String,
     #[serde(default)]
@@ -106,17 +114,87 @@ pub struct ForeignTypeConfig {
     #[serde(default)]
     pub mock_strategy: String,
 
-    // --- Import resolution ---
-    /// TypeScript import config: `{ name = "DateTime", is_type_only = false }`.
-    /// `is_type_only = true` (default) emits `import type { X }`,
-    /// `is_type_only = false` emits `import { X }` for namespace types accessed as `X.Y`.
-    #[serde(default, rename = "import")]
-    pub ts_import: TsImport,
-
     // --- Serde format annotation ---
     /// If set, generates `@serde({ format: "..." })` in macroforge output
     #[serde(default)]
     pub serde_format: String,
+}
+
+fn deserialize_foreign_types<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, ForeignTypeConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let foreign_types = BTreeMap::<String, ForeignTypeConfig>::deserialize(deserializer)?;
+    validate_foreign_types(&foreign_types).map_err(serde::de::Error::custom)?;
+    Ok(foreign_types)
+}
+
+/// Rejects foreign type entries evenframe cannot use: a placeholder no generic
+/// parameter fills, and a `RecordLink` entry that sets more than its
+/// TypeScript side, since the record link's schema and mock data are
+/// evenframe's own.
+pub fn validate_foreign_types(
+    foreign_types: &BTreeMap<String, ForeignTypeConfig>,
+) -> std::result::Result<(), String> {
+    use crate::typesync::foreign_ts::{RECORD_LINK, placeholders};
+    for (name, foreign) in foreign_types {
+        let record_link = name == RECORD_LINK;
+        let parameters = usize::from(record_link);
+        let types = [
+            (
+                "arktype",
+                foreign.arktype.as_ref().map(|mapping| &mapping.type_expr),
+            ),
+            (
+                "effect",
+                foreign.effect.as_ref().map(|mapping| &mapping.type_expr),
+            ),
+            (
+                "effect encoded",
+                foreign.effect.as_ref().map(|mapping| &mapping.encoded),
+            ),
+            (
+                "macroforge",
+                foreign
+                    .macroforge
+                    .as_ref()
+                    .map(|mapping| &mapping.type_expr),
+            ),
+        ];
+        for (output, type_expr) in types {
+            let Some(type_expr) = type_expr else {
+                continue;
+            };
+            if let Some(unfilled) = placeholders(type_expr)
+                .into_iter()
+                .find(|index| *index >= parameters)
+            {
+                return Err(format!(
+                    "foreign_types.{name}: the {output} type `{type_expr}` uses `{{{unfilled}}}`, \
+                     but {name} has {parameters} generic parameter{}",
+                    if parameters == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        let typescript_only = ForeignTypeConfig {
+            crate_name: foreign.crate_name.clone(),
+            arktype: foreign.arktype.clone(),
+            effect: foreign.effect.clone(),
+            macroforge: foreign.macroforge.clone(),
+            serde_format: foreign.serde_format.clone(),
+            ..Default::default()
+        };
+        if record_link && &typescript_only != foreign {
+            return Err(format!(
+                "foreign_types.{RECORD_LINK} can only set arktype, effect, macroforge, crate and \
+                 serde_format: the record link's Rust names, schema and mock data are \
+                 evenframe's own"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Loads environment variables from the `.env` file at `env_path`. The file
@@ -132,7 +210,7 @@ fn load_env_from(env_path: &Path) {
 /// A single `include_files` entry: either a bare path string, or a table form
 /// `{ path = "...", resolve_only = true }`.
 ///
-/// `resolve_only` registers the file's types for field-type *resolution* only —
+/// `resolve_only` registers the file's types for field-type *resolution* only:
 /// they are skipped at every emission site (schemasync `DEFINE TABLE`/mock/diff,
 /// typesync interface output). This is orthogonal to [`crate::types::Pipeline`]:
 /// pipeline chooses *which* pipelines emit a type, while `resolve_only` keeps a
@@ -141,9 +219,9 @@ fn load_env_from(env_path: &Path) {
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 pub enum IncludeFileSpec {
-    /// Bare path string — the file's types are registered and emitted, as if in-tree.
+    /// Bare path string: the file's types are registered and emitted, as if in-tree.
     Path(String),
-    /// Table form — `resolve_only` controls whether the file's types are emitted.
+    /// Table form: `resolve_only` controls whether the file's types are emitted.
     Spec {
         path: String,
         #[serde(default)]
@@ -201,7 +279,7 @@ pub struct GeneralConfig {
 
     /// Foreign type configurations, keyed by canonical type name.
     /// Defines how external Rust types map to database schemas and TypeScript types.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_foreign_types")]
     pub foreign_types: BTreeMap<String, ForeignTypeConfig>,
 
     /// Type-transform WASM plugins, keyed by plugin name.
@@ -244,9 +322,12 @@ pub struct EvenframeConfig {
     /// General configuration
     #[serde(default)]
     pub general: GeneralConfig,
-    /// Schema synchronization configuration (database operations)
-    pub schemasync: crate::schemasync::config::SchemasyncConfig,
+    /// Schema synchronization configuration (database operations), when the
+    /// project syncs a database.
+    #[serde(default)]
+    pub schemasync: Option<crate::schemasync::config::SchemasyncConfig>,
     /// Type synchronization configuration (TypeScript/Effect type generation)
+    #[serde(default)]
     pub typesync: crate::typesync::config::TypesyncConfig,
     /// Path to the config file that was loaded (set at runtime, not from TOML)
     #[serde(skip)]
@@ -258,6 +339,18 @@ pub struct EvenframeConfig {
 static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
 
 impl EvenframeConfig {
+    /// The `[schemasync]` section, which every command that reaches the
+    /// database needs.
+    pub fn require_schemasync(&self) -> Result<&crate::schemasync::config::SchemasyncConfig> {
+        self.schemasync.as_ref().ok_or_else(|| {
+            EvenframeError::config(format!(
+                "{} has no [schemasync] section; add one with a [schemasync.database] table to \
+                 sync a database",
+                self.config_file_path.display()
+            ))
+        })
+    }
+
     /// Makes every configuration lookup in this process use `path` instead of
     /// searching upward from the current directory.
     pub fn use_config_file(path: &Path) -> Result<()> {
@@ -341,27 +434,30 @@ impl EvenframeConfig {
         // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
 
-        if let crate::schemasync::config::AccessesSource::Path { ref path } =
-            config.schemasync.database.accesses
-        {
-            config.schemasync.database.resolved.access_surql =
-                Some(Self::load_surql_from_path(&project_root, path)?);
-        }
-
-        if let Some(ref func) = config.schemasync.database.functions {
-            config.schemasync.database.resolved.functions_surql =
-                Some(Self::load_surql_from_path(&project_root, &func.path)?);
-        }
-
-        if let Some(ref analyzers) = config.schemasync.database.analyzers {
-            config.schemasync.database.resolved.analyzers_surql =
-                Some(Self::load_surql_from_path(&project_root, &analyzers.path)?);
+        if let Some(schemasync) = config.schemasync.as_mut() {
+            let database = &mut schemasync.database;
+            if let crate::schemasync::config::AccessesSource::Path { ref path } = database.accesses
+            {
+                database.resolved.access_surql =
+                    Some(Self::load_surql_from_path(&project_root, path)?);
+            }
+            if let Some(ref func) = database.functions {
+                database.resolved.functions_surql =
+                    Some(Self::load_surql_from_path(&project_root, &func.path)?);
+            }
+            if let Some(ref analyzers) = database.analyzers {
+                database.resolved.analyzers_surql =
+                    Some(Self::load_surql_from_path(&project_root, &analyzers.path)?);
+            }
         }
 
         info!("Configuration loaded successfully");
         debug!(
             "Mock generation: {}, typesync outputs: {}",
-            config.schemasync.should_generate_mocks,
+            config
+                .schemasync
+                .as_ref()
+                .is_some_and(|schemasync| schemasync.should_generate_mocks),
             config.typesync.outputs.len()
         );
 
@@ -400,7 +496,7 @@ impl EvenframeConfig {
     }
 
     /// Locates the project root by the same ancestor walk as config loading,
-    /// but without parsing the config — usable before env substitution can
+    /// but without parsing the config, so it is usable before env substitution can
     /// succeed (e.g. for process locking). `None` when no config file exists
     /// in the current directory or any ancestor.
     pub fn find_project_root() -> Option<PathBuf> {
@@ -535,23 +631,30 @@ impl EvenframeConfig {
         require_connection_env: bool,
     ) -> Result<()> {
         let config_file_path = config.config_file_path.clone();
-        let mut resolved = config.schemasync.database.resolved.clone();
+        let mut resolved = config
+            .schemasync
+            .as_ref()
+            .map(|schemasync| schemasync.database.resolved.clone())
+            .unwrap_or_default();
 
         // Taken out of the strict round-trip below and substituted leniently
-        let connection = (!require_connection_env).then(|| {
-            let database = &mut config.schemasync.database;
-            (
-                std::mem::take(&mut database.url),
-                std::mem::take(&mut database.namespace),
-                std::mem::take(&mut database.database),
-            )
-        });
+        let connection = match (require_connection_env, config.schemasync.as_mut()) {
+            (false, Some(schemasync)) => {
+                let database = &mut schemasync.database;
+                Some((
+                    std::mem::take(&mut database.url),
+                    std::mem::take(&mut database.namespace),
+                    std::mem::take(&mut database.database),
+                ))
+            }
+            _ => None,
+        };
 
         // The TOML round-trip below only substitutes vars that appear in
         // config string fields; it can't reach surql content loaded from
         // disk into `resolved`. Substitute those explicitly so DDL like
-        // `WITH JWT URL '${OIDC_JWKS_URL:-…}'` reaches SurrealDB resolved
-        // — SurrealDB itself does no env-var expansion.
+        // `WITH JWT URL '${OIDC_JWKS_URL:-…}'` reaches SurrealDB resolved,
+        // since SurrealDB itself does no env-var expansion.
         if let Some(ref surql) = resolved.access_surql {
             resolved.access_surql = Some(Self::substitute_env_vars(surql)?);
         }
@@ -577,12 +680,14 @@ impl EvenframeConfig {
         })?;
 
         new_config.config_file_path = config_file_path;
-        new_config.schemasync.database.resolved = resolved;
-        if let Some((url, namespace, database)) = connection {
-            let db = &mut new_config.schemasync.database;
-            db.url = Self::substitute_env_vars_inner(&url, false)?;
-            db.namespace = Self::substitute_env_vars_inner(&namespace, false)?;
-            db.database = Self::substitute_env_vars_inner(&database, false)?;
+        if let Some(schemasync) = new_config.schemasync.as_mut() {
+            let db = &mut schemasync.database;
+            db.resolved = resolved;
+            if let Some((url, namespace, database)) = connection {
+                db.url = Self::substitute_env_vars_inner(&url, false)?;
+                db.namespace = Self::substitute_env_vars_inner(&namespace, false)?;
+                db.database = Self::substitute_env_vars_inner(&database, false)?;
+            }
         }
 
         *config = new_config;
@@ -652,6 +757,41 @@ mod tests {
     use super::*;
     use crate::typesync::config::{OutputKind, TypesyncOutput};
     use tempfile::TempDir;
+
+    fn foreign_types(entries: &str) -> std::result::Result<GeneralConfig, toml::de::Error> {
+        toml::from_str(&format!("foreign_types = {{ {entries} }}"))
+    }
+
+    #[test]
+    fn a_record_link_entry_sets_only_its_typescript_side() {
+        let owned = foreign_types(
+            "RecordLink = { macroforge = { type = \"RecordLink<{0}>\", import = { from = \"./index\", name = \"RecordLink\" } } }",
+        )
+        .unwrap();
+        assert!(owned.foreign_types.contains_key("RecordLink"));
+        let error = foreign_types("RecordLink = { surrealdb = \"record\" }")
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(
+            error.contains("foreign_types.RecordLink can only set arktype, effect, macroforge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_placeholder_needs_a_generic_parameter() {
+        let error = foreign_types("Money = { macroforge = { type = \"Money<{0}>\" } }")
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(
+            error.contains(
+                "the macroforge type `Money<{0}>` uses `{0}`, but Money has 0 generic parameters"
+            ),
+            "{error}"
+        );
+    }
 
     // ==================== GeneralConfig Tests ====================
 
@@ -936,25 +1076,27 @@ mod tests {
     }
 
     #[test]
+    fn a_config_may_leave_out_either_pipeline() {
+        let config: EvenframeConfig = toml::from_str("[general]\napply_aliases = []\n").unwrap();
+        assert!(config.schemasync.is_none());
+        assert!(config.typesync.outputs.is_empty());
+        let config = EvenframeConfig {
+            config_file_path: PathBuf::from("/project/evenframe.toml"),
+            ..config
+        };
+        let error = config.require_schemasync().unwrap_err().to_string();
+        assert!(
+            error.contains("/project/evenframe.toml has no [schemasync] section"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn test_project_root_for_legacy_config() {
         let config = EvenframeConfig {
             general: GeneralConfig::default(),
-            schemasync: toml::from_str(
-                r#"
-                should_generate_mocks = false
-                [database]
-                provider = "surrealdb"
-                url = ""
-                namespace = ""
-                database = ""
-                [mock_gen_config]
-                default_record_count = 10
-                default_preservation_mode = "Smart"
-                full_refresh_mode = false
-                "#,
-            )
-            .unwrap(),
-            typesync: toml::from_str("outputs = []").unwrap(),
+            schemasync: None,
+            typesync: crate::typesync::config::TypesyncConfig::default(),
             config_file_path: PathBuf::from("/project/evenframe.toml"),
         };
         assert_eq!(config.project_root(), Path::new("/project"));
@@ -964,22 +1106,8 @@ mod tests {
     fn test_project_root_for_dotdir_config() {
         let config = EvenframeConfig {
             general: GeneralConfig::default(),
-            schemasync: toml::from_str(
-                r#"
-                should_generate_mocks = false
-                [database]
-                provider = "surrealdb"
-                url = ""
-                namespace = ""
-                database = ""
-                [mock_gen_config]
-                default_record_count = 10
-                default_preservation_mode = "Smart"
-                full_refresh_mode = false
-                "#,
-            )
-            .unwrap(),
-            typesync: toml::from_str("outputs = []").unwrap(),
+            schemasync: None,
+            typesync: crate::typesync::config::TypesyncConfig::default(),
             config_file_path: PathBuf::from("/project/.evenframe/config.toml"),
         };
         assert_eq!(config.project_root(), Path::new("/project"));
@@ -1057,7 +1185,10 @@ mod tests {
 
         let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
         assert!(config.general.apply_aliases.is_empty()); // Default
-        assert_eq!(config.schemasync.database.url, "http://localhost:8000");
+        assert_eq!(
+            config.require_schemasync().unwrap().database.url,
+            "http://localhost:8000"
+        );
         assert_eq!(
             config.typesync.outputs,
             vec![TypesyncOutput::new(OutputKind::Arktype, "./generated/")]
@@ -1137,9 +1268,25 @@ mod tests {
         let config: EvenframeConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.general.apply_aliases.len(), 1);
         assert_eq!(config.general.apply_aliases[0], "MyAlias");
-        assert!(config.schemasync.should_generate_mocks);
+        assert!(config.require_schemasync().unwrap().should_generate_mocks);
         let kinds: Vec<OutputKind> = config.typesync.outputs.iter().map(|o| o.kind).collect();
         assert_eq!(kinds, vec![OutputKind::Arktype, OutputKind::Effect]);
+    }
+
+    #[test]
+    fn struct_variants_default_to_named_and_accept_inline() {
+        let parse = |typesync: &str| toml::from_str::<EvenframeConfig>(typesync);
+        let named = parse("[typesync]\noutputs = []\n").unwrap();
+        assert_eq!(
+            named.typesync.struct_variants,
+            crate::typesync::config::StructVariants::Named
+        );
+        let inline = parse("[typesync]\noutputs = []\nstruct_variants = \"inline\"\n").unwrap();
+        assert_eq!(
+            inline.typesync.struct_variants,
+            crate::typesync::config::StructVariants::Inline
+        );
+        assert!(parse("[typesync]\nstruct_variants = \"flattened\"\n").is_err());
     }
 
     // ==================== EvenframeConfig::new() Integration Tests ====================
@@ -1181,8 +1328,14 @@ mod tests {
 
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.schemasync.database.namespace, "test_ns");
-        assert_eq!(config.schemasync.database.database, "test_db");
+        assert_eq!(
+            config.require_schemasync().unwrap().database.namespace,
+            "test_ns"
+        );
+        assert_eq!(
+            config.require_schemasync().unwrap().database.database,
+            "test_db"
+        );
     }
 
     fn config_with_env_refs(url: &str, output_path: &str) -> EvenframeConfig {
@@ -1221,7 +1374,7 @@ mod tests {
         );
 
         EvenframeConfig::substitute_all_env_vars(&mut config, false).unwrap();
-        let database = &config.schemasync.database;
+        let database = &config.require_schemasync().unwrap().database;
         assert_eq!(database.url, "${EF_TEST_OFFLINE_UNSET_URL}");
         assert_eq!(database.namespace, "${EF_TEST_OFFLINE_UNSET_NS}");
         assert_eq!(database.database, "fallback_db");

@@ -1,4 +1,4 @@
-//! Per-file macro expansion cache for [`WorkspaceScanner`].
+//! Per-file macro expansion cache for [`WorkspaceScanner`](super::WorkspaceScanner).
 //!
 //! This module provides hash-gated caching of `cargo expand` output on a
 //! per-source-file basis. The goal is that editing a single `.rs` file only

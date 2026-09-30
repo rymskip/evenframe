@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Shape = Schema.Union(Schema.Struct({ type: Schema.Literal("Circle"), radius: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Radius' is required` }) }), Schema.Struct({ type: Schema.Literal("Rectangle"), width: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Width' is required` }), height: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Height' is required` }) }), Schema.Struct({ type: Schema.Literal("Point") })).annotations({ identifier: `Shape` });
+
+export type ShapeEncoded = { readonly type: "Circle"; readonly radius: number; } | { readonly type: "Rectangle"; readonly width: number; readonly height: number; } | { readonly type: "Point"; };
+
+
+export type ShapeType = typeof Shape.Type;

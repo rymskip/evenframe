@@ -1,6 +1,7 @@
 //! Schema comparison: the changes between the database's schema and the
 //! one the models define.
 
+#[cfg(feature = "mockmake")]
 pub mod filter;
 #[cfg(feature = "surrealdb")]
 pub mod surql;

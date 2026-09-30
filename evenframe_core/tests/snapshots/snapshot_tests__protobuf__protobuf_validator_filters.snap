@@ -1,0 +1,15 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Booking {
+    string code = 1;
+    optional string nickname = 2;
+    repeated string guests = 3;
+    string starts_on = 4;
+    string deposit = 5;
+    string sequence = 6;
+    int64 stay = 7;
+}

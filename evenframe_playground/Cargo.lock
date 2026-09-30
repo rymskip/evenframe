@@ -420,6 +420,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1485,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "clap",
  "convert_case",
@@ -1495,7 +1510,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "syn 3.0.5",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
@@ -1508,7 +1522,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "bon",
@@ -1519,6 +1533,7 @@ dependencies = [
  "derive-syn-parse",
  "derive_more",
  "dotenvy",
+ "fancy-regex",
  "futures",
  "heck 0.5.0",
  "ignore",
@@ -1544,20 +1559,20 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "try_from_expr",
+ "unicode-normalization",
+ "url",
  "uuid",
  "wasmtime",
 ]
 
 [[package]]
 name = "evenframe_derive"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "convert_case",
  "evenframe_core",
  "proc-macro2",
  "quote",
- "regex",
- "serde_json",
  "syn 3.0.5",
 ]
 
@@ -1567,13 +1582,10 @@ version = "0.1.4"
 dependencies = [
  "axum",
  "chrono",
- "convert_case",
  "evenframe",
  "evenframe_core",
  "evenframe_derive",
  "http-body-util",
- "linkme",
- "ordered-float 5.5.0",
  "protox",
  "serde",
  "serde_json",
@@ -1618,6 +1630,17 @@ dependencies = [
  "rmp-serde",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "fancy-regex"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -5691,6 +5714,15 @@ name = "unicode-ident"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab72a15cf68d77cb0987d3684aa8a45c5ef827e8cb49ee2f30bfd7ba2feb519f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

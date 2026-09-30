@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Shape {
+    ShapeCircle,
+    ShapeRectangle,
+    ShapePoint
+}
+
+table ShapeCircle {
+    radius: double;
+}
+
+table ShapeRectangle {
+    width: double;
+    height: double;
+}
+
+table ShapePoint {
+}

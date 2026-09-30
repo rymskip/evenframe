@@ -1,0 +1,15 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Booking {
+    code: string (validate: "startsWith(\"bk`${x}\"\"), trimmed, uppercase");
+    nickname: string (validate: "minLength(2)");
+    guests: [string] (validate: "maxItems(8)");
+    starts_on: string (validate: "validDate, betweenDate(\"2024-01-01\", \"2030-12-31\")");
+    deposit: string (validate: "greaterThanOrEqualToBigDecimal(\"10.50\")");
+    sequence: string (validate: "lessThanBigInt(\"-5\")");
+    stay: long (validate: "betweenDuration(\"1h30m\", \"2d\")");
+}

@@ -101,6 +101,8 @@ full_refresh_mode = false
 # its own directory. effect and macroforge also take mode = "per_file" (one
 # file per type), barrel_file, file_naming, file_extension, array_style and
 # import_extension. A single-file output can rename its file with file = "...".
+# macroforge imports each derive it does not provide from the package named in
+# macros = { Derive = "package" }.
 outputs = [
   { kind = "arktype", dir = "./src/generated/arktype" },
   # { kind = "effect", dir = "./src/generated/effect" },

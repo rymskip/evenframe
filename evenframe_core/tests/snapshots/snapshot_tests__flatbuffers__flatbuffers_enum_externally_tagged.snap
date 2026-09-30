@@ -2,7 +2,7 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-enum Status : byte {
+enum Status : ubyte {
     Active = 0,
     Inactive = 1,
     Pending = 2,

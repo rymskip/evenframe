@@ -139,7 +139,7 @@ where
                 // SurrealQL FETCH returns the full record with its `id` field
                 // intact, so both Id (via the embedded `id: "table:key"`) and
                 // Object (because every field is present) succeed. The caller
-                // asked for a fetch — prefer the richer Object form. Bare-id
+                // asked for a fetch, so prefer the richer Object form. Bare-id
                 // responses still resolve via the (Ok, Err) arm above.
                 (Ok(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
                 (Err(err_id), Err(err_obj)) => Err(serde::de::Error::custom(format!(
@@ -149,7 +149,7 @@ where
             }
         } else {
             Err(serde::de::Error::custom(format!(
-                "RecordLink<{}> must be a string or an object — got {:#?}",
+                "RecordLink<{}> must be a string or an object, got {:#?}",
                 std::any::type_name::<T>(),
                 value
             )))
@@ -169,7 +169,7 @@ pub struct Variant {
     pub output_override: Option<Box<Self>>,
     #[serde(default)]
     pub raw_attributes: BTreeMap<String, Vec<String>>,
-    /// True for the variant marked `#[default]` — the same attribute
+    /// True for the variant marked `#[default]`, the same attribute
     /// `#[derive(Default)]` uses to pick an enum's default variant. Default
     /// synthesis (both SurrealDB and TypeScript) picks this variant; if no
     /// variant is flagged, the first declared variant is used.
@@ -181,6 +181,25 @@ pub struct Variant {
 pub enum VariantData {
     InlineStruct(StructConfig),
     DataStructureRef(FieldType),
+}
+
+impl VariantData {
+    /// The type a link to this variant's enum reaches through it: a newtype
+    /// variant's type, the field type of a struct variant with one field (as
+    /// `EvenframeUnion` reads it), or another struct variant's own name.
+    pub fn linked_type_name(&self) -> Option<&str> {
+        match self {
+            VariantData::DataStructureRef(FieldType::Other(name)) => Some(name),
+            VariantData::DataStructureRef(_) => None,
+            VariantData::InlineStruct(inline) => match inline.fields.as_slice() {
+                [only] => match &only.field_type {
+                    FieldType::Other(name) => Some(name),
+                    _ => None,
+                },
+                _ => Some(&inline.struct_name),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,7 +241,7 @@ impl StructField {
     }
 
     /// Resolve `output_override` recursively. Every consumer that reads a
-    /// `StructField` should call this first — `output_override` is a literal
+    /// `StructField` should call this first: `output_override` is a literal
     /// replacement, applied uniformly across all consumers.
     pub fn effective(&self) -> &Self {
         self.output_override
@@ -313,7 +332,7 @@ impl StructField {
     /// Whether the auto-generated fallback `DEFAULT` would satisfy this field's
     /// validators. A default that the validators reject (`''` under `NonEmpty`,
     /// `0` under `Positive`, `[]` under `MinItems`) makes the field
-    /// unsatisfiable — the default itself fails the `ASSERT` — so the caller
+    /// unsatisfiable (the default itself fails the `ASSERT`), so the caller
     /// omits the default and the field becomes required instead.
     #[cfg(feature = "schemasync")]
     fn auto_default_satisfies_validators(&self) -> bool {
@@ -469,15 +488,7 @@ impl StructField {
                                             if let Some(data) = &variant.data {
                                                 match data {
                                                     VariantData::InlineStruct(s) => {
-                                                        let struct_config = app_structs.get(&s.struct_name)
-                                                        .ok_or_else(|| EvenframeError::FieldDefinition {
-                                                            message: format!("Inline enum struct '{}' should have corresponding object definition", s.struct_name),
-                                                            work_stack: format!("{:#?}", work_stack),
-                                                            value_stack: format!("{:#?}", value_stack),
-                                                            item: format!("{:#?}", item),
-                                                            visited_types: format!("{:#?}", visited_types),
-                                                        })?
-                                                        .effective();
+                                                        let struct_config = s.effective();
                                                         match &enum_def.representation {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: { fields } }
@@ -974,7 +985,7 @@ pub struct StructConfig {
 
 impl StructConfig {
     /// Resolve `output_override` recursively. Every consumer that reads a
-    /// `StructConfig` should call this first — `output_override` is a literal
+    /// `StructConfig` should call this first: `output_override` is a literal
     /// replacement, applied uniformly across all consumers.
     pub fn effective(&self) -> &Self {
         self.output_override
@@ -1031,11 +1042,7 @@ pub fn link_target_tables(
             union
                 .variants
                 .iter()
-                .filter_map(|variant| match variant.data.as_ref()? {
-                    VariantData::InlineStruct(enum_struct) => table_key(&enum_struct.struct_name),
-                    VariantData::DataStructureRef(FieldType::Other(name)) => table_key(name),
-                    VariantData::DataStructureRef(_) => None,
-                })
+                .filter_map(|variant| table_key(variant.data.as_ref()?.linked_type_name()?))
                 .collect()
         })
         .unwrap_or_default()
@@ -1287,6 +1294,47 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         });
         assert_ne!(vd1, vd2);
+    }
+
+    #[test]
+    fn a_variant_links_through_its_newtype_or_only_field() {
+        let field = |name: &str, field_type: FieldType| StructField {
+            field_name: name.to_string(),
+            field_type,
+            ..Default::default()
+        };
+        let inline = |fields: Vec<StructField>| {
+            VariantData::InlineStruct(StructConfig {
+                struct_name: "Named".to_string(),
+                fields,
+                ..Default::default()
+            })
+        };
+        let invoice = || FieldType::Other("Invoice".to_string());
+        assert_eq!(
+            VariantData::DataStructureRef(invoice()).linked_type_name(),
+            Some("Invoice")
+        );
+        assert_eq!(
+            VariantData::DataStructureRef(FieldType::U32).linked_type_name(),
+            None
+        );
+        assert_eq!(
+            inline(vec![field("invoice", invoice())]).linked_type_name(),
+            Some("Invoice")
+        );
+        assert_eq!(
+            inline(vec![field("count", FieldType::U32)]).linked_type_name(),
+            None
+        );
+        assert_eq!(
+            inline(vec![
+                field("invoice", invoice()),
+                field("note", FieldType::String)
+            ])
+            .linked_type_name(),
+            Some("Named")
+        );
     }
 
     // ==================== StructField Tests ====================
@@ -1694,7 +1742,7 @@ mod tests {
     #[cfg(feature = "schemasync")]
     #[test]
     fn test_generate_define_statement_resolves_record_link_override() {
-        // Models the dealdraft `partial_route` synthetic plugin scenario:
+        // Models a synthetic plugin that adds a projection:
         // a real table field is `Vec<RecordLink<PartialUser>>`, where
         // `PartialUser` is a TS-only projection whose `output_override`
         // points back to the underlying `User` table.
@@ -1747,7 +1795,7 @@ mod tests {
             raw_attributes: BTreeMap::new(),
         };
 
-        // Real `user` table — the override target
+        // Real `user` table, the override target
         let user_table = TableConfig {
             table_name: "user".to_string(),
             struct_config: StructConfig {

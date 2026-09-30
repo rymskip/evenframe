@@ -174,9 +174,10 @@ fn test_user_message_in_schema() {
                 "User.email should have validate rules: {}",
                 line
             );
+            // The email keyword's own pattern, which is what the validator checks.
             assert!(
-                line.contains("email: true"),
-                "User.email should have email: true validator: {}",
+                line.contains("pattern: \"^[0-9A-Za-z_%+.-]+@"),
+                "User.email should have the email pattern: {}",
                 line
             );
         }
@@ -262,14 +263,17 @@ fn test_address_message_in_schema() {
         "Schema should contain Address message"
     );
 
-    // Country should have pattern validator for uppercase
-    let has_country_validator = content
-        .lines()
-        .any(|line| line.contains("country") && line.contains("pattern"));
-
+    // Uppercase is a Unicode case check no protoc-gen-validate rule holds, so
+    // the field names it instead of approximating it.
+    let lines: Vec<&str> = content.lines().collect();
+    let country = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("string country = 5"))
+        .expect("Address.country should be in the schema");
     assert!(
-        has_country_validator,
-        "Address.country should have pattern validator for uppercase"
+        lines[country - 1].contains("protoc-gen-validate cannot check: uppercase"),
+        "Address.country should note that uppercase is not checked: {}",
+        lines[country - 1]
     );
 }
 
@@ -485,9 +489,9 @@ fn test_string_validator_conversion() {
         "max_len validator should be converted"
     );
 
-    // email validator
+    // email validator, as the email keyword's pattern
     assert!(
-        content.contains("email: true"),
+        content.contains("pattern: \"^[0-9A-Za-z_%+.-]+@"),
         "email validator should be converted"
     );
 }
@@ -625,14 +629,14 @@ fn test_cart_item_message_in_schema() {
         "Schema should contain CartItem message"
     );
 
-    // CartItem.quantity should have gt: 0 (positive) validator
+    // CartItem.quantity is a positive integer: its inclusive lower bound is 1
     let has_quantity_validator = content
         .lines()
-        .any(|line| line.contains("quantity") && line.contains("gt:"));
+        .any(|line| line.contains("quantity = 3") && line.contains("gte: 1"));
 
     assert!(
         has_quantity_validator,
-        "CartItem.quantity should have gt: 0 (positive) validator"
+        "CartItem.quantity should have gte: 1 (positive integer) validator"
     );
 }
 

@@ -2,4 +2,29 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
+export class RectangleData extends Schema.Class<RectangleData>("RectangleData")( { 
+  width: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Width' is required` }),
+  height: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Height' is required` })
+}) {[key: string]: unknown}
 
+export class CircleData extends Schema.Class<CircleData>("CircleData")( { 
+  radius: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Radius' is required` })
+}) {[key: string]: unknown}
+
+export const Shape = Schema.Union(Schema.Struct({ type: Schema.Literal("Circle"), radius: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Radius' is required` }) }), Schema.Struct({ type: Schema.Literal("Rectangle"), width: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Width' is required` }), height: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Height' is required` }) }), Schema.Struct({ type: Schema.Literal("Point") })).annotations({ identifier: `Shape` });
+
+export interface RectangleDataEncoded {
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface CircleDataEncoded {
+  readonly radius: number;
+}
+
+export type ShapeEncoded = ({ readonly type: "Circle"; } & CircleDataEncoded) | ({ readonly type: "Rectangle"; } & RectangleDataEncoded) | { readonly type: "Point"; };
+
+
+export type RectangleDataType = typeof RectangleData.Type;
+export type CircleDataType = typeof CircleData.Type;
+export type ShapeType = typeof Shape.Type;
