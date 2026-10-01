@@ -174,7 +174,7 @@ fn test_playground_models_have_serialize_derive() {
 
     let config = BuildConfig::builder().scan_path(&playground_dir).build();
     let (_enums, tables, objects) = build_all_configs(&config).unwrap();
-    let structs = merge_tables_and_objects(&tables, &objects);
+    let structs = merge_tables_and_objects(tables, objects);
 
     // The playground auth.rs models use #[derive(Debug, Clone, Serialize, Deserialize, Evenframe)]
     // Check at least one has Serialize

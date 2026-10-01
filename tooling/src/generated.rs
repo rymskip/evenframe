@@ -84,11 +84,42 @@ fn write_outputs() -> std::io::Result<Outputs> {
             fs::write(directory.join(&name), format!("{prelude}{body}{suffix}"))?;
         }
     }
+    // The typesync pipeline snapshot holds whole generated files, including
+    // per-file outputs whose files import each other.
+    let pipeline = snapshot_body(&snapshots.join(PIPELINE_SNAPSHOT))?;
+    for (relative, content) in split_files(&pipeline) {
+        let path = typescript.join("pipeline").join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, content)?;
+        typescript_files.push(format!("pipeline/{relative}"));
+    }
     Ok(Outputs {
         typescript,
         typescript_files,
         schemas,
     })
+}
+
+/// The snapshot of every output of a scanned project.
+const PIPELINE_SNAPSHOT: &str = "typesync_pipeline__every_output_of_a_scanned_project.snap";
+
+/// The files in a snapshot that lists each under a `=== <path>` line.
+fn split_files(body: &str) -> Vec<(&str, String)> {
+    let mut files: Vec<(&str, String)> = Vec::new();
+    for line in body.lines() {
+        match line.strip_prefix("=== ") {
+            Some(path) => files.push((path, String::new())),
+            None => {
+                if let Some((_, content)) = files.last_mut() {
+                    content.push_str(line);
+                    content.push('\n');
+                }
+            }
+        }
+    }
+    files
 }
 
 fn file_name(path: &Path) -> String {

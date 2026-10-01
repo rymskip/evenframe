@@ -183,7 +183,7 @@ pub fn check_validators(validators: &[Validator]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{DateValidator, Decimal, DurationValidator, Validator};
 
     #[test]
     fn decimals_compare_exactly() {

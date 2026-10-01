@@ -1,26 +1,12 @@
 //! Serde types for synthetic-item WASM plugin communication.
 //!
 //! Unlike [`super::plugin_types`], synthetic plugins don't override existing
-//! items — they receive the full set of `StructConfig`, `TaggedUnion`, and
-//! `TableConfig` values evenframe has accumulated, and return *new* ones to
-//! be merged into the build.
-//!
-//! # Why full configs, not summaries
-//!
-//! An earlier iteration passed lightweight summaries (name + a canonical
-//! field-type string) to keep the JSON small. That turned out to block
-//! legitimate system-wide plugins: a partial-projection plugin, for
-//! example, needs to copy field types *verbatim* from an existing struct
-//! into a new one, and can't rebuild `FieldType::Option(Box<FieldType::
-//! RecordLink<...>>)` from a display string. Full configs solve that — they
-//! round-trip the real serde tree, so plugins can splat any field
-//! directly into their output.
-//!
-//! Both input and output use the real [`StructConfig`] / [`TaggedUnion`] /
-//! [`TableConfig`] types, which are already `Serialize + Deserialize` in
-//! this crate. The plugin crate (`evenframe_plugin`) receives them as
-//! `serde_json::Value` maps so plugin authors don't have to pull
-//! `evenframe_core` (and all its deps) into their cdylibs.
+//! items: they receive every `StructConfig`, `TaggedUnion` and `TableConfig`
+//! evenframe has accumulated, and return new ones to merge into the build.
+//! Full configs let a plugin copy field types verbatim (a partial
+//! projection, say) instead of rebuilding them from a display string. The
+//! plugin crate (`evenframe_plugin`) reads them as `serde_json::Value` maps,
+//! so plugins don't pull in `evenframe_core`.
 
 use crate::schemasync::table::TableConfig;
 use crate::types::{StructConfig, TaggedUnion};
@@ -30,13 +16,13 @@ use std::collections::BTreeMap;
 /// Full snapshot of everything the scanner + rule plugins have accumulated,
 /// handed to each synthetic plugin for system-wide decisions.
 #[derive(Debug, Clone, Serialize)]
-pub struct SyntheticPluginInput {
+pub struct SyntheticPluginInput<'a> {
     /// Non-persisted application structs, keyed by struct name.
-    pub structs: BTreeMap<String, StructConfig>,
+    pub structs: &'a BTreeMap<String, StructConfig>,
     /// Tagged unions (Rust enums), keyed by enum name.
-    pub enums: BTreeMap<String, TaggedUnion>,
+    pub enums: &'a BTreeMap<String, TaggedUnion>,
     /// Persisted structs (tables), keyed by snake_case table name.
-    pub tables: BTreeMap<String, TableConfig>,
+    pub tables: &'a BTreeMap<String, TableConfig>,
 }
 
 /// Plugin response: a set of brand-new items to merge into the build.

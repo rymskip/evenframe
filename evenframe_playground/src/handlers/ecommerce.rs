@@ -1,7 +1,7 @@
 use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
-use crate::models::{OrderStatus, ProductCategory};
+use crate::models::ecommerce::{OrderStatus, ProductCategory};
 
 /// List all products (mock data)
 pub async fn list_products() -> impl IntoResponse {
@@ -98,7 +98,10 @@ fn mock_order(id: &str, customer_id: &str, total: f64, status: OrderStatus) -> s
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        OrderStatus, ProductCategory, StatusCode, get_order, get_product, list_orders,
+        list_products, mock_order, mock_product,
+    };
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;

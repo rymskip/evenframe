@@ -69,6 +69,10 @@ flatbuffers = ["evenframe_core/flatbuffers"]
 # Macroforge TypeScript interface generation. Implies: typesync.
 macroforge = ["evenframe_core/macroforge"]
 
+# Workspace scanning and `tooling::generate()` for build scripts.
+# Implies: typesync.
+tooling = ["evenframe_core/tooling"]
+
 # --- Schema synchronization (forwarded to evenframe_core) ---
 
 # Schema comparison and synchronization engine. Implies: surrealdb.
@@ -116,3 +120,6 @@ tempfile = "3.27"
 mockall = "0.15"
 proptest = "1.11"
 pretty_assertions = "1.4"
+
+[lints]
+workspace = true

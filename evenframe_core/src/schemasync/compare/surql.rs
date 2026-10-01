@@ -11,26 +11,19 @@ use super::types::{
 };
 use crate::{
     EvenframeError, Result, evenframe_log,
-    schemasync::{config::AccessType, database::surql::access::setup_access_definitions},
+    schemasync::{config::AccessType, database::surql::access::access_definitions_surql},
 };
 use futures::StreamExt;
 use std::collections::BTreeMap;
 use surrealdb::engine::local::{Db, Mem};
-use surrealdb::{Surreal, engine::remote::http::Client};
-use tracing;
+use surrealdb::{Connection, Surreal, engine::remote::http::Client};
 
 /// SurrealDB-specific schema comparator that uses in-memory databases
 #[derive(Debug)]
 pub struct SurrealdbComparator<'a> {
     db: &'a Surreal<Client>,
     schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
-
-    // Runtime state
-    remote_schema: Option<Surreal<Db>>,
-    new_schema: Option<Surreal<Db>>,
     access_query: String,
-    remote_schema_string: String,
-    new_schema_string: String,
     schema_changes: Option<SchemaChanges>,
 }
 
@@ -42,132 +35,75 @@ impl<'a> SurrealdbComparator<'a> {
         Self {
             db,
             schemasync_config,
-            remote_schema: None,
-            new_schema: None,
             access_query: String::new(),
-            remote_schema_string: String::new(),
-            new_schema_string: String::new(),
             schema_changes: None,
         }
     }
 
+    /// Compares the database's schema with the one `define_statements`
+    /// declare. The database's schema is read from its schema-only export;
+    /// the declared one is applied to an in-memory database and exported the
+    /// same way, so both are read from the same export form.
     pub async fn run(&mut self, define_statements: &str) -> Result<()> {
         tracing::info!("Starting SurrealdbComparator pipeline");
+        let (remote_schema_string, new_schema) = tokio::try_join!(
+            export_schema(self.db, "remote database"),
+            self.declared_schema(define_statements),
+        )?;
+        evenframe_log!(remote_schema_string, "remote_schema.surql");
 
-        tracing::debug!("Setting up schemas");
-        self.setup_schemas(define_statements).await?;
-
-        tracing::debug!("Setting up access definitions");
-        self.setup_access().await?;
-
-        tracing::debug!("Exporting schemas for comparison");
-        self.export_schemas().await?;
-
-        tracing::debug!("Comparing schemas");
-        self.compare_schemas().await?;
-
-        tracing::info!("SurrealdbComparator pipeline completed successfully");
-        Ok(())
-    }
-
-    /// Setup backup and create in-memory schemas
-    async fn setup_schemas(&mut self, define_statements: &str) -> Result<()> {
-        tracing::trace!("Creating backup and in-memory schemas");
-        let (remote_schema, new_schema) = setup_backup_and_schemas(self.db).await?;
-        self.remote_schema = Some(remote_schema);
-
-        // Analyzers first: FULLTEXT indexes in the define statements reference them.
-        let resolved = &self.schemasync_config.database.resolved;
-        if let Some(ref analyzers_surql) = resolved.analyzers_surql
-            && !analyzers_surql.is_empty()
-        {
-            if analyzers_reference_functions(analyzers_surql)
-                && let Some(ref functions_surql) = resolved.functions_surql
-            {
-                let _ = new_schema.query(functions_surql.as_str()).await;
-            }
-            tracing::debug!("Executing analyzer surql on embedded DB");
-            let _ = new_schema
-                .query(analyzers_surql.as_str())
-                .await
-                .map_err(|e| {
-                    tracing::warn!(error = %e, "Failed to execute analyzer surql on embedded DB");
-                });
+        self.access_query = access_definitions_surql(&self.schemasync_config.database)?;
+        evenframe_log!(&self.access_query, "access_query.surql");
+        if !self.access_query.trim().is_empty() {
+            run_checked(&new_schema, &self.access_query, "the access definitions").await?;
         }
 
-        // Execute and check define statements
-        let _ = new_schema.query(define_statements).await.map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem executing the define statements on the new_schema embedded db: {e}"
-            ))
-        });
-
-        // Execute function surql on embedded DB if available (for validation)
-        if let Some(ref functions_surql) = self.schemasync_config.database.resolved.functions_surql
-            && !functions_surql.is_empty()
-        {
-            tracing::debug!("Executing function surql on embedded DB for validation");
-            let _ = new_schema.query(functions_surql.as_str()).await.map_err(|e| {
-                tracing::warn!(error = %e, "Failed to execute function surql on embedded DB");
-                EvenframeError::database(format!(
-                    "There was a problem executing function surql on the new_schema embedded db: {e}"
-                ))
-            });
-        }
-
-        self.new_schema = Some(new_schema);
-
-        tracing::trace!("Schemas setup complete");
-        Ok(())
-    }
-
-    /// Setup access definitions
-    async fn setup_access(&mut self) -> Result<()> {
-        tracing::trace!("Setting up access definitions");
-        let new_schema = self.new_schema.as_ref().unwrap();
-        self.access_query = setup_access_definitions(new_schema, self.schemasync_config).await?;
-        tracing::trace!(
-            access_query_length = self.access_query.len(),
-            "Access query generated"
-        );
-        Ok(())
-    }
-
-    /// Export schemas for comparison
-    async fn export_schemas(&mut self) -> Result<()> {
-        tracing::trace!("Exporting schemas");
-        let remote_schema = self.remote_schema.as_ref().unwrap();
-        let new_schema = self.new_schema.as_ref().unwrap();
-
-        let (remote_schema_string, new_schema_string) =
-            export_schemas(remote_schema, new_schema).await?;
-
-        tracing::trace!(
-            remote_schema_size = remote_schema_string.len(),
-            new_schema_size = new_schema_string.len(),
-            "Schemas exported"
-        );
-
-        self.remote_schema_string = remote_schema_string;
-        self.new_schema_string = new_schema_string;
-        Ok(())
-    }
-
-    /// Compare schemas to find changes
-    async fn compare_schemas(&mut self) -> Result<()> {
-        tracing::trace!("Starting schema comparison");
-        let changes =
-            compare_schemas(self.db, &self.remote_schema_string, &self.new_schema_string).await?;
-
+        let new_schema_string = export_schema(&new_schema, "declared schema").await?;
+        evenframe_log!(new_schema_string, "new_schema.surql");
+        let changes = compare_schemas(&remote_schema_string, &new_schema_string)?;
         tracing::info!(
             new_tables = changes.new_tables.len(),
             removed_tables = changes.removed_tables.len(),
             modified_tables = changes.modified_tables.len(),
             "Schema changes detected"
         );
-
         self.schema_changes = Some(changes);
         Ok(())
+    }
+
+    /// An in-memory database holding the schema the models declare: the
+    /// configured analyzers, the define statements and the functions.
+    async fn declared_schema(&self, define_statements: &str) -> Result<Surreal<Db>> {
+        let new_schema = in_memory_database("new", "memory").await?;
+        let resolved = &self.schemasync_config.database.resolved;
+        let functions = resolved
+            .functions_surql
+            .as_deref()
+            .filter(|functions| !functions.is_empty());
+
+        // Analyzers first: FULLTEXT indexes in the define statements reference
+        // them, and functions go before the analyzers that call them.
+        let mut functions_applied = false;
+        if let Some(analyzers) = resolved
+            .analyzers_surql
+            .as_deref()
+            .filter(|analyzers| !analyzers.is_empty())
+        {
+            if let Some(functions) = functions
+                && analyzers_reference_functions(analyzers)
+            {
+                run_checked(&new_schema, functions, "the function definitions").await?;
+                functions_applied = true;
+            }
+            run_checked(&new_schema, analyzers, "the analyzer definitions").await?;
+        }
+        run_checked(&new_schema, define_statements, "the define statements").await?;
+        if let Some(functions) = functions
+            && !functions_applied
+        {
+            run_checked(&new_schema, functions, "the function definitions").await?;
+        }
+        Ok(new_schema)
     }
 
     /// The access definitions the models declare, to apply to the database.
@@ -182,110 +118,87 @@ impl<'a> SurrealdbComparator<'a> {
     }
 }
 
+/// Runs `statements` on the in-memory database `db`, failing on any statement
+/// that fails.
+async fn run_checked(db: &Surreal<Db>, statements: &str, what: &str) -> Result<()> {
+    db.query(statements)
+        .await
+        .and_then(|response| response.check())
+        .map_err(|error| {
+            EvenframeError::database(format!(
+                "Applying {what} to the in-memory schema failed: {error}"
+            ))
+        })?;
+    Ok(())
+}
+
+/// A fresh in-memory database using `namespace` and `database`.
+async fn in_memory_database(namespace: &str, database: &str) -> Result<Surreal<Db>> {
+    let db = Surreal::new::<Mem>(()).await.map_err(|error| {
+        EvenframeError::database(format!(
+            "Starting the '{namespace}' in-memory database failed: {error}"
+        ))
+    })?;
+    db.use_ns(namespace)
+        .use_db(database)
+        .await
+        .map_err(|error| {
+            EvenframeError::database(format!(
+                "Selecting {namespace}/{database} in the in-memory database failed: {error}"
+            ))
+        })?;
+    Ok(db)
+}
+
+/// A schema-only export of `db`: tables, fields, indexes, events, accesses
+/// and analyzers. Records, functions, users, params and experimental
+/// definitions are left out, since the comparison reads none of them.
+pub async fn export_schema<C: Connection>(db: &Surreal<C>, name: &str) -> Result<String> {
+    let mut stream = db
+        .export(())
+        .with_config()
+        .versions(false)
+        .accesses(true)
+        .analyzers(true)
+        .functions(false)
+        .records(false)
+        .params(false)
+        .users(false)
+        .apis(false)
+        .buckets(false)
+        .modules(false)
+        .configs(false)
+        .await
+        .map_err(|error| {
+            EvenframeError::database(format!("Exporting the {name}'s schema failed: {error}"))
+        })?;
+    // Chunks can split a multi-byte character, so decode once at the end.
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        bytes.extend(chunk.map_err(|error| {
+            EvenframeError::database(format!(
+                "Reading the {name}'s schema export failed: {error}"
+            ))
+        })?);
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        EvenframeError::database(format!("The {name}'s schema export is not UTF-8: {error}"))
+    })
+}
+
 /// Compare two schema export strings and return the differences
-pub async fn compare_schemas(
-    db: &Surreal<Client>,
+pub fn compare_schemas(
     remote_schema_string: &str,
     new_schema_string: &str,
 ) -> Result<SchemaChanges> {
     tracing::debug!("Parsing and comparing schema exports");
-    let importer = SchemaImporter::new(db);
-
-    // Parse exports with error propagation instead of panicking
-    let remote_schema = importer
-        .parse_schema_from_export(remote_schema_string)
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                remote_len = remote_schema_string.len(),
-                "Failed parsing remote schema export"
-            );
-            e
-        })?;
-
-    let new_schema = importer
-        .parse_schema_from_export(new_schema_string)
-        .map_err(|e| {
-            tracing::error!(
-                error = %e,
-                new_len = new_schema_string.len(),
-                "Failed parsing new schema export"
-            );
-            e
-        })?;
-
+    let remote_schema = SchemaImporter::parse_schema_from_export(remote_schema_string)?;
+    let new_schema = SchemaImporter::parse_schema_from_export(new_schema_string)?;
     let schema_changes = super::Comparator::compare(&remote_schema, &new_schema)?;
-
     evenframe_log!(format!("{:#?}", schema_changes), "changes.log");
     Ok(schema_changes)
 }
 
-/// Export schemas from two in-memory databases
-pub async fn export_schemas(
-    remote_schema: &Surreal<Db>,
-    new_schema: &Surreal<Db>,
-) -> Result<(String, String)> {
-    tracing::trace!("Exporting remote schema");
-    let mut remote_stream = remote_schema
-        .export(())
-        .with_config()
-        .versions(false)
-        .accesses(true)
-        .analyzers(true)
-        .functions(false)
-        .records(false)
-        .params(false)
-        .users(false)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'remote_schema' embedded database's schema: {e}"
-            ))
-        })?;
-
-    let mut remote_schema_string = String::new();
-    while let Some(result) = remote_stream.next().await {
-        let line = result.map_err(|e| {
-            EvenframeError::database(format!("Error reading remote schema stream: {e}"))
-        })?;
-        remote_schema_string.push_str(&String::from_utf8_lossy(&line));
-    }
-
-    evenframe_log!(remote_schema_string, "remote_schema.surql");
-
-    tracing::trace!("Exporting new schema");
-    let mut new_stream = new_schema
-        .export(())
-        .with_config()
-        .versions(false)
-        .accesses(true)
-        .analyzers(true)
-        .functions(false)
-        .records(false)
-        .params(false)
-        .users(false)
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'new_schema' embedded database's schema: {e}"
-            ))
-        })?;
-
-    let mut new_schema_string = String::new();
-    while let Some(result) = new_stream.next().await {
-        let line = result.map_err(|e| {
-            EvenframeError::database(format!("Error reading new schema stream: {e}"))
-        })?;
-        new_schema_string.push_str(&String::from_utf8_lossy(&line));
-    }
-
-    evenframe_log!(new_schema_string, "new_schema.surql");
-
-    tracing::trace!("Schema export complete");
-    Ok((remote_schema_string, new_schema_string))
-}
-
-/// Setup backup and in-memory schemas from a remote database
 /// Keywords that end the column list of a `DEFINE INDEX` statement.
 const INDEX_CLAUSE_KEYWORDS: &[&str] = &[
     "UNIQUE",
@@ -417,165 +330,23 @@ pub fn analyzers_reference_functions(surql: &str) -> bool {
     surql.to_uppercase().contains("FUNCTION FN::")
 }
 
-pub async fn setup_backup_and_schemas(db: &Surreal<Client>) -> Result<(Surreal<Db>, Surreal<Db>)> {
-    tracing::trace!("Creating database backup");
-    let mut backup_stream = db.export(()).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "There was a problem exporting the remote database: {e}"
-        ))
-    })?;
+/// Parses SurrealQL schema exports into structured definitions.
+pub struct SchemaImporter;
 
-    let mut backup = String::new();
-    while let Some(result) = backup_stream.next().await {
-        let line = result
-            .map_err(|e| EvenframeError::database(format!("Error reading backup stream: {e}")))?;
-        backup.push_str(&String::from_utf8_lossy(&line));
-    }
-
-    evenframe_log!(backup, "backup.surql");
-
-    let remote_schema = Surreal::new::<Mem>(())
-        .await
-        .expect("Something went wrong starting the remote_schema in-memory db");
-
-    tracing::trace!("Importing backup to remote in-memory schema");
-    remote_schema
-        .use_ns("remote")
-        .use_db("backup")
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem using the namespace or db for 'remote_schema': {e}"
-            ))
-        })?;
-
-    remote_schema.query(&backup).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "Something went wrong importing the remote schema to the in-memory db: {e}"
-        ))
-    })?;
-
-    let new_schema = Surreal::new::<Mem>(()).await.map_err(|e| {
-        EvenframeError::database(format!(
-            "Something went wrong starting the new_schema in-memory db: {e}"
-        ))
-    })?;
-
-    tracing::trace!("Setting up new in-memory schema");
-    new_schema
-        .use_ns("new")
-        .use_db("memory")
-        .await
-        .map_err(|e| {
-            EvenframeError::database(format!(
-                "There was a problem exporting the 'remote_schema' embedded database's schema: {e}"
-            ))
-        })?;
-
-    tracing::trace!("In-memory schemas ready");
-    Ok((remote_schema, new_schema))
-}
-
-/// Imports schema definitions from a SurrealDB instance
-pub struct SchemaImporter<'a> {
-    client: &'a Surreal<Client>,
-}
-
-impl<'a> SchemaImporter<'a> {
-    pub fn new(client: &'a Surreal<Client>) -> Self {
-        Self { client }
-    }
-
-    /// Import schema-only (no data) from the database
-    pub async fn import_schema_only(&self) -> Result<SchemaDefinition> {
-        // Export schema only (no records)
-        let mut export_stream = self
-            .client
-            .export(())
-            .with_config()
-            .records(false) // Schema only, no data
-            .await
-            .map_err(|e| {
-                EvenframeError::comparison(format!("Failed to export schema from database: {e}"))
-            })?;
-
-        let mut schema_statements = Vec::new();
-        let mut statement_count = 0;
-
-        // Collect all export statements
-        while let Some(result) = export_stream.next().await {
-            match result {
-                Ok(bytes) => {
-                    statement_count += 1;
-                    let statement = String::from_utf8(bytes).map_err(|e| {
-                        EvenframeError::comparison(format!(
-                            "Failed to parse export data at statement {statement_count}: {e}",
-                        ))
-                    })?;
-
-                    // Skip empty statements
-                    if !statement.trim().is_empty() {
-                        schema_statements.push(statement);
-                    }
-                }
-                Err(e) => {
-                    return Err(EvenframeError::comparison(format!(
-                        "Error reading export stream at statement {statement_count}: {e}",
-                    )));
-                }
-            }
-        }
-
-        // Check if we got any statements
-        if schema_statements.is_empty() {
-            return Err(EvenframeError::comparison(
-                "No schema statements found in database export".to_string(),
-            ));
-        }
-
-        // Parse the exported statements into our schema structure
-        self.parse_schema_statements(schema_statements)
-    }
-
-    /// Export schema only as raw DEFINE statements
-    pub async fn export_schema_only(&self) -> Result<String> {
-        // Export schema only (no records)
-        let mut export_stream = self
-            .client
-            .export(())
-            .await
-            .map_err(|e| EvenframeError::comparison(format!("Failed to export schema: {e}")))?;
-
-        let mut schema_statements = Vec::new();
-
-        while let Some(Ok(bytes)) = export_stream.next().await {
-            let statement = String::from_utf8(bytes).map_err(|e| {
-                EvenframeError::comparison(format!("Failed to parse export data: {e}"))
-            })?;
-
-            // Only keep schema-related statements (DEFINE)
-            let trimmed = statement.trim();
-            if trimmed.starts_with("DEFINE ") {
-                schema_statements.push(statement);
-            }
-        }
-
-        Ok(schema_statements.join("\n"))
-    }
-
+impl SchemaImporter {
     /// Parse schema from raw export string
-    pub fn parse_schema_from_export(&self, export_data: &str) -> Result<SchemaDefinition> {
-        let statements: Vec<String> = export_data
-            .lines()
-            .map(|s| s.to_string())
-            .filter(|s| !s.trim().is_empty())
-            .collect();
-
-        self.parse_schema_statements(statements)
+    pub fn parse_schema_from_export(export_data: &str) -> Result<SchemaDefinition> {
+        Self::parse_schema_statements(
+            export_data
+                .lines()
+                .filter(|statement| !statement.trim().is_empty()),
+        )
     }
 
     /// Parse SurrealDB export statements into structured schema
-    fn parse_schema_statements(&self, statements: Vec<String>) -> Result<SchemaDefinition> {
+    fn parse_schema_statements<'s>(
+        statements: impl Iterator<Item = &'s str>,
+    ) -> Result<SchemaDefinition> {
         let mut tables = BTreeMap::new();
         let edges = BTreeMap::new();
         let mut accesses = Vec::new();
@@ -603,15 +374,13 @@ impl<'a> SchemaImporter<'a> {
                     let table_def = TableDefinition {
                         name: table_name.clone(),
                         schema_type,
-                        fields: current_fields.clone(),
-                        array_wildcard_fields: current_wildcard_fields.clone(),
+                        fields: std::mem::take(&mut current_fields),
+                        array_wildcard_fields: std::mem::take(&mut current_wildcard_fields),
                         permissions: None,
                         indexes: table_indexes.remove(&table_name).unwrap_or_default(),
                         events: table_events.remove(&table_name).unwrap_or_default(),
                     };
                     tables.insert(table_name, table_def);
-                    current_fields.clear();
-                    current_wildcard_fields.clear();
                 }
 
                 // Extract table name and store statement
@@ -1239,7 +1008,7 @@ impl<'a> SchemaImporter<'a> {
     /// Parse a DEFINE EVENT statement and extract the associated table.
     ///
     /// SurrealDB's `DEFINE EVENT` syntax treats the `TABLE` keyword as
-    /// optional — `... ON TABLE foo ...` and `... ON foo ...` are both
+    /// optional: `... ON TABLE foo ...` and `... ON foo ...` are both
     /// valid. INFO/EXPORT round-trips strip the keyword, so the
     /// schema-import parser has to accept both forms or it silently
     /// drops every existing event from the loaded schema. When that
@@ -1535,7 +1304,7 @@ impl<'a> SchemaImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{IndexDefinition, ObjectType, SchemaImporter, analyzers_reference_functions};
 
     fn parse_index(stmt: &str) -> (String, IndexDefinition) {
         SchemaImporter::parse_index_definition(stmt)

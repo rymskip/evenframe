@@ -104,7 +104,7 @@ fn effective_variant_mut(variant: &mut Variant) -> &mut Variant {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BTreeMap, FieldType, StructConfig, TaggedUnion, VariantData, declare_payloads};
     use crate::types::StructField;
 
     fn payload(name: &str, fields: &[(&str, FieldType)]) -> VariantData {

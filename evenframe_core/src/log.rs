@@ -3,86 +3,87 @@
 /// because the variable is missing.
 #[cfg(feature = "dev-mode")]
 #[doc(hidden)]
-pub fn log_root() -> String {
-    std::env::var("ABSOLUTE_PATH_TO_EVENFRAME")
-        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned())
+pub fn log_root() -> std::path::PathBuf {
+    std::env::var_os("ABSOLUTE_PATH_TO_EVENFRAME")
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
+}
+
+/// A log file name stamped with the current local time.
+#[cfg(feature = "dev-mode")]
+#[doc(hidden)]
+pub fn timestamped_filename() -> String {
+    format!("{}.log", chrono::Local::now().format("%Y_%m_%d_%H_%M_%S"))
+}
+
+/// Write one `evenframe_log!` entry to `subdir/filename` under
+/// [`log_root`]. Debug logging must not fail the run, so a failure is
+/// reported as a warning instead.
+#[cfg(feature = "dev-mode")]
+#[doc(hidden)]
+pub fn write_entry(subdir: &str, filename: &str, append: bool, entry: &str) {
+    use std::io::Write;
+
+    let logs_dir = log_root().join(subdir);
+    if let Err(error) = std::fs::create_dir_all(&logs_dir) {
+        tracing::warn!(dir = %logs_dir.display(), %error, "evenframe_log could not create its directory");
+        return;
+    }
+    let path = logs_dir.join(filename);
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true);
+    if append {
+        options.append(true);
+    } else {
+        options.write(true).truncate(true);
+    }
+    if let Err(error) = options
+        .open(&path)
+        .and_then(|mut file| file.write_all(entry.as_bytes()))
+    {
+        tracing::warn!(path = %path.display(), %error, "evenframe_log could not write");
+    }
 }
 
 #[cfg(feature = "dev-mode")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __internal_log_impl {
-    // Standard variant - rooted at `log_root()`
     ($content:expr, $log_subdir:expr, standard) => {{
-        let filename = format!("{}.log", chrono::Local::now().format("%Y_%m_%d_%H_%M_%S"));
-        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
-
-        $crate::__internal_log_impl!($content, logs_dir, filename, false, impl);
+        let filename = $crate::log::timestamped_filename();
+        $crate::__internal_log_impl!($content, $log_subdir, filename, false, standard);
     }};
 
     ($content:expr, $log_subdir:expr, $filename:expr, standard) => {{
-        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
-
-        $crate::__internal_log_impl!($content, logs_dir, $filename, false, impl);
+        $crate::__internal_log_impl!($content, $log_subdir, $filename, false, standard);
     }};
 
     ($content:expr, $log_subdir:expr, $filename:expr, $append:expr, standard) => {{
-        let logs_dir = format!("{}/{}", $crate::log::log_root(), $log_subdir);
-
-        $crate::__internal_log_impl!($content, logs_dir, $filename, $append, impl);
-    }};
-
-    // Core implementation
-    ($content:expr, $logs_dir:expr, $filename:expr, $append:expr, impl) => {{
-        use std::io::Write;
-
-        // Create logs directory if it doesn't exist
-        let _ = std::fs::create_dir_all(&$logs_dir);
-
-        let path_str = &format!("{}/{}", $logs_dir, $filename);
-        let path = std::path::Path::new(path_str);
-
-        let mut options = std::fs::OpenOptions::new();
-        options.create(true);
-        if $append {
-            options.append(true);
+        let filename: &str = &$filename;
+        let expr_str = stringify!($content);
+        let entry = if expr_str.starts_with("format!")
+            || expr_str.starts_with("&format!")
+            || expr_str.starts_with("\"")
+            || expr_str.starts_with("String::")
+            || filename.ends_with(".surql")
+        {
+            format!("{}\n", $content)
         } else {
-            options.write(true).truncate(true);
-        }
-
-        if let Ok(mut file_handle) = options.open(path) {
-            let expr_str = stringify!($content);
-            let formatted = if expr_str.starts_with("format!")
-                || expr_str.starts_with("&format!")
-                || expr_str.starts_with("\"")
-                || expr_str.starts_with("String::")
-            {
-                format!("{}\n", $content)
-            } else if $filename.ends_with(".surql") {
-                format!("{}\n", $content)
+            let value_str = format!("{:#?}", &$content);
+            let separator = if value_str.contains('\n') || value_str.len() > 80 {
+                " = \n"
             } else {
-                let value_str = format!("{:#?}", &$content);
-
-                if value_str.contains('\n') || value_str.len() > 80 {
-                    format!(
-                        "[{}:{}] {} = \n{}\n",
-                        file!(),
-                        line!(),
-                        stringify!($content),
-                        value_str
-                    )
-                } else {
-                    format!(
-                        "[{}:{}] {} = {}\n",
-                        file!(),
-                        line!(),
-                        stringify!($content),
-                        value_str
-                    )
-                }
+                " = "
             };
-            let _ = file_handle.write_all(formatted.as_bytes());
-        }
+            format!(
+                "[{}:{}] {}{}{}\n",
+                file!(),
+                line!(),
+                stringify!($content),
+                separator,
+                value_str
+            )
+        };
+        $crate::log::write_entry($log_subdir, filename, $append, &entry);
     }};
 }
 
@@ -110,16 +111,42 @@ macro_rules! evenframe_log {
     }};
 }
 
+// The arguments are type-checked but never evaluated, so a `format!` passed
+// in costs nothing outside dev mode.
 #[cfg(not(feature = "dev-mode"))]
 #[macro_export]
 macro_rules! evenframe_log {
     ($content:expr) => {{
-        let _ = &$content;
+        if false {
+            let _ = &$content;
+        }
     }};
     ($content:expr, $filename:expr) => {{
-        let _ = (&$content, &$filename);
+        if false {
+            let _ = (&$content, &$filename);
+        }
     }};
     ($content:expr, $filename:expr, $append:expr) => {{
-        let _ = (&$content, &$filename, &$append);
+        if false {
+            let _ = (&$content, &$filename, &$append);
+        }
     }};
+}
+
+#[cfg(all(test, not(feature = "dev-mode")))]
+mod tests {
+    use std::cell::Cell;
+
+    #[test]
+    fn arguments_are_not_evaluated_outside_dev_mode() {
+        let evaluations = Cell::new(0);
+        let render = || {
+            evaluations.set(evaluations.get() + 1);
+            String::from("rendered")
+        };
+        crate::evenframe_log!(render());
+        crate::evenframe_log!(render(), "file.log");
+        crate::evenframe_log!(render(), "file.log", true);
+        assert_eq!(evaluations.get(), 0);
+    }
 }

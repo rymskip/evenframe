@@ -1,6 +1,7 @@
 //! Offline SurrealQL dumps of the resolved schema, as written by
 //! `evenframe schemasync dump`. Nothing here connects to a database.
 
+use crate::error::Result;
 use crate::schemasync::TableConfig;
 use crate::schemasync::compare::surql::analyzers_reference_functions;
 use crate::schemasync::config::DatabaseConfig;
@@ -18,8 +19,8 @@ pub fn tables_surql(
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &ForeignTypeRegistry,
     allow_scripting: bool,
-) -> String {
-    tables
+) -> Result<String> {
+    Ok(tables
         .iter()
         .map(|(table_name, table)| {
             generate_define_statements(
@@ -32,8 +33,8 @@ pub fn tables_surql(
                 allow_scripting,
             )
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect::<Result<Vec<_>>>()?
+        .join("\n"))
 }
 
 /// Everything schemasync defines, in the order it applies it, so the result
@@ -42,13 +43,13 @@ pub fn tables_surql(
 /// uses a `FUNCTION fn::...` preprocessor the functions go before the
 /// analyzers instead. Each non-empty section starts with a `-- <name>`
 /// comment.
-pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> String {
+pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> Result<String> {
     let resolved = &database.resolved;
     let analyzers = resolved.analyzers_surql.clone().unwrap_or_default();
     let functions = resolved.functions_surql.clone().unwrap_or_default();
     let functions_first = analyzers_reference_functions(&analyzers);
 
-    let mut sections = vec![("Accesses", access_definitions_surql(database))];
+    let mut sections = vec![("Accesses", access_definitions_surql(database)?)];
     if functions_first {
         sections.push(("Functions", functions.clone()));
     }
@@ -58,17 +59,17 @@ pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> String {
         sections.push(("Functions", functions));
     }
 
-    sections
+    Ok(sections
         .into_iter()
         .filter(|(_, body)| !body.trim().is_empty())
         .map(|(title, body)| format!("-- {title}\n{}\n", body.trim()))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{DatabaseConfig, schema_surql};
     use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource};
 
     fn database(analyzers: &str, functions: &str) -> DatabaseConfig {
@@ -97,7 +98,8 @@ mod tests {
                 "DEFINE FUNCTION OVERWRITE fn::greet() { RETURN 'hi' };",
             ),
             "DEFINE TABLE OVERWRITE user SCHEMAFULL;\n",
-        );
+        )
+        .unwrap();
         assert_eq!(
             section_order(&dump),
             vec!["Accesses", "Analyzers", "Tables", "Functions"]
@@ -114,7 +116,8 @@ mod tests {
                 "DEFINE FUNCTION OVERWRITE fn::strip($s: string) { RETURN $s };",
             ),
             "DEFINE TABLE OVERWRITE user SCHEMAFULL;",
-        );
+        )
+        .unwrap();
         assert_eq!(
             section_order(&dump),
             vec!["Accesses", "Functions", "Analyzers", "Tables"]
@@ -125,7 +128,7 @@ mod tests {
     fn empty_sections_are_omitted() {
         let mut database = DatabaseConfig::for_testing();
         database.accesses = AccessesSource::Inline(Vec::new());
-        let dump = schema_surql(&database, "DEFINE TABLE OVERWRITE user SCHEMAFULL;");
+        let dump = schema_surql(&database, "DEFINE TABLE OVERWRITE user SCHEMAFULL;").unwrap();
         assert_eq!(dump, "-- Tables\nDEFINE TABLE OVERWRITE user SCHEMAFULL;\n");
     }
 }

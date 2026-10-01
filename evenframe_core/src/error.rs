@@ -331,7 +331,7 @@ impl EvenframeError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{EvenframeError, PathBuf, Result};
     use std::io;
 
     // ==================== Display/Error Message Tests ====================

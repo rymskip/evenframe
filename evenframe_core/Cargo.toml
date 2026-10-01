@@ -28,11 +28,10 @@ dev-mode = []
 # Type synchronization (TypeScript / schema generation)
 # ---------------------------------------------------------------------------
 
-# Enables the core typesync module for generating TypeScript types from Rust
-# structs. Includes ArkType and Effect-TS generators, file grouping, import
-# resolution, and doc-comment support. The typesync config types are always
-# compiled (used by EvenframeConfig), but the generators require this feature.
-typesync = []
+# Enables the typesync generators: ArkType and Effect-TS, file grouping,
+# import resolution and doc comments. The typesync config types are always
+# compiled (EvenframeConfig uses them); the generators need this feature.
+typesync = ["dep:rayon"]
 
 # Enables Protocol Buffers (.proto) schema generation from Rust types.
 # Implies: typesync
@@ -58,7 +57,7 @@ typesync-all = ["typesync", "protobuf", "flatbuffers", "macroforge"]
 # definitions against a live SurrealDB database: schema comparison, DEFINE
 # statement generation and the database execution pipeline. No mock data.
 # Implies: surrealdb
-schemasync = ["surrealdb", "tempfile"]
+schemasync = ["surrealdb", "tempfile", "dep:futures", "dep:rand", "dep:tokio"]
 
 # The mock data engine: generates and writes mock records during schemasync,
 # with the full IANA timezone database. Without it, any request for mock
@@ -83,13 +82,18 @@ surrealdb = ["dep:surrealdb"]
 # Convenience bundles
 # ---------------------------------------------------------------------------
 
-# Enables every feature: all generators, schemasync with mock data, and WASM
-# plugins. Use this for CI or when you need everything.
-full = ["mockmake", "typesync-all", "wasm-plugins"]
+# Workspace scanning, the scan and expansion caches, the process lock and
+# `tooling::generate()` for build scripts. evenframe_derive builds without it.
+# Implies: typesync
+tooling = ["typesync", "dep:ignore", "dep:blake3"]
+
+# Enables every feature: all generators, schemasync with mock data, WASM
+# plugins and tooling. Use this for CI or when you need everything.
+full = ["mockmake", "typesync-all", "wasm-plugins", "tooling"]
 
 # The feature set used by the evenframe CLI binary. Enables full schemasync
-# with mock data, all type generators, and SurrealDB.
-cli = ["mockmake", "typesync-all", "wasm-plugins", "dep:clap"]
+# with mock data, all type generators, tooling, and SurrealDB.
+cli = ["mockmake", "typesync-all", "wasm-plugins", "tooling", "dep:clap"]
 
 [dependencies]
 # workspace dependencies
@@ -99,7 +103,7 @@ try_from_expr = { workspace = true }
 syn = { workspace = true }
 tracing = { workspace = true }
 convert_case = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, optional = true }
 toml = { workspace = true }
 url = { workspace = true }
 
@@ -114,33 +118,33 @@ dotenvy = "0.15.7"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 serde = { version = "1.0.229", features = ["derive"] }
-heck = "0.5.0"
 chrono = "0.4.45"
 derive_more = { version = "2.1.1", features = ["from"] }
 petgraph = "0.8.3"
-futures = "0.3.34"
 serde-value = "0.7.0"
 thiserror = "2.0.20"
 ordered-float = { version = "5.5.0", features = ["serde"] }
-derive-syn-parse = "0.2.0"
 linkme = "0.3.37"
-once_cell = "1.21.4"
-ignore = "0.4.33"
-rayon = "1.12"
-blake3 = "1.8"
 # ArkType string keyword checks shared by derive, mockmake and typesync
 unicode-normalization = "0.1.25"
 fancy-regex = "0.19.2"
 
 # Always compiled (used in type definitions throughout)
 bon = "3.10.1"
-rand = "0.10.2"
-rand_distr = "0.6.0"
 uuid = { version = "1.26", features = ["v4", "serde"] }
 strum = { version = "0.28.0", features = ["derive"] }
 
+# Optional: the schemasync engine
+futures = { version = "0.3.34", optional = true }
+rand = { version = "0.10.2", optional = true }
+
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
+
+# Optional: the typesync generators and tooling
+rayon = { version = "1.12", optional = true }
+ignore = { version = "0.4.33", optional = true }
+blake3 = { version = "1.8", optional = true }
 
 # Optional: WASM plugin runtime
 wasmtime = { version = "48", optional = true }
@@ -154,3 +158,6 @@ pretty_assertions = "1.4"
 insta = { workspace = true }
 serde_json = { workspace = true }
 tests_macros = { path = "../tests_macros" }
+
+[lints]
+workspace = true

@@ -1,15 +1,15 @@
 use crate::config::{EffectMapping, ForeignTypeConfig};
-use crate::dependency::{RecursionInfo, analyse_recursion, deps_of};
+use crate::config::{RECORD_LINK, fill};
 use crate::error::{EvenframeError, Result};
 use crate::types::{
     EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData,
 };
 use crate::typesync::doc_comment::format_jsdoc;
-use crate::typesync::foreign_ts::{RECORD_LINK, fill};
 use crate::typesync::js_checks::{
     self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal, template_literal,
 };
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
+use crate::typesync::type_index::TypeIndex;
 use crate::validator::keywords;
 use crate::validator::string_rules::{StringParse, StringRule, StringTransform};
 use crate::validator::{
@@ -17,185 +17,218 @@ use crate::validator::{
     NumberValidator, StringValidator, Validator, bounds,
 };
 use convert_case::{Case, Casing};
-use petgraph::{algo::toposort, graphmap::DiGraphMap};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+use std::fmt::Write;
 use tracing;
 
+/// The Effect schemas of every type, in one file. With `print_types`, each
+/// schema's `…Type` alias follows the schemas.
 pub fn generate_effect_schema_string(
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     print_types: bool,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     tracing::info!(
-        struct_count = structs.len(),
-        enum_count = enums.len(),
+        struct_count = index.structs().len(),
+        enum_count = index.enums().len(),
         print_types = print_types,
         "Generating Effect Schema string"
     );
-
-    // 1.  Analyse recursion once at the beginning.
-    tracing::debug!("Analyzing recursion in types");
-    let rec = analyse_recursion(structs, enums);
-
-    // 2.  Topologically sort components so all **non-recursive**
-    //     dependencies appear first. This removes the need for
-    //     `Schema.suspend` outside of recursive strongly connected components (SCCs).
-    tracing::debug!("Performing topological sort of components");
-    let mut condensation = DiGraphMap::<usize, ()>::new();
-    // Every component is a node, so a type with no dependency edges is still emitted.
-    for &comp_id in rec.meta.keys() {
-        condensation.add_node(comp_id);
-    }
-    for (t1, _tos) in rec
-        .meta
-        .values()
-        .flat_map(|(_, mem)| mem.iter())
-        .filter_map(|n| rec.comp_of.get(n).map(|&c| (n, c)))
-    {
-        let from_comp = rec.comp_of[t1];
-        for t2 in &deps_of(t1, structs, enums) {
-            let to_comp = rec.comp_of[t2];
-            if from_comp != to_comp {
-                // An edge A -> B means "A depends on B".
-                condensation.add_edge(from_comp, to_comp, ());
-            }
+    let mut emitter = EffectEmitter::new(index, registry, Defined::emitted_only());
+    for name in index.ordered() {
+        if emitter.defined.contains(name) {
+            continue;
         }
-    }
-    // `toposort` gives an order where dependencies come first. We reverse it
-    // to process dependencies before the types that use them.
-    let mut ordered_comps = toposort(&condensation, None).unwrap_or_default();
-    ordered_comps.reverse();
-
-    // 3.  Generate all TypeScript code in a single, unified loop.
-    tracing::debug!("Generating schema classes, types, and encoded interfaces");
-    let mut out_classes = String::new();
-    let mut out_types = String::new();
-    let mut out_encoded = String::new(); // All '...Encoded' interfaces/types go here.
-    let mut processed = BTreeSet::<String>::new();
-
-    // Helper closure for field conversion that has access to `rec`.
-    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> Result<String> {
-        field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
-    };
-
-    for comp_id in ordered_comps {
-        // Order inside the SCC is arbitrary; preserve original order for deterministic output.
-        let mut members = rec.meta[&comp_id].1.clone();
-        members.sort();
-
-        for name in members {
-            if processed.contains(&name) {
-                continue; // Skip if already processed
-            }
-
-            // `resolve_only` types stay in the maps for reference resolution
-            // (field conversion below) but are not emitted as their own schema
-            // class/interface.
-            let resolve_only = enums
-                .values()
-                .any(|e| e.resolve_only && e.enum_name.to_case(Case::Pascal) == name)
-                || structs
-                    .values()
-                    .any(|s| s.resolve_only && s.struct_name.to_case(Case::Pascal) == name);
-            if resolve_only {
-                processed.insert(name);
-                continue;
-            }
-
-            if let Some(e) = enums
-                .values()
-                .find(|e| e.enum_name.to_case(Case::Pascal) == name)
-            {
-                // ---- ENUM ---------------------------------------------------
-                // Write doc comment if present
-                if let Some(ref doc) = e.doccom {
-                    out_classes.push_str(&format_jsdoc(doc, ""));
-                }
-
-                // Generate the schema class for the enum.
-                out_classes.push_str(&format!("export const {} = Schema.Union(", name));
-                let variants = e
-                    .variants
-                    .iter()
-                    .map(|v| {
-                        enum_variant_to_schema(
-                            v,
-                            &e.representation,
-                            &name,
-                            &to_schema,
-                            &processed,
-                            structs,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ");
-                out_classes.push_str(&variants);
-                out_classes.push_str(&format!(").annotations({{ identifier: `{}` }});\n", name));
-
-                // Generate the `.Type` alias.
-                out_types.push_str(&format!(
-                    "export type {}Type = typeof {}.Type;\n",
-                    name, name
-                ));
-
-                // Generate the `...Encoded` type alias for the enum.
-                out_encoded.push_str(&encoded_alias_for_enum(e, registry)?);
-            } else if let Some(struct_config) = structs
-                .values()
-                .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
-            {
-                // ---- STRUCT -------------------------------------------------
-                // Write doc comment if present
-                if let Some(ref doc) = struct_config.doccom {
-                    out_classes.push_str(&format_jsdoc(doc, ""));
-                }
-
-                // Generate the schema class for the struct.
-                out_classes.push_str(&format!(
-                    "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
-                    name, name, name
-                ));
-                for (idx, f) in struct_config.fields.iter().enumerate() {
-                    if let Some(ref doc) = f.doccom {
-                        out_classes.push_str(&format_jsdoc(doc, "  "));
-                    }
-                    let entry = field_schema_entry(f, |field_type| {
-                        to_schema(field_type, &name, &processed)
-                    })?;
-                    let separator = if idx + 1 == struct_config.fields.len() {
-                        ""
-                    } else {
-                        ","
-                    };
-                    out_classes.push_str(&format!("  {entry}{separator}\n"));
-                }
-                out_classes.push_str("}) {[key: string]: unknown}\n\n");
-
-                // Generate the `.Type` alias.
-                out_types.push_str(&format!(
-                    "export type {}Type = typeof {}.Type;\n",
-                    name, name
-                ));
-
-                // Generate the `...Encoded` interface for the struct.
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry)?);
-            }
-            processed.insert(name);
+        // `resolve_only` types stay in the maps for reference resolution but
+        // are not emitted as their own schema.
+        let resolve_only = index
+            .enums_named(name)
+            .iter()
+            .any(|tagged_union| tagged_union.resolve_only)
+            || index
+                .structs_named(name)
+                .iter()
+                .any(|struct_config| struct_config.resolve_only);
+        if resolve_only {
+            emitter.defined.emitted.insert(name.clone());
+            continue;
         }
+        emitter.emit(name, false)?;
     }
 
+    let EffectEmitter {
+        classes,
+        types,
+        encoded,
+        ..
+    } = emitter;
     let result = if print_types {
-        format!("{out_classes}\n{out_encoded}\n{out_types}")
+        format!("{classes}\n{encoded}\n{types}")
     } else {
-        format!("{out_classes}\n{out_encoded}")
+        format!("{classes}\n{encoded}")
     };
-
     tracing::info!(
         output_length = result.len(),
         "Effect Schema generation complete"
     );
     Ok(result)
+}
+
+/// The Effect schemas of one per-file output's file, `type_names`, each
+/// followed by its `…Type` alias. Every type outside the file counts as
+/// already defined, since the file imports it, so no reference to one is
+/// suspended.
+pub fn generate_effect_schema_for_types(
+    type_names: &[String],
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    let in_file: BTreeSet<String> = type_names.iter().cloned().collect();
+    let mut emitter = EffectEmitter::new(
+        index,
+        registry,
+        Defined {
+            emitted: BTreeSet::new(),
+            outside: Some((index.effective_names(), &in_file)),
+        },
+    );
+    for name in index.in_definition_order(&in_file) {
+        if !emitter.defined.contains(name) {
+            emitter.emit(name, true)?;
+        }
+    }
+    Ok(format!("{}\n{}", emitter.classes, emitter.encoded))
+}
+
+/// The types a reference can name directly rather than through
+/// `Schema.suspend`: those defined earlier in the file and, for one file of a
+/// per-file output, every type outside it.
+struct Defined<'s> {
+    emitted: BTreeSet<String>,
+    /// Every type's effective name, and the names in this file.
+    outside: Option<(&'s BTreeSet<String>, &'s BTreeSet<String>)>,
+}
+
+impl Defined<'_> {
+    fn emitted_only() -> Self {
+        Self {
+            emitted: BTreeSet::new(),
+            outside: None,
+        }
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.emitted.contains(name)
+            || self
+                .outside
+                .is_some_and(|(all, in_file)| all.contains(name) && !in_file.contains(name))
+    }
+}
+
+/// Writes Effect schemas one type at a time, in definition order.
+struct EffectEmitter<'i, 'a, 's> {
+    index: &'i TypeIndex<'a>,
+    registry: &'i crate::types::ForeignTypeRegistry,
+    defined: Defined<'s>,
+    classes: String,
+    types: String,
+    encoded: String,
+}
+
+impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
+    fn new(
+        index: &'i TypeIndex<'a>,
+        registry: &'i crate::types::ForeignTypeRegistry,
+        defined: Defined<'s>,
+    ) -> Self {
+        Self {
+            index,
+            registry,
+            defined,
+            classes: String::new(),
+            types: String::new(),
+            encoded: String::new(),
+        }
+    }
+
+    /// Writes the schema, `…Type` alias and `…Encoded` type of `name`,
+    /// putting the alias after the schema when `alias_inline`, else with the
+    /// other aliases.
+    fn emit(&mut self, name: &str, alias_inline: bool) -> Result<()> {
+        let index = self.index;
+        let registry = self.registry;
+        let to_schema = |field_type: &FieldType, current: &str, defined: &Defined| {
+            field_type_to_effect_schema(field_type, index, current, defined, registry)
+        };
+        let alias = format!("export type {name}Type = typeof {name}.Type;\n");
+        if let Some(tagged_union) = index.enum_named(name) {
+            if let Some(doc) = &tagged_union.doccom {
+                self.classes.push_str(&format_jsdoc(doc, ""));
+            }
+            let variants = tagged_union
+                .variants
+                .iter()
+                .map(|variant| {
+                    enum_variant_to_schema(
+                        variant,
+                        &tagged_union.representation,
+                        name,
+                        &to_schema,
+                        &self.defined,
+                        index,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(", ");
+            writeln!(
+                self.classes,
+                "export const {name} = Schema.Union({variants}).annotations({{ identifier: `{name}` }});"
+            )
+            .map_err(write_failed)?;
+            self.encoded
+                .push_str(&encoded_alias_for_enum(tagged_union, registry)?);
+        } else if let Some(struct_config) = index.struct_named(name) {
+            if let Some(doc) = &struct_config.doccom {
+                self.classes.push_str(&format_jsdoc(doc, ""));
+            }
+            writeln!(
+                self.classes,
+                "export class {name} extends Schema.Class<{name}>(\"{name}\")( {{ "
+            )
+            .map_err(write_failed)?;
+            for (position, field) in struct_config.fields.iter().enumerate() {
+                if let Some(doc) = &field.doccom {
+                    self.classes.push_str(&format_jsdoc(doc, "  "));
+                }
+                let entry = field_schema_entry(field, |field_type| {
+                    to_schema(field_type, name, &self.defined)
+                })?;
+                let separator = if position + 1 == struct_config.fields.len() {
+                    ""
+                } else {
+                    ","
+                };
+                writeln!(self.classes, "  {entry}{separator}").map_err(write_failed)?;
+            }
+            self.classes.push_str("}) {[key: string]: unknown}\n\n");
+            self.encoded
+                .push_str(&encoded_interface_for_struct(struct_config, registry)?);
+        } else {
+            self.defined.emitted.insert(name.to_string());
+            return Ok(());
+        }
+        if alias_inline {
+            self.classes.push_str(&alias);
+        } else {
+            self.types.push_str(&alias);
+        }
+        self.defined.emitted.insert(name.to_string());
+        Ok(())
+    }
+}
+
+fn write_failed(error: std::fmt::Error) -> EvenframeError {
+    EvenframeError::type_sync(format!("writing the Effect schema failed: {error}"))
 }
 
 // ----- Encoded Type Generation Helpers -------------------------------------
@@ -286,11 +319,11 @@ fn enum_variant_to_schema<F>(
     repr: &EnumRepresentation,
     enum_name: &str,
     to_schema: &F,
-    processed: &BTreeSet<String>,
-    structs: &BTreeMap<String, StructConfig>,
+    defined: &Defined,
+    index: &TypeIndex,
 ) -> Result<String>
 where
-    F: Fn(&FieldType, &str, &BTreeSet<String>) -> Result<String>,
+    F: Fn(&FieldType, &str, &Defined) -> Result<String>,
 {
     let tag_entry = |tag: &str| format!("{tag}: Schema.Literal(\"{}\")", v.name);
     let Some(data) = &v.data else {
@@ -308,7 +341,7 @@ where
         let mut entries: Vec<String> = tag.map(tag_entry).into_iter().collect();
         for field in fields {
             entries.push(field_schema_entry(field, |field_type| {
-                to_schema(field_type, enum_name, processed)
+                to_schema(field_type, enum_name, defined)
             })?);
         }
         Ok(format!("Schema.Struct({{ {} }})", entries.join(", ")))
@@ -323,8 +356,8 @@ where
             None => fields_schema(&inline.fields, None)?,
         },
         VariantData::DataStructureRef(field_type) => match tag {
-            Some(tag) => return fields_schema(held_struct_fields(field_type, structs)?, Some(tag)),
-            None => to_schema(field_type, enum_name, processed)?,
+            Some(tag) => return fields_schema(held_struct_fields(field_type, index)?, Some(tag)),
+            None => to_schema(field_type, enum_name, defined)?,
         },
     };
     Ok(match repr {
@@ -396,15 +429,10 @@ fn enum_variant_to_encoded(
 /// writes the tag into that struct's object, which only a struct can take.
 fn held_struct_fields<'a>(
     field_type: &FieldType,
-    structs: &'a BTreeMap<String, StructConfig>,
+    index: &TypeIndex<'a>,
 ) -> Result<&'a [StructField]> {
     let held = match field_type {
-        FieldType::Other(name) => {
-            let pascal = name.to_case(Case::Pascal);
-            structs
-                .values()
-                .find(|struct_config| struct_config.struct_name.to_case(Case::Pascal) == pascal)
-        }
+        FieldType::Other(name) => index.struct_named(name),
         _ => None,
     };
     held.map(|struct_config| struct_config.effective().fields.as_slice())
@@ -489,10 +517,9 @@ fn map_key_encoded(
 /// Converts a `FieldType` into its corresponding Effect `Schema` representation.
 fn field_type_to_effect_schema(
     field_type: &FieldType,
-    structs: &BTreeMap<String, StructConfig>,
+    index: &TypeIndex,
     current: &str,
-    rec: &RecursionInfo,
-    processed: &BTreeSet<String>,
+    defined: &Defined,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     enum WorkItem<'a> {
@@ -576,12 +603,11 @@ fn field_type_to_effect_schema(
                     let pascal = name.to_case(Case::Pascal);
                     let wrap_id = format!("{}Ref", pascal);
                     // Decide whether we need Schema.suspend for recursion.
-                    if rec.is_recursive_pair(current, &pascal) && !processed.contains(&pascal) {
+                    if index.recursion().is_recursive_pair(current, &pascal)
+                        && !defined.contains(&pascal)
+                    {
                         // Forward edge *inside* a recursive SCC requires suspension.
-                        if structs
-                            .values()
-                            .any(|sc| sc.struct_name.to_case(Case::Pascal) == pascal)
-                        {
+                        if index.struct_named(&pascal).is_some() {
                             value_stack.push(format!(
                                 "Schema.suspend((): Schema.Schema<{}, {}Encoded> => {}).annotations({{ identifier: `{}` }})",
                                 pascal, pascal, pascal, wrap_id
@@ -794,143 +820,6 @@ fn field_type_to_ts_encoded(
         "Generation ended with not exactly one value on the stack."
     );
     Ok(value_stack.pop().unwrap())
-}
-
-/// Generates Effect Schema code for a specific subset of types (used in per-file mode).
-///
-/// Types NOT in `type_names` are treated as already-processed (imported from other files),
-/// so `Schema.suspend()` will NOT be emitted for cross-file references.
-pub fn generate_effect_schema_for_types(
-    type_names: &[String],
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> Result<String> {
-    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
-
-    // Analyse recursion across ALL types (needed for correct SCC detection).
-    let rec = analyse_recursion(structs, enums);
-
-    // Build condensation graph for topological ordering.
-    let mut condensation = DiGraphMap::<usize, ()>::new();
-    // Every component is a node, so a type with no dependency edges is still emitted.
-    for &comp_id in rec.meta.keys() {
-        condensation.add_node(comp_id);
-    }
-    for (t1, _) in rec
-        .meta
-        .values()
-        .flat_map(|(_, mem)| mem.iter())
-        .filter_map(|n| rec.comp_of.get(n).map(|&c| (n, c)))
-    {
-        let from_comp = rec.comp_of[t1];
-        for t2 in &deps_of(t1, structs, enums) {
-            let to_comp = rec.comp_of[t2];
-            if from_comp != to_comp {
-                condensation.add_edge(from_comp, to_comp, ());
-            }
-        }
-    }
-    let mut ordered_comps = toposort(&condensation, None).unwrap_or_default();
-    ordered_comps.reverse();
-
-    // Pre-populate processed with all types NOT in this group.
-    // This means cross-file references won't get Schema.suspend().
-    // Use `effective()` so overrides replace the scanned type.
-    let all_types: BTreeSet<String> = structs
-        .values()
-        .map(|s| s.effective().struct_name.to_case(Case::Pascal))
-        .chain(
-            enums
-                .values()
-                .map(|e| e.effective().enum_name.to_case(Case::Pascal)),
-        )
-        .collect();
-    let mut processed: BTreeSet<String> = all_types.difference(&type_set).cloned().collect();
-
-    let to_schema = |ft: &FieldType, cur: &str, proc: &BTreeSet<String>| -> Result<String> {
-        field_type_to_effect_schema(ft, structs, cur, &rec, proc, registry)
-    };
-
-    let mut out_classes = String::new();
-    let mut out_encoded = String::new();
-
-    for comp_id in ordered_comps {
-        let mut members = rec.meta[&comp_id].1.clone();
-        members.sort();
-
-        for name in members {
-            if processed.contains(&name) || !type_set.contains(&name) {
-                continue;
-            }
-
-            if let Some(e) = enums
-                .values()
-                .find(|e| e.enum_name.to_case(Case::Pascal) == name)
-            {
-                if let Some(ref doc) = e.doccom {
-                    out_classes.push_str(&format_jsdoc(doc, ""));
-                }
-                out_classes.push_str(&format!("export const {} = Schema.Union(", name));
-                let variants = e
-                    .variants
-                    .iter()
-                    .map(|v| {
-                        enum_variant_to_schema(
-                            v,
-                            &e.representation,
-                            &name,
-                            &to_schema,
-                            &processed,
-                            structs,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ");
-                out_classes.push_str(&variants);
-                out_classes.push_str(&format!(").annotations({{ identifier: `{}` }});\n", name));
-                out_classes.push_str(&format!(
-                    "export type {}Type = typeof {}.Type;\n",
-                    name, name
-                ));
-                out_encoded.push_str(&encoded_alias_for_enum(e, registry)?);
-            } else if let Some(struct_config) = structs
-                .values()
-                .find(|sc| sc.struct_name.to_case(Case::Pascal) == name)
-            {
-                if let Some(ref doc) = struct_config.doccom {
-                    out_classes.push_str(&format_jsdoc(doc, ""));
-                }
-                out_classes.push_str(&format!(
-                    "export class {} extends Schema.Class<{}>(\"{}\")( {{ \n",
-                    name, name, name
-                ));
-                for (idx, f) in struct_config.fields.iter().enumerate() {
-                    if let Some(ref doc) = f.doccom {
-                        out_classes.push_str(&format_jsdoc(doc, "  "));
-                    }
-                    let entry = field_schema_entry(f, |field_type| {
-                        to_schema(field_type, &name, &processed)
-                    })?;
-                    let separator = if idx + 1 == struct_config.fields.len() {
-                        ""
-                    } else {
-                        ","
-                    };
-                    out_classes.push_str(&format!("  {entry}{separator}\n"));
-                }
-                out_classes.push_str("}) {[key: string]: unknown}\n\n");
-                out_classes.push_str(&format!(
-                    "export type {}Type = typeof {}.Type;\n",
-                    name, name
-                ));
-                out_encoded.push_str(&encoded_interface_for_struct(struct_config, registry)?);
-            }
-            processed.insert(name);
-        }
-    }
-
-    Ok(format!("{out_classes}\n{out_encoded}"))
 }
 
 // ----- Validator Application Logic -----------------------------------------
@@ -1345,7 +1234,10 @@ fn duration_literal(value: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator, Validator,
+        apply_validators_to_schema,
+    };
 
     #[test]
     fn rejects_unparsable_validator_bounds() {

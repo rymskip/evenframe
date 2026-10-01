@@ -282,7 +282,11 @@ pub struct FloatValidation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        AllIntegerTypes, CaseValidation, ComplexStringValidation, FloatValidation, InnerValidated,
+        IntegerBounds, MultiValidatorOptionalString, MultipleNumberValidators,
+        NonEmptyOptionString, OptionalIntegerValidation, OuterWithNestedValidator,
+    };
 
     #[test]
     fn test_multi_validator_optional_string_with_some() {

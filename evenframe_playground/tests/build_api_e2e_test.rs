@@ -133,7 +133,7 @@ fn test_type_generator_generate_arktype() {
     let generated = generate_one(output(OutputKind::Arktype, temp_dir.path()));
 
     assert_eq!(generated.kind, OutputKind::Arktype);
-    assert!(generated.bytes_written > 0, "Should write some bytes");
+    assert!(generated.bytes > 0, "Should write some bytes");
     assert!(generated.path.exists(), "Generated file should exist");
 
     let content = fs::read_to_string(&generated.path).expect("Should read generated file");
@@ -150,7 +150,7 @@ fn test_type_generator_generate_effect() {
     let generated = generate_one(output(OutputKind::Effect, temp_dir.path()));
 
     assert_eq!(generated.kind, OutputKind::Effect);
-    assert!(generated.bytes_written > 0);
+    assert!(generated.bytes > 0);
     assert!(generated.path.exists());
 
     let content = fs::read_to_string(&generated.path).expect("Should read generated file");
@@ -167,7 +167,7 @@ fn test_type_generator_generate_macroforge() {
     let generated = generate_one(output(OutputKind::Macroforge, temp_dir.path()));
 
     assert_eq!(generated.kind, OutputKind::Macroforge);
-    assert!(generated.bytes_written > 0);
+    assert!(generated.bytes > 0);
     assert!(generated.path.exists());
 }
 
@@ -180,7 +180,7 @@ fn test_type_generator_generate_flatbuffers() {
     let generated = generate_one(fbs);
 
     assert_eq!(generated.kind, OutputKind::Flatbuffers);
-    assert!(generated.bytes_written > 0);
+    assert!(generated.bytes > 0);
     assert!(generated.path.exists());
 
     let content = fs::read_to_string(&generated.path).expect("Should read generated file");
@@ -203,7 +203,7 @@ fn test_type_generator_generate_protobuf() {
     let generated = generate_one(proto);
 
     assert_eq!(generated.kind, OutputKind::Protobuf);
-    assert!(generated.bytes_written > 0);
+    assert!(generated.bytes > 0);
     assert!(generated.path.exists());
 
     let content = fs::read_to_string(&generated.path).expect("Should read generated file");
@@ -257,7 +257,7 @@ fn test_type_generator_generate_all() {
     // Verify each file was created
     for file in &report.files {
         assert!(file.path.exists(), "File {:?} should exist", file.path);
-        assert!(file.bytes_written > 0, "File should have content");
+        assert!(file.bytes > 0, "File should have content");
     }
 
     for name in [

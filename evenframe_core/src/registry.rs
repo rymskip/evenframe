@@ -3,8 +3,8 @@ use crate::{
     types::{Pipeline, StructConfig, TaggedUnion},
 };
 use linkme::distributed_slice;
-use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 
 /// Registry entry for persistable structs (tables)
 #[derive(Clone, Copy)]
@@ -54,59 +54,53 @@ pub static ENUM_REGISTRY_ENTRIES: [EnumRegistryEntry] = [..];
 #[distributed_slice]
 pub static UNION_OF_TABLES_REGISTRY_ENTRIES: [UnionOfTablesRegistryEntry] = [..];
 
-/// Runtime-accessible table registry
-static TABLE_REGISTRY: Lazy<HashMap<&'static str, &'static TableRegistryEntry>> = Lazy::new(|| {
+/// Every registered table's configuration, built once on first use.
+static TABLE_CONFIGS: LazyLock<HashMap<&'static str, TableConfig>> = LazyLock::new(|| {
     TABLE_REGISTRY_ENTRIES
         .iter()
-        .map(|entry| (entry.type_name, entry))
+        .map(|entry| (entry.type_name, (entry.table_config_fn)()))
         .collect()
 });
 
-/// Runtime-accessible object registry
-static OBJECT_REGISTRY: Lazy<HashMap<&'static str, &'static ObjectRegistryEntry>> =
-    Lazy::new(|| {
-        OBJECT_REGISTRY_ENTRIES
-            .iter()
-            .map(|entry| (entry.type_name, entry))
-            .collect()
-    });
+/// Every registered object's configuration, built once on first use.
+static STRUCT_CONFIGS: LazyLock<HashMap<&'static str, StructConfig>> = LazyLock::new(|| {
+    OBJECT_REGISTRY_ENTRIES
+        .iter()
+        .map(|entry| (entry.type_name, (entry.struct_config_fn)()))
+        .collect()
+});
 
-/// Runtime-accessible enum registry
-static ENUM_REGISTRY: Lazy<HashMap<&'static str, &'static EnumRegistryEntry>> = Lazy::new(|| {
+/// Every registered enum, built once on first use.
+static TAGGED_UNIONS: LazyLock<HashMap<&'static str, TaggedUnion>> = LazyLock::new(|| {
     ENUM_REGISTRY_ENTRIES
+        .iter()
+        .map(|entry| (entry.type_name, (entry.tagged_union_fn)()))
+        .collect()
+});
+
+/// Every registered union of tables.
+static UNION_OF_TABLES_REGISTRY: LazyLock<
+    HashMap<&'static str, &'static UnionOfTablesRegistryEntry>,
+> = LazyLock::new(|| {
+    UNION_OF_TABLES_REGISTRY_ENTRIES
         .iter()
         .map(|entry| (entry.type_name, entry))
         .collect()
 });
 
-/// Runtime-accessible union of tables registry
-static UNION_OF_TABLES_REGISTRY: Lazy<HashMap<&'static str, &'static UnionOfTablesRegistryEntry>> =
-    Lazy::new(|| {
-        UNION_OF_TABLES_REGISTRY_ENTRIES
-            .iter()
-            .map(|entry| (entry.type_name, entry))
-            .collect()
-    });
-
 /// Get table configuration by type name
-pub fn get_table_config(type_name: &str) -> Option<TableConfig> {
-    TABLE_REGISTRY
-        .get(type_name)
-        .map(|entry| (entry.table_config_fn)())
+pub fn get_table_config(type_name: &str) -> Option<&'static TableConfig> {
+    TABLE_CONFIGS.get(type_name)
 }
 
 /// Get struct configuration by type name
-pub fn get_struct_config(type_name: &str) -> Option<StructConfig> {
-    OBJECT_REGISTRY
-        .get(type_name)
-        .map(|entry| (entry.struct_config_fn)())
+pub fn get_struct_config(type_name: &str) -> Option<&'static StructConfig> {
+    STRUCT_CONFIGS.get(type_name)
 }
 
 /// Get tagged union by type name
-pub fn get_tagged_union(type_name: &str) -> Option<TaggedUnion> {
-    ENUM_REGISTRY
-        .get(type_name)
-        .map(|entry| (entry.tagged_union_fn)())
+pub fn get_tagged_union(type_name: &str) -> Option<&'static TaggedUnion> {
+    TAGGED_UNIONS.get(type_name)
 }
 
 /// Get union of tables by type name
@@ -127,11 +121,11 @@ pub enum TypeCategory {
 
 /// Resolve the category of a type by name
 pub fn resolve_type_category(type_name: &str) -> Option<TypeCategory> {
-    if TABLE_REGISTRY.contains_key(type_name) {
+    if TABLE_CONFIGS.contains_key(type_name) {
         Some(TypeCategory::Table)
-    } else if OBJECT_REGISTRY.contains_key(type_name) {
+    } else if STRUCT_CONFIGS.contains_key(type_name) {
         Some(TypeCategory::Object)
-    } else if ENUM_REGISTRY.contains_key(type_name) {
+    } else if TAGGED_UNIONS.contains_key(type_name) {
         Some(TypeCategory::Enum)
     } else if UNION_OF_TABLES_REGISTRY.contains_key(type_name) {
         Some(TypeCategory::UnionOfTables)
@@ -142,21 +136,21 @@ pub fn resolve_type_category(type_name: &str) -> Option<TypeCategory> {
 
 /// Get all registered table names
 pub fn get_all_table_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = TABLE_REGISTRY.keys().copied().collect();
+    let mut names: Vec<&'static str> = TABLE_CONFIGS.keys().copied().collect();
     names.sort();
     names
 }
 
 /// Get all registered object names
 pub fn get_all_object_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = OBJECT_REGISTRY.keys().copied().collect();
+    let mut names: Vec<&'static str> = STRUCT_CONFIGS.keys().copied().collect();
     names.sort();
     names
 }
 
 /// Get all registered enum names
 pub fn get_all_enum_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = ENUM_REGISTRY.keys().copied().collect();
+    let mut names: Vec<&'static str> = TAGGED_UNIONS.keys().copied().collect();
     names.sort();
     names
 }
@@ -180,7 +174,13 @@ pub fn get_all_type_names() -> BTreeMap<TypeCategory, Vec<&'static str>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        EnumRegistryEntry, HashMap, ObjectRegistryEntry, Pipeline, StructConfig, TableConfig,
+        TableRegistryEntry, TaggedUnion, TypeCategory, UnionOfTablesRegistryEntry,
+        get_all_enum_names, get_all_object_names, get_all_table_names, get_all_type_names,
+        get_all_union_of_tables_names, get_struct_config, get_table_config, get_tagged_union,
+        get_union_of_tables, resolve_type_category,
+    };
 
     // ==================== TypeCategory Tests ====================
 

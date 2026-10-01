@@ -295,7 +295,7 @@ impl DatabaseConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{ConnectionOverrides, DatabaseConfig, MockOverrides, SchemasyncConfig};
 
     #[test]
     fn mock_overrides_only_switch_settings_on() {

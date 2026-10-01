@@ -3,10 +3,9 @@
 //! Determines what import statements each file needs based on cross-group
 //! type dependencies.
 
-use crate::dependency::deps_of;
-use crate::types::{StructConfig, TaggedUnion};
 use crate::typesync::config::{FileNamingConvention, ImportExtensionStyle};
 use crate::typesync::file_grouping::{FileOutputPlan, TypeFileGroup};
+use crate::typesync::type_index::TypeIndex;
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,8 +34,8 @@ pub fn type_name_to_filename(type_name: &str, naming: FileNamingConvention) -> S
 /// imports); for `.svelte.ts` → `.svelte` (strip trailing `.ts`); for
 /// other compound extensions → strip trailing `.ts`/`.js` if present.
 ///
-/// `Js`: the extension the file has after transpilation — `.ts` → `.js`,
-/// `.svelte.ts` → `.svelte.js` — so the specifier resolves under strict
+/// `Js`: the extension the file has after transpilation (`.ts` → `.js`,
+/// `.svelte.ts` → `.svelte.js`), so the specifier resolves under strict
 /// node/Vite resolution in a packaged `dist/` and maps back to the `.ts`
 /// source pre-build.
 pub fn import_specifier_suffix(file_extension: &str, style: ImportExtensionStyle) -> String {
@@ -62,14 +61,13 @@ pub fn import_specifier_suffix(file_extension: &str, style: ImportExtensionStyle
 
 /// Resolves what imports a given file group needs from other groups.
 ///
-/// For each type in the group, collects its `deps_of()`, filters to types NOT in
-/// this group, looks up their group, and creates import statements grouped by
-/// source file.
+/// For each type in the group, collects its dependencies, filters to types NOT
+/// in this group, looks up their group, and creates import statements grouped
+/// by source file.
 pub fn resolve_imports(
     group: &TypeFileGroup,
     plan: &FileOutputPlan,
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     naming: FileNamingConvention,
     file_extension: &str,
     style: ImportExtensionStyle,
@@ -80,9 +78,9 @@ pub fn resolve_imports(
     // Collect all external dependencies from all types in this group.
     let mut external_deps: BTreeSet<String> = BTreeSet::new();
     for type_name in &group_types {
-        for dep in deps_of(type_name, structs, enums) {
-            if !group_types.contains(&dep) {
-                external_deps.insert(dep);
+        for dependency in index.deps(type_name) {
+            if !group_types.contains(dependency) {
+                external_deps.insert(dependency.clone());
             }
         }
     }
@@ -110,7 +108,25 @@ pub fn resolve_imports(
     imports
 }
 
-/// Formats import statements into TypeScript import lines.
+/// Import lines for a per-file Effect output. Each imported schema is a
+/// runtime value, and its `…Encoded` interface is a type.
+pub fn format_effect_imports(imports: &[ImportStatement]) -> String {
+    imports
+        .iter()
+        .map(|statement| {
+            let names = statement
+                .type_names
+                .iter()
+                .map(|name| format!("{name}, type {name}Encoded"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("import {{ {names} }} from '{}';", statement.from_path)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Type-only import lines, for outputs that only declare types.
 pub fn format_imports(imports: &[ImportStatement]) -> String {
     imports
         .iter()
@@ -148,8 +164,12 @@ pub fn barrel_filename(file_extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::types::{FieldType, StructField};
+    use super::{
+        BTreeMap, FileNamingConvention, FileOutputPlan, ImportExtensionStyle, ImportStatement,
+        TypeFileGroup, TypeIndex, format_imports, generate_barrel_file, import_specifier_suffix,
+        resolve_imports, type_name_to_filename,
+    };
+    use crate::types::{FieldType, StructConfig, StructField};
     use crate::typesync::file_grouping::compute_file_grouping;
 
     fn make_struct(name: &str, fields: Vec<(&str, FieldType)>) -> StructConfig {
@@ -223,15 +243,15 @@ mod tests {
         );
         let enums = BTreeMap::new();
 
-        let plan = compute_file_grouping(&structs, &enums);
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let plan = compute_file_grouping(&index);
         let user_group_idx = plan.type_to_group["User"];
         let user_group = &plan.groups[user_group_idx];
 
         let imports = resolve_imports(
             user_group,
             &plan,
-            &structs,
-            &enums,
+            &index,
             FileNamingConvention::Kebab,
             ".ts",
             ImportExtensionStyle::Bare,
@@ -245,8 +265,7 @@ mod tests {
         let js_imports = resolve_imports(
             user_group,
             &plan,
-            &structs,
-            &enums,
+            &index,
             FileNamingConvention::Kebab,
             ".ts",
             ImportExtensionStyle::Js,

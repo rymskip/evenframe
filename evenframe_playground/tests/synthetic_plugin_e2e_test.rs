@@ -59,7 +59,7 @@ fn make_field(name: &str, ft: FieldType) -> StructField {
     }
 }
 
-fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
+fn seed_with_struct(name: &str) -> Seed {
     let mut structs = BTreeMap::new();
     structs.insert(
         name.to_string(),
@@ -118,18 +118,28 @@ fn seed_input_with_struct(name: &str) -> SyntheticPluginInput {
         },
     );
 
-    SyntheticPluginInput {
+    Seed {
         structs,
         enums,
         tables,
     }
 }
 
-fn empty_input() -> SyntheticPluginInput {
-    SyntheticPluginInput {
-        structs: BTreeMap::new(),
-        enums: BTreeMap::new(),
-        tables: BTreeMap::new(),
+/// The configs a plugin input borrows.
+#[derive(Default)]
+struct Seed {
+    structs: BTreeMap<String, StructConfig>,
+    enums: BTreeMap<String, TaggedUnion>,
+    tables: BTreeMap<String, TableConfig>,
+}
+
+impl Seed {
+    fn input(&self) -> SyntheticPluginInput<'_> {
+        SyntheticPluginInput {
+            structs: &self.structs,
+            enums: &self.enums,
+            tables: &self.tables,
+        }
     }
 }
 
@@ -140,10 +150,10 @@ fn empty_input() -> SyntheticPluginInput {
 #[test]
 fn synthetic_plugin_loads_and_returns_all_three_kinds() {
     let mut pm = load_manager();
-    let input = seed_input_with_struct("Account");
+    let seed = seed_with_struct("Account");
 
     let output = pm
-        .generate_items("synthetic_test", &input)
+        .generate_items("synthetic_test", &seed.input())
         .expect("generate_items must succeed");
 
     assert!(
@@ -160,26 +170,38 @@ fn synthetic_plugin_loads_and_returns_all_three_kinds() {
 fn synthetic_plugin_names_match_plugin_contract() {
     let mut pm = load_manager();
     let output = pm
-        .generate_items("synthetic_test", &seed_input_with_struct("Account"))
+        .generate_items("synthetic_test", &seed_with_struct("Account").input())
         .expect("generate_items must succeed");
 
-    let struct_names: Vec<_> = output.new_structs.iter().map(|s| &s.struct_name).collect();
+    let struct_names: Vec<_> = output
+        .new_structs
+        .iter()
+        .map(|config| &config.struct_name)
+        .collect();
     assert!(
-        struct_names.iter().any(|n| *n == "SyntheticAudit"),
+        struct_names.iter().any(|name| *name == "SyntheticAudit"),
         "expected SyntheticAudit, got: {:?}",
         struct_names
     );
 
-    let enum_names: Vec<_> = output.new_enums.iter().map(|e| &e.enum_name).collect();
+    let enum_names: Vec<_> = output
+        .new_enums
+        .iter()
+        .map(|config| &config.enum_name)
+        .collect();
     assert!(
-        enum_names.iter().any(|n| *n == "SyntheticSeverity"),
+        enum_names.iter().any(|name| *name == "SyntheticSeverity"),
         "expected SyntheticSeverity, got: {:?}",
         enum_names
     );
 
-    let table_names: Vec<_> = output.new_tables.iter().map(|t| &t.table_name).collect();
+    let table_names: Vec<_> = output
+        .new_tables
+        .iter()
+        .map(|table| &table.table_name)
+        .collect();
     assert!(
-        table_names.iter().any(|n| *n == "synthetic_ping"),
+        table_names.iter().any(|name| *name == "synthetic_ping"),
         "expected synthetic_ping, got: {:?}",
         table_names
     );
@@ -191,19 +213,22 @@ fn synthetic_plugin_sees_existing_scanner_state() {
 
     for seed in ["Account", "Workspace", "Project"] {
         let output = pm
-            .generate_items("synthetic_test", &seed_input_with_struct(seed))
+            .generate_items("synthetic_test", &seed_with_struct(seed).input())
             .expect("generate_items must succeed");
         assert_eq!(output.new_structs.len(), 1);
         let audit = &output.new_structs[0];
         let expected_field = format!("{}_audit_note", seed);
         assert!(
-            audit.fields.iter().any(|f| f.field_name == expected_field),
+            audit
+                .fields
+                .iter()
+                .any(|field| field.field_name == expected_field),
             "plugin did not observe seed struct '{}': fields were {:?}",
             seed,
             audit
                 .fields
                 .iter()
-                .map(|f| &f.field_name)
+                .map(|field| &field.field_name)
                 .collect::<Vec<_>>()
         );
     }
@@ -213,7 +238,7 @@ fn synthetic_plugin_sees_existing_scanner_state() {
 fn synthetic_plugin_noop_when_no_existing_structs() {
     let mut pm = load_manager();
     let output = pm
-        .generate_items("synthetic_test", &empty_input())
+        .generate_items("synthetic_test", &Seed::default().input())
         .expect("generate_items must succeed on empty input");
 
     assert!(output.error.is_none());
@@ -230,7 +255,7 @@ fn synthetic_plugin_noop_when_no_existing_structs() {
 fn synthetic_struct_roundtrips_through_core_struct_config() {
     let mut pm = load_manager();
     let output = pm
-        .generate_items("synthetic_test", &seed_input_with_struct("Account"))
+        .generate_items("synthetic_test", &seed_with_struct("Account").input())
         .expect("generate_items must succeed");
 
     let sc = &output.new_structs[0];
@@ -245,7 +270,7 @@ fn synthetic_struct_roundtrips_through_core_struct_config() {
 fn synthetic_enum_roundtrips_through_core_tagged_union() {
     let mut pm = load_manager();
     let output = pm
-        .generate_items("synthetic_test", &seed_input_with_struct("Account"))
+        .generate_items("synthetic_test", &seed_with_struct("Account").input())
         .expect("generate_items must succeed");
 
     let ec = &output.new_enums[0];
@@ -253,7 +278,11 @@ fn synthetic_enum_roundtrips_through_core_tagged_union() {
     let reparsed: TaggedUnion = serde_json::from_value(json).expect("TaggedUnion must round-trip");
     assert_eq!(reparsed.enum_name, "SyntheticSeverity");
     assert_eq!(reparsed.variants.len(), 3);
-    let variant_names: Vec<_> = reparsed.variants.iter().map(|v| v.name.as_str()).collect();
+    let variant_names: Vec<_> = reparsed
+        .variants
+        .iter()
+        .map(|variant| variant.name.as_str())
+        .collect();
     assert_eq!(variant_names, ["Info", "Warning", "Critical"]);
 }
 
@@ -261,7 +290,7 @@ fn synthetic_enum_roundtrips_through_core_tagged_union() {
 fn synthetic_table_roundtrips_through_core_table_config() {
     let mut pm = load_manager();
     let output = pm
-        .generate_items("synthetic_test", &seed_input_with_struct("Account"))
+        .generate_items("synthetic_test", &seed_with_struct("Account").input())
         .expect("generate_items must succeed");
 
     let tc = &output.new_tables[0];
@@ -298,11 +327,11 @@ fn synthetic_plugin_missing_wasm_fails_at_load() {
 #[test]
 fn synthetic_plugin_repeated_calls_are_stable() {
     let mut pm = load_manager();
-    let input = seed_input_with_struct("Widget");
+    let seed = seed_with_struct("Widget");
 
-    let first = pm.generate_items("synthetic_test", &input).unwrap();
+    let first = pm.generate_items("synthetic_test", &seed.input()).unwrap();
     for _ in 0..10 {
-        let again = pm.generate_items("synthetic_test", &input).unwrap();
+        let again = pm.generate_items("synthetic_test", &seed.input()).unwrap();
         assert_eq!(first.new_structs.len(), again.new_structs.len());
         assert_eq!(first.new_enums.len(), again.new_enums.len());
         assert_eq!(first.new_tables.len(), again.new_tables.len());

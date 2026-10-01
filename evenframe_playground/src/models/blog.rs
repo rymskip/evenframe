@@ -169,7 +169,7 @@ pub struct Comment {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Author, Comment, Post, RecordLink, Tag};
 
     #[test]
     fn test_tag_serialization() {

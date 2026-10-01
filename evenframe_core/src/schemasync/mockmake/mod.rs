@@ -10,15 +10,17 @@ pub mod regex_val_gen;
 #[cfg(feature = "mockmake")]
 mod repoint;
 #[cfg(feature = "mockmake")]
+pub(crate) mod unique;
+#[cfg(feature = "mockmake")]
 pub mod validator_gen;
 
 #[cfg(feature = "mockmake")]
 use crate::{
     dependency::sort_tables_by_dependencies,
     evenframe_log,
-    schemasync::PreservationMode,
     schemasync::TableConfig,
     schemasync::compare::SchemaChanges,
+    schemasync::database::surql::execute::{RPC_SIZE_LIMIT, execute_and_validate, execute_bound},
     schemasync::mockmake::coordinate::{
         CoherentDataset, Coordination, CoordinationGroup, CoordinationId, CoordinationPair,
     },
@@ -67,9 +69,11 @@ pub struct Mockmaker<'a> {
     pub(super) excess_ids: BTreeMap<String, Vec<String>>,
     table_mocks: BTreeMap<String, TableMocks>,
     /// Pre-computed coordinated values, keyed by record index and field.
-    pub coordinated_values: BTreeMap<(usize, CoordinationId), String>,
+    pub coordinated_values: coordinate::CoordinatedValues,
     /// Record count for every table, taking precedence over `#[mock_data(n)]`.
     pub count_override: Option<usize>,
+    /// The tables each linked type name can point at, resolved once.
+    link_targets: std::cell::RefCell<BTreeMap<String, std::rc::Rc<[String]>>>,
     #[cfg(feature = "wasm-plugins")]
     pub(super) plugin_manager: Option<std::cell::RefCell<plugin::PluginManager>>,
 }
@@ -109,16 +113,27 @@ impl<'a> Mockmaker<'a> {
             new_records: BTreeMap::new(),
             excess_ids: BTreeMap::new(),
             table_mocks: BTreeMap::new(),
-            coordinated_values: BTreeMap::new(),
+            coordinated_values: coordinate::CoordinatedValues::default(),
             count_override: None,
+            link_targets: std::cell::RefCell::new(BTreeMap::new()),
             #[cfg(feature = "wasm-plugins")]
             plugin_manager,
         })
     }
 
-    /// [`crate::types::link_target_tables`] over this run's types.
-    pub(super) fn link_target_tables(&self, type_name: &str) -> Vec<String> {
-        crate::types::link_target_tables(type_name, self.tables, self.objects, self.enums)
+    /// [`crate::types::link_target_tables`] over this run's types, resolved
+    /// once per type name.
+    pub(super) fn link_target_tables(&self, type_name: &str) -> std::rc::Rc<[String]> {
+        if let Some(targets) = self.link_targets.borrow().get(type_name) {
+            return std::rc::Rc::clone(targets);
+        }
+        let targets: std::rc::Rc<[String]> =
+            crate::types::link_target_tables(type_name, self.tables, self.objects, self.enums)
+                .into();
+        self.link_targets
+            .borrow_mut()
+            .insert(type_name.to_string(), std::rc::Rc::clone(&targets));
+        targets
     }
 
     /// Whether `field_type` is a link all of whose target tables have no
@@ -134,7 +149,7 @@ impl<'a> Mockmaker<'a> {
         !targets.is_empty()
             && targets
                 .iter()
-                .all(|t| self.id_map.get(t).is_some_and(Vec::is_empty))
+                .all(|table| self.id_map.get(table).is_some_and(Vec::is_empty))
     }
 
     /// Fails when a record this run writes has a link it must fill (not
@@ -146,7 +161,7 @@ impl<'a> Mockmaker<'a> {
             let has_plugin = table
                 .mock_generation_config
                 .as_ref()
-                .is_some_and(|c| c.plugin.is_some());
+                .is_some_and(|config| config.plugin.is_some());
             if has_plugin {
                 continue;
             }
@@ -195,7 +210,7 @@ impl<'a> Mockmaker<'a> {
         match field_type {
             FieldType::RecordLink(inner) => match inner.as_ref() {
                 FieldType::Other(type_name) if self.links_only_to_empty_tables(field_type) => {
-                    Some(self.link_target_tables(type_name))
+                    Some(self.link_target_tables(type_name).to_vec())
                 }
                 _ => None,
             },
@@ -204,7 +219,7 @@ impl<'a> Mockmaker<'a> {
                 .get(type_name)?
                 .fields
                 .iter()
-                .find_map(|f| self.unfillable_link(&f.field_type, visited)),
+                .find_map(|field| self.unfillable_link(&field.field_type, visited)),
             _ => None,
         }
     }
@@ -218,7 +233,7 @@ impl<'a> Mockmaker<'a> {
             table_config
                 .mock_generation_config
                 .as_ref()
-                .map(|c| c.n)
+                .and_then(|mock_config| mock_config.record_count)
                 .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count)
         })
     }
@@ -235,13 +250,54 @@ impl<'a> Mockmaker<'a> {
 
     /// The tables defined in the database. A table that is not defined yet
     /// has no records, and selecting from it is an error.
+    /// The ids of every table's existing records, read in one request. Each
+    /// is cast in the query so it comes back as a SurrealQL record literal,
+    /// escaped where its key needs it. None are read in full refresh mode,
+    /// which deletes them.
+    async fn existing_ids(
+        &self,
+        full_refresh: bool,
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        if full_refresh {
+            return Ok(BTreeMap::new());
+        }
+        let defined = self.defined_tables().await?;
+        let tables: Vec<&String> = self
+            .tables
+            .keys()
+            .filter(|table_name| defined.contains(*table_name))
+            .collect();
+        if tables.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let query: String = tables
+            .iter()
+            .map(|table_name| format!("SELECT VALUE <string> id FROM {table_name};\n"))
+            .collect();
+        let mut response = self
+            .db
+            .query(query)
+            .await
+            .map_err(|error| format!("reading the existing record ids: {error}"))?;
+        tables
+            .into_iter()
+            .enumerate()
+            .map(|(index, table_name)| {
+                let ids: Vec<String> = response.take(index).map_err(|error| {
+                    format!("reading the existing ids of `{table_name}`: {error}")
+                })?;
+                Ok((table_name.clone(), ids))
+            })
+            .collect()
+    }
+
     async fn defined_tables(&self) -> Result<BTreeSet<String>, String> {
         let tables: Vec<String> = self
             .db
             .query("RETURN object::keys((INFO FOR DB).tables);")
             .await
             .and_then(|mut response| response.take(0))
-            .map_err(|e| format!("listing the database's tables: {e}"))?;
+            .map_err(|error| format!("listing the database's tables: {error}"))?;
         Ok(tables.into_iter().collect())
     }
 
@@ -253,10 +309,8 @@ impl<'a> Mockmaker<'a> {
         let mut excess_ids = BTreeMap::new();
 
         let full_refresh = self.schemasync_config.mock_gen_config.full_refresh_mode;
-        let defined_tables = self.defined_tables().await?;
+        let mut existing = self.existing_ids(full_refresh).await?;
 
-        // Process tables sequentially to avoid reference issues
-        // Since these are just SELECT queries, they should be fast enough
         for (table_name, table_config) in self.tables {
             let table_config = table_config.effective();
             tracing::trace!(table = %table_name, "Generating IDs for table");
@@ -268,7 +322,7 @@ impl<'a> Mockmaker<'a> {
             // which may reference records that no longer exist after deletion.
             if full_refresh {
                 let ids: Vec<String> = (1..=desired_count)
-                    .map(|i| format!("{table_name}:{i}"))
+                    .map(|number| format!("{table_name}:{number}"))
                     .collect();
 
                 tracing::trace!(
@@ -282,17 +336,7 @@ impl<'a> Mockmaker<'a> {
                 continue;
             }
 
-            // Cast in the query so each id comes back as a SurrealQL record
-            // literal, escaped where its key needs it.
-            let existing_ids: Vec<String> = if defined_tables.contains(table_name) {
-                self.db
-                    .query(format!("SELECT VALUE <string> id FROM {table_name};"))
-                    .await
-                    .and_then(|mut response| response.take(0))
-                    .map_err(|e| format!("reading the existing ids of `{table_name}`: {e}"))?
-            } else {
-                Vec::new()
-            };
+            let existing_ids = existing.remove(table_name).unwrap_or_default();
             let existing_count = existing_ids.len();
             tracing::trace!(
                 table = %table_name,
@@ -308,7 +352,7 @@ impl<'a> Mockmaker<'a> {
             let mut ids = existing_ids;
             let excess = ids.split_off(desired_count.min(existing_count));
             let fresh = (1..)
-                .map(|n| format!("{table_name}:{n}"))
+                .map(|number| format!("{table_name}:{number}"))
                 .filter(|id| !taken.contains(id))
                 .take(desired_count - ids.len());
             ids.extend(fresh);
@@ -357,11 +401,9 @@ impl<'a> Mockmaker<'a> {
             .collect();
         evenframe_log!(&statements, "remove_statements.surql");
         if !statements.is_empty() {
-            self.db
-                .query(statements)
+            execute_and_validate(self.db, &statements, "delete", "full refresh")
                 .await
-                .and_then(|response| response.check())
-                .map_err(|e| format!("clearing records for a full refresh: {e}"))?;
+                .map_err(|error| format!("clearing records for a full refresh: {error}"))?;
         }
         Ok(())
     }
@@ -372,7 +414,7 @@ impl<'a> Mockmaker<'a> {
     /// after
     /// [`Self::generate_ids`].
     pub fn select_tables_for_insert(&mut self, selected: Option<&BTreeSet<String>>) {
-        let is_selected = |name: &str| selected.is_none_or(|s| s.contains(name));
+        let is_selected = |name: &str| selected.is_none_or(|selection| selection.contains(name));
 
         for (table_name, ids) in self.id_map.iter_mut() {
             if !is_selected(table_name) {
@@ -401,18 +443,31 @@ impl<'a> Mockmaker<'a> {
         );
     }
 
-    /// Delete the records beyond each table's count.
+    /// Delete the records beyond each table's count: one statement per
+    /// table with its ids bound, in as few requests as the size limit allows.
+    /// Links are only generated to ids kept in the pool, so no new record
+    /// points at an excess one.
     pub async fn remove_excess_records(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let deletes = self.excess_record_deletes();
-        if deletes.is_empty() {
-            return Ok(());
+        const DELETE_EXCESS: &str = "DELETE array::map($excess, |$id| <record> $id) RETURN NONE;";
+        for (table_name, excess) in self.excess_ids.iter().filter(|(_, ids)| !ids.is_empty()) {
+            evenframe_log!(
+                format!(
+                    "-- {} excess records of {table_name}\n{DELETE_EXCESS}",
+                    excess.len()
+                ),
+                "remove_statements.surql",
+                true
+            );
+            for batch in id_batches(excess) {
+                let mut variables = surrealdb::types::Variables::new();
+                variables.insert("excess", batch.to_vec());
+                execute_bound(self.db, DELETE_EXCESS, &variables, "delete", table_name)
+                    .await
+                    .map_err(|error| {
+                        format!("deleting excess records of `{table_name}`: {error}")
+                    })?;
+            }
         }
-        evenframe_log!(&deletes, "remove_statements.surql");
-        self.db
-            .query(deletes)
-            .await
-            .and_then(|response| response.check())
-            .map_err(|e| format!("deleting excess records: {e}"))?;
         Ok(())
     }
 
@@ -441,18 +496,18 @@ impl<'a> Mockmaker<'a> {
     }
 
     pub(super) async fn generate_mock_data(&self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(feature = "wasm-plugins")]
+        let started = std::time::Instant::now();
         self.check_required_links()?;
         tracing::trace!("Starting mock data generation");
 
-        // Sort tables by dependencies to ensure proper insertion order
-        let planned_tables: BTreeMap<String, TableConfig> = self
-            .tables
-            .iter()
-            .filter(|(name, _)| self.table_mocks.contains_key(*name))
-            .map(|(name, table)| (name.clone(), table.clone()))
-            .collect();
-        let sorted_table_names =
-            sort_tables_by_dependencies(&planned_tables, self.objects, self.enums);
+        // Every table is sorted, so an order that runs through a table without
+        // mocks still holds between the tables that have them.
+        let sorted_table_names: Vec<String> =
+            sort_tables_by_dependencies(self.tables, self.objects, self.enums)
+                .into_iter()
+                .filter(|name| self.table_mocks.contains_key(name))
+                .collect();
 
         tracing::debug!(
             table_count = sorted_table_names.len(),
@@ -470,7 +525,7 @@ impl<'a> Mockmaker<'a> {
                 tracing::trace!(table = %table_name, "Processing table for mock data");
 
                 if self.schemasync_config.should_generate_mocks {
-                    let stmts = self.generate_mock_statements(table_name, mocks)?;
+                    let stmts = self.generate_mock_statements(table_name, mocks).await?;
 
                     tracing::debug!(
                         table = %table_name,
@@ -480,28 +535,25 @@ impl<'a> Mockmaker<'a> {
 
                     evenframe_log!(&stmts, "all_statements.surql", true);
 
-                    // Execute and validate upsert statements
-                    use crate::schemasync::database::surql::execute::execute_and_validate;
-
                     match execute_and_validate(self.db, &stmts, "mock data", table_name).await {
                         Ok(_results) => {
                             tracing::debug!(table = %table_name, "Mock data inserted successfully");
                         }
-                        Err(e) => {
+                        Err(error) => {
                             tracing::error!(
                                 table = %table_name,
-                                error = %e,
+                                error = %error,
                                 "Failed to execute statements"
                             );
                             #[cfg(feature = "dev-mode")]
                             {
                                 let error_msg = format!(
                                     "Failed to execute upsert statements for table {}: {}",
-                                    table_name, e
+                                    table_name, error
                                 );
                                 evenframe_log!(&error_msg, "results.log", true);
                             }
-                            return Err(e);
+                            return Err(error.into());
                         }
                     }
                 }
@@ -509,6 +561,16 @@ impl<'a> Mockmaker<'a> {
         }
         // After the new records exist, so every kept id is a record.
         self.repoint_links_to_excess().await?;
+        #[cfg(feature = "wasm-plugins")]
+        if let Some(plugins) = &self.plugin_manager {
+            let usage = plugins.borrow().usage();
+            tracing::info!(
+                calls = usage.calls,
+                plugin_ms = usage.time.as_millis(),
+                total_ms = started.elapsed().as_millis(),
+                "Mock data plugin time"
+            );
+        }
         tracing::info!("Mock data generation complete");
         Ok(())
     }
@@ -556,7 +618,7 @@ impl<'a> Mockmaker<'a> {
                                 country,
                             } => [city, state, zip, country]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::PersonName {
@@ -565,7 +627,7 @@ impl<'a> Mockmaker<'a> {
                                 full_name,
                             } => [first_name, last_name, full_name]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::GeoLocation {
@@ -575,7 +637,7 @@ impl<'a> Mockmaker<'a> {
                                 country,
                             } => [latitude, longitude, city, country]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::DateRange {
@@ -588,7 +650,7 @@ impl<'a> Mockmaker<'a> {
                                 ..
                             } => [latitude, longitude]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                         },
@@ -674,7 +736,7 @@ impl<'a> Mockmaker<'a> {
                                 country,
                             } => [city, state, zip, country]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::PersonName {
@@ -683,7 +745,7 @@ impl<'a> Mockmaker<'a> {
                                 full_name,
                             } => [first_name, last_name, full_name]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::GeoLocation {
@@ -693,7 +755,7 @@ impl<'a> Mockmaker<'a> {
                                 country,
                             } => [latitude, longitude, city, country]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                             CoherentDataset::DateRange {
@@ -706,7 +768,7 @@ impl<'a> Mockmaker<'a> {
                                 ..
                             } => [latitude, longitude]
                                 .into_iter()
-                                .filter(|s| !s.is_empty())
+                                .filter(|field| !field.is_empty())
                                 .cloned()
                                 .collect(),
                         },
@@ -719,11 +781,15 @@ impl<'a> Mockmaker<'a> {
                         for (t_name, t_coord) in typed_coordinations {
                             // Only add if this table's coordination includes this field
                             let t_fields = match t_coord {
-                                Coordination::InitializeEqual(f) => f.clone(),
-                                Coordination::InitializeSequential { field_names: f, .. } => {
-                                    f.clone()
-                                }
-                                Coordination::InitializeSum { field_names: f, .. } => f.clone(),
+                                Coordination::InitializeEqual(fields) => fields.clone(),
+                                Coordination::InitializeSequential {
+                                    field_names: fields,
+                                    ..
+                                } => fields.clone(),
+                                Coordination::InitializeSum {
+                                    field_names: fields,
+                                    ..
+                                } => fields.clone(),
                                 Coordination::InitializeDerive {
                                     source_field_names,
                                     target_field_name,
@@ -733,8 +799,8 @@ impl<'a> Mockmaker<'a> {
                                     all.push(target_field_name.clone());
                                     all
                                 }
-                                Coordination::OneToOne(f) => vec![f.clone()],
-                                Coordination::InitializeCoherent(d) => match d {
+                                Coordination::OneToOne(fields) => vec![fields.clone()],
+                                Coordination::InitializeCoherent(dataset) => match dataset {
                                     CoherentDataset::Address {
                                         city,
                                         state,
@@ -742,7 +808,7 @@ impl<'a> Mockmaker<'a> {
                                         country,
                                     } => [city, state, zip, country]
                                         .into_iter()
-                                        .filter(|s| !s.is_empty())
+                                        .filter(|field| !field.is_empty())
                                         .cloned()
                                         .collect(),
                                     CoherentDataset::PersonName {
@@ -751,7 +817,7 @@ impl<'a> Mockmaker<'a> {
                                         full_name,
                                     } => [first_name, last_name, full_name]
                                         .into_iter()
-                                        .filter(|s| !s.is_empty())
+                                        .filter(|field| !field.is_empty())
                                         .cloned()
                                         .collect(),
                                     CoherentDataset::GeoLocation {
@@ -761,7 +827,7 @@ impl<'a> Mockmaker<'a> {
                                         country,
                                     } => [latitude, longitude, city, country]
                                         .into_iter()
-                                        .filter(|s| !s.is_empty())
+                                        .filter(|field| !field.is_empty())
                                         .cloned()
                                         .collect(),
                                     CoherentDataset::DateRange {
@@ -776,7 +842,7 @@ impl<'a> Mockmaker<'a> {
                                         ..
                                     } => [latitude, longitude]
                                         .into_iter()
-                                        .filter(|s| !s.is_empty())
+                                        .filter(|field| !field.is_empty())
                                         .cloned()
                                         .collect(),
                                 },
@@ -794,9 +860,9 @@ impl<'a> Mockmaker<'a> {
                     }
 
                     if !coordinated_fields.is_empty() {
-                        coordination.validate(self, &coordinated_fields).map_err(|e| {
+                        coordination.validate(self, &coordinated_fields).map_err(|error| {
                             crate::error::EvenframeError::validation(format!(
-                                "invalid mock data coordination {coordination:?} on {group_tables:?}: {e}"
+                                "invalid mock data coordination {coordination:?} on {group_tables:?}: {error}"
                             ))
                         })?;
                         group_pairs.push(
@@ -820,77 +886,187 @@ impl<'a> Mockmaker<'a> {
     }
 }
 
-// MockGenerationConfig needs this in every build; the engine imports it above.
-#[cfg(not(feature = "mockmake"))]
-use crate::schemasync::PreservationMode;
+/// `ids` in runs small enough to bind in one request.
+#[cfg(feature = "mockmake")]
+fn id_batches(ids: &[String]) -> Vec<&[String]> {
+    let mut batches = Vec::new();
+    let mut start = 0;
+    let mut bytes = 0;
+    for (index, id) in ids.iter().enumerate() {
+        // Each id goes over the wire quoted and comma separated.
+        let size = id.len() + 3;
+        if bytes + size > RPC_SIZE_LIMIT && index > start {
+            batches.push(&ids[start..index]);
+            start = index;
+            bytes = 0;
+        }
+        bytes += size;
+    }
+    if start < ids.len() {
+        batches.push(&ids[start..]);
+    }
+    batches
+}
 
-/// A table's `#[mock_data(...)]` settings.
+/// A table's `#[mock_data(...)]` settings, as written on the struct.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MockGenerationConfig {
-    pub n: usize,
+    /// Records to generate; `None` uses the configured `default_record_count`.
+    pub record_count: Option<usize>,
     pub coordination_rules: Vec<crate::schemasync::mockmake::coordinate::Coordination>,
-    pub preservation_mode: PreservationMode,
     /// Name of the WASM plugin to use for table-level mock generation.
     #[serde(default)]
     pub plugin: Option<String>,
 }
 
-impl Default for MockGenerationConfig {
-    fn default() -> Self {
-        // Only mock settings are read, so the connection env vars aren't needed.
-        let mock_gen_config = match crate::config::EvenframeConfig::new_offline() {
-            Ok(config) => config
-                .schemasync
-                .map(|schemasync| schemasync.mock_gen_config)
-                .unwrap_or_default(),
-            Err(e) => {
-                tracing::warn!("Using default mock settings; the configuration did not load: {e}");
-                crate::schemasync::config::SchemasyncMockGenConfig::default()
-            }
-        };
-
-        Self {
-            n: mock_gen_config.default_record_count,
-            coordination_rules: Vec::new(),
-            preservation_mode: mock_gen_config.default_preservation_mode,
-            plugin: None,
-        }
-    }
-}
-
 impl quote::ToTokens for MockGenerationConfig {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let n = self.n;
-        let coordination_rules = &self.coordination_rules;
-
-        // Convert preservation mode to tokens
-        let preservation_mode_tokens = match &self.preservation_mode {
-            PreservationMode::Smart => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::Smart }
-            }
-            PreservationMode::Full => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::Full }
-            }
-            PreservationMode::None => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::None }
-            }
+        let record_count_tokens = match self.record_count {
+            Some(record_count) => quote::quote! { Some(#record_count) },
+            None => quote::quote! { None },
         };
-
-        // Generate the full config token stream
+        let coordination_rules = &self.coordination_rules;
         let plugin_tokens = match &self.plugin {
             Some(name) => quote::quote! { Some(#name.to_string()) },
             None => quote::quote! { None },
         };
 
-        let config_tokens = quote::quote! {
+        tokens.extend(quote::quote! {
             MockGenerationConfig {
-                n: #n,
+                record_count: #record_count_tokens,
                 coordination_rules: vec![#(#coordination_rules),*],
-                preservation_mode: #preservation_mode_tokens,
                 plugin: #plugin_tokens,
             }
-        };
+        });
+    }
+}
 
-        tokens.extend(config_tokens);
+#[cfg(all(test, feature = "mockmake", feature = "tooling"))]
+mod select_tables_tests {
+    use super::{BTreeMap, BTreeSet, Client, Mockmaker, Surreal};
+    use crate::schemasync::{TableConfig, config::SchemasyncConfig};
+    use crate::tooling::{BuildConfig, build_all_configs};
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Two tables generating no records that link to each other, and one
+    /// generating records that links to one of them.
+    fn scanned_tables() -> BTreeMap<String, TableConfig> {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(
+            tmp.path().join("src/lib.rs"),
+            r#"
+#[derive(Evenframe)]
+#[mock_data(n = 0)]
+pub struct Author { pub id: String, pub favorite: RecordLink<Post> }
+
+#[derive(Evenframe)]
+#[mock_data(n = 0)]
+pub struct Post { pub id: String, pub author: RecordLink<Author> }
+
+#[derive(Evenframe)]
+#[mock_data(n = 2)]
+pub struct Comment { pub id: String, pub post: RecordLink<Post> }
+"#,
+        )
+        .unwrap();
+        let config = BuildConfig {
+            scan_path: tmp.path().to_path_buf(),
+            ..BuildConfig::default()
+        };
+        let (_, tables, _) = build_all_configs(&config).unwrap();
+        tables
+    }
+
+    /// The records each table selected for insert plans over an empty
+    /// database, once its required links are checked.
+    fn planned(
+        tables: &BTreeMap<String, TableConfig>,
+        selected: Option<&[&str]>,
+    ) -> crate::error::Result<BTreeMap<String, usize>> {
+        let db = Surreal::<Client>::init();
+        let config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+        let objects = BTreeMap::new();
+        let enums = BTreeMap::new();
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let mut mockmaker =
+            Mockmaker::new(&db, tables, &objects, &enums, &config, &registry).unwrap();
+        // What `generate_ids` leaves over an empty database: generated IDs only.
+        let counts: BTreeMap<String, usize> = tables
+            .iter()
+            .map(|(name, table)| (name.clone(), mockmaker.record_count(table.effective())))
+            .collect();
+        mockmaker.id_map = counts
+            .iter()
+            .map(|(name, count)| {
+                (
+                    name.clone(),
+                    (1..=*count)
+                        .map(|index| format!("{name}:{index}"))
+                        .collect(),
+                )
+            })
+            .collect();
+        mockmaker.new_records = counts;
+        let selected: Option<BTreeSet<String>> =
+            selected.map(|names| names.iter().map(|name| name.to_string()).collect());
+        mockmaker.select_tables_for_insert(selected.as_ref());
+        mockmaker.check_required_links()?;
+        Ok(mockmaker
+            .table_mocks
+            .iter()
+            .map(|(name, mocks)| (name.clone(), mocks.new_records))
+            .collect())
+    }
+
+    #[test]
+    fn tables_generating_no_records_need_nothing_to_link_to() {
+        let tables = scanned_tables();
+        assert_eq!(
+            planned(&tables, Some(&["author", "post"])).unwrap(),
+            BTreeMap::from([("author".to_string(), 0), ("post".to_string(), 0)])
+        );
+    }
+
+    #[test]
+    fn a_table_generating_records_needs_its_links_to_have_records() {
+        let tables = scanned_tables();
+        let error = planned(&tables, None).unwrap_err().to_string();
+        assert!(
+            error.contains("`comment.post` must link to") && error.contains("which has no records"),
+            "{error}"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "mockmake"))]
+mod id_batch_tests {
+    use super::{RPC_SIZE_LIMIT, id_batches};
+
+    #[test]
+    fn ids_split_into_batches_under_the_size_limit() {
+        let ids: Vec<String> = (0..200_000)
+            .map(|number| format!("record:{number}"))
+            .collect();
+        let batches = id_batches(&ids);
+        assert!(batches.len() > 1);
+        for batch in &batches {
+            let bytes: usize = batch.iter().map(|id| id.len() + 3).sum();
+            assert!(bytes <= RPC_SIZE_LIMIT, "{bytes} bytes");
+        }
+        assert_eq!(batches.concat(), ids);
+    }
+
+    #[test]
+    fn few_ids_go_in_one_batch() {
+        let ids = vec!["record:1".to_string(), "record:2".to_string()];
+        assert_eq!(id_batches(&ids), vec![&ids[..]]);
     }
 }

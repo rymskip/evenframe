@@ -8,7 +8,7 @@
 //! actually invokes the scanner pipeline, so the only test that proves
 //! the feature works for real users has to drive that same pipeline.
 
-#![cfg(feature = "schemasync")]
+#![cfg(all(feature = "schemasync", feature = "tooling"))]
 
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
@@ -88,7 +88,8 @@ fn scanner_threads_struct_level_index_into_define_statements() {
         &BTreeMap::new(),
         &registry,
         true,
-    );
+    )
+    .unwrap();
 
     assert!(
         surql.contains(
@@ -231,7 +232,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
     let after_schema =
         SchemaDefinition::from_table_configs(&after_tables, true).expect("schema after");
 
-    // Compare "old" (before) vs "new" (after) — simulates a database whose
+    // Compare "old" (before) vs "new" (after), as for a database whose
     // indexes were last synced under the old schema.
     let changes = Comparator::compare(&before_schema, &after_schema).expect("compare");
 
@@ -369,7 +370,8 @@ fn named_field_unique_replaces_default_unique_index() {
         &BTreeMap::new(),
         &ForeignTypeRegistry::default(),
         true,
-    );
+    )
+    .unwrap();
     let index_lines: Vec<&str> = surql
         .lines()
         .filter(|l| l.starts_with("DEFINE INDEX"))

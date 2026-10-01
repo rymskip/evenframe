@@ -465,15 +465,15 @@ impl Validator {
 /// Mockmake builds one of these for each candidate it generates and asks every
 /// validator on the field whether it would accept the value. Validators that
 /// don't apply to the supplied variant (e.g. a `NumberValidator` against a
-/// `Str`) return `true` — they have no opinion on a value outside their
+/// `Str`) return `true`: they have no opinion on a value outside their
 /// domain.
 #[derive(Debug, Clone, Copy)]
 pub enum MockValue<'a> {
     Str(&'a str),
     Num(f64),
-    /// Lexical bigint without any suffix — e.g. `"1000000000000"`.
+    /// Lexical bigint without any suffix, such as `"1000000000000"`.
     BigInt(&'a str),
-    /// Lexical bigdecimal — e.g. `"3.14159"`.
+    /// Lexical bigdecimal, such as `"3.14159"`.
     BigDecimal(&'a str),
     /// Duration as nanoseconds. Mock values for SurrealDB durations are
     /// ultimately emitted as `duration::from_nanos(...)`, so this is the
@@ -1123,7 +1123,10 @@ impl ToTokens for DurationValidator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
+        MockValue, NumberValidator, StringValidator, ToTokens, Validator, quote,
+    };
     use ordered_float::OrderedFloat;
 
     // ==================== Validator Enum Tests ====================
@@ -1769,7 +1772,7 @@ mod tests {
 
     #[test]
     fn matches_validators_outside_their_domain_return_true() {
-        // A NumberValidator on a string mock value is irrelevant — return true
+        // A NumberValidator on a string mock value is irrelevant, so return true
         // so the retry loop doesn't reject perfectly fine string candidates
         // when the user mis-attached a validator.
         let nv = Validator::NumberValidator(NumberValidator::Positive);

@@ -9,9 +9,10 @@
 #![cfg(feature = "wasm-plugins")]
 
 use evenframe_core::config::OutputRulePluginConfig;
+use evenframe_core::error::EvenframeError;
 use evenframe_core::types::{FieldType, StructConfig, StructField};
 use evenframe_core::typesync::plugin::OutputRulePluginManager;
-use evenframe_core::typesync::plugin_types::OutputRulePluginInput;
+use evenframe_core::typesync::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -40,26 +41,33 @@ fn field(name: &str, ty: &str) -> StructField {
 }
 
 fn field_with_annotation(name: &str, ty: &str, annotation: &str) -> StructField {
-    let mut f = field(name, ty);
-    f.annotations.push(annotation.to_string());
-    f
+    let mut annotated = field(name, ty);
+    annotated.annotations.push(annotation.to_string());
+    annotated
 }
 
-fn struct_input(
-    type_name: &str,
-    derives: Vec<&str>,
-    fields: Vec<StructField>,
-) -> OutputRulePluginInput {
-    OutputRulePluginInput::Struct {
+fn struct_config(type_name: &str, derives: Vec<&str>, fields: Vec<StructField>) -> StructConfig {
+    StructConfig {
+        struct_name: type_name.to_string(),
+        fields,
+        rust_derives: derives.into_iter().map(String::from).collect(),
+        ..Default::default()
+    }
+}
+
+/// The loaded plugin's output for a struct `config`.
+fn transform(
+    manager: &mut OutputRulePluginManager,
+    config: &StructConfig,
+) -> Result<OutputRulePluginOutput, EvenframeError> {
+    let input = OutputRulePluginInput::Struct {
         pipeline: "Both".to_string(),
         generator: "macroforge".to_string(),
-        config: StructConfig {
-            struct_name: type_name.to_string(),
-            fields,
-            rust_derives: derives.into_iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
-        },
-    }
+        config,
+    };
+    let mut outputs = manager.transform(&input)?;
+    assert_eq!(outputs.len(), 1, "one plugin is loaded");
+    Ok(outputs.remove(0).1)
 }
 
 // ============================================================================
@@ -91,7 +99,7 @@ fn decimal_override_missing_wasm_errors_at_load() {
 #[test]
 fn decimal_field_gets_bigdecimal_annotation_when_serialize_derived() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
+    let input = struct_config(
         "Payment",
         vec!["Debug", "Clone", "Serialize", "Deserialize"],
         vec![
@@ -101,9 +109,7 @@ fn decimal_field_gets_bigdecimal_annotation_when_serialize_derived() {
         ],
     );
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
     assert!(
         output.error.is_none(),
         "plugin reported error: {:?}",
@@ -132,15 +138,13 @@ fn decimal_field_gets_bigdecimal_annotation_when_serialize_derived() {
 #[test]
 fn decimal_field_is_untouched_without_serialize() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
+    let input = struct_config(
         "InternalPayment",
         vec!["Debug", "Clone"], // no Serialize
         vec![field("amount", "Decimal"), field("note", "String")],
     );
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
     assert!(
         output.field_overrides.is_empty(),
         "plugin must not annotate anything without Serialize; got: {:?}",
@@ -152,15 +156,13 @@ fn decimal_field_is_untouched_without_serialize() {
 #[test]
 fn non_decimal_field_is_untouched_even_with_serialize() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
+    let input = struct_config(
         "User",
         vec!["Debug", "Serialize"],
         vec![field("name", "String"), field("age", "I32")],
     );
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
     assert!(
         output.field_overrides.is_empty(),
         "plugin must not touch non-Decimal fields; got: {:?}",
@@ -175,7 +177,7 @@ fn non_decimal_field_is_untouched_even_with_serialize() {
 #[test]
 fn internal_annotated_field_gets_stripped_marker() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
+    let input = struct_config(
         "AuditLog",
         vec!["Debug"],
         vec![
@@ -184,9 +186,7 @@ fn internal_annotated_field_gets_stripped_marker() {
         ],
     );
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
 
     let internal_annotations = output
         .field_overrides
@@ -208,15 +208,13 @@ fn internal_annotated_field_gets_stripped_marker() {
 #[test]
 fn type_level_annotation_appears_when_any_override_fires() {
     let mut pm = create_plugin_manager();
-    let input = struct_input(
+    let input = struct_config(
         "Order",
         vec!["Serialize"],
         vec![field("total", "Decimal"), field("note", "String")],
     );
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
 
     assert!(
         output
@@ -231,11 +229,9 @@ fn type_level_annotation_appears_when_any_override_fires() {
 #[test]
 fn type_level_annotation_absent_when_no_override_fires() {
     let mut pm = create_plugin_manager();
-    let input = struct_input("Empty", vec!["Debug"], vec![field("name", "String")]);
+    let input = struct_config("Empty", vec!["Debug"], vec![field("name", "String")]);
 
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("plugin call must succeed");
+    let output = transform(&mut pm, &input).expect("plugin call must succeed");
     assert!(output.type_override.annotations.is_empty());
     assert!(output.field_overrides.is_empty());
 }
@@ -247,24 +243,20 @@ fn type_level_annotation_absent_when_no_override_fires() {
 #[test]
 fn plugin_is_stable_across_repeated_calls() {
     let mut pm = create_plugin_manager();
-    let input = struct_input("Widget", vec!["Serialize"], vec![field("price", "Decimal")]);
+    let input = struct_config("Widget", vec!["Serialize"], vec![field("price", "Decimal")]);
 
-    let first = pm
-        .transform_type("decimal_override", &input)
-        .expect("first call");
+    let first = transform(&mut pm, &input).expect("first call");
     for _ in 0..10 {
-        let again = pm
-            .transform_type("decimal_override", &input)
-            .expect("repeat call");
+        let again = transform(&mut pm, &input).expect("repeat call");
         assert_eq!(
             first
                 .field_overrides
                 .get("price")
-                .map(|f| f.annotations.clone()),
+                .map(|field_override| field_override.annotations.clone()),
             again
                 .field_overrides
                 .get("price")
-                .map(|f| f.annotations.clone()),
+                .map(|field_override| field_override.annotations.clone()),
         );
     }
 }
@@ -272,10 +264,8 @@ fn plugin_is_stable_across_repeated_calls() {
 #[test]
 fn empty_struct_returns_empty_output() {
     let mut pm = create_plugin_manager();
-    let input = struct_input("Blank", vec![], vec![]);
-    let output = pm
-        .transform_type("decimal_override", &input)
-        .expect("empty input must succeed");
+    let input = struct_config("Blank", vec![], vec![]);
+    let output = transform(&mut pm, &input).expect("empty input must succeed");
 
     assert!(output.error.is_none());
     assert!(output.field_overrides.is_empty());

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::models::billing::{
     Billable, BookingKind, BookingSlot, Service, ServiceBooking, Shift, ShiftLocation,
 };
-use crate::models::{Product, ProductCategory};
+use crate::models::ecommerce::{Product, ProductCategory};
 
 /// List what line items can bill for (mock data)
 pub async fn list_billables() -> impl IntoResponse {

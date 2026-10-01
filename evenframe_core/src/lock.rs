@@ -10,8 +10,8 @@ use tracing::{debug, info, warn};
 
 /// A per-project lock held for the lifetime of an evenframe run.
 ///
-/// Concurrent runs against the same project mutate shared state — the
-/// database schema, generated type files, and the `.evenframe` caches — so a
+/// Concurrent runs against the same project mutate shared state (the
+/// database schema, generated type files, and the `.evenframe` caches), so a
 /// second process blocks until the first finishes instead of interleaving
 /// with it. The lock is an OS advisory file lock: the kernel releases it when
 /// the holder exits (cleanly or not), so a crashed run cannot leave a stale
@@ -112,7 +112,7 @@ impl ProcessLock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{OpenOptions, ProcessLock, TryLockError};
     use tempfile::TempDir;
 
     #[test]

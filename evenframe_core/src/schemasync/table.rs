@@ -19,7 +19,7 @@ pub struct TableConfig {
 
 impl TableConfig {
     /// Resolve `output_override` recursively. Every consumer that reads a
-    /// `TableConfig` should call this first — `output_override` is a literal
+    /// `TableConfig` should call this first: `output_override` is a literal
     /// replacement, applied uniformly across all consumers.
     pub fn effective(&self) -> &Self {
         self.output_override
@@ -510,7 +510,7 @@ pub(crate) fn surql_string_literal(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Bm25, IndexConfig, IndexKind, VectorDistance, VectorType};
 
     #[test]
     fn default_names_are_unchanged_for_plain_fields() {

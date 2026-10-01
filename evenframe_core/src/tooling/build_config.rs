@@ -1,13 +1,10 @@
 //! Build-time configuration for type generation.
 
-use crate::config::ForeignTypeConfig;
+use crate::config::{EvenframeConfig, ForeignTypeConfig, IncludeFile};
 use crate::error::EvenframeError;
-use crate::typesync::config::{
-    CollisionStrategy, OutputKind, StructVariants, TypesyncConfig, TypesyncOutput,
-};
+use crate::typesync::config::{CollisionStrategy, OutputKind, StructVariants, TypesyncOutput};
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Configuration for build-time type generation.
@@ -46,7 +43,7 @@ pub struct BuildConfig {
 
     /// Files outside the scan subtree to additionally parse for Evenframe types.
     /// Paths are already resolved (absolute) relative to the project root.
-    pub include_files: Vec<super::IncludeFile>,
+    pub include_files: Vec<IncludeFile>,
 }
 
 impl Default for BuildConfig {
@@ -73,12 +70,29 @@ impl BuildConfig {
         Self::default()
     }
 
+    /// The build settings of a loaded configuration, so type generation and
+    /// the rest of a command read the same, environment-substituted file.
+    pub fn from_config(config: &EvenframeConfig) -> Self {
+        Self {
+            scan_path: config.project_root().to_path_buf(),
+            config_path: Some(config.config_file_path.clone()),
+            apply_aliases: config.general.apply_aliases.clone(),
+            expand_macros: config.general.expand_macros,
+            outputs: config.typesync.outputs.clone(),
+            collision_strategy: config.typesync.collision_strategy,
+            struct_variants: config.typesync.struct_variants,
+            foreign_types: config.general.foreign_types.clone(),
+            output_rule_plugins: config.general.output_rule_plugins.clone(),
+            synthetic_item_plugins: config.general.synthetic_item_plugins.clone(),
+            include_files: config.resolved_include_files(),
+        }
+    }
+
     /// Loads the configuration file the CLI uses: the one
-    /// [`EvenframeConfig::find_config_file`](crate::config::EvenframeConfig::find_config_file)
-    /// finds from the current directory, so both configs always describe the
-    /// same project.
+    /// [`EvenframeConfig::find_config_file`] finds from the current
+    /// directory, so both configs always describe the same project.
     pub fn discover() -> Result<Self, EvenframeError> {
-        Self::from_toml_path(crate::config::EvenframeConfig::find_config_file()?)
+        Ok(Self::from_config(&EvenframeConfig::new_offline()?))
     }
 
     /// Loads configuration from evenframe.toml, for build scripts.
@@ -91,24 +105,19 @@ impl BuildConfig {
     /// Returns `EvenframeError::ConfigNotFound` if no evenframe.toml is found.
     /// Returns `EvenframeError::Config` if the file cannot be parsed.
     pub fn from_toml() -> Result<Self, EvenframeError> {
-        let start_dir = env::var("CARGO_MANIFEST_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
+        let start_dir = match env::var_os("CARGO_MANIFEST_DIR") {
+            Some(manifest_dir) => PathBuf::from(manifest_dir),
+            None => env::current_dir()?,
+        };
         Self::from_toml_search(&start_dir)
     }
 
-    /// Loads configuration from a specific evenframe.toml file.
+    /// Loads configuration from a specific evenframe.toml file. The database
+    /// connection settings may reference unset variables, as type generation
+    /// never connects.
     pub fn from_toml_path(path: impl AsRef<Path>) -> Result<Self, EvenframeError> {
-        let path = path.as_ref();
-        let content = fs::read_to_string(path).map_err(|e| {
-            EvenframeError::config_error(format!(
-                "Failed to read configuration file {}: {e}",
-                path.display()
-            ))
-        })?;
-
-        Self::parse_toml(&content, path)
+        let config = EvenframeConfig::load_from(path.as_ref().to_path_buf(), false)?;
+        Ok(Self::from_config(&config))
     }
 
     /// Searches for `.evenframe/config.toml` (preferred) or `evenframe.toml` (fallback)
@@ -135,68 +144,6 @@ impl BuildConfig {
                 });
             }
         }
-    }
-
-    /// Parses TOML content into BuildConfig.
-    fn parse_toml(content: &str, path: &Path) -> Result<Self, EvenframeError> {
-        let value: toml::Value =
-            toml::from_str(content).map_err(|e| EvenframeError::config_error(e.to_string()))?;
-
-        let mut config = Self {
-            config_path: Some(path.to_path_buf()),
-            ..Self::default()
-        };
-
-        // Captured from [general] but resolved below, once `project_root` is known.
-        let mut include_specs: Vec<crate::config::IncludeFileSpec> = Vec::new();
-
-        // Parse [general] section
-        if let Some(general) = value.get("general") {
-            let general_config: crate::config::GeneralConfig =
-                general.clone().try_into().map_err(|e| {
-                    EvenframeError::config_error(format!("Failed to parse [general]: {e}"))
-                })?;
-
-            config.apply_aliases = general_config.apply_aliases;
-            config.expand_macros = general_config.expand_macros;
-            config.foreign_types = general_config.foreign_types;
-            config.output_rule_plugins = general_config.output_rule_plugins;
-            config.synthetic_item_plugins = general_config.synthetic_item_plugins;
-            include_specs = general_config.include_files;
-        }
-
-        let project_root = crate::config::EvenframeConfig::project_root_of(path);
-
-        // Resolve `include_files` paths relative to the project root (absolute as-is).
-        config.include_files = include_specs
-            .iter()
-            .map(|spec| {
-                let p = PathBuf::from(spec.path());
-                let path = if p.is_absolute() {
-                    p
-                } else {
-                    project_root.join(p)
-                };
-                super::IncludeFile {
-                    path,
-                    resolve_only: spec.resolve_only(),
-                }
-            })
-            .collect();
-
-        if let Some(typesync) = value.get("typesync") {
-            let typesync: TypesyncConfig = typesync.clone().try_into().map_err(|e| {
-                EvenframeError::config_error(format!("Failed to parse [typesync]: {e}"))
-            })?;
-            config.outputs = typesync.outputs;
-            config.collision_strategy = typesync.collision_strategy;
-            config.struct_variants = typesync.struct_variants;
-        }
-
-        // Set scan_path to the project root
-        config.scan_path = project_root.to_path_buf();
-
-        Ok(config)
     }
 
     /// Creates a builder for programmatic configuration.
@@ -263,10 +210,17 @@ impl BuildConfigBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BuildConfig, EvenframeConfig, EvenframeError, OutputKind, PathBuf, TypesyncOutput,
+    };
+
+    fn parse_at(content: &str, config_path: &str) -> Result<BuildConfig, EvenframeError> {
+        let config = EvenframeConfig::parse(content, PathBuf::from(config_path), false)?;
+        Ok(BuildConfig::from_config(&config))
+    }
 
     fn parse(content: &str) -> Result<BuildConfig, EvenframeError> {
-        BuildConfig::parse_toml(content, Path::new("/proj/evenframe.toml"))
+        parse_at(content, "/nonexistent-evenframe-project/evenframe.toml")
     }
 
     #[test]
@@ -358,9 +312,8 @@ include_files = [
 ]
 "#;
 
-        let config =
-            BuildConfig::parse_toml(toml_content, Path::new("/proj/.evenframe/config.toml"))
-                .expect("Should parse successfully");
+        let config = parse_at(toml_content, "/proj/.evenframe/config.toml")
+            .expect("Should parse successfully");
 
         assert_eq!(config.include_files.len(), 2);
         // Relative path joined to project root (/proj); `.evenframe/` stripped.

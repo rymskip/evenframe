@@ -1,0 +1,441 @@
+---
+source: evenframe_core/tests/typesync_pipeline.rs
+expression: rendered
+---
+=== 0-arktype/arktype.ts
+import { scope } from 'arktype';
+
+export const bindings = scope({
+
+Status: [[['===', 'Draft'], '|', { Scheduled: 'Scheduled' }], '|', { Archived: 'string' }],
+Address: {
+  street: 'string',
+  city: [['string', '|', 'undefined'], '|', 'null']
+},
+Comment: {
+  body: 'string',
+  replies: ['Reply', '[]']
+},
+Reply: {
+  body: 'string',
+  thread: ['Comment', '[]']
+},
+Scheduled: {
+  at: 'string',
+  note: [['string', '|', 'undefined'], '|', 'null']
+},
+Section: {
+  heading: 'string',
+  children: ['Section', '[]']
+},
+Author: {
+  id: 'string',
+  name: 'string',
+  home: 'Address'
+},
+Post: {
+  id: 'string',
+  title: 'string',
+  author: ['Author', "|",  "string"],
+  status: 'Status',
+  location: 'Address',
+  outline: [['Section', '|', 'undefined'], '|', 'null'],
+  comments: ['Comment', '[]']
+},
+
+});
+
+const exported = bindings.export();
+
+export const defaultAddress: Address = {
+street: "",
+city: null
+};
+export const defaultComment: Comment = {
+body: "",
+replies: []
+};
+export const defaultReply: Reply = {
+body: "",
+thread: []
+};
+export const defaultScheduled: Scheduled = {
+at: "",
+note: null
+};
+export const defaultSection: Section = {
+heading: "",
+children: []
+};
+export const defaultAuthor: Author = {
+id: "",
+name: "",
+home: { street: "", city: null }
+};
+export const defaultPost: Post = {
+id: "",
+title: "",
+author: '',
+status: "Draft",
+location: { street: "", city: null },
+outline: null,
+comments: []
+};
+
+export type Status = typeof exported.Status.infer;
+export type Address = typeof exported.Address.infer;
+export type Comment = typeof exported.Comment.infer;
+export type Reply = typeof exported.Reply.infer;
+export type Scheduled = typeof exported.Scheduled.infer;
+export type Section = typeof exported.Section.infer;
+export type Author = typeof exported.Author.infer;
+export type Post = typeof exported.Post.infer;
+
+export const validator = exported;
+
+=== 1-effect/bindings.ts
+import { Schema } from "effect";
+
+export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
+  at: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'At' is required` }),
+  note: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+}) {[key: string]: unknown}
+
+export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) })).annotations({ identifier: `Status` });
+export class Section extends Schema.Class<Section>("Section")( { 
+  heading: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Heading' is required` }),
+  children: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Section, SectionEncoded> => Section).annotations({ identifier: `SectionRef` }))).annotations({ missingMessage: () => `'Children' is required` })
+}) {[key: string]: unknown}
+
+export class Comment extends Schema.Class<Comment>("Comment")( { 
+  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
+}) {[key: string]: unknown}
+
+export class Reply extends Schema.Class<Reply>("Reply")( { 
+  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  thread: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Thread' is required` })
+}) {[key: string]: unknown}
+
+export class Address extends Schema.Class<Address>("Address")( { 
+  street: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+}) {[key: string]: unknown}
+
+export class Author extends Schema.Class<Author>("Author")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
+}) {[key: string]: unknown}
+
+export class Post extends Schema.Class<Post>("Post")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
+  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
+                message: `Please enter a valid value`,
+                override: true,
+            }), })).annotations({ missingMessage: () => `'Author' is required` }),
+  status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
+  location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
+  outline: Schema.OptionFromNullishOr(Section, null),
+  comments: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Comments' is required` })
+}) {[key: string]: unknown}
+
+
+export interface ScheduledEncoded {
+  readonly at: string;
+  readonly note: string | null | undefined;
+}
+
+export type StatusEncoded = "Draft" | { readonly Scheduled: ScheduledEncoded } | { readonly Archived: string };
+
+export interface SectionEncoded {
+  readonly heading: string;
+  readonly children: ReadonlyArray<SectionEncoded>;
+}
+
+export interface CommentEncoded {
+  readonly body: string;
+  readonly replies: ReadonlyArray<ReplyEncoded>;
+}
+
+export interface ReplyEncoded {
+  readonly body: string;
+  readonly thread: ReadonlyArray<CommentEncoded>;
+}
+
+export interface AddressEncoded {
+  readonly street: string;
+  readonly city: string | null | undefined;
+}
+
+export interface AuthorEncoded {
+  readonly id: string;
+  readonly name: string;
+  readonly home: AddressEncoded;
+}
+
+export interface PostEncoded {
+  readonly id: string;
+  readonly title: string;
+  readonly author: string | AuthorEncoded;
+  readonly status: StatusEncoded;
+  readonly location: AddressEncoded;
+  readonly outline: SectionEncoded | null | undefined;
+  readonly comments: ReadonlyArray<CommentEncoded>;
+}
+
+
+=== 2-effect/address.ts
+import { Schema } from "effect";
+
+export class Address extends Schema.Class<Address>("Address")( { 
+  street: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+}) {[key: string]: unknown}
+
+export type AddressType = typeof Address.Type;
+
+export interface AddressEncoded {
+  readonly street: string;
+  readonly city: string | null | undefined;
+}
+
+
+=== 2-effect/post.ts
+import { Schema } from "effect";
+import { Address, type AddressEncoded } from './address';
+import { Section, type SectionEncoded } from './section';
+
+export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
+  at: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'At' is required` }),
+  note: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+}) {[key: string]: unknown}
+
+export type ScheduledType = typeof Scheduled.Type;
+export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) })).annotations({ identifier: `Status` });
+export type StatusType = typeof Status.Type;
+export class Comment extends Schema.Class<Comment>("Comment")( { 
+  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
+}) {[key: string]: unknown}
+
+export type CommentType = typeof Comment.Type;
+export class Reply extends Schema.Class<Reply>("Reply")( { 
+  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  thread: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Thread' is required` })
+}) {[key: string]: unknown}
+
+export type ReplyType = typeof Reply.Type;
+export class Author extends Schema.Class<Author>("Author")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
+}) {[key: string]: unknown}
+
+export type AuthorType = typeof Author.Type;
+export class Post extends Schema.Class<Post>("Post")( { 
+  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
+  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
+                message: `Please enter a valid value`,
+                override: true,
+            }), })).annotations({ missingMessage: () => `'Author' is required` }),
+  status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
+  location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
+  outline: Schema.OptionFromNullishOr(Section, null),
+  comments: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Comments' is required` })
+}) {[key: string]: unknown}
+
+export type PostType = typeof Post.Type;
+
+export interface ScheduledEncoded {
+  readonly at: string;
+  readonly note: string | null | undefined;
+}
+
+export type StatusEncoded = "Draft" | { readonly Scheduled: ScheduledEncoded } | { readonly Archived: string };
+
+export interface CommentEncoded {
+  readonly body: string;
+  readonly replies: ReadonlyArray<ReplyEncoded>;
+}
+
+export interface ReplyEncoded {
+  readonly body: string;
+  readonly thread: ReadonlyArray<CommentEncoded>;
+}
+
+export interface AuthorEncoded {
+  readonly id: string;
+  readonly name: string;
+  readonly home: AddressEncoded;
+}
+
+export interface PostEncoded {
+  readonly id: string;
+  readonly title: string;
+  readonly author: string | AuthorEncoded;
+  readonly status: StatusEncoded;
+  readonly location: AddressEncoded;
+  readonly outline: SectionEncoded | null | undefined;
+  readonly comments: ReadonlyArray<CommentEncoded>;
+}
+
+
+=== 2-effect/section.ts
+import { Schema } from "effect";
+
+export class Section extends Schema.Class<Section>("Section")( { 
+  heading: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Heading' is required` }),
+  children: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Section, SectionEncoded> => Section).annotations({ identifier: `SectionRef` }))).annotations({ missingMessage: () => `'Children' is required` })
+}) {[key: string]: unknown}
+
+export type SectionType = typeof Section.Type;
+
+export interface SectionEncoded {
+  readonly heading: string;
+  readonly children: ReadonlyArray<SectionEncoded>;
+}
+
+
+=== 3-macroforge/macroforge.ts
+export type RecordLink<T> = string | T;
+
+/** @derive(Deserialize) */
+export interface Address {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  street: string;
+  city: string | null;
+}
+
+/** @derive(Deserialize) */
+export interface Author {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  name: string;
+  home: Address;
+}
+
+/** @derive(Deserialize) */
+export interface Comment {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  body: string;
+  replies: Reply[];
+}
+
+/** @derive(Deserialize) */
+export interface Post {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  title: string;
+  author: RecordLink<Author>;
+  status: Status;
+  location: Address;
+  outline: Section | null;
+  comments: Comment[];
+}
+
+/** @derive(Deserialize) */
+export interface Reply {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  body: string;
+  thread: Comment[];
+}
+
+/** @derive(Deserialize) */
+export interface Scheduled {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  at: string;
+  note: string | null;
+}
+
+/** @derive(Deserialize) */
+export interface Section {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  heading: string;
+  children: Section[];
+}
+
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Status =
+	| "Draft"
+	| { Scheduled: Scheduled }
+	| { Archived: string };
+
+=== 4-macroforge/address.ts
+/** @derive(Deserialize) */
+export interface Address {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  street: string;
+  city: string | null;
+}
+
+=== 4-macroforge/post.ts
+import type { RecordLink } from './record-link';
+import type { Address } from './address';
+import type { Section } from './section';
+
+/** @derive(Deserialize) */
+export interface Author {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  name: string;
+  home: Address;
+}
+
+/** @derive(Deserialize) */
+export interface Comment {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  body: string;
+  replies: Reply[];
+}
+
+/** @derive(Deserialize) */
+export interface Post {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  id: string;
+  /** @serde({ validate: ["nonEmpty"] }) */
+  title: string;
+  author: RecordLink<Author>;
+  status: Status;
+  location: Address;
+  outline: Section | null;
+  comments: Comment[];
+}
+
+/** @derive(Deserialize) */
+export interface Reply {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  body: string;
+  thread: Comment[];
+}
+
+/** @derive(Deserialize) */
+export interface Scheduled {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  at: string;
+  note: string | null;
+}
+
+/** @derive(Deserialize) */
+/** @serde({ externallyTagged: true }) */
+export type Status =
+	| "Draft"
+	| { Scheduled: Scheduled }
+	| { Archived: string };
+
+=== 4-macroforge/record-link.ts
+export type RecordLink<T> = string | T;
+
+=== 4-macroforge/section.ts
+/** @derive(Deserialize) */
+export interface Section {
+  /** @serde({ validate: ["nonEmpty"] }) */
+  heading: string;
+  children: Section[];
+}

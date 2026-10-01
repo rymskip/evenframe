@@ -52,7 +52,7 @@ pub fn format_double_slash(desc: &str, indent: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{format_double_slash, format_jsdoc, format_triple_slash};
 
     #[test]
     fn test_format_jsdoc_single_line() {

@@ -322,7 +322,7 @@ fn test_filter_for_typesync_excludes_schemasync_only() {
 
     let config = BuildConfig::builder().scan_path(root).build();
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
-    let (ts_enums, ts_tables, ts_objects) = filter_for_typesync(enums, tables, objects);
+    let (ts_enums, ts_tables, ts_objects) = filter_for_typesync(&enums, &tables, &objects);
 
     // Typesync filter should include Typesync and Both, exclude Schemasync
     assert!(
@@ -552,7 +552,7 @@ fn test_merge_tables_and_objects_preserves_pipeline() {
 
     let config = BuildConfig::builder().scan_path(root).build();
     let (_enums, tables, objects) = build_all_configs(&config).unwrap();
-    let merged = merge_tables_and_objects(&tables, &objects);
+    let merged = merge_tables_and_objects(tables, objects);
 
     // `merge_tables_and_objects` keys tables by their snake_case table name
     // (dropping the PascalCase duplicate); objects stay under their PascalCase

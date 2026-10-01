@@ -23,11 +23,20 @@ pub mod expansion_cache;
 mod generator;
 mod workspace_scanner;
 
-pub use build_config::*;
-pub use cache::*;
-pub use config_builders::*;
-pub use generator::*;
-pub use workspace_scanner::*;
+pub use build_config::{BuildConfig, BuildConfigBuilder};
+pub use cache::{
+    CACHE_FORMAT_VERSION, CACHE_REFRESH_COMMAND, CACHE_RELATIVE_PATH, CacheStatus, InputStamp,
+    ScanCache, build_and_record, scan_inputs,
+};
+pub use config_builders::{
+    AllConfigs, ParsedType, TableAttributes, build_all_configs, filter_for_schemasync,
+    filter_for_typesync, merge_tables_and_objects,
+};
+pub use generator::{GenerationReport, TypeGenerator};
+pub use workspace_scanner::{
+    EvenframeType, MAX_SCAN_DEPTH, ScannedItem, TypeKind, WorkspaceScanner, canonical_manifests,
+    find_manifests, member_has_own_manifest,
+};
 
 use crate::error::EvenframeError;
 

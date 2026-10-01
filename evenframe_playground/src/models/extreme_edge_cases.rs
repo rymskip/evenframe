@@ -978,7 +978,12 @@ pub struct ArrayValidationExtremes {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidationExtremes, ComplexIdentifiers, ComplexPayment, DateTimeExtremes,
+        DeepNestedValidation, EdgeCasePost, ExtremeFloatValidation, ExtremeIntegerValidation,
+        KitchenSinkString, MaxValidatorStacking, NetworkTypes, PaymentMethod, PaymentStatus,
+        RecordLink, ValidatedAddress, ValidatedContact,
+    };
 
     // Kitchen Sink String tests
     #[test]

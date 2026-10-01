@@ -1,4 +1,4 @@
-//! test-plugin command — runs output rule plugins against project types
+//! test-plugin command: runs output rule plugins against project types
 //! and prints what they produce as JSON for scripted assertions.
 
 use crate::cli::TestPluginArgs;
@@ -7,17 +7,18 @@ use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
     types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
+    typesync::type_index::TypeIndex,
 };
 use std::collections::BTreeMap;
 use tracing::info;
 
 pub async fn run(args: TestPluginArgs) -> Result<()> {
     let config = EvenframeConfig::new_offline()?;
-    let build_config = config_builders::BuildConfig::discover()?;
+    let build_config = config_builders::BuildConfig::from_config(&config);
 
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
-    let (enums, tables, objects) = config_builders::filter_for_typesync(enums, tables, objects);
-    let structs = config_builders::merge_tables_and_objects(&tables, &objects);
+    let (enums, tables, objects) = config_builders::filter_for_typesync(&enums, &tables, &objects);
+    let structs = config_builders::merge_tables_and_objects(tables, objects);
 
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
 
@@ -52,8 +53,7 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         single.insert(name.clone(), sc.clone());
         let empty_enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
-            &single,
-            &empty_enums,
+            &TypeIndex::new(&single, &empty_enums)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
         );
@@ -102,8 +102,7 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         let mut single_enum = BTreeMap::new();
         single_enum.insert(name.clone(), eu.clone());
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
-            &empty_structs,
-            &single_enum,
+            &TypeIndex::new(&empty_structs, &single_enum)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
         );

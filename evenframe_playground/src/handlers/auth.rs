@@ -1,7 +1,7 @@
 use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
-use crate::models::Role;
+use crate::models::auth::Role;
 
 /// List all users (mock data)
 pub async fn list_users() -> impl IntoResponse {
@@ -44,7 +44,7 @@ fn mock_user(id: &str, email: &str, username: &str) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{StatusCode, get_user, list_users, mock_user};
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request;

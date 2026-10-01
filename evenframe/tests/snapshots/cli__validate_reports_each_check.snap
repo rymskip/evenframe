@@ -1,6 +1,5 @@
 ---
 source: evenframe/tests/cli.rs
-assertion_line: 88
 expression: transcript
 ---
 $ evenframe validate
@@ -24,7 +23,11 @@ Configuration: FAILED
 the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
 
 Types: FAILED
-  Configuration error: Failed to parse [typesync]: the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
+  Configuration error: Failed to parse configuration file [PROJECT]/evenframe.toml: TOML parse error at line 12, column 1
+   |
+12 | [typesync]
+   | ^^^^^^^^^^
+the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
 
 --- stderr ---
 [TIME] ERROR evenframe: Evenframe failed: Validation error: validation failed with errors

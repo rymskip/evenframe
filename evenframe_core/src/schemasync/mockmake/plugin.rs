@@ -3,8 +3,8 @@
 use crate::error::EvenframeError;
 use std::collections::BTreeMap;
 use std::path::Path;
-use tracing::{debug, info};
-use wasmtime::*;
+use std::time::{Duration, Instant};
+use tracing::info;
 
 use crate::typesync::plugin_runtime::LoadedPlugin;
 
@@ -29,15 +29,24 @@ struct WithParams<'a, T: serde::Serialize> {
 /// The error a plugin returns to leave a field to the default generator.
 const SKIP: &str = "skip";
 
+/// How much a run has used its mock plugins: the field values asked of
+/// them and the time those requests took, serialization included.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PluginUsage {
+    pub calls: u64,
+    pub time: Duration,
+}
+
 /// Manages WASM plugin loading, caching, and invocation.
 pub struct PluginManager {
-    _engine: Engine,
     plugins: BTreeMap<String, MockPlugin>,
+    usage: PluginUsage,
 }
 
 impl std::fmt::Debug for PluginManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PluginManager")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PluginManager")
             .field("plugins", &self.plugins.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -49,81 +58,32 @@ impl PluginManager {
         plugin_configs: &BTreeMap<String, crate::schemasync::config::PluginConfig>,
         project_root: &Path,
     ) -> Result<Self, EvenframeError> {
-        let engine = Engine::default();
-        let mut plugins = BTreeMap::new();
-
-        for (name, config) in plugin_configs {
-            let wasm_path = project_root.join(&config.path);
-            if !wasm_path.exists() {
-                return Err(EvenframeError::plugin(format!(
-                    "Plugin '{}': WASM file not found at {}",
-                    name,
-                    wasm_path.display()
-                )));
-            }
-
-            info!(
-                "Loading WASM plugin '{}' from {}",
-                name,
-                wasm_path.display()
-            );
-
-            let module = Module::from_file(&engine, &wasm_path).map_err(|e| {
-                EvenframeError::plugin(format!("Plugin '{}': failed to compile WASM: {}", name, e))
-            })?;
-
-            let mut store = Store::new(&engine, ());
-            let linker = Linker::new(&engine);
-            let instance = linker.instantiate(&mut store, &module).map_err(|e| {
-                EvenframeError::plugin(format!("Plugin '{}': failed to instantiate: {}", name, e))
-            })?;
-
-            // Verify required exports
-            let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
-                EvenframeError::plugin(format!("Plugin '{}': missing 'memory' export", name))
-            })?;
-
-            // Verify alloc/dealloc exist
-            instance
-                .get_typed_func::<i32, i32>(&mut store, "alloc")
-                .map_err(|_| {
-                    EvenframeError::plugin(format!("Plugin '{}': missing 'alloc' export", name))
-                })?;
-            instance
-                .get_typed_func::<(i32, i32), ()>(&mut store, "dealloc")
-                .map_err(|_| {
-                    EvenframeError::plugin(format!("Plugin '{}': missing 'dealloc' export", name))
-                })?;
-
-            // Mock data is generated field by field, so a plugin must export
-            // `generate_field`; a table-level `generate_table` is not called.
-            instance
-                .get_typed_func::<(i32, i32), i64>(&mut store, "generate_field")
-                .map_err(|_| {
-                    EvenframeError::plugin(format!(
-                        "Plugin '{name}': mock-data plugins must export 'generate_field'"
-                    ))
-                })?;
-            debug!("Plugin '{}' loaded", name);
-
-            plugins.insert(
-                name.clone(),
-                MockPlugin {
-                    runtime: LoadedPlugin {
-                        store,
-                        instance,
-                        memory,
-                    },
+        let plugins = plugin_configs
+            .iter()
+            .map(|(name, config)| {
+                let wasm_path = project_root.join(&config.path);
+                info!("Loading WASM plugin '{name}' from {}", wasm_path.display());
+                // Mock data is generated field by field, so a plugin must
+                // export `generate_field`.
+                let runtime =
+                    LoadedPlugin::load(&format!("Plugin '{name}'"), &wasm_path, "generate_field")?;
+                let plugin = MockPlugin {
+                    runtime,
                     params: config.params.clone(),
-                },
-            );
-        }
-
+                };
+                Ok((name.clone(), plugin))
+            })
+            .collect::<Result<BTreeMap<_, _>, EvenframeError>>()?;
         info!("Loaded {} WASM plugin(s)", plugins.len());
         Ok(Self {
-            _engine: engine,
             plugins,
+            usage: PluginUsage::default(),
         })
+    }
+
+    /// What this run has asked of its plugins so far.
+    pub fn usage(&self) -> PluginUsage {
+        self.usage
     }
 
     /// A field value from a named plugin, or `None` when the plugin skips
@@ -133,43 +93,39 @@ impl PluginManager {
         plugin_name: &str,
         input: &PluginFieldInput,
     ) -> Result<Option<String>, EvenframeError> {
+        let started = Instant::now();
         let plugin = self
             .plugins
             .get_mut(plugin_name)
-            .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{}' not found", plugin_name)))?;
-
+            .ok_or_else(|| EvenframeError::plugin(format!("Plugin '{plugin_name}' not found")))?;
         let input_json = serde_json::to_vec(&WithParams {
             input,
             params: &plugin.params,
         })
-        .map_err(|e| EvenframeError::plugin(format!("Failed to serialize input: {}", e)))?;
-
-        let output_str = plugin
-            .runtime
-            .call_plugin_fn("generate_field", &input_json)?;
-
-        let output: PluginFieldOutput = serde_json::from_str(&output_str).map_err(|e| {
+        .map_err(|error| {
+            EvenframeError::plugin(format!("Failed to serialize plugin input: {error}"))
+        })?;
+        let raw = plugin.runtime.call(&input_json)?;
+        let output: PluginFieldOutput = serde_json::from_str(&raw).map_err(|error| {
             EvenframeError::plugin(format!(
-                "Plugin '{}' returned invalid JSON: {} (raw: {})",
-                plugin_name, e, output_str
+                "Plugin '{plugin_name}' returned invalid JSON: {error} (raw: {raw})"
             ))
         })?;
+        self.usage.calls += 1;
+        self.usage.time += started.elapsed();
 
         match output.error.as_deref() {
             Some(SKIP) => return Ok(None),
-            Some(err) => {
+            Some(error) => {
                 return Err(EvenframeError::plugin(format!(
-                    "Plugin '{}' error: {}",
-                    plugin_name, err
+                    "Plugin '{plugin_name}' error: {error}"
                 )));
             }
             None => {}
         }
-
         output.value.map(Some).ok_or_else(|| {
             EvenframeError::plugin(format!(
-                "Plugin '{}' returned neither value nor error",
-                plugin_name
+                "Plugin '{plugin_name}' returned neither value nor error"
             ))
         })
     }

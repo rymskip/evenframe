@@ -17,7 +17,7 @@
 //! it with cargo-expand artifacts.
 //!
 //! Two of the tests shell out to `cargo expand`. If cargo-expand is not
-//! installed, those tests are skipped with a warning instead of failing —
+//! installed, those tests are skipped with a warning instead of failing;
 //! the CI host needs `cargo install cargo-expand` to exercise them fully.
 //!
 //! Run with: `cargo test --test expander_e2e_test`
@@ -37,7 +37,7 @@ fn cargo_expand_available() -> bool {
     Command::new("cargo")
         .args(["expand", "--help"])
         .output()
-        .map(|o| o.status.success())
+        .map(|output| output.status.success())
         .unwrap_or(false)
 }
 
@@ -45,7 +45,7 @@ fn cargo_expand_available() -> bool {
 /// detected by the scanner via manual trait impls.
 ///
 /// We use manual impls instead of `#[derive(Evenframe)]` so the temp crate
-/// doesn't need to depend on `evenframe_derive` — that lets `cargo expand`
+/// doesn't need to depend on `evenframe_derive`, which lets `cargo expand`
 /// run against it without pulling in the whole workspace.
 fn write_minimal_lib_crate(dir: &Path, crate_name: &str) {
     fs::write(
@@ -153,17 +153,17 @@ fn load_cache_discards_manifest_pointing_at_missing_fragment() {
     let tmp = TempDir::new().unwrap();
     let cache_dir = tmp.path();
 
-    let mut m = CacheManifest::empty("test_crate", &cache_dir.join("src"));
-    m.entries.insert(
+    let mut manifest = CacheManifest::empty("test_crate", &cache_dir.join("src"), &[]);
+    manifest.entries.insert(
         "lib.rs".to_string(),
         CacheEntry {
             input_hash: "deadbeef".to_string(),
             module_path: "test_crate".to_string(),
-            fragment_path: "fragments/lib.rs.expanded".to_string(),
-            extracted_types: vec![],
+            fragment_path: Some("fragments/lib.rs.expanded".to_string()),
+            items: vec![],
         },
     );
-    m.save(cache_dir).unwrap();
+    manifest.save(cache_dir).unwrap();
     // Note: the fragment file is deliberately NOT created.
 
     assert!(
@@ -178,17 +178,17 @@ fn load_cache_discards_manifest_pointing_at_zero_byte_fragment() {
     let tmp = TempDir::new().unwrap();
     let cache_dir = tmp.path();
 
-    let mut m = CacheManifest::empty("poisoned_crate", &cache_dir.join("src"));
-    m.entries.insert(
+    let mut manifest = CacheManifest::empty("poisoned_crate", &cache_dir.join("src"), &[]);
+    manifest.entries.insert(
         "lib.rs".to_string(),
         CacheEntry {
             input_hash: "cafebabe".to_string(),
             module_path: "poisoned_crate".to_string(),
-            fragment_path: "fragments/lib.rs.expanded".to_string(),
-            extracted_types: vec![],
+            fragment_path: Some("fragments/lib.rs.expanded".to_string()),
+            items: vec![],
         },
     );
-    m.save(cache_dir).unwrap();
+    manifest.save(cache_dir).unwrap();
 
     let frag = cache_dir.join("fragments/lib.rs.expanded");
     fs::create_dir_all(frag.parent().unwrap()).unwrap();
@@ -225,7 +225,7 @@ fn write_fragment_refuses_empty_contents() {
 #[test]
 fn raw_scan_skips_main_rs_and_src_bin() {
     // Even without cargo expand, walk_src's skip logic for main.rs and
-    // src/bin/*.rs must apply — otherwise turning on expand_macros would
+    // src/bin/*.rs must apply; otherwise turning on expand_macros would
     // hard-error on every bin-containing crate. This test doesn't turn
     // expand_macros on; it just verifies the scanner finds lib-side types
     // in a crate that also has main.rs + src/bin.
@@ -262,14 +262,14 @@ impl EvenframePersistableStruct for LibOnly {}
     )
     .unwrap();
 
-    // A bin target alongside the lib — `cargo expand --lib` never sees this.
+    // A bin target alongside the lib, which `cargo expand --lib` never sees.
     fs::write(
         src.join("main.rs"),
         r#"fn main() { println!("ignored by scanner"); }"#,
     )
     .unwrap();
 
-    // An extra bin in src/bin — also never seen by cargo expand --lib.
+    // An extra bin in src/bin, also never seen by cargo expand --lib.
     fs::create_dir_all(src.join("bin")).unwrap();
     fs::write(
         src.join("bin/tool.rs"),
@@ -283,13 +283,13 @@ impl EvenframePersistableStruct for LibOnly {}
         .scan_for_evenframe_types()
         .expect("raw scan must succeed");
 
-    let names: Vec<_> = types.iter().map(|t| t.name.as_str()).collect();
+    let names: Vec<_> = types.iter().map(|found| found.name.as_str()).collect();
     assert!(
         names.contains(&"LibOnly"),
         "lib types must still be discovered; found: {:?}",
         names
     );
-    // Nothing from main.rs / src/bin should end up in the output — they
+    // Nothing from main.rs / src/bin should end up in the output: they
     // have no Evenframe markers, so the scanner shouldn't find anything
     // there, and we shouldn't have crashed trying to walk them.
 }
@@ -324,10 +324,10 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
         .expect("expansion-mode scan must succeed on a valid temp crate");
 
     // Should have discovered at least User, Profile, Widget, Color.
-    let names: Vec<_> = types.iter().map(|t| t.name.clone()).collect();
+    let names: Vec<_> = types.iter().map(|found| found.name.clone()).collect();
     for expected in ["User", "Profile", "Widget", "Color"] {
         assert!(
-            names.iter().any(|n| n == expected),
+            names.iter().any(|name| name == expected),
             "expected scanner to find '{}' via expansion; found: {:?}",
             expected,
             names
@@ -350,15 +350,11 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
     let sizes = collect_file_sizes(&cache_dir);
     assert!(
         !sizes.is_empty(),
-        "cache directory {:?} is empty — no fragments were written",
+        "cache directory {:?} is empty: no fragments were written",
         cache_dir
     );
     for (path, len) in &sizes {
-        assert!(
-            *len > 0,
-            "found 0-byte cache file at {:?} — this is the regression",
-            path
-        );
+        assert!(*len > 0, "found 0-byte cache file at {:?}", path);
     }
 
     // The manifest on disk must survive a round-trip through the loader.
@@ -366,8 +362,57 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
     let loaded = CacheManifest::load(&cache_dir, "expand_me").expect("the manifest should load");
     assert!(
         !loaded.entries.is_empty(),
-        "persisted manifest was empty after reload — fragments may be corrupt"
+        "persisted manifest was empty after reload; fragments may be corrupt"
     );
+}
+
+/// A type inside an inline module of a file is found, an empty module file
+/// does not fail the scan, and a single changed file re-expands without
+/// losing the unchanged files' types.
+#[test]
+fn expand_macros_keeps_inline_modules_and_empty_files() {
+    if !cargo_expand_available() {
+        eprintln!(
+            "SKIP expand_macros_keeps_inline_modules_and_empty_files: cargo-expand not installed"
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let crate_dir = tmp.path().join("inline_mods");
+    fs::create_dir_all(&crate_dir).unwrap();
+    write_minimal_lib_crate(&crate_dir, "inline_mods");
+    let src = crate_dir.join("src");
+    let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
+    fs::write(src.join("lib.rs"), format!("{lib}pub mod empty;\n")).unwrap();
+    fs::write(src.join("empty.rs"), "").unwrap();
+    let sub_one = fs::read_to_string(src.join("sub_one.rs")).unwrap();
+    fs::write(
+        src.join("sub_one.rs"),
+        format!(
+            "{sub_one}\npub mod inline {{\n    pub struct Gadget {{\n        pub size: u32,\n    }}\n    \
+             impl crate::EvenframeAppStruct for Gadget {{}}\n}}\n"
+        ),
+    )
+    .unwrap();
+
+    let names = |scanner: &WorkspaceScanner| {
+        let mut names: Vec<String> = scanner
+            .scan_for_evenframe_types()
+            .expect("expansion-mode scan must succeed")
+            .into_iter()
+            .map(|found| found.name)
+            .collect();
+        names.sort();
+        names
+    };
+    let scanner = WorkspaceScanner::with_path(crate_dir.clone(), Vec::new(), true);
+    let expected = ["Color", "Gadget", "Profile", "User", "Widget"];
+    assert_eq!(names(&scanner), expected);
+
+    let sub_two = fs::read_to_string(src.join("sub_two.rs")).unwrap();
+    fs::write(src.join("sub_two.rs"), format!("{sub_two}\n// changed\n")).unwrap();
+    assert_eq!(names(&scanner), expected);
 }
 
 /// Second-run cache hit. Verifies that running the scanner twice in a row
@@ -400,9 +445,9 @@ fn expand_macros_second_run_is_a_cache_hit() {
     let fragments_dir = cache_dir.join("fragments");
     let first_mtimes: Vec<(PathBuf, std::time::SystemTime)> = collect_file_sizes(&fragments_dir)
         .into_iter()
-        .map(|(p, _)| {
-            let mtime = fs::metadata(&p).unwrap().modified().unwrap();
-            (p, mtime)
+        .map(|(path, _)| {
+            let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+            (path, mtime)
         })
         .collect();
     assert!(
@@ -431,18 +476,15 @@ fn expand_macros_second_run_is_a_cache_hit() {
         let second_mtime = fs::metadata(path).unwrap().modified().unwrap();
         assert_eq!(
             *first_mtime, second_mtime,
-            "fragment {:?} was re-written on the second run — cache miss",
+            "fragment {:?} was re-written on the second run: cache miss",
             path
         );
     }
 }
 
-/// Regression test for fix 1d: a crate that has *both* `src/lib.rs` and
-/// `src/main.rs` must not hard-error the expand path. Before the fix,
-/// `walk_src` would find `main.rs`, compute a module path for it, and then
-/// `split_expanded_by_module` would never produce that key (because
-/// `cargo expand --lib` skips the bin target) — tripping the new
-/// "missing module" hard error.
+/// A crate with both `src/lib.rs` and `src/main.rs` expands without error:
+/// `cargo expand --lib` never emits the bin target's module, so the expand
+/// path must not look for it.
 #[test]
 fn expand_macros_handles_mixed_lib_and_bin_crate() {
     if !cargo_expand_available() {
@@ -508,9 +550,9 @@ impl EvenframePersistableStruct for Account {}
     // module in the expanded output twice (once for lib, once for main).
     let types = result.expect("mixed lib/bin crate must scan cleanly in expand mode");
     assert!(
-        types.iter().any(|t| t.name == "Account"),
+        types.iter().any(|found| found.name == "Account"),
         "expected to find lib-side `Account` type; got: {:?}",
-        types.iter().map(|t| &t.name).collect::<Vec<_>>()
+        types.iter().map(|found| &found.name).collect::<Vec<_>>()
     );
 
     // Check the cache doesn't contain a `main.rs.expanded` entry.
@@ -523,7 +565,7 @@ impl EvenframePersistableStruct for Account {}
         loaded.entries.keys().collect::<Vec<_>>()
     );
     assert!(
-        !loaded.entries.keys().any(|k| k.starts_with("bin/")),
+        !loaded.entries.keys().any(|key| key.starts_with("bin/")),
         "cache should not have entries for src/bin/*; entries: {:?}",
         loaded.entries.keys().collect::<Vec<_>>()
     );

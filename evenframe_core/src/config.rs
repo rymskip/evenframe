@@ -131,6 +131,31 @@ where
     Ok(foreign_types)
 }
 
+/// The foreign type config for evenframe's record link, which a project may
+/// configure to own its TypeScript definition.
+pub const RECORD_LINK: &str = "RecordLink";
+
+/// `type_expr` with `{0}`, `{1}` and so on replaced by `params`. Config
+/// loading rejects a placeholder no parameter can fill.
+pub fn fill(type_expr: &str, params: &[String]) -> String {
+    params
+        .iter()
+        .enumerate()
+        .fold(type_expr.to_string(), |filled, (index, param)| {
+            filled.replace(&format!("{{{index}}}"), param)
+        })
+}
+
+/// The generic parameter indices `type_expr` has placeholders for.
+pub fn placeholders(type_expr: &str) -> Vec<usize> {
+    type_expr
+        .split('{')
+        .skip(1)
+        .filter_map(|rest| rest.split_once('}'))
+        .filter_map(|(digits, _)| digits.parse().ok())
+        .collect()
+}
+
 /// Rejects foreign type entries evenframe cannot use: a placeholder no generic
 /// parameter fills, and a `RecordLink` entry that sets more than its
 /// TypeScript side, since the record link's schema and mock data are
@@ -138,7 +163,6 @@ where
 pub fn validate_foreign_types(
     foreign_types: &BTreeMap<String, ForeignTypeConfig>,
 ) -> std::result::Result<(), String> {
-    use crate::typesync::foreign_ts::{RECORD_LINK, placeholders};
     for (name, foreign) in foreign_types {
         let record_link = name == RECORD_LINK;
         let parameters = usize::from(record_link);
@@ -246,6 +270,31 @@ impl IncludeFileSpec {
             IncludeFileSpec::Spec { resolve_only, .. } => *resolve_only,
         }
     }
+
+    /// The file this entry names, with a relative path joined to
+    /// `project_root` and an absolute one taken as is.
+    pub fn resolve(&self, project_root: &Path) -> IncludeFile {
+        let path = Path::new(self.path());
+        IncludeFile {
+            path: if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                project_root.join(path)
+            },
+            resolve_only: self.resolve_only(),
+        }
+    }
+}
+
+/// A file outside the scan subtree to additionally parse for Evenframe types,
+/// with its path resolved to absolute. [`IncludeFileSpec`] is the form the
+/// config file takes.
+#[derive(Debug, Clone)]
+pub struct IncludeFile {
+    /// Absolute path to the `.rs` file to parse.
+    pub path: PathBuf,
+    /// Register the file's types for resolution only (do not emit tables/TS).
+    pub resolve_only: bool,
 }
 
 /// General configuration for Evenframe operations
@@ -398,42 +447,52 @@ impl EvenframeConfig {
     }
 
     fn load(require_connection_env: bool) -> Result<EvenframeConfig> {
-        info!("Loading Evenframe configuration");
+        Self::load_from(Self::find_config_file()?, require_connection_env)
+    }
 
-        let config_path = Self::find_config_file()?;
-        info!("Found configuration file at: {:?}", config_path);
-
-        let contents = fs::read_to_string(&config_path).map_err(|e| {
+    /// Loads the configuration file at `config_path`. With
+    /// `require_connection_env` false, as for [`Self::new_offline`], the
+    /// database connection settings may reference unset variables.
+    pub fn load_from(
+        config_path: PathBuf,
+        require_connection_env: bool,
+    ) -> Result<EvenframeConfig> {
+        info!("Loading configuration from {}", config_path.display());
+        let contents = fs::read_to_string(&config_path).map_err(|error| {
             EvenframeError::config(format!(
-                "Failed to read configuration file {}: {e}",
+                "Failed to read configuration file {}: {error}",
                 config_path.display()
             ))
         })?;
+        Self::parse(&contents, config_path, require_connection_env)
+    }
 
-        debug!("Configuration file size: {} bytes", contents.len());
-
-        let mut config: EvenframeConfig = toml::from_str(&contents).map_err(|e| {
+    /// Parses configuration text read from `config_path`: loads the project's
+    /// `.env`, substitutes environment references in every string setting,
+    /// and reads the SurrealQL files the configuration names.
+    pub fn parse(
+        contents: &str,
+        config_path: PathBuf,
+        require_connection_env: bool,
+    ) -> Result<EvenframeConfig> {
+        let parse_error = |error: toml::de::Error| {
             EvenframeError::config(format!(
-                "Failed to parse configuration file {}: {e}",
+                "Failed to parse configuration file {}: {error}",
                 config_path.display()
             ))
-        })?;
+        };
+        // Parsed as written first, so a malformed setting is reported with its
+        // position in the file, and the `.env` it names is known.
+        let mut written: EvenframeConfig = toml::from_str(contents).map_err(parse_error)?;
+        written.config_file_path = config_path.clone();
+        load_env_from(&written.resolve_env_path());
 
-        debug!("Successfully parsed TOML configuration");
-
-        // Store config file path early so project_root() works
+        let mut document: toml::Value = toml::from_str(contents).map_err(parse_error)?;
+        Self::substitute_strings(&mut document, &[], !require_connection_env)?;
+        let mut config: EvenframeConfig = document.try_into().map_err(parse_error)?;
         config.config_file_path = config_path;
 
-        // Load .env file from configured or default path
-        Self::load_env_file(&config);
-
-        // Process environment variable substitutions for all string fields in the config
-        debug!("Substituting environment variables in configuration");
-        Self::substitute_all_env_vars(&mut config, require_connection_env)?;
-
-        // Resolve surql paths
         let project_root = config.project_root().to_path_buf();
-
         if let Some(schemasync) = config.schemasync.as_mut() {
             let database = &mut schemasync.database;
             if let crate::schemasync::config::AccessesSource::Path { ref path } = database.accesses
@@ -441,17 +500,15 @@ impl EvenframeConfig {
                 database.resolved.access_surql =
                     Some(Self::load_surql_from_path(&project_root, path)?);
             }
-            if let Some(ref func) = database.functions {
+            if let Some(ref functions) = database.functions {
                 database.resolved.functions_surql =
-                    Some(Self::load_surql_from_path(&project_root, &func.path)?);
+                    Some(Self::load_surql_from_path(&project_root, &functions.path)?);
             }
             if let Some(ref analyzers) = database.analyzers {
                 database.resolved.analyzers_surql =
                     Some(Self::load_surql_from_path(&project_root, &analyzers.path)?);
             }
         }
-
-        info!("Configuration loaded successfully");
         debug!(
             "Mock generation: {}, typesync outputs: {}",
             config
@@ -460,8 +517,41 @@ impl EvenframeConfig {
                 .is_some_and(|schemasync| schemasync.should_generate_mocks),
             config.typesync.outputs.len()
         );
-
         Ok(config)
+    }
+
+    /// Substitutes environment references in every string under `value`,
+    /// whose position in the document is `path`. A value is substituted as
+    /// data, never as TOML, so quotes and backslashes in it are kept. When
+    /// `offline`, the database connection settings leave references to unset
+    /// variables as written.
+    fn substitute_strings(value: &mut toml::Value, path: &[&str], offline: bool) -> Result<()> {
+        match value {
+            toml::Value::String(text) => {
+                let lenient = offline
+                    && matches!(
+                        path,
+                        ["schemasync", "database", "url" | "namespace" | "database"]
+                    );
+                *text = Self::substitute_env_vars_inner(text, !lenient)?;
+            }
+            toml::Value::Array(items) => {
+                for item in items {
+                    Self::substitute_strings(item, path, offline)?;
+                }
+            }
+            toml::Value::Table(table) => {
+                for (key, item) in table.iter_mut() {
+                    let child: Vec<&str> = path.iter().copied().chain([key.as_str()]).collect();
+                    Self::substitute_strings(item, &child, offline)?;
+                }
+            }
+            toml::Value::Integer(_)
+            | toml::Value::Float(_)
+            | toml::Value::Boolean(_)
+            | toml::Value::Datetime(_) => {}
+        }
+        Ok(())
     }
 
     /// The configuration file: the one chosen with [`Self::use_config_file`],
@@ -521,30 +611,12 @@ impl EvenframeConfig {
         Self::project_root_of(&self.config_file_path)
     }
 
-    /// Resolves `general.include_files` to absolute paths for the workspace
-    /// scanner's [`with_extra_files`](crate::tooling::WorkspaceScanner::with_extra_files).
-    /// Relative entries are joined to the project root; absolute paths are used
-    /// as-is. Mirrors the resolution in
-    /// [`BuildConfig::parse_toml`](crate::tooling::BuildConfig) so every scanner
-    /// entry point (generate/typesync/schemasync via `BuildConfig`, and
-    /// info/validate via `EvenframeConfig`) sees the same included files.
-    pub fn resolved_include_files(&self) -> Vec<crate::tooling::IncludeFile> {
-        let project_root = self.project_root().to_path_buf();
+    /// `general.include_files`, resolved against the project root.
+    pub fn resolved_include_files(&self) -> Vec<IncludeFile> {
         self.general
             .include_files
             .iter()
-            .map(|spec| {
-                let p = PathBuf::from(spec.path());
-                let path = if p.is_absolute() {
-                    p
-                } else {
-                    project_root.join(p)
-                };
-                crate::tooling::IncludeFile {
-                    path,
-                    resolve_only: spec.resolve_only(),
-                }
-            })
+            .map(|spec| spec.resolve(self.project_root()))
             .collect()
     }
 
@@ -560,11 +632,6 @@ impl EvenframeConfig {
         std::path::absolute(&raw).unwrap_or(raw)
     }
 
-    /// Load environment variables from the .env file resolved from config.
-    fn load_env_file(config: &EvenframeConfig) {
-        load_env_from(&config.resolve_env_path());
-    }
-
     /// Load surql content from a file or directory path, with env var substitution.
     /// If the path points to a file, reads its contents.
     /// If it points to a directory, reads all `*.surql` files sorted by name and concatenates them.
@@ -574,18 +641,28 @@ impl EvenframeConfig {
 
         let content = if full_path.is_dir() {
             let mut entries: Vec<_> = fs::read_dir(&full_path)
-                .map_err(|e| {
+                .map_err(|error| {
                     EvenframeError::config(format!(
                         "Failed to read directory {:?}: {}",
-                        full_path, e
+                        full_path, error
                     ))
                 })?
-                .filter_map(|entry| entry.ok())
                 .filter(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("surql")
+                    entry.as_ref().map_or(true, |entry| {
+                        entry
+                            .path()
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            == Some("surql")
+                    })
                 })
-                .collect();
-            entries.sort_by_key(|e| e.file_name());
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|error| {
+                    EvenframeError::config(format!(
+                        "Failed to read directory {full_path:?}: {error}"
+                    ))
+                })?;
+            entries.sort_by_key(|entry| entry.file_name());
 
             if entries.is_empty() {
                 return Err(EvenframeError::config(format!(
@@ -596,8 +673,8 @@ impl EvenframeConfig {
 
             let mut combined = String::new();
             for entry in entries {
-                let file_content = fs::read_to_string(entry.path()).map_err(|e| {
-                    EvenframeError::config(format!("Failed to read {:?}: {}", entry.path(), e))
+                let file_content = fs::read_to_string(entry.path()).map_err(|error| {
+                    EvenframeError::config(format!("Failed to read {:?}: {}", entry.path(), error))
                 })?;
                 if !combined.is_empty() {
                     combined.push('\n');
@@ -606,8 +683,8 @@ impl EvenframeConfig {
             }
             combined
         } else if full_path.is_file() {
-            fs::read_to_string(&full_path).map_err(|e| {
-                EvenframeError::config(format!("Failed to read {:?}: {}", full_path, e))
+            fs::read_to_string(&full_path).map_err(|error| {
+                EvenframeError::config(format!("Failed to read {:?}: {}", full_path, error))
             })?
         } else {
             return Err(EvenframeError::config(format!(
@@ -618,82 +695,6 @@ impl EvenframeConfig {
 
         Self::substitute_env_vars(&content)
     }
-    /// Substitute environment variables across all string fields in the config.
-    ///
-    /// Serializes the config to TOML, applies env var substitution to the entire
-    /// string, then deserializes back. Fields marked `#[serde(skip)]` (like
-    /// `config_file_path` and `resolved`) are preserved across the round-trip.
-    ///
-    /// With `require_connection_env` false, the database connection settings
-    /// are substituted leniently: references to unset variables stay as-is.
-    fn substitute_all_env_vars(
-        config: &mut EvenframeConfig,
-        require_connection_env: bool,
-    ) -> Result<()> {
-        let config_file_path = config.config_file_path.clone();
-        let mut resolved = config
-            .schemasync
-            .as_ref()
-            .map(|schemasync| schemasync.database.resolved.clone())
-            .unwrap_or_default();
-
-        // Taken out of the strict round-trip below and substituted leniently
-        let connection = match (require_connection_env, config.schemasync.as_mut()) {
-            (false, Some(schemasync)) => {
-                let database = &mut schemasync.database;
-                Some((
-                    std::mem::take(&mut database.url),
-                    std::mem::take(&mut database.namespace),
-                    std::mem::take(&mut database.database),
-                ))
-            }
-            _ => None,
-        };
-
-        // The TOML round-trip below only substitutes vars that appear in
-        // config string fields; it can't reach surql content loaded from
-        // disk into `resolved`. Substitute those explicitly so DDL like
-        // `WITH JWT URL '${OIDC_JWKS_URL:-…}'` reaches SurrealDB resolved,
-        // since SurrealDB itself does no env-var expansion.
-        if let Some(ref surql) = resolved.access_surql {
-            resolved.access_surql = Some(Self::substitute_env_vars(surql)?);
-        }
-        if let Some(ref surql) = resolved.functions_surql {
-            resolved.functions_surql = Some(Self::substitute_env_vars(surql)?);
-        }
-        if let Some(ref surql) = resolved.analyzers_surql {
-            resolved.analyzers_surql = Some(Self::substitute_env_vars(surql)?);
-        }
-
-        let toml_string = toml::to_string(&config).map_err(|e| {
-            EvenframeError::config(format!(
-                "Failed to serialize config for env var substitution: {e}"
-            ))
-        })?;
-
-        let substituted = Self::substitute_env_vars(&toml_string)?;
-
-        let mut new_config: EvenframeConfig = toml::from_str(&substituted).map_err(|e| {
-            EvenframeError::config(format!(
-                "Failed to re-parse config after env var substitution: {e}"
-            ))
-        })?;
-
-        new_config.config_file_path = config_file_path;
-        if let Some(schemasync) = new_config.schemasync.as_mut() {
-            let db = &mut schemasync.database;
-            db.resolved = resolved;
-            if let Some((url, namespace, database)) = connection {
-                db.url = Self::substitute_env_vars_inner(&url, false)?;
-                db.namespace = Self::substitute_env_vars_inner(&namespace, false)?;
-                db.database = Self::substitute_env_vars_inner(&database, false)?;
-            }
-        }
-
-        *config = new_config;
-        Ok(())
-    }
-
     /// Substitute environment variables in config strings
     /// Supports ${VAR_NAME:-default} syntax
     pub fn substitute_env_vars(value: &str) -> Result<String> {
@@ -701,62 +702,71 @@ impl EvenframeConfig {
     }
 
     /// With `strict` false, a reference to an unset variable without a default
-    /// is left in place instead of being an error.
+    /// is left in place instead of being an error. Values are substituted in
+    /// one pass, so a value that itself contains `${...}` is kept as written.
     fn substitute_env_vars_inner(value: &str, strict: bool) -> Result<String> {
         trace!("Substituting environment variables in: {}", value);
-        let mut result = value.to_string();
-
-        // Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
-        // Only matches valid env var names (uppercase letters, digits, underscores)
-        // to avoid colliding with JS template literals like ${foo.bar()}
-        let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
-            .expect("Invalid regex for environment variable substitution");
-
-        for cap in re.captures_iter(value) {
-            let var_name = &cap[1];
-            let default_value = cap.get(2).map(|m| m.as_str());
-
-            trace!("Looking for environment variable: {}", var_name);
-
-            let replacement = match env::var(var_name) {
-                Ok(val) => {
-                    debug!("Resolved environment variable: {}", var_name);
-                    val
+        let mut result = String::with_capacity(value.len());
+        let mut copied = 0;
+        for reference in ENV_REFERENCE.captures_iter(value) {
+            let whole = reference.get_match();
+            let name = &reference[1];
+            let replacement = match env::var(name) {
+                Ok(set) => {
+                    debug!("Resolved environment variable: {name}");
+                    set
                 }
-                Err(_) => match default_value {
+                Err(env::VarError::NotUnicode(_)) => {
+                    return Err(EvenframeError::config(format!(
+                        "Environment variable {name} is not valid UTF-8"
+                    )));
+                }
+                Err(env::VarError::NotPresent) => match reference.get(2) {
                     Some(default) => {
-                        debug!(
-                            "Environment variable {} not set, using default: {}",
-                            var_name, default
-                        );
-                        default.to_string()
+                        debug!("Environment variable {name} not set, using its default");
+                        default.as_str().to_string()
                     }
                     None if !strict => {
-                        debug!(
-                            "Environment variable {} not set, leaving the reference unresolved",
-                            var_name
-                        );
+                        debug!("Environment variable {name} not set, leaving the reference");
                         continue;
                     }
-                    None => {
-                        return Err(EvenframeError::EnvVarNotSet(var_name.to_string()));
-                    }
+                    None => return Err(EvenframeError::EnvVarNotSet(name.to_string())),
                 },
             };
-
-            let full_match = &cap[0];
-            result = result.replace(full_match, &replacement);
+            result.push_str(&value[copied..whole.start()]);
+            result.push_str(&replacement);
+            copied = whole.end();
         }
-
+        result.push_str(&value[copied..]);
         Ok(result)
     }
 }
 
+/// `${VAR}` or `${VAR:-default}` naming an environment variable (uppercase
+/// letters, digits and underscores), so JavaScript template literals like
+/// `${foo.bar()}` are left alone.
+static ENV_REFERENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
+        .expect("the environment reference pattern is valid")
+});
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        EvenframeConfig, EvenframeError, GeneralConfig, Path, PathBuf, env, fill, fs, placeholders,
+    };
     use crate::typesync::config::{OutputKind, TypesyncOutput};
     use tempfile::TempDir;
+
+    #[test]
+    fn placeholders_take_generic_parameters() {
+        assert_eq!(
+            fill("RecordLink<{0}>", &["Order".to_string()]),
+            "RecordLink<Order>"
+        );
+        assert_eq!(placeholders("Pair<{0}, {1}>"), vec![0, 1]);
+        assert!(placeholders("{ on: boolean }").is_empty());
+    }
 
     fn foreign_types(entries: &str) -> std::result::Result<GeneralConfig, toml::de::Error> {
         toml::from_str(&format!("foreign_types = {{ {entries} }}"))
@@ -862,6 +872,23 @@ mod tests {
                     EvenframeConfig::substitute_env_vars("${TEST_VAR_MULTI1}:${TEST_VAR_MULTI2}")
                         .unwrap();
                 assert_eq!(result, "foo:bar");
+            },
+        );
+    }
+
+    #[test]
+    fn a_value_is_not_substituted_again() {
+        temp_env::with_vars(
+            [
+                ("TEST_VAR_HOLDS_REFERENCE", Some("${TEST_VAR_INNER}")),
+                ("TEST_VAR_INNER", Some("inner")),
+            ],
+            || {
+                let result = EvenframeConfig::substitute_env_vars(
+                    "${TEST_VAR_HOLDS_REFERENCE} ${TEST_VAR_INNER} ${TEST_VAR_INNER}",
+                )
+                .unwrap();
+                assert_eq!(result, "${TEST_VAR_INNER} inner inner");
             },
         );
     }
@@ -1338,8 +1365,8 @@ mod tests {
         );
     }
 
-    fn config_with_env_refs(url: &str, output_path: &str) -> EvenframeConfig {
-        let content = format!(
+    fn config_with_env_refs(url: &str, output_path: &str) -> String {
+        format!(
             r#"
             [schemasync]
             should_generate_mocks = false
@@ -1359,21 +1386,25 @@ mod tests {
             [typesync]
             output = {{ kind = "arktype", dir = "{output_path}" }}
             "#
-        );
-        toml::from_str(&content).unwrap()
+        )
+    }
+
+    /// A configuration path whose directory holds no `.env`.
+    fn config_path() -> PathBuf {
+        PathBuf::from("/nonexistent-evenframe-project/evenframe.toml")
     }
 
     #[test]
     fn offline_substitution_leaves_unset_connection_vars_unresolved() {
-        let mut config = config_with_env_refs("${EF_TEST_OFFLINE_UNSET_URL}", "./output/");
+        let content = config_with_env_refs("${EF_TEST_OFFLINE_UNSET_URL}", "./output/");
 
-        let strict = EvenframeConfig::substitute_all_env_vars(&mut config.clone(), true);
+        let strict = EvenframeConfig::parse(&content, config_path(), true);
         assert!(
             matches!(strict, Err(EvenframeError::EnvVarNotSet(_))),
             "online loading must still require the connection variables"
         );
 
-        EvenframeConfig::substitute_all_env_vars(&mut config, false).unwrap();
+        let config = EvenframeConfig::parse(&content, config_path(), false).unwrap();
         let database = &config.require_schemasync().unwrap().database;
         assert_eq!(database.url, "${EF_TEST_OFFLINE_UNSET_URL}");
         assert_eq!(database.namespace, "${EF_TEST_OFFLINE_UNSET_NS}");
@@ -1382,15 +1413,24 @@ mod tests {
 
     #[test]
     fn offline_substitution_still_requires_other_vars() {
-        let mut config = config_with_env_refs(
+        let content = config_with_env_refs(
             "${EF_TEST_OFFLINE_UNSET_URL}",
             "${EF_TEST_OFFLINE_UNSET_OUTPUT}",
         );
-        let result = EvenframeConfig::substitute_all_env_vars(&mut config, false);
+        let result = EvenframeConfig::parse(&content, config_path(), false);
         assert!(
             matches!(&result, Err(EvenframeError::EnvVarNotSet(name)) if name == "EF_TEST_OFFLINE_UNSET_OUTPUT"),
             "unexpected result: {result:?}"
         );
+    }
+
+    #[test]
+    fn a_value_with_quotes_and_backslashes_is_substituted_as_data() {
+        temp_env::with_var("EF_TEST_QUOTED_DIR", Some(r#"out "quoted" \ dir"#), || {
+            let content = config_with_env_refs("http://localhost:8000", "${EF_TEST_QUOTED_DIR}");
+            let config = EvenframeConfig::parse(&content, config_path(), false).unwrap();
+            assert_eq!(config.typesync.outputs[0].dir, r#"out "quoted" \ dir"#);
+        });
     }
 
     #[test]
@@ -1416,25 +1456,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires --test-threads=1 due to env::set_current_dir"]
-    fn test_evenframe_config_new_missing_required_fields() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create TOML missing required fields
-        let config_content = r#"
-            [general]
-            apply_aliases = []
-        "#;
-        fs::write(temp_dir.path().join("evenframe.toml"), config_content).unwrap();
-
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = EvenframeConfig::new();
-
-        env::set_current_dir(original_dir).unwrap();
-
-        // Should fail due to missing schemasync and typesync sections
-        assert!(result.is_err());
+    fn a_config_with_only_general_settings_loads() {
+        let config =
+            EvenframeConfig::parse("[general]\napply_aliases = []\n", config_path(), true).unwrap();
+        assert!(config.schemasync.is_none());
+        assert!(config.typesync.outputs.is_empty());
     }
 }

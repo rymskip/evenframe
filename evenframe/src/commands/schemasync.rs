@@ -156,7 +156,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     &enums,
                     &registry,
                     allow_scripting,
-                );
+                )?;
                 let (ddl, output_path) = match dump_args.command {
                     Some(DumpCommands::Tables(tables_args)) => (
                         tables_surql,
@@ -168,7 +168,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                         evenframe_core::schemasync::dump::schema_surql(
                             &config.require_schemasync()?.database,
                             &tables_surql,
-                        ),
+                        )?,
                         dump_args.file.unwrap_or_else(|| {
                             config.project_root().join(".evenframe/surql/schema.surql")
                         }),

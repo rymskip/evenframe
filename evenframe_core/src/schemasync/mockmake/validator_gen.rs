@@ -106,7 +106,7 @@ struct StringConstraints {
     to_upper: bool,
     to_trim: bool,
     to_capitalize: bool,
-    /// True when a `Literal(s)` is present — value must equal exactly `s`.
+    /// True when a `Literal(s)` is present: the value must equal exactly `s`.
     literal: Option<String>,
     /// Exactly one "shape" picked from the validator set. The first one we
     /// see wins; conflicting shapes (`Email` + `Uuid`) collapse to `None`
@@ -306,7 +306,7 @@ fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<
     if let Some(min) = effective_min_len(c) {
         let cur = s.chars().count();
         if cur < min {
-            // Pad with random alphanumerics — safe for most shape regexes
+            // Pad with random alphanumerics, which is safe for most shape regexes
             // (alpha/alphanumeric/random/regex-driven won't be invalidated
             // by appended ASCII). If the shape is structural (uuid, email,
             // semver), the post-validation `matches` loop will catch the
@@ -540,7 +540,7 @@ fn generate_integer(
     let mut r = collect_numeric_range(validators);
     r.require_int = true;
     let (default_lo, default_hi) = integer_field_default_range(field_type);
-    // Default an unbounded side relative to the bounded one — a plain
+    // Default an unbounded side relative to the bounded one, since a plain
     // default can contradict it (e.g. Negative: hi < 0 with default lo 0).
     if r.lo == f64::NEG_INFINITY {
         r.lo = if r.hi < default_lo {
@@ -570,7 +570,7 @@ fn generate_integer(
 
 fn generate_float(validators: &[Validator], rng: &mut ThreadRng) -> Option<String> {
     let mut r = collect_numeric_range(validators);
-    // Default an unbounded side relative to the bounded one — a plain
+    // Default an unbounded side relative to the bounded one, since a plain
     // default can contradict it (e.g. Negative: hi < 0 with default lo 0,
     // or GreaterThan(1000) with default hi 100).
     if r.lo == f64::NEG_INFINITY {
@@ -641,7 +641,10 @@ fn sample_numeric(r: &NumericRange, rng: &mut ThreadRng) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidator, FieldType, MockValue, NumberValidator, StringValidator, Validator,
+        array_count_range, generate_with_validators,
+    };
     use ordered_float::OrderedFloat;
 
     /// Strip the surrounding `'…'` quoting so we can test the underlying value.
@@ -827,7 +830,7 @@ mod tests {
     fn unsupported_type_yields_none() {
         let validators = vec![Validator::NumberValidator(NumberValidator::Positive)];
         let mut rng = rand::rng();
-        // Bool is not handled by validator_gen — caller falls back to default.
+        // Bool is not handled by validator_gen; the caller falls back to default.
         assert!(generate_with_validators(&FieldType::Bool, &validators, &mut rng).is_none());
     }
 }

@@ -16,6 +16,10 @@ insta = "1.48"
 url = "2.5"
 uuid = { version = "1.26", features = ["v4", "serde"] }
 
+[workspace.lints.clippy]
+wildcard_imports = "deny"
+enum_glob_use = "deny"
+
 [profile.dev.package.insta]
 opt-level = 3
 

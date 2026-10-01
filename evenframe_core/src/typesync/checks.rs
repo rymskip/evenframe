@@ -292,7 +292,10 @@ fn collect<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, FieldType, ForeignTypeRegistry, Pipeline, Result, StructConfig, StructField,
+        TableConfig, TaggedUnion, check_types,
+    };
 
     fn named(name: &str) -> FieldType {
         FieldType::Other(name.to_string())
