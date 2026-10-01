@@ -2,8 +2,7 @@
 
 Evenframe makes your Rust types the single source of truth. From the structs
 and enums you already write, it generates TypeScript types and validators,
-synchronizes a SurrealDB schema, fills the database with mock data, and gives
-your program the same type information at runtime.
+synchronizes a SurrealDB schema (SQL planned for a future release), fills the database with mock data, and gives your program the same type information at runtime. You can configure the features to include the full feature set, or something as simple as just using the type metadata with no syncing or mock data at all.
 
 The goal is one dependency for every utility that needs to know your types.
 Runtime metadata, type synchronization, schema synchronization and mock data
@@ -15,8 +14,8 @@ of your types.
 
 | You want | Use | Needs |
 | --- | --- | --- |
-| Type metadata and validated deserialization at runtime | the derive | `evenframe`, no features |
-| TypeScript generated on every `cargo build` | the derive and a build script | `evenframe` with `tooling` |
+| Type metadata and validated deserialization at runtime | the derive | `evenframe` with `metadata` |
+| TypeScript and the schema's SurrealQL written on every `cargo build` | the derive and a build script | `evenframe` with `build-typesync`, `build-schemadump` or both (`build-fullstack`) |
 | Schema synchronization, mock data and plugins as well | the CLI | the `evenframe` binary |
 
 These combine. A project can use the derive for runtime access, a build script
@@ -24,14 +23,15 @@ for its TypeScript, and the CLI for its database.
 
 ### 1. The derive: runtime type access
 
-Deriving `Evenframe` on a struct or enum registers its full description at
-compile time: fields, types, validators, and, for tables, permissions,
-indexes, events and mock data settings. A struct with an `id` field is a
-table; one without is an embedded object.
+With the `metadata` feature, deriving `Evenframe` on a struct or enum
+registers its full description at compile time: fields, types, validators,
+and, for tables, permissions, indexes, events and mock data settings. A
+struct with an `id` field is a table; one without is an embedded object.
+Metadata needs no database dependency.
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false }
+evenframe = { version = "0.6", default-features = false, features = ["metadata"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -66,19 +66,22 @@ assert_eq!(User::static_table_config().table_name, user.table_name);
 
 A struct whose fields carry `#[validators(...)]` also gets a generated
 `serde::Deserialize` that runs them, so invalid input fails to deserialize.
-Do not derive `Deserialize` on such a struct yourself.
+Do not derive `Deserialize` on such a struct yourself. This does not need
+`metadata`: without it the derive emits only validated deserialization and
+the `EvenframeTable` marker that `RecordLink` accepts, which is all a project
+using only a build script or the CLI needs.
 
 `Typesync` and `Schemasync` are the same derive limited to one pipeline, and
 `EvenframeUnion` describes an enum whose variants are each a table.
 
-### 2. The derive and a build script: TypeScript on every build
+### 2. The derive and a build script: generated files on every build
 
-Add evenframe with the `tooling` feature as a build dependency, and describe
+Add evenframe with the `build-typesync` feature as a build dependency, and describe
 your outputs in `evenframe.toml` at the project root:
 
 ```toml
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["tooling"] }
+evenframe = { version = "0.6", default-features = false, features = ["build-typesync"] }
 ```
 
 ```toml
@@ -93,20 +96,60 @@ outputs = [
 ```rust
 // build.rs
 fn main() {
-    evenframe::tooling::generate().expect("type generation failed");
+    evenframe::build::typesync().expect("type generation failed");
     println!("cargo:rerun-if-changed=src/");
     println!("cargo:rerun-if-changed=evenframe.toml");
 }
 ```
 
-`generate()` scans the workspace for derived types and writes every
+`typesync()` scans the workspace for derived types and writes every
 configured output, leaving unchanged files untouched. To configure it in
-code instead of the file, build a `BuildConfig` and call
-`evenframe::tooling::generate_with_config`.
+code instead of the file, build a `ScanConfig` and call
+`evenframe::build::typesync_with`.
 
 The outputs are ArkType, Effect, Macroforge, Protocol Buffers and
 FlatBuffers. ArkType and Effect are always available; enable `macroforge`,
 `protobuf` and `flatbuffers` (or `typesync-all`) for the others.
+
+The scan reads source text and finds types by their derive, so the types
+still derive `Evenframe` (or `Typesync`, or an `apply_aliases` attribute that
+includes it), and the crate depends on `evenframe` for the derive as well. The
+scan uses none of the derive's output, so that dependency needs no features.
+
+#### Why a build script does not sync the database
+
+A build script generates files and stops there. Applying schema changes to a
+database stays a deliberate step, through the CLI or the `schemasync`
+library API, because a build script is the wrong place for it:
+
+- Build scripts run far more often than the builds you mean to make:
+  rust-analyzer runs them in the background as you edit, and so do
+  `cargo check`, clippy and CI. Each run would change the live database.
+- Every build would need the database reachable and its credentials in the
+  build environment, so an offline machine or a CI job without the database
+  would fail to compile.
+- Schemasync is async and needs the full SurrealDB client, which would
+  compile into the build dependencies.
+- A build script cannot ask before a destructive change, as
+  `evenframe schemasync apply` does.
+
+What a build script can do safely is write the schema down. With the
+`build-schemadump` feature, `evenframe::build::schemadump()` writes the
+SurrealQL schemasync would apply to `.evenframe/surql/schema.surql`, the file
+`evenframe schemasync dump` writes, without connecting to a database or
+pulling in its client. It needs the `[schemasync]` section of
+`evenframe.toml`, whose connection settings may reference variables a build
+does not set. `build-fullstack` enables both build-script features:
+
+```rust
+// build.rs
+fn main() {
+    evenframe::build::typesync().expect("type generation failed");
+    evenframe::build::schemadump().expect("schema dump failed");
+    println!("cargo:rerun-if-changed=src/");
+    println!("cargo:rerun-if-changed=evenframe.toml");
+}
+```
 
 ### 3. The CLI: schemasync, typesync, or both
 
@@ -202,15 +245,44 @@ default_value_surql = "time::now()"
 mock_strategy = "datetime"
 ```
 
+`std::time::Duration` needs no entry: it is a SurrealDB `duration` in the
+schema and serde's `{ secs, nanos }` in every TypeScript output.
+
+### Record links
+
+A `RecordLink<T>` field holds the linked record's id, the SurrealDB SDK's
+`RecordId`, or the record itself where a query fetched it. It needs the
+`surrealdb-types` feature. Each TypeScript output writes the id half as the
+project's `RecordId` foreign type says, so a project with record links maps
+it, for example to a codec for the JavaScript SDK's `RecordId` (the
+playground's `src/record-id.ts` is one):
+
+```toml
+[general.foreign_types.RecordId]
+rust_type_names = ["RecordId"]
+surrealdb = "record"
+arktype = { type = "RecordIdCodec.ark", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
+effect = { type = "RecordIdCodec.schema", encoded = "Schema.Schema.Encoded<typeof RecordIdCodec.schema>", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
+macroforge = { type = "RecordIdEncoded", import = { from = "../record-id.ts", name = "RecordIdEncoded" } }
+default_value_ts = "RecordIdCodec.empty"
+```
+
+A `RecordLink` entry instead replaces the whole link in the outputs it maps,
+with `{0}` for the linked type.
+
 ## Cargo features
 
 `evenframe` with no features builds only what the derive needs.
 
 | Feature | Adds |
 | --- | --- |
+| `metadata` | Each derived type's config functions and the registry that finds them by name. |
+| `surrealdb-types` | `RecordLink`, holding the SurrealDB SDK's `RecordId`, without the SDK's client. |
 | `typesync` | The ArkType and Effect generators. |
 | `macroforge`, `protobuf`, `flatbuffers` | Those generators. `typesync-all` enables every generator. |
-| `tooling` | Workspace scanning and `tooling::generate()` for build scripts. Implies `typesync`. |
+| `build-typesync` | Workspace scanning and `build::typesync()` for build scripts. Implies `typesync`. |
+| `build-schemadump` | Workspace scanning and `build::schemadump()` for build scripts, with no database client. |
+| `build-fullstack` | Both build-script features. |
 | `schemasync` | Schema comparison and synchronization against SurrealDB. |
 | `mockmake` | Mock data generation. Implies `schemasync`. |
 | `wasm-plugins` | The plugin runtime. |

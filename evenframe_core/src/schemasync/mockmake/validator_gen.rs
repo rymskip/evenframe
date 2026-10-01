@@ -14,7 +14,10 @@
 
 use crate::schemasync::mockmake::Mockmaker;
 use crate::types::FieldType;
-use crate::validator::{ArrayValidator, MockValue, NumberValidator, StringValidator, Validator};
+use crate::validator::{
+    ArrayValidator, DurationValidator, MockValue, NumberValidator, StringValidator, Validator,
+    bounds,
+};
 use rand::{RngExt, rngs::ThreadRng};
 
 /// Cap on how many times we'll regenerate a string when it doesn't satisfy
@@ -48,6 +51,7 @@ pub fn generate_with_validators(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize => generate_integer(field_type, validators, rng),
+        FieldType::Duration => generate_duration(validators, rng),
         // Containers, options, records, and foreign types are handled by the
         // existing recursion in field_value.rs. ArrayValidator on a Vec field
         // is honoured separately via `array_count_range`.
@@ -639,11 +643,70 @@ fn sample_numeric(r: &NumericRange, rng: &mut ThreadRng) -> Option<f64> {
     Some(raw)
 }
 
+// ---------------------------------------------------------------------------
+// Durations
+// ---------------------------------------------------------------------------
+
+/// A day in nanoseconds, the span a duration with no bound on that side
+/// reaches.
+pub const DAY_NANOS: u64 = 86_400_000_000_000;
+
+/// The SurrealQL literal of a duration of `nanos` nanoseconds.
+pub fn duration_literal(nanos: u64) -> String {
+    use surrealdb_types::ToSql;
+    surrealdb_types::Duration::from_std(std::time::Duration::from_nanos(nanos)).to_sql()
+}
+
+/// A duration inside the bounds `validators` set, defaulting an unbounded
+/// side to a day from the other.
+fn generate_duration(validators: &[Validator], rng: &mut ThreadRng) -> Option<String> {
+    // Bounds are checked where validators are declared; one that still
+    // fails to parse is logged, and the caller reports the field.
+    let nanos = |bound: &str| {
+        bounds::duration(bound)
+            .inspect_err(|problem| tracing::error!("duration validator bound: {problem}"))
+            .ok()
+    };
+    let mut low: i128 = 0;
+    let mut high: Option<i128> = None;
+    for validator in validators {
+        let Validator::DurationValidator(duration) = validator else {
+            continue;
+        };
+        let (lower, upper) = match duration {
+            DurationValidator::GreaterThanDuration(bound) => (Some(nanos(bound)? + 1), None),
+            DurationValidator::GreaterThanOrEqualToDuration(bound) => (Some(nanos(bound)?), None),
+            DurationValidator::LessThanDuration(bound) => (None, Some(nanos(bound)? - 1)),
+            DurationValidator::LessThanOrEqualToDuration(bound) => (None, Some(nanos(bound)?)),
+            DurationValidator::BetweenDuration(start, end) => {
+                (Some(nanos(start)?), Some(nanos(end)?))
+            }
+        };
+        if let Some(lower) = lower {
+            low = low.max(lower);
+        }
+        if let Some(upper) = upper {
+            high = Some(high.map_or(upper, |current| current.min(upper)));
+        }
+    }
+    let high = high.unwrap_or(low + i128::from(DAY_NANOS));
+    let low = u64::try_from(low).ok()?;
+    let high = u64::try_from(high).ok()?;
+    if low > high {
+        return None;
+    }
+    let nanos = rng.random_range(low..=high);
+    validators
+        .iter()
+        .all(|validator| validator.matches(&MockValue::DurationNanos(i128::from(nanos))))
+        .then(|| duration_literal(nanos))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ArrayValidator, FieldType, MockValue, NumberValidator, StringValidator, Validator,
-        array_count_range, generate_with_validators,
+        ArrayValidator, DurationValidator, FieldType, MockValue, NumberValidator, StringValidator,
+        Validator, array_count_range, duration_literal, generate_with_validators,
     };
     use ordered_float::OrderedFloat;
 
@@ -817,6 +880,30 @@ mod tests {
         let (lo, hi) = array_count_range(&v, 2, 9);
         assert_eq!(lo, 4);
         assert_eq!(hi, 4);
+    }
+
+    #[test]
+    fn duration_within_its_bounds_as_a_surql_literal() {
+        let validators = vec![
+            Validator::DurationValidator(DurationValidator::GreaterThanDuration("1h".into())),
+            Validator::DurationValidator(DurationValidator::LessThanOrEqualToDuration(
+                "90m".into(),
+            )),
+        ];
+        let mut rng = rand::rng();
+        for _ in 0..50 {
+            let literal = generate_with_validators(&FieldType::Duration, &validators, &mut rng)
+                .expect("a duration in range");
+            let nanos = crate::validator::parse_duration_to_nanos(&literal).expect("a duration");
+            assert!(
+                validators
+                    .iter()
+                    .all(|validator| validator.matches(&MockValue::DurationNanos(nanos))),
+                "{literal}"
+            );
+        }
+        assert_eq!(duration_literal(5_400_000_000_000), "1h30m");
+        assert_eq!(duration_literal(0), "0ns");
     }
 
     #[test]

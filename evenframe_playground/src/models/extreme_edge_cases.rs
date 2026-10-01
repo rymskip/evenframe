@@ -984,6 +984,7 @@ mod tests {
         KitchenSinkString, MaxValidatorStacking, NetworkTypes, PaymentMethod, PaymentStatus,
         RecordLink, ValidatedAddress, ValidatedContact,
     };
+    use surrealdb_types::RecordId;
 
     // Kitchen Sink String tests
     #[test]
@@ -1215,7 +1216,7 @@ mod tests {
     fn test_edge_case_post() {
         let post = EdgeCasePost {
             id: "post:1".to_string(),
-            author: RecordLink::Id("user:1".to_string().into()),
+            author: RecordLink::Id(RecordId::new("user", 1_i64)),
             title: "Test Post Title".to_string(),
             content: "This is the test post content that is long enough.".to_string(),
             slug: "test-post-title".to_string(),
@@ -1238,7 +1239,7 @@ mod tests {
     fn test_complex_payment() {
         let payment = ComplexPayment {
             id: "payment:1".to_string(),
-            user: RecordLink::Id("user:1".to_string().into()),
+            user: RecordLink::Id(RecordId::new("user", 1_i64)),
             status: PaymentStatus::Completed,
             method: PaymentMethod::CreditCard,
             amount: 99.99,

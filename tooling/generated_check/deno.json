@@ -2,6 +2,7 @@
   "unstable": ["sloppy-imports"],
   "imports": {
     "arktype": "npm:arktype@2.2.3",
-    "effect": "npm:effect@3.22.2"
+    "effect": "npm:effect@3.22.2",
+    "surrealdb": "npm:surrealdb@2.0.8"
   }
 }

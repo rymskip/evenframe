@@ -8,12 +8,12 @@
 //! actually invokes the scanner pipeline, so the only test that proves
 //! the feature works for real users has to drive that same pipeline.
 
-#![cfg(all(feature = "schemasync", feature = "tooling"))]
+#![cfg(all(feature = "schemasync", feature = "scan"))]
 
+use evenframe_core::scan::{AllConfigs, ScanConfig, build_all_configs};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::remove::generate_remove_index_statements;
-use evenframe_core::tooling::{AllConfigs, BuildConfig, build_all_configs};
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
 use std::fs;
@@ -61,9 +61,9 @@ fn scanner_threads_struct_level_index_into_define_statements() {
         "#,
     );
 
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
 
     let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
@@ -137,9 +137,9 @@ fn scanner_rejects_unknown_field_in_index() {
         "#,
     );
 
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
 
     let err = build_all_configs(&config)
@@ -189,9 +189,9 @@ fn orphan_index_is_dropped_when_removed_from_source() {
             }
         "#,
     );
-    let before_cfg = BuildConfig {
+    let before_cfg = ScanConfig {
         scan_path: tmp_before.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (_e1, before_tables, _o1) = build_all_configs(&before_cfg).expect("build before");
     let before_schema =
@@ -224,9 +224,9 @@ fn orphan_index_is_dropped_when_removed_from_source() {
             }
         "#,
     );
-    let after_cfg = BuildConfig {
+    let after_cfg = ScanConfig {
         scan_path: tmp_after.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (_e2, after_tables, _o2) = build_all_configs(&after_cfg).expect("build after");
     let after_schema =
@@ -270,9 +270,9 @@ fn scan_single_file(name: &str, source: &str) -> evenframe_core::error::Result<A
         &format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"),
     );
     write(&tmp, "src/lib.rs", source);
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     build_all_configs(&config)
 }
@@ -302,9 +302,9 @@ fn scanner_collects_field_level_indexes() {
             }
         "#,
     );
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
     let names: Vec<String> = tables["post"]
@@ -345,9 +345,9 @@ fn named_field_unique_replaces_default_unique_index() {
             }
         "#,
     );
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
     let account = &tables["account"];

@@ -1,14 +1,20 @@
 //! Every TypeScript output of a small scanned project, through the same
 //! filtering, merging and rendering the CLI runs, so a change to how outputs
 //! look up, order or group types shows up as a snapshot diff.
-#![cfg(all(feature = "macroforge", feature = "schemasync", feature = "tooling"))]
+#![cfg(all(
+    feature = "macroforge",
+    feature = "schemasync",
+    feature = "build-typesync"
+))]
 
-use evenframe_core::tooling::{
-    BuildConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects,
+use evenframe_core::config::ForeignTypeConfig;
+use evenframe_core::scan::{
+    ScanConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects,
 };
 use evenframe_core::types::ForeignTypeRegistry;
 use evenframe_core::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
 use evenframe_core::typesync::output::{OutputTypes, render_output};
+use std::collections::BTreeMap;
 use std::fs;
 use tempfile::TempDir;
 
@@ -28,6 +34,7 @@ pub struct Post {
     pub id: String,
     pub title: String,
     pub author: RecordLink<Author>,
+    pub read_time: std::time::Duration,
     pub status: Status,
     pub location: Address,
     pub outline: Option<Section>,
@@ -84,6 +91,18 @@ fn outputs() -> Vec<TypesyncOutput> {
     ]
 }
 
+/// The playground's mapping of the SDK's record id, whose codec the generated
+/// check places beside these outputs at `../record-id.ts`.
+fn playground_record_id() -> ForeignTypeConfig {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../evenframe_playground/evenframe.toml");
+    let config: toml::Table = fs::read_to_string(&config_path).unwrap().parse().unwrap();
+    config["general"]["foreign_types"]["RecordId"]
+        .clone()
+        .try_into()
+        .unwrap()
+}
+
 #[test]
 fn every_output_of_a_scanned_project() {
     let project = TempDir::new().unwrap();
@@ -94,15 +113,18 @@ fn every_output_of_a_scanned_project() {
     .unwrap();
     fs::create_dir(project.path().join("src")).unwrap();
     fs::write(project.path().join("src/lib.rs"), SOURCE).unwrap();
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: project.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
 
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
     let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
     let structs = merge_tables_and_objects(tables, objects);
-    let registry = ForeignTypeRegistry::default();
+    let registry = ForeignTypeRegistry::from_config(&BTreeMap::from([(
+        "RecordId".to_string(),
+        playground_record_id(),
+    )]));
     let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
 
     let out = TempDir::new().unwrap();

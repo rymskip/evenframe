@@ -1188,6 +1188,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive_check"
+version = "0.0.0"
+dependencies = [
+ "evenframe",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1493,6 +1502,7 @@ dependencies = [
 name = "evenframe"
 version = "0.6.0"
 dependencies = [
+ "blake3",
  "clap",
  "convert_case",
  "evenframe_core",
@@ -1502,6 +1512,7 @@ dependencies = [
  "mockall",
  "pretty_assertions",
  "proptest",
+ "rayon",
  "regex",
  "serde",
  "serde_json",
@@ -1534,7 +1545,7 @@ dependencies = [
  "insta",
  "linkme",
  "mockall",
- "ordered-float 5.5.0",
+ "ordered-float",
  "petgraph 0.8.3",
  "pretty_assertions",
  "proc-macro2",
@@ -1544,10 +1555,10 @@ dependencies = [
  "rayon",
  "regex",
  "serde",
- "serde-value",
  "serde_json",
  "strum",
  "surrealdb",
+ "surrealdb-types",
  "syn 3.0.5",
  "temp-env",
  "tempfile",
@@ -3260,15 +3271,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "ordered-float"
-version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "ordered-float"
 version = "5.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
@@ -4559,16 +4561,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-value"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
-dependencies = [
- "ordered-float 2.10.1",
- "serde",
-]
-
-[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5675,7 +5667,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "675b40e166da041af1c68f1419f7c7b3620c5be982817b2859fda875ddb2aa6d"
 dependencies = [
- "ordered-float 5.5.0",
+ "ordered-float",
  "syn 2.0.119",
  "try_from_expr_derive",
 ]

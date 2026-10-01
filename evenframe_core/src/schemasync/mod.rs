@@ -4,10 +4,10 @@
 #[cfg(feature = "schemasync")]
 pub mod compare;
 pub mod config;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 pub mod database;
 pub mod define_config;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 pub mod dump;
 pub mod edge;
 pub mod event;
@@ -69,7 +69,7 @@ use crate::{
     evenframe_log,
     schemasync::compare::SurrealdbComparator,
     schemasync::database::surql::{
-        access::execute_access_query, remove::generate_remove_statements,
+        execute::execute_access_query, remove::generate_remove_statements,
     },
     types::{StructConfig, TaggedUnion},
 };
@@ -826,7 +826,7 @@ impl<'a> Schemasync<'a> {
         if let Some(ref analyzers_surql) = config.database.resolved.analyzers_surql
             && !analyzers_surql.is_empty()
         {
-            if crate::schemasync::compare::surql::analyzers_reference_functions(analyzers_surql)
+            if crate::schemasync::dump::analyzers_reference_functions(analyzers_surql)
                 && let Some(ref functions_surql) = config.database.resolved.functions_surql
                 && !functions_surql.is_empty()
             {

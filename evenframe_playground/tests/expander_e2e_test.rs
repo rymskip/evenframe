@@ -4,7 +4,7 @@
 //!
 //! - `workspace_scanner.rs` no longer swallows missing modules from the
 //!   split expanded output; it errors out loudly.
-//! - `expansion_cache::write_fragment` refuses to write empty fragments.
+//! - `expansion::write_fragment` refuses to write empty fragments.
 //! - `CacheManifest::load` discards a cache whose fragments are missing or
 //!   empty on disk (automatic recovery from poisoned caches).
 //! - `walk_src` skips `src/main.rs` and `src/bin/*` so bin targets don't
@@ -22,8 +22,11 @@
 //!
 //! Run with: `cargo test --test expander_e2e_test`
 
-use evenframe_core::tooling::WorkspaceScanner;
-use evenframe_core::tooling::expansion_cache::{self, CacheEntry, CacheManifest};
+use evenframe_core::scan::expansion::{self, CacheEntry, CacheManifest};
+use evenframe_core::scan::{ScanConfig, WorkspaceScanner, build_all_configs};
+use evenframe_core::types::FieldType;
+use evenframe_core::typesync::config::CollisionStrategy;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -161,6 +164,7 @@ fn load_cache_discards_manifest_pointing_at_missing_fragment() {
             module_path: "test_crate".to_string(),
             fragment_path: Some("fragments/lib.rs.expanded".to_string()),
             items: vec![],
+            scopes: BTreeMap::new(),
         },
     );
     manifest.save(cache_dir).unwrap();
@@ -186,6 +190,7 @@ fn load_cache_discards_manifest_pointing_at_zero_byte_fragment() {
             module_path: "poisoned_crate".to_string(),
             fragment_path: Some("fragments/lib.rs.expanded".to_string()),
             items: vec![],
+            scopes: BTreeMap::new(),
         },
     );
     manifest.save(cache_dir).unwrap();
@@ -207,7 +212,7 @@ fn write_fragment_refuses_empty_contents() {
     // fragments. This is belt-and-suspenders on top of 1a.
     let tmp = TempDir::new().unwrap();
 
-    let empty_err = expansion_cache::write_fragment(tmp.path(), "foo.rs", "").unwrap_err();
+    let empty_err = expansion::write_fragment(tmp.path(), "foo.rs", "").unwrap_err();
     assert!(
         empty_err.to_string().contains("empty expansion fragment"),
         "expected empty-fragment error, got: {}",
@@ -218,7 +223,7 @@ fn write_fragment_refuses_empty_contents() {
         "no fragment file must be created when the write is rejected"
     );
 
-    let ws_err = expansion_cache::write_fragment(tmp.path(), "bar.rs", "   \n\t").unwrap_err();
+    let ws_err = expansion::write_fragment(tmp.path(), "bar.rs", "   \n\t").unwrap_err();
     assert!(ws_err.to_string().contains("empty expansion fragment"));
 }
 
@@ -337,8 +342,8 @@ fn expand_macros_discovers_types_and_writes_no_zero_byte_fragments() {
     // The cache lives under `<crate>/target/.evenframe-expanded/<crate_name>/`.
     // `find_target_dir` walks upward so it'll locate whichever target/ cargo
     // expand created.
-    let target_dir = expansion_cache::find_target_dir(&crate_dir);
-    let cache_dir = expansion_cache::crate_cache_dir(&target_dir, "expand_me");
+    let target_dir = expansion::find_target_dir(&crate_dir);
+    let cache_dir = expansion::crate_cache_dir(&target_dir, "expand_me");
     assert!(
         cache_dir.exists(),
         "expansion cache directory was not created at {:?}",
@@ -415,6 +420,82 @@ fn expand_macros_keeps_inline_modules_and_empty_files() {
     assert_eq!(names(&scanner), expected);
 }
 
+/// A field's type resolves through the imports of the module it is written
+/// in, both on the run that expands the crate and on the one its cache
+/// serves, so two types sharing a name keep their own references.
+#[test]
+fn expand_macros_resolves_field_types_through_imports_from_cache_too() {
+    if !cargo_expand_available() {
+        eprintln!(
+            "SKIP expand_macros_resolves_field_types_through_imports_from_cache_too: \
+             cargo-expand not installed"
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let crate_dir = tmp.path().join("resolve_me");
+    let src = crate_dir.join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(
+        crate_dir.join("Cargo.toml"),
+        "[package]\nname = \"resolve_me\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("lib.rs"),
+        "pub trait EvenframeAppStruct {}\npub trait EvenframeTaggedUnion {}\npub mod auth;\npub mod billing;\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("auth.rs"),
+        r#"use crate::{EvenframeAppStruct, EvenframeTaggedUnion};
+
+pub enum Status { Active }
+impl EvenframeTaggedUnion for Status {}
+
+pub struct Account { pub status: Status }
+impl EvenframeAppStruct for Account {}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        src.join("billing.rs"),
+        r#"use super::auth::Status as AccountStatus;
+use crate::{EvenframeAppStruct, EvenframeTaggedUnion};
+
+pub enum Status { Open }
+impl EvenframeTaggedUnion for Status {}
+
+pub struct Invoice { pub status: Status, pub owner: AccountStatus }
+impl EvenframeAppStruct for Invoice {}
+"#,
+    )
+    .unwrap();
+
+    let config = ScanConfig {
+        scan_path: crate_dir.clone(),
+        expand_macros: true,
+        collision_strategy: CollisionStrategy::AutoRename,
+        ..ScanConfig::default()
+    };
+    for run in ["expanding run", "cached run"] {
+        let (_, _, objects) = build_all_configs(&config).expect(run);
+        let field = |struct_name: &str, field_name: &str| {
+            objects[struct_name]
+                .fields
+                .iter()
+                .find(|field| field.field_name == field_name)
+                .map(|field| field.field_type.clone())
+                .expect("field")
+        };
+        let named = |name: &str| FieldType::Other(name.to_string());
+        assert_eq!(field("Account", "status"), named("Status"), "{run}");
+        assert_eq!(field("Invoice", "status"), named("BillingStatus"), "{run}");
+        assert_eq!(field("Invoice", "owner"), named("Status"), "{run}");
+    }
+}
+
 /// Second-run cache hit. Verifies that running the scanner twice in a row
 /// on an unchanged source tree reuses the cached fragments rather than
 /// re-expanding. We detect cache reuse by fragment mtimes: if the second
@@ -437,8 +518,8 @@ fn expand_macros_second_run_is_a_cache_hit() {
     let first = scanner.scan_for_evenframe_types().expect("first scan");
     assert!(!first.is_empty(), "first scan should discover types");
 
-    let target_dir = expansion_cache::find_target_dir(&crate_dir);
-    let cache_dir = expansion_cache::crate_cache_dir(&target_dir, "cache_me");
+    let target_dir = expansion::find_target_dir(&crate_dir);
+    let cache_dir = expansion::crate_cache_dir(&target_dir, "cache_me");
     let first_sizes = collect_file_sizes(&cache_dir);
 
     // Snapshot fragment mtimes.
@@ -556,8 +637,8 @@ impl EvenframePersistableStruct for Account {}
     );
 
     // Check the cache doesn't contain a `main.rs.expanded` entry.
-    let target_dir = expansion_cache::find_target_dir(&crate_dir);
-    let cache_dir = expansion_cache::crate_cache_dir(&target_dir, "mixed");
+    let target_dir = expansion::find_target_dir(&crate_dir);
+    let cache_dir = expansion::crate_cache_dir(&target_dir, "mixed");
     let loaded = CacheManifest::load(&cache_dir, "mixed").expect("the manifest should load");
     assert!(
         !loaded.entries.contains_key("main.rs"),

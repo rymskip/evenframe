@@ -1,11 +1,49 @@
 //! Foreign types in the TypeScript outputs: their types, with generic
 //! parameters filled in, and the imports they need.
 
-use crate::config::{ForeignTypeConfig, TsImport};
+use crate::config::{ForeignTypeConfig, RECORD_ID, RECORD_LINK, TsImport};
 use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::config::OutputKind;
 use crate::typesync::type_index::TypeIndex;
+use crate::{EvenframeError, Result};
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// How a TypeScript output writes a record link, from the output's mapping
+/// `M` of a foreign type.
+pub enum RecordLinkMapping<'a, M> {
+    /// The project's `RecordLink` mapping, with `{0}` for the linked type.
+    Configured(&'a M),
+    /// Evenframe's own link: the id as the project's `RecordId` mapping
+    /// writes it, or the linked record.
+    Own { record_id: &'a M },
+}
+
+/// How `output`, whose mapping of a foreign type `mapping` reads, writes a
+/// record link.
+pub fn record_link_mapping<'a, M>(
+    registry: &'a ForeignTypeRegistry,
+    output: OutputKind,
+    mapping: impl Fn(&'a ForeignTypeConfig) -> Option<&'a M>,
+) -> Result<RecordLinkMapping<'a, M>> {
+    if let Some(configured) = registry.lookup(RECORD_LINK).and_then(&mapping) {
+        return Ok(RecordLinkMapping::Configured(configured));
+    }
+    let record_id = registry.lookup(RECORD_ID).ok_or_else(|| {
+        EvenframeError::config(format!(
+            "a record link holds the SurrealDB SDK's `{RECORD_ID}`, so the {output} output needs \
+             `foreign_types.{RECORD_ID}` to say how to write it, or `foreign_types.{RECORD_LINK}` \
+             to write the whole link"
+        ))
+    })?;
+    mapping(record_id)
+        .map(|record_id| RecordLinkMapping::Own { record_id })
+        .ok_or_else(|| {
+            EvenframeError::config(format!(
+                "the foreign type `{RECORD_ID}` has no {output} mapping, which a record link needs"
+            ))
+        })
+}
 
 /// The foreign types a set of generated types uses, and whether they use a
 /// record link.

@@ -1,0 +1,8 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+DEFINE TABLE OVERWRITE timer SCHEMAFULL TYPE NORMAL CHANGEFEED 3d PERMISSIONS FOR select FULL FOR update FULL FOR create FULL FOR delete FULL;
+DEFINE FIELD OVERWRITE limit ON TABLE timer TYPE duration DEFAULT 0ns ASSERT $value <= duration::from_nanos(28800000000000);
+DEFINE FIELD OVERWRITE grace ON TABLE timer TYPE null | duration DEFAULT NULL;
+DEFINE FIELD OVERWRITE laps ON TABLE timer TYPE array<duration> DEFAULT [];

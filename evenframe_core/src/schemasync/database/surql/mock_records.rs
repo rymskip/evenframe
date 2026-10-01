@@ -239,7 +239,7 @@ impl Mockmaker<'_> {
         let input = crate::schemasync::mockmake::plugin_types::PluginFieldInput {
             table_name: table_name.to_string(),
             field_name: "id".to_string(),
-            field_type: "EvenframeRecordId".to_string(),
+            field_type: "RecordId".to_string(),
             record_index: index,
             total_records,
             record_id: default_id.to_string(),

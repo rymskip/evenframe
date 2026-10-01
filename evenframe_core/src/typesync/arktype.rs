@@ -1,8 +1,10 @@
-use crate::config::{RECORD_LINK, fill};
+use crate::config::fill;
 use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, StructField, Variant, VariantData};
+use crate::typesync::config::OutputKind;
 use crate::typesync::default_value::field_type_to_default_value;
 use crate::typesync::doc_comment::format_jsdoc;
+use crate::typesync::foreign_ts::{RecordLinkMapping, record_link_mapping};
 use crate::typesync::js_checks::{self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
@@ -107,6 +109,9 @@ fn field_type_to_arktype(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize => "'number'".to_string(),
+        // serde writes whole seconds and the nanoseconds past them, and
+        // rejects any other key.
+        FieldType::Duration => "{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }".to_string(),
 
         FieldType::Tuple(types) => format!(
             "[{}]",
@@ -150,12 +155,11 @@ fn field_type_to_arktype(
 
         FieldType::RecordLink(inner) => {
             let linked = field_type_to_arktype(inner, index, registry)?;
-            match registry
-                .lookup(RECORD_LINK)
-                .and_then(|record_link| record_link.arktype.as_ref())
-            {
-                Some(mapping) => fill(&mapping.type_expr, &[linked]),
-                None => format!(r#"[{linked}, "|",  "string"]"#),
+            match record_link_mapping(registry, OutputKind::Arktype, |foreign| foreign.arktype.as_ref())? {
+                RecordLinkMapping::Configured(mapping) => fill(&mapping.type_expr, &[linked]),
+                RecordLinkMapping::Own { record_id } => {
+                    format!(r#"[{linked}, "|", {}]"#, record_id.type_expr)
+                }
             }
         }
 

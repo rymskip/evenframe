@@ -77,7 +77,8 @@ pub fn generate_struct_with_override(
         &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
-    );
+    )
+    .expect("the macroforge output generates");
     GeneratedOutput {
         full_output: output,
     }
@@ -111,7 +112,8 @@ pub fn generate_enum_with_override(
         &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
-    );
+    )
+    .expect("the macroforge output generates");
     GeneratedOutput {
         full_output: output,
     }

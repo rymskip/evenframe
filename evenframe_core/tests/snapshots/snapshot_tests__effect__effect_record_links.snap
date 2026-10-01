@@ -10,14 +10,8 @@ export class Author extends Schema.Class<Author>("Author")( {
 export class Post extends Schema.Class<Post>("Post")( { 
   id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
-  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
-                message: `Please enter a valid value`,
-                override: true,
-            }), })).annotations({ missingMessage: () => `'Author' is required` }),
-  relatedPosts: Schema.propertySignature(Schema.Array(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Schema.suspend((): Schema.Schema<Post, PostEncoded> => Post).annotations({ identifier: `PostRef` })).annotations({ message: () => ({
-                message: `Please enter a valid value`,
-                override: true,
-            }), }))).annotations({ missingMessage: () => `'Related Posts' is required` })
+  author: Schema.propertySignature(Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Author)).annotations({ missingMessage: () => `'Author' is required` }),
+  relatedPosts: Schema.propertySignature(Schema.Array(Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Post, PostEncoded> => Post).annotations({ identifier: `PostRef` })))).annotations({ missingMessage: () => `'Related Posts' is required` })
 }) {[key: string]: unknown}
 
 
@@ -29,8 +23,8 @@ export interface AuthorEncoded {
 export interface PostEncoded {
   readonly id: string;
   readonly title: string;
-  readonly author: string | AuthorEncoded;
-  readonly relatedPosts: ReadonlyArray<string | PostEncoded>;
+  readonly author: { readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | AuthorEncoded;
+  readonly relatedPosts: ReadonlyArray<{ readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | PostEncoded>;
 }
 
 

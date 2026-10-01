@@ -941,11 +941,11 @@ impl quote::ToTokens for MockGenerationConfig {
     }
 }
 
-#[cfg(all(test, feature = "mockmake", feature = "tooling"))]
+#[cfg(all(test, feature = "mockmake", feature = "scan"))]
 mod select_tables_tests {
     use super::{BTreeMap, BTreeSet, Client, Mockmaker, Surreal};
+    use crate::scan::{ScanConfig, build_all_configs};
     use crate::schemasync::{TableConfig, config::SchemasyncConfig};
-    use crate::tooling::{BuildConfig, build_all_configs};
     use std::fs;
     use tempfile::TempDir;
 
@@ -976,9 +976,9 @@ pub struct Comment { pub id: String, pub post: RecordLink<Post> }
 "#,
         )
         .unwrap();
-        let config = BuildConfig {
+        let config = ScanConfig {
             scan_path: tmp.path().to_path_buf(),
-            ..BuildConfig::default()
+            ..ScanConfig::default()
         };
         let (_, tables, _) = build_all_configs(&config).unwrap();
         tables

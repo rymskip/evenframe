@@ -2,7 +2,8 @@
 //! and prints what they produce as JSON for scripted assertions.
 
 use crate::cli::TestPluginArgs;
-use crate::config_builders;
+use crate::scan_cache::build_and_record;
+use evenframe_core::scan::{ScanConfig, filter_for_typesync, merge_tables_and_objects};
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
@@ -14,11 +15,11 @@ use tracing::info;
 
 pub async fn run(args: TestPluginArgs) -> Result<()> {
     let config = EvenframeConfig::new_offline()?;
-    let build_config = config_builders::BuildConfig::from_config(&config);
+    let build_config = ScanConfig::from_config(&config);
 
-    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
-    let (enums, tables, objects) = config_builders::filter_for_typesync(&enums, &tables, &objects);
-    let structs = config_builders::merge_tables_and_objects(tables, objects);
+    let (enums, tables, objects) = build_and_record(&build_config)?;
+    let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
+    let structs = merge_tables_and_objects(tables, objects);
 
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
 
@@ -56,7 +57,7 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
             &TypeIndex::new(&single, &empty_enums)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
-        );
+        )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
 
         let mut field_entries: Vec<serde_json::Value> = Vec::new();
@@ -105,7 +106,7 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
             &TypeIndex::new(&empty_structs, &single_enum)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
-        );
+        )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
 
         results.push(entry);

@@ -24,7 +24,6 @@ pub mod js_checks;
 pub mod map_key;
 #[cfg(feature = "typesync")]
 pub mod output;
-#[cfg(feature = "typesync")]
 pub mod struct_variants;
 #[cfg(feature = "typesync")]
 pub mod type_index;

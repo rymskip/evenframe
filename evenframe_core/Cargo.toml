@@ -13,10 +13,16 @@ categories = ["development-tools", "database"]
 
 [features]
 # By default, no optional features are enabled. This compiles only the minimal
-# core needed for derive macros: types, config, validators, wrappers, and the
+# core needed for derive macros: types, config, validators and the
 # schemasync data types (DefineConfig, EdgeConfig, etc.). This is the fastest
 # possible compile and is what evenframe_derive depends on.
 default = []
+
+# Runtime type metadata: the derive's config functions for each type and the
+# registry that finds them by name. Without it the derive emits only what a
+# type needs to be used, such as the table marker and validated
+# deserialization.
+metadata = ["dep:linkme"]
 
 # Enables file-based debug logging via the `evenframe_log!` macro.
 # Writes .log and .surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/
@@ -53,11 +59,15 @@ typesync-all = ["typesync", "protobuf", "flatbuffers", "macroforge"]
 # Schema synchronization (database operations)
 # ---------------------------------------------------------------------------
 
+# The schema's SurrealQL, generated offline: the DEFINE statements schemasync
+# applies, without the database client or an async runtime.
+schemadump = ["surrealdb-types"]
+
 # Enables the schemasync engine for comparing and synchronizing Rust struct
-# definitions against a live SurrealDB database: schema comparison, DEFINE
-# statement generation and the database execution pipeline. No mock data.
-# Implies: surrealdb
-schemasync = ["surrealdb", "tempfile", "dep:futures", "dep:rand", "dep:tokio"]
+# definitions against a live SurrealDB database: schema comparison and the
+# database execution pipeline. No mock data.
+# Implies: schemadump, surrealdb
+schemasync = ["schemadump", "surrealdb", "tempfile", "dep:futures", "dep:rand", "dep:tokio"]
 
 # The mock data engine: generates and writes mock records during schemasync,
 # with the full IANA timezone database. Without it, any request for mock
@@ -76,24 +86,39 @@ wasm-plugins = ["dep:wasmtime"]
 # Enables SurrealDB as a database backend. Pulls in the full surrealdb client
 # with in-memory (kv-mem) and HTTP protocol support. This is the heaviest
 # single dependency in the tree (~200+ transitive crates).
-surrealdb = ["dep:surrealdb"]
+surrealdb = ["dep:surrealdb", "surrealdb-types"]
+
+# The SurrealDB SDK's value types without its client: `RecordLink`, which
+# holds the SDK's `RecordId`, and the duration validators over its `Duration`.
+surrealdb-types = ["dep:surrealdb-types"]
 
 # ---------------------------------------------------------------------------
 # Convenience bundles
 # ---------------------------------------------------------------------------
 
-# Workspace scanning, the scan and expansion caches, the process lock and
-# `tooling::generate()` for build scripts. evenframe_derive builds without it.
-# Implies: typesync
-tooling = ["typesync", "dep:ignore", "dep:blake3"]
+# Workspace scanning and the macro expansion cache, shared by the
+# build-script features and the CLI.
+scan = ["dep:ignore", "dep:blake3", "dep:rayon"]
 
-# Enables every feature: all generators, schemasync with mock data, WASM
-# plugins and tooling. Use this for CI or when you need everything.
-full = ["mockmake", "typesync-all", "wasm-plugins", "tooling"]
+# `build::typesync()` for build scripts: scan the workspace and write the
+# configured type outputs. Implies: scan, typesync
+build-typesync = ["scan", "typesync"]
+
+# `build::schemadump()` for build scripts: scan the workspace and write the
+# schema's SurrealQL, without connecting to a database. Implies: scan,
+# schemadump
+build-schemadump = ["scan", "schemadump"]
+
+# Both build-script outputs. Implies: build-typesync, build-schemadump
+build-fullstack = ["build-typesync", "build-schemadump"]
+
+# Enables every feature: runtime metadata, all generators, schemasync with
+# mock data, WASM plugins and both build-script features.
+full = ["metadata", "mockmake", "typesync-all", "wasm-plugins", "build-fullstack"]
 
 # The feature set used by the evenframe CLI binary. Enables full schemasync
-# with mock data, all type generators, tooling, and SurrealDB.
-cli = ["mockmake", "typesync-all", "wasm-plugins", "tooling", "dep:clap"]
+# with mock data, all type generators, workspace scanning, and SurrealDB.
+cli = ["mockmake", "typesync-all", "wasm-plugins", "build-typesync", "dep:clap"]
 
 [dependencies]
 # workspace dependencies
@@ -109,6 +134,7 @@ url = { workspace = true }
 
 # Database providers (optional based on features)
 surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"], optional = true }
+surrealdb-types = { version = "3.2.4", optional = true }
 tempfile = { version = "3.27", optional = true }
 # Lets the CLI use core enums as argument values.
 clap = { version = "4.6", features = ["derive"], optional = true }
@@ -121,10 +147,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 chrono = "0.4.45"
 derive_more = { version = "2.1.1", features = ["from"] }
 petgraph = "0.8.3"
-serde-value = "0.7.0"
 thiserror = "2.0.20"
 ordered-float = { version = "5.5.0", features = ["serde"] }
-linkme = "0.3.37"
+linkme = { version = "0.3.37", optional = true }
 # ArkType string keyword checks shared by derive, mockmake and typesync
 unicode-normalization = "0.1.25"
 fancy-regex = "0.19.2"
@@ -141,7 +166,7 @@ rand = { version = "0.10.2", optional = true }
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
 
-# Optional: the typesync generators and tooling
+# Optional: the typesync generators and workspace scanning
 rayon = { version = "1.12", optional = true }
 ignore = { version = "0.4.33", optional = true }
 blake3 = { version = "1.8", optional = true }

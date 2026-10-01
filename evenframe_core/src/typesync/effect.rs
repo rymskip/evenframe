@@ -1,10 +1,12 @@
+use crate::config::fill;
 use crate::config::{EffectMapping, ForeignTypeConfig};
-use crate::config::{RECORD_LINK, fill};
 use crate::error::{EvenframeError, Result};
 use crate::types::{
     EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData,
 };
+use crate::typesync::config::OutputKind;
 use crate::typesync::doc_comment::format_jsdoc;
+use crate::typesync::foreign_ts::{RecordLinkMapping, record_link_mapping};
 use crate::typesync::js_checks::{
     self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal, template_literal,
 };
@@ -455,13 +457,6 @@ fn effect_mapping<'a>(name: &str, foreign: &'a ForeignTypeConfig) -> Result<&'a 
     })
 }
 
-/// The Effect mapping a project configures for the record link, if any.
-fn record_link_mapping(registry: &crate::types::ForeignTypeRegistry) -> Option<&EffectMapping> {
-    registry
-        .lookup(RECORD_LINK)
-        .and_then(|record_link| record_link.effect.as_ref())
-}
-
 /// A `char`: a string of exactly one character.
 fn char_schema() -> Result<String> {
     Ok(format!(
@@ -547,6 +542,12 @@ fn field_type_to_effect_schema(
                 FieldType::Char => value_stack.push(char_schema()?),
                 FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
                 FieldType::Unit => value_stack.push("Schema.Null".to_string()),
+                // serde writes whole seconds and the nanoseconds past them,
+                // and rejects any other key.
+                FieldType::Duration => value_stack.push(
+                    "Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: \"error\" } })"
+                        .to_string(),
+                ),
                 FieldType::F32 | FieldType::F64 => value_stack.push("Schema.Number".to_string()),
                 FieldType::I8
                 | FieldType::I16
@@ -648,16 +649,14 @@ fn field_type_to_effect_schema(
             }
             WorkItem::AssembleRecordLink => {
                 let inner = value_stack.pop().unwrap();
-                value_stack.push(match record_link_mapping(registry) {
-                    Some(mapping) => fill(&mapping.type_expr, &[inner]),
-                    None => format!(
-                        "Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), {}).annotations({{ message: () => ({{
-                message: `Please enter a valid value`,
-                override: true,
-            }}), }})",
-                        inner
-                    ),
-                });
+                value_stack.push(
+                    match record_link_mapping(registry, OutputKind::Effect, |foreign| foreign.effect.as_ref())? {
+                        RecordLinkMapping::Configured(mapping) => fill(&mapping.type_expr, &[inner]),
+                        RecordLinkMapping::Own { record_id } => {
+                            format!("Schema.Union({}, {inner})", record_id.type_expr)
+                        }
+                    },
+                );
             }
             WorkItem::AssembleMap { key, finite_keys } => {
                 let v = value_stack.pop().unwrap();
@@ -712,6 +711,10 @@ fn field_type_to_ts_encoded(
                     FieldType::String | FieldType::Char => value_stack.push("string".to_string()),
                     FieldType::Bool => value_stack.push("boolean".to_string()),
                     FieldType::Unit => value_stack.push("null".to_string()),
+                    FieldType::Duration => value_stack.push(field_type_to_ts_encoded(
+                        &FieldType::serde_duration(),
+                        registry,
+                    )?),
                     FieldType::F32
                     | FieldType::F64
                     | FieldType::I8
@@ -806,10 +809,16 @@ fn field_type_to_ts_encoded(
             }
             WorkItem::AssembleRecordLink => {
                 let inner = value_stack.pop().unwrap();
-                value_stack.push(match record_link_mapping(registry) {
-                    Some(mapping) => fill(&mapping.encoded, &[inner]),
-                    None => format!("string | {}", inner),
-                });
+                value_stack.push(
+                    match record_link_mapping(registry, OutputKind::Effect, |foreign| {
+                        foreign.effect.as_ref()
+                    })? {
+                        RecordLinkMapping::Configured(mapping) => fill(&mapping.encoded, &[inner]),
+                        RecordLinkMapping::Own { record_id } => {
+                            format!("{} | {inner}", record_id.encoded)
+                        }
+                    },
+                );
             }
         }
     }
@@ -834,11 +843,19 @@ fn validated_field_schema(
     match &field.field_type {
         FieldType::Option(inner) if !field.validators.is_empty() => Ok(format!(
             "Schema.OptionFromNullishOr({}, null)",
-            apply_validators_to_schema(schema_of(inner)?, &field.validators, &field.field_name)?
+            apply_validators_to_schema(
+                schema_of(inner)?,
+                inner,
+                &field.validators,
+                &field.field_name
+            )?
         )),
-        field_type => {
-            apply_validators_to_schema(schema_of(field_type)?, &field.validators, &field.field_name)
-        }
+        field_type => apply_validators_to_schema(
+            schema_of(field_type)?,
+            field_type,
+            &field.validators,
+            &field.field_name,
+        ),
     }
 }
 
@@ -856,6 +873,7 @@ fn parses_string_input(field: &StructField) -> bool {
 /// schema with one that decodes a string into the field's type.
 fn apply_validators_to_schema(
     schema: String,
+    field_type: &FieldType,
     validators: &[Validator],
     field_name: &str,
 ) -> Result<String> {
@@ -1165,6 +1183,11 @@ fn apply_validators_to_schema(
                 ),
             }],
 
+            // Effect's duration filters read its own `Duration`; a Rust
+            // duration is serde's `{ secs, nanos }`.
+            Validator::DurationValidator(dv) if matches!(field_type, FieldType::Duration) => {
+                vec![serde_duration_filter(dv, &message)?]
+            }
             Validator::DurationValidator(dv) => vec![match dv {
                 DurationValidator::GreaterThanDuration(value) => format!(
                     "Schema.greaterThanDuration({}, {})",
@@ -1226,6 +1249,43 @@ fn big_decimal_literal(value: &str) -> Result<String> {
 
 /// A duration bound as bigint nanoseconds, which Effect accepts as a
 /// `DurationInput`.
+/// A duration validator as a filter over serde's `{ secs, nanos }`.
+fn serde_duration_filter(
+    validator: &DurationValidator,
+    message: &dyn Fn(&str) -> String,
+) -> Result<String> {
+    let (condition, rule) = match validator {
+        DurationValidator::GreaterThanDuration(bound) => (
+            format!("nanos > {}", duration_literal(bound)?),
+            format!("must be longer than {bound}"),
+        ),
+        DurationValidator::GreaterThanOrEqualToDuration(bound) => (
+            format!("nanos >= {}", duration_literal(bound)?),
+            format!("must be at least {bound} long"),
+        ),
+        DurationValidator::LessThanDuration(bound) => (
+            format!("nanos < {}", duration_literal(bound)?),
+            format!("must be shorter than {bound}"),
+        ),
+        DurationValidator::LessThanOrEqualToDuration(bound) => (
+            format!("nanos <= {}", duration_literal(bound)?),
+            format!("must be at most {bound} long"),
+        ),
+        DurationValidator::BetweenDuration(start, end) => (
+            format!(
+                "nanos >= {} && nanos <= {}",
+                duration_literal(start)?,
+                duration_literal(end)?
+            ),
+            format!("must be between {start} and {end} long"),
+        ),
+    };
+    Ok(format!(
+        "Schema.filter((value) => ((nanos: bigint) => {condition})(BigInt(value.secs) * 1000000000n + BigInt(value.nanos)), {})",
+        message(&rule)
+    ))
+}
+
 fn duration_literal(value: &str) -> Result<String> {
     bounds::duration(value)
         .map(|nanos| format!("{nanos}n"))
@@ -1235,8 +1295,8 @@ fn duration_literal(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator, Validator,
-        apply_validators_to_schema,
+        BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator, FieldType,
+        Validator, apply_validators_to_schema,
     };
 
     #[test]
@@ -1250,6 +1310,7 @@ mod tests {
         for validator in validators {
             let result = apply_validators_to_schema(
                 "Schema.String".into(),
+                &FieldType::String,
                 std::slice::from_ref(&validator),
                 "field",
             );

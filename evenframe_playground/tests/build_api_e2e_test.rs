@@ -7,7 +7,8 @@
 //! 4. The builder pattern works correctly
 //! 5. Configuration loading works
 
-use evenframe_core::tooling::{BuildConfig, TypeGenerator};
+use evenframe_core::build::TypeGenerator;
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::typesync::config::{OutputKind, TypesyncOutput};
 use evenframe_core::typesync::output::GeneratedFile;
 use std::fs;
@@ -28,10 +29,14 @@ fn output(kind: OutputKind, dir: &Path) -> TypesyncOutput {
     TypesyncOutput::new(kind, dir.to_string_lossy())
 }
 
-/// A config scanning the playground and generating `outputs`.
-fn config_with(outputs: Vec<TypesyncOutput>) -> BuildConfig {
-    BuildConfig::builder()
+/// A config scanning the playground with its foreign types, which its record
+/// links need, and generating `outputs`.
+fn config_with(outputs: Vec<TypesyncOutput>) -> ScanConfig {
+    let playground =
+        ScanConfig::from_toml_path(get_evenframe_toml_path()).expect("the playground config loads");
+    ScanConfig::builder()
         .scan_path(get_playground_root_path())
+        .foreign_types(playground.foreign_types)
         .outputs(outputs)
         .build()
 }
@@ -46,12 +51,12 @@ fn generate_one(output: TypesyncOutput) -> GeneratedFile {
 }
 
 // ============================================================================
-// BuildConfig Builder Tests
+// ScanConfig Builder Tests
 // ============================================================================
 
 #[test]
 fn test_build_config_default() {
-    let config = BuildConfig::default();
+    let config = ScanConfig::default();
 
     assert_eq!(
         config.outputs,
@@ -73,7 +78,7 @@ fn test_build_config_builder_custom_paths() {
 
 #[test]
 fn test_build_config_builder_apply_aliases() {
-    let config = BuildConfig::builder()
+    let config = ScanConfig::builder()
         .apply_alias("Table")
         .apply_alias("Object")
         .apply_alias("Edge")
@@ -98,13 +103,13 @@ fn test_load_config_from_toml_path() {
         return;
     }
 
-    let config = BuildConfig::from_toml_path(&toml_path);
+    let config = ScanConfig::from_toml_path(&toml_path);
     assert!(config.is_ok(), "Should load config from path: {:?}", config);
 }
 
 #[test]
 fn test_config_not_found_error() {
-    let result = BuildConfig::from_toml_path("/nonexistent/path/evenframe.toml");
+    let result = ScanConfig::from_toml_path("/nonexistent/path/evenframe.toml");
     assert!(result.is_err(), "Should fail for nonexistent path");
 }
 
@@ -391,7 +396,7 @@ fn test_generated_protobuf_has_valid_syntax() {
 fn test_generate_with_invalid_scan_path() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
-    let config = BuildConfig::builder()
+    let config = ScanConfig::builder()
         .scan_path("/nonexistent/path/that/does/not/exist")
         .outputs(vec![output(OutputKind::Arktype, temp_dir.path())])
         .build();
@@ -437,7 +442,7 @@ fn test_generate_with_config_function() {
     let config = config_with(vec![output(OutputKind::Arktype, temp_dir.path())]);
 
     // Use the top-level generate_with_config function
-    let result = evenframe_core::tooling::generate_with_config(config);
+    let result = evenframe_core::build::typesync_with(config);
 
     assert!(
         result.is_ok(),

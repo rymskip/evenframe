@@ -1,7 +1,8 @@
 //! Generate command - runs the full pipeline (typesync + schemasync).
 
 use crate::cli::{Cli, GenerateArgs, TypesyncArgs};
-use crate::config_builders;
+use crate::scan_cache::build_and_record;
+use evenframe_core::scan::{ScanConfig, filter_for_schemasync};
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
@@ -23,8 +24,8 @@ pub async fn run_default(cli: &Cli) -> Result<()> {
 pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
     info!("Starting Evenframe code generation");
     let config = EvenframeConfig::new()?;
-    let build_config = config_builders::BuildConfig::from_config(&config);
-    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
+    let build_config = ScanConfig::from_config(&config);
+    let (enums, tables, objects) = build_and_record(&build_config)?;
 
     if args.skip_typesync {
         debug!("Skipping typesync phase");
@@ -42,8 +43,7 @@ pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
     if args.skip_schemasync {
         debug!("Skipping schemasync phase");
     } else {
-        let (enums, tables, objects) =
-            config_builders::filter_for_schemasync(enums, tables, objects);
+        let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
         super::schemasync::run_schemasync(
             &enums,
             &tables,

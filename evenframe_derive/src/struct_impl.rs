@@ -487,22 +487,23 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             };
 
             quote! {
-                const _: () = {
-                    #imports
+                impl ::evenframe::traits::EvenframeTable for #ident {}
 
-                    #evenframe_persistable_struct_impl
+                ::evenframe::__metadata! {
+                    const _: () = {
+                        #imports
 
-                    #registry_submission
-                };
+                        #evenframe_persistable_struct_impl
+
+                        #registry_submission
+                    };
+                }
 
                 #deserialize_impl
             }
         } else {
-            // App (non-table) struct. Generate a `static_struct_config()` method
-            // and register it, so `get_struct_config(name)` gives code that
-            // renders values at runtime each embedded field's real
-            // `FieldType`, such as a `RecordLink<T>` that must not be written
-            // as a quoted string.
+            // An embedded object's metadata is a `static_struct_config()`
+            // method and a registry entry finding it by name.
             let struct_config_impl = quote! {
                 impl #ident {
                     pub fn static_struct_config() -> ::evenframe::types::StructConfig {
@@ -546,13 +547,15 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             };
 
             quote! {
-                const _: () = {
-                    #app_imports
+                ::evenframe::__metadata! {
+                    const _: () = {
+                        #app_imports
 
-                    #struct_config_impl
+                        #struct_config_impl
 
-                    #registry_submission
-                };
+                        #registry_submission
+                    };
+                }
 
                 #deserialize_impl
             }

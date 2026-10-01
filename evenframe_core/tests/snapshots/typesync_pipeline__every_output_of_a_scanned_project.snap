@@ -4,6 +4,7 @@ expression: rendered
 ---
 === 0-arktype/arktype.ts
 import { scope } from 'arktype';
+import { RecordIdCodec } from '../record-id.ts';
 
 export const bindings = scope({
 
@@ -36,7 +37,8 @@ Author: {
 Post: {
   id: 'string',
   title: 'string',
-  author: ['Author', "|",  "string"],
+  author: ['Author', "|", RecordIdCodec.ark],
+  readTime: { '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' },
   status: 'Status',
   location: 'Address',
   outline: [['Section', '|', 'undefined'], '|', 'null'],
@@ -75,7 +77,8 @@ home: { street: "", city: null }
 export const defaultPost: Post = {
 id: "",
 title: "",
-author: '',
+author: RecordIdCodec.empty,
+readTime: { secs: 0, nanos: 0 },
 status: "Draft",
 location: { street: "", city: null },
 outline: null,
@@ -95,6 +98,7 @@ export const validator = exported;
 
 === 1-effect/bindings.ts
 import { Schema } from "effect";
+import { RecordIdCodec } from '../record-id.ts';
 
 export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
   at: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'At' is required` }),
@@ -131,10 +135,8 @@ export class Author extends Schema.Class<Author>("Author")( {
 export class Post extends Schema.Class<Post>("Post")( { 
   id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
-  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
-                message: `Please enter a valid value`,
-                override: true,
-            }), })).annotations({ missingMessage: () => `'Author' is required` }),
+  author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
+  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -178,7 +180,11 @@ export interface AuthorEncoded {
 export interface PostEncoded {
   readonly id: string;
   readonly title: string;
-  readonly author: string | AuthorEncoded;
+  readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
+  readonly readTime: {
+  readonly secs: number;
+  readonly nanos: number;
+};
   readonly status: StatusEncoded;
   readonly location: AddressEncoded;
   readonly outline: SectionEncoded | null | undefined;
@@ -204,6 +210,7 @@ export interface AddressEncoded {
 
 === 2-effect/post.ts
 import { Schema } from "effect";
+import { RecordIdCodec } from '../record-id.ts';
 import { Address, type AddressEncoded } from './address';
 import { Section, type SectionEncoded } from './section';
 
@@ -237,10 +244,8 @@ export type AuthorType = typeof Author.Type;
 export class Post extends Schema.Class<Post>("Post")( { 
   id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
-  author: Schema.propertySignature(Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Author).annotations({ message: () => ({
-                message: `Please enter a valid value`,
-                override: true,
-            }), })).annotations({ missingMessage: () => `'Author' is required` }),
+  author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
+  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -275,7 +280,11 @@ export interface AuthorEncoded {
 export interface PostEncoded {
   readonly id: string;
   readonly title: string;
-  readonly author: string | AuthorEncoded;
+  readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
+  readonly readTime: {
+  readonly secs: number;
+  readonly nanos: number;
+};
   readonly status: StatusEncoded;
   readonly location: AddressEncoded;
   readonly outline: SectionEncoded | null | undefined;
@@ -300,7 +309,9 @@ export interface SectionEncoded {
 
 
 === 3-macroforge/macroforge.ts
-export type RecordLink<T> = string | T;
+import type { RecordIdEncoded } from '../record-id.ts';
+
+export type RecordLink<T> = RecordIdEncoded | T;
 
 /** @derive(Deserialize) */
 export interface Address {
@@ -332,6 +343,7 @@ export interface Post {
   /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
   author: RecordLink<Author>;
+  readTime: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;
@@ -402,6 +414,7 @@ export interface Post {
   /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
   author: RecordLink<Author>;
+  readTime: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;
@@ -430,7 +443,9 @@ export type Status =
 	| { Archived: string };
 
 === 4-macroforge/record-link.ts
-export type RecordLink<T> = string | T;
+import type { RecordIdEncoded } from '../record-id.ts';
+
+export type RecordLink<T> = RecordIdEncoded | T;
 
 === 4-macroforge/section.ts
 /** @derive(Deserialize) */

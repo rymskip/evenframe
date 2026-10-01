@@ -1,6 +1,7 @@
 //! The TypeScript default value of a field type, which the ArkType output
 //! writes for a field's `.default(...)`.
 
+use crate::config::RECORD_ID;
 use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, TaggedUnion, VariantData};
 use crate::typesync::type_index::TypeIndex;
@@ -43,6 +44,9 @@ pub fn field_type_to_default_value(
         | FieldType::Usize => {
             trace!("Generating default for numeric type");
             "0".to_string()
+        }
+        FieldType::Duration => {
+            field_type_to_default_value(&FieldType::serde_duration(), index, registry)?
         }
         FieldType::Tuple(inner_types) => {
             trace!(
@@ -98,11 +102,17 @@ pub fn field_type_to_default_value(
             "{}".to_string()
         }
 
-        FieldType::RecordLink(inner) => {
-            // An unlinked record is an empty id.
-            trace!("Generating default for RecordLink with inner: {:?}", inner);
-            "''".to_string()
-        }
+        FieldType::RecordLink(_) => match registry.lookup(RECORD_ID) {
+            Some(record_id) if !record_id.default_value_ts.trim().is_empty() => {
+                record_id.default_value_ts.clone()
+            }
+            _ => {
+                return Err(EvenframeError::config(format!(
+                    "a record link defaults to a record id, which needs \
+                     `foreign_types.{RECORD_ID}` with a `default_value_ts`"
+                )));
+            }
+        },
         FieldType::Other(name) => {
             // 0) Check if it's a configured foreign type
             if let Some(ftc) = registry.lookup(name) {

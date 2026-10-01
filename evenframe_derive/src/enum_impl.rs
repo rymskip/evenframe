@@ -4,7 +4,7 @@ use evenframe_core::{
         parse_annotation_attributes, parse_macroforge_derive_attribute, parse_rust_derives,
         parse_serde_enum_representation,
     },
-    types::{EnumRepresentation, FieldType},
+    types::{EnumRepresentation, FieldType, PathNames},
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -74,7 +74,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     quote! { None }
                 }
                 Fields::Unnamed(fields) => {
-                    let field_type = FieldType::parse_tuple_variant(fields);
+                    let field_type = FieldType::parse_tuple_variant(fields, PathNames::Last);
                     quote! {
                         Some(VariantData::DataStructureRef(#field_type))
                     }
@@ -160,33 +160,35 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
         };
 
         quote! {
-            const _: () = {
-                use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation, Pipeline};
-                use ::evenframe::traits::EvenframeTaggedUnion;
+            ::evenframe::__metadata! {
+                const _: () = {
+                    use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation, Pipeline};
+                    use ::evenframe::traits::EvenframeTaggedUnion;
 
-                impl EvenframeTaggedUnion for #ident {
-                    fn variants() -> TaggedUnion {
-                        let macroforge_derives_val: Vec<String> = vec![#(#macroforge_derives.to_string()),*];
-                        let enum_annotations_val: Vec<String> = vec![#(#enum_annotations.to_string()),*];
-                        let rust_derives_val: Vec<String> = vec![#(#rust_derives.to_string()),*];
-                        TaggedUnion {
-                            enum_name: #enum_name.to_string(),
-                            variants: vec![#(#variant_tokens),*],
-                            representation: #representation_tokens,
-                            doccom: None,
-                            macroforge_derives: macroforge_derives_val,
-                            annotations: enum_annotations_val,
-                            pipeline: #pipeline_tokens,
-                            rust_derives: rust_derives_val,
-                            output_override: None,
-                            resolve_only: false,
-                            raw_attributes: std::collections::BTreeMap::new(),
+                    impl EvenframeTaggedUnion for #ident {
+                        fn variants() -> TaggedUnion {
+                            let macroforge_derives_val: Vec<String> = vec![#(#macroforge_derives.to_string()),*];
+                            let enum_annotations_val: Vec<String> = vec![#(#enum_annotations.to_string()),*];
+                            let rust_derives_val: Vec<String> = vec![#(#rust_derives.to_string()),*];
+                            TaggedUnion {
+                                enum_name: #enum_name.to_string(),
+                                variants: vec![#(#variant_tokens),*],
+                                representation: #representation_tokens,
+                                doccom: None,
+                                macroforge_derives: macroforge_derives_val,
+                                annotations: enum_annotations_val,
+                                pipeline: #pipeline_tokens,
+                                rust_derives: rust_derives_val,
+                                output_override: None,
+                                resolve_only: false,
+                                raw_attributes: std::collections::BTreeMap::new(),
+                            }
                         }
                     }
-                }
 
-                #registry_submission
-            };
+                    #registry_submission
+                };
+            }
         }
     } else {
         syn::Error::new(

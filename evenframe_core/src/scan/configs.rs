@@ -1,7 +1,8 @@
 //! Configuration builders for processing Evenframe types.
 
-use super::workspace_scanner::{ScannedAst, ScannedItem};
-use super::{BuildConfig, EvenframeType, WorkspaceScanner};
+use super::paths::{Target, TypePaths, rust_path};
+use super::workspace::{Scan, ScannedAst, ScannedItem};
+use super::{EvenframeType, ScanConfig, WorkspaceScanner};
 use crate::error::{EvenframeError, Result};
 use crate::{
     derive::{
@@ -17,7 +18,10 @@ use crate::{
     schemasync::mockmake::MockGenerationConfig,
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, IndexConfig, PermissionsConfig},
-    types::{FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData},
+    types::{
+        FieldType, ForeignTypeRegistry, PathNames, STD_DURATION_PATHS, StructConfig, StructField,
+        TaggedUnion, Variant, VariantData,
+    },
     typesync::config::{CollisionStrategy, StructVariants},
     typesync::struct_variants::declare_payloads,
     validator::{StringValidator, Validator},
@@ -25,7 +29,6 @@ use crate::{
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
 use syn::{Fields, FieldsNamed, ItemEnum, ItemStruct};
 use tracing::{debug, info, trace, warn};
 
@@ -39,7 +42,7 @@ pub type AllConfigs = (
 /// Builds all configurations from the workspace using the provided build config.
 ///
 /// Returns a tuple of (enums, tables, objects).
-pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
+pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
     debug!("Starting build_all_configs");
     let mut enum_configs = BTreeMap::new();
     let mut table_configs = BTreeMap::new();
@@ -54,7 +57,7 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
     .with_extra_files(config.include_files.clone());
 
     let scanned = scanner.scan()?;
-    info!("Found {} Evenframe types", scanned.len());
+    info!("Found {} Evenframe types", scanned.items.len());
 
     process_types(
         scanned,
@@ -62,6 +65,7 @@ pub fn build_all_configs(config: &BuildConfig) -> Result<AllConfigs> {
         &mut table_configs,
         &mut struct_configs,
         config.collision_strategy,
+        &ForeignTypeRegistry::from_config(&config.foreign_types),
     )?;
 
     info!(
@@ -404,165 +408,273 @@ fn parse_table_attributes(
 
 /// Processes scanned types into configurations, in file order and, within a
 /// file, in source order, so collisions resolve the same way on every run.
+/// Each type a field names is resolved, through the imports of the module
+/// the field is written in, to the definition it means, and named as that
+/// definition is generated.
 fn process_types(
-    scanned: Vec<ScannedItem>,
+    scan: Scan,
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
     collision_strategy: CollisionStrategy,
+    registry: &ForeignTypeRegistry,
 ) -> Result<()> {
-    let mut by_file: BTreeMap<String, Vec<Result<ParsedType>>> = BTreeMap::new();
-    for item in scanned {
+    let Scan { items, scopes } = scan;
+    let mut by_file: BTreeMap<String, Vec<ScannedItem>> = BTreeMap::new();
+    for item in items {
         by_file
-            .entry(item.evenframe_type.file_path)
+            .entry(item.evenframe_type.file_path.clone())
             .or_default()
-            .push(item.parsed);
+            .push(item);
     }
     debug!("Processing types from {} files", by_file.len());
+    let definitions = by_file
+        .into_values()
+        .flatten()
+        .map(|item| Ok((item.evenframe_type, item.parsed?)))
+        .collect::<Result<Vec<(EvenframeType, ParsedType)>>>()?;
 
-    // Which file each type name was first defined in, for collision messages
-    let mut struct_origins: BTreeMap<String, String> = BTreeMap::new();
-    let mut enum_origins: BTreeMap<String, String> = BTreeMap::new();
-    // Renames, applied to field references once every type is collected
-    let mut renames: BTreeMap<String, String> = BTreeMap::new();
+    let qualified: Vec<String> = definitions
+        .iter()
+        .map(|(evenframe_type, _)| {
+            format!(
+                "{}::{}",
+                rust_path(&evenframe_type.module_path),
+                evenframe_type.name
+            )
+        })
+        .collect();
+    let mut first_definition: BTreeMap<&str, &str> = BTreeMap::new();
+    for (path, (evenframe_type, _)) in qualified.iter().zip(&definitions) {
+        if let Some(first_file) = first_definition.insert(path, &evenframe_type.file_path) {
+            return Err(EvenframeError::Config(format!(
+                "'{path}' is defined twice, in '{first_file}' and '{}'",
+                evenframe_type.file_path
+            )));
+        }
+    }
+    let names = output_names(&definitions, collision_strategy)?;
+    let paths = TypePaths::new(&scopes, qualified.iter().cloned());
+    let resolver = Resolver {
+        paths: &paths,
+        names: &names,
+        qualified: &qualified,
+        registry,
+    };
 
-    for (file_path, parsed_types) in by_file {
-        for parsed in parsed_types {
-            match parsed? {
-                ParsedType::Struct { mut config, table } => {
-                    resolve_collision(
-                        &mut config.struct_name,
-                        &struct_origins,
-                        &file_path,
-                        collision_strategy,
-                        &mut renames,
-                    )?;
-                    struct_origins.insert(config.struct_name.clone(), file_path.clone());
-                    if let Some(table) = table {
-                        let table_name = config.struct_name.to_case(Case::Snake);
-                        if let Some((_, name)) =
-                            find_duplicate_index_name(&table_name, &table.indexes)
-                        {
-                            return Err(EvenframeError::Config(format!(
-                                "Another index on struct '{}' in '{}' already uses the name '{}'; give one of them `name = \"...\"`",
-                                config.struct_name, file_path, name
-                            )));
-                        }
-                        table_configs.insert(
-                            table_name.clone(),
-                            TableConfig {
-                                table_name,
-                                struct_config: config.clone(),
-                                relation: table.relation,
-                                permissions: table.permissions,
-                                mock_generation_config: table.mock_generation_config,
-                                events: table
-                                    .events
-                                    .into_iter()
-                                    .map(|statement| EventConfig { statement })
-                                    .collect(),
-                                indexes: table.indexes,
-                                output_override: None,
-                            },
-                        );
+    for ((evenframe_type, parsed), name) in definitions.into_iter().zip(names.iter()) {
+        let module_path = evenframe_type.module_path.as_str();
+        let file_path = evenframe_type.file_path.as_str();
+        match parsed {
+            ParsedType::Struct { mut config, table } => {
+                config.struct_name = name.clone();
+                resolver.fields(&mut config.fields, module_path, &config.struct_name)?;
+                if let Some(table) = table {
+                    let table_name = config.struct_name.to_case(Case::Snake);
+                    if let Some((_, name)) = find_duplicate_index_name(&table_name, &table.indexes)
+                    {
+                        return Err(EvenframeError::Config(format!(
+                            "Another index on struct '{}' in '{}' already uses the name '{}'; give one of them `name = \"...\"`",
+                            config.struct_name, file_path, name
+                        )));
                     }
-                    struct_configs.insert(config.struct_name.clone(), config);
+                    table_configs.insert(
+                        table_name.clone(),
+                        TableConfig {
+                            table_name,
+                            struct_config: config.clone(),
+                            relation: table.relation,
+                            permissions: table.permissions,
+                            mock_generation_config: table.mock_generation_config,
+                            events: table
+                                .events
+                                .into_iter()
+                                .map(|statement| EventConfig { statement })
+                                .collect(),
+                            indexes: table.indexes,
+                            output_override: None,
+                        },
+                    );
                 }
-                ParsedType::Enum(mut tagged_union) => {
-                    resolve_collision(
-                        &mut tagged_union.enum_name,
-                        &enum_origins,
-                        &file_path,
-                        collision_strategy,
-                        &mut renames,
-                    )?;
-                    enum_origins.insert(tagged_union.enum_name.clone(), file_path.clone());
-                    enum_configs.insert(tagged_union.enum_name.clone(), tagged_union);
-                }
+                struct_configs.insert(config.struct_name.clone(), config);
+            }
+            ParsedType::Enum(mut tagged_union) => {
+                tagged_union.enum_name = name.clone();
+                resolver.variants(
+                    &mut tagged_union.variants,
+                    module_path,
+                    &tagged_union.enum_name,
+                )?;
+                enum_configs.insert(tagged_union.enum_name.clone(), tagged_union);
             }
         }
     }
-
-    // Propagate renames through field type references
-    if !renames.is_empty() {
-        debug!(
-            "Propagating {} type renames through field references",
-            renames.len()
-        );
-        for struct_config in struct_configs.values_mut() {
-            for field in &mut struct_config.fields {
-                rename_field_type(&mut field.field_type, &renames);
-            }
-        }
-        for table_config in table_configs.values_mut() {
-            for field in &mut table_config.struct_config.fields {
-                rename_field_type(&mut field.field_type, &renames);
-            }
-        }
-    }
-
     Ok(())
 }
 
-/// Renames `name` when another file already defines a type by that name and
-/// the strategy allows it, or fails naming both files.
-fn resolve_collision(
-    name: &mut String,
-    origins: &BTreeMap<String, String>,
-    file_path: &str,
+/// The name each of `definitions` is generated under: its own, unless an
+/// earlier struct or enum took it. Then the strategy either fails naming both
+/// files or prefixes the name with the end of its module path.
+fn output_names(
+    definitions: &[(EvenframeType, ParsedType)],
     collision_strategy: CollisionStrategy,
-    renames: &mut BTreeMap<String, String>,
-) -> Result<()> {
-    let Some(existing_file) = origins.get(name.as_str()) else {
-        return Ok(());
-    };
-    match collision_strategy {
-        CollisionStrategy::Error => Err(EvenframeError::Config(format!(
-            "Type name collision: '{name}' is defined in both '{existing_file}' and '{file_path}'. \
-             Rename one of them, or set collision_strategy = \"auto_rename\" in [typesync] config."
-        ))),
-        CollisionStrategy::AutoRename => {
-            let stem = Path::new(file_path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("unknown");
-            let new_name = format!("{}{name}", stem.to_case(Case::Pascal));
-            warn!(
-                "Type '{name}' in '{file_path}' renamed to '{new_name}' to avoid collision with '{existing_file}'"
-            );
-            renames.insert(name.clone(), new_name.clone());
-            *name = new_name;
-            Ok(())
-        }
+) -> Result<Vec<String>> {
+    let mut taken: BTreeMap<String, &str> = BTreeMap::new();
+    let mut names = Vec::with_capacity(definitions.len());
+    for (evenframe_type, _) in definitions {
+        let name = &evenframe_type.name;
+        let file_path = evenframe_type.file_path.as_str();
+        let output = match taken.get(name) {
+            None => name.clone(),
+            Some(existing_file) => match collision_strategy {
+                CollisionStrategy::Error => {
+                    return Err(EvenframeError::Config(format!(
+                        "Type name collision: '{name}' is defined in both '{existing_file}' and '{file_path}'. \
+                         Rename one of them, or set collision_strategy = \"auto_rename\" in [typesync] config."
+                    )));
+                }
+                CollisionStrategy::AutoRename => {
+                    let segments: Vec<&str> = evenframe_type.module_path.split("::").collect();
+                    let renamed = (1..=segments.len())
+                        .map(|count| {
+                            let prefix = segments[segments.len() - count..].join("_");
+                            format!("{}{name}", prefix.to_case(Case::Pascal))
+                        })
+                        .find(|candidate| !taken.contains_key(candidate))
+                        .ok_or_else(|| {
+                            EvenframeError::Config(format!(
+                                "Type '{name}' in '{file_path}' collides with the one in \
+                                 '{existing_file}', and every name its module path offers is taken"
+                            ))
+                        })?;
+                    warn!(
+                        "Type '{name}' in '{file_path}' renamed to '{renamed}' to avoid collision with '{existing_file}'"
+                    );
+                    renamed
+                }
+            },
+        };
+        taken.insert(output.clone(), file_path);
+        names.push(output);
     }
+    Ok(names)
 }
 
-/// Recursively updates type references that were renamed due to collisions.
-fn rename_field_type(field_type: &mut FieldType, renames: &BTreeMap<String, String>) {
-    match field_type {
-        FieldType::Other(name) => {
-            if let Some(new_name) = renames.get(name.as_str()) {
-                *name = new_name.clone();
+/// Resolves the type paths scanned fields name to the name each definition
+/// they refer to is generated under.
+struct Resolver<'a> {
+    paths: &'a TypePaths<'a>,
+    /// Each definition's generated name, by definition index.
+    names: &'a [String],
+    /// Each definition's absolute path, by definition index.
+    qualified: &'a [String],
+    registry: &'a ForeignTypeRegistry,
+}
+
+impl Resolver<'_> {
+    fn fields(&self, fields: &mut [StructField], module_path: &str, owner: &str) -> Result<()> {
+        for field in fields {
+            let site = format!("{owner}.{}", field.field_name);
+            self.field_type(&mut field.field_type, module_path, &site)?;
+        }
+        Ok(())
+    }
+
+    fn variants(&self, variants: &mut [Variant], module_path: &str, owner: &str) -> Result<()> {
+        for variant in variants {
+            let site = format!("{owner}::{}", variant.name);
+            match &mut variant.data {
+                Some(VariantData::DataStructureRef(field_type)) => {
+                    self.field_type(field_type, module_path, &site)?;
+                }
+                Some(VariantData::InlineStruct(inline)) => {
+                    self.fields(&mut inline.fields, module_path, &site)?;
+                }
+                None => {}
             }
         }
-        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-            rename_field_type(inner, renames);
-        }
-        FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
-            rename_field_type(k, renames);
-            rename_field_type(v, renames);
-        }
-        FieldType::Tuple(items) => {
-            for item in items {
-                rename_field_type(item, renames);
+        Ok(())
+    }
+
+    fn field_type(&self, field_type: &mut FieldType, module_path: &str, site: &str) -> Result<()> {
+        match field_type {
+            FieldType::Other(path) => {
+                let resolved = self.resolve(path, module_path, site)?;
+                *field_type = resolved;
             }
-        }
-        FieldType::Struct(fields) => {
-            for (_, ft) in fields {
-                rename_field_type(ft, renames);
+            FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
+                self.field_type(inner, module_path, site)?;
             }
+            FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
+                self.field_type(key, module_path, site)?;
+                self.field_type(value, module_path, site)?;
+            }
+            FieldType::Tuple(items) => {
+                for item in items {
+                    self.field_type(item, module_path, site)?;
+                }
+            }
+            FieldType::Struct(members) => {
+                for (name, member) in members {
+                    self.field_type(member, module_path, &format!("{site}.{name}"))?;
+                }
+            }
+            FieldType::String
+            | FieldType::Char
+            | FieldType::Bool
+            | FieldType::Unit
+            | FieldType::F32
+            | FieldType::F64
+            | FieldType::I8
+            | FieldType::I16
+            | FieldType::I32
+            | FieldType::I64
+            | FieldType::I128
+            | FieldType::Isize
+            | FieldType::U8
+            | FieldType::U16
+            | FieldType::U32
+            | FieldType::U64
+            | FieldType::U128
+            | FieldType::Usize
+            | FieldType::Duration => {}
         }
-        _ => {}
+        Ok(())
+    }
+
+    /// The field type `path`, written at `site` in the module at
+    /// `module_path`, names.
+    fn resolve(&self, path: &str, module_path: &str, site: &str) -> Result<FieldType> {
+        Ok(match self.paths.resolve(module_path, path) {
+            Target::Definition(definition) => FieldType::Other(self.names[definition].clone()),
+            Target::External(absolute) => {
+                let name = absolute.rsplit("::").next().unwrap_or(&absolute);
+                // A path no import resolves names the standard `Duration`
+                // the way the prelude-less source can only mean it, unless a
+                // foreign type claims the name.
+                let std_duration =
+                    absolute == "Duration" || STD_DURATION_PATHS.contains(&absolute.as_str());
+                if std_duration
+                    && !self.registry.is_foreign(name)
+                    && !self.registry.is_foreign(&absolute)
+                {
+                    FieldType::Duration
+                } else {
+                    FieldType::Other(name.to_string())
+                }
+            }
+            Target::Ambiguous(definitions) => {
+                let candidates = definitions
+                    .iter()
+                    .map(|definition| format!("`{}`", self.qualified[*definition]))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(EvenframeError::Config(format!(
+                    "`{site}` names `{path}`, which no import in `{module_path}` resolves, and \
+                     {candidates} all define it; import the one it means"
+                )));
+            }
+        })
     }
 }
 
@@ -629,7 +741,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
         let data = match &variant.fields {
             Fields::Unit => None,
             Fields::Unnamed(fields) => Some(VariantData::DataStructureRef(
-                FieldType::parse_tuple_variant(fields),
+                FieldType::parse_tuple_variant(fields, PathNames::Written),
             )),
             Fields::Named(fields_named) => {
                 debug!(
@@ -689,7 +801,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> syn::Result<Vec<StructFi
             .to_string();
         let field_name = field_name.trim_start_matches("r#").to_string();
 
-        let field_type = FieldType::parse_syn_ty(&field.ty);
+        let field_type = FieldType::parse(&field.ty, PathNames::Written);
 
         let edge_config = EdgeConfig::parse(field)?;
         let define_config = DefineConfig::parse(field)?;
@@ -890,7 +1002,7 @@ pub fn filter_for_schemasync(
 /// generators read a config's `output_override` before computing output.
 #[cfg(feature = "wasm-plugins")]
 fn apply_rule_plugins(
-    config: &BuildConfig,
+    config: &ScanConfig,
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
@@ -1086,7 +1198,7 @@ fn push_missing(existing: &mut Vec<String>, annotations: &[String]) {
 ///   Pascal-cased.
 #[cfg(feature = "wasm-plugins")]
 fn apply_synthetic_plugins(
-    config: &BuildConfig,
+    config: &ScanConfig,
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
@@ -1259,6 +1371,285 @@ fn merge_synthetic_output(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::{
+        AllConfigs, BTreeMap, CollisionStrategy, FieldType, Result, ScanConfig, StructVariants,
+        VariantData, build_all_configs,
+    };
+    use std::fs;
+    use tempfile::TempDir;
+
+    const AUTH: &str = r#"
+        use evenframe::Evenframe;
+
+        #[derive(Evenframe)]
+        pub enum Status { Active, Banned }
+
+        #[derive(Evenframe)]
+        pub struct Account { pub id: String, pub status: Status }
+    "#;
+
+    const BILLING: &str = r#"
+        use evenframe::Evenframe;
+
+        #[derive(Evenframe)]
+        pub enum Status { Open, Paid }
+
+        #[derive(Evenframe)]
+        pub struct Invoice {
+            pub id: String,
+            pub status: Status,
+            pub account_status: super::auth::Status,
+        }
+
+        #[derive(Evenframe)]
+        pub enum Event { Changed(Status), Moved { from: Status, to: Status } }
+    "#;
+
+    /// Builds a crate named `shop` from `files`, paths relative to `src/`.
+    fn build(collision_strategy: CollisionStrategy, files: &[(&str, &str)]) -> Result<AllConfigs> {
+        let root = TempDir::new().expect("temp dir");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        for (path, content) in files {
+            let file = root.path().join("src").join(path);
+            fs::create_dir_all(file.parent().expect("parent")).expect("source dir");
+            fs::write(file, content).expect("source file");
+        }
+        build_all_configs(&ScanConfig {
+            scan_path: root.path().to_path_buf(),
+            collision_strategy,
+            struct_variants: StructVariants::Inline,
+            ..ScanConfig::default()
+        })
+    }
+
+    fn other(name: &str) -> FieldType {
+        FieldType::Other(name.to_string())
+    }
+
+    fn field(configs: &AllConfigs, struct_name: &str, field_name: &str) -> FieldType {
+        let (_, _, objects) = configs;
+        objects[struct_name]
+            .fields
+            .iter()
+            .find(|field| field.field_name == field_name)
+            .map(|field| field.field_type.clone())
+            .expect("field")
+    }
+
+    #[test]
+    fn each_reference_resolves_to_the_definition_its_module_names() {
+        let configs = build(
+            CollisionStrategy::AutoRename,
+            &[
+                ("lib.rs", "pub mod models;\npub mod handlers;\n"),
+                ("models/mod.rs", "pub mod auth;\npub mod billing;\n"),
+                ("models/auth.rs", AUTH),
+                ("models/billing.rs", BILLING),
+                (
+                    "handlers.rs",
+                    r#"
+                    use crate::models::auth::Status;
+                    use crate::models::billing::Status as InvoiceState;
+
+                    #[derive(Evenframe)]
+                    pub struct Audit {
+                        pub account: Status,
+                        pub invoice: InvoiceState,
+                        pub history: Vec<Option<crate::models::billing::Status>>,
+                    }
+                    "#,
+                ),
+            ],
+        )
+        .expect("configs");
+
+        assert_eq!(field(&configs, "Account", "status"), other("Status"));
+        assert_eq!(field(&configs, "Invoice", "status"), other("BillingStatus"));
+        assert_eq!(
+            field(&configs, "Invoice", "account_status"),
+            other("Status")
+        );
+        assert_eq!(field(&configs, "Audit", "account"), other("Status"));
+        assert_eq!(field(&configs, "Audit", "invoice"), other("BillingStatus"));
+        assert_eq!(
+            field(&configs, "Audit", "history"),
+            FieldType::Vec(Box::new(FieldType::Option(Box::new(other(
+                "BillingStatus"
+            )))))
+        );
+    }
+
+    #[test]
+    fn enum_variant_payloads_follow_a_renamed_definition() {
+        let configs = build(
+            CollisionStrategy::AutoRename,
+            &[("auth.rs", AUTH), ("billing.rs", BILLING)],
+        )
+        .expect("configs");
+        let (enums, _, _) = &configs;
+
+        let event = &enums["Event"];
+        let payload = |name: &str| {
+            event
+                .variants
+                .iter()
+                .find(|variant| variant.name == name)
+                .and_then(|variant| variant.data.clone())
+                .expect("payload")
+        };
+        assert_eq!(
+            payload("Changed"),
+            VariantData::DataStructureRef(other("BillingStatus"))
+        );
+        let VariantData::InlineStruct(moved) = payload("Moved") else {
+            panic!("Moved is a struct variant");
+        };
+        assert!(
+            moved
+                .fields
+                .iter()
+                .all(|field| field.field_type == other("BillingStatus")),
+            "{moved:?}"
+        );
+        assert!(enums.contains_key("Status") && enums.contains_key("BillingStatus"));
+    }
+
+    #[test]
+    fn a_struct_and_an_enum_sharing_a_name_collide() {
+        let struct_status = "#[derive(Evenframe)]\npub struct Status { pub code: u32 }\n";
+        let enum_status = "#[derive(Evenframe)]\npub enum Status { Open, Closed }\n";
+        let files = [("a.rs", struct_status), ("b.rs", enum_status)];
+
+        let error = build(CollisionStrategy::Error, &files)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(
+            error.contains("'Status'") && error.contains("a.rs") && error.contains("b.rs"),
+            "{error}"
+        );
+
+        let (enums, _, objects) = build(CollisionStrategy::AutoRename, &files).expect("configs");
+        assert!(objects.contains_key("Status"));
+        assert!(enums.contains_key("BStatus"), "{:?}", enums.keys());
+    }
+
+    #[test]
+    fn re_exports_and_glob_imports_resolve_to_their_definition() {
+        let configs = build(
+            CollisionStrategy::AutoRename,
+            &[
+                ("lib.rs", "pub mod models;\npub mod reports;\npub mod views;\n"),
+                (
+                    "models/mod.rs",
+                    "pub mod auth;\npub mod billing;\npub use billing::Status as InvoiceStatus;\n",
+                ),
+                ("models/auth.rs", AUTH),
+                ("models/billing.rs", BILLING),
+                (
+                    "reports.rs",
+                    "use crate::models::InvoiceStatus;\n#[derive(Evenframe)]\npub struct Report { pub state: InvoiceStatus }\n",
+                ),
+                (
+                    "views.rs",
+                    "use crate::models::billing::*;\n#[derive(Evenframe)]\npub struct View { pub state: Status }\n",
+                ),
+            ],
+        )
+        .expect("configs");
+
+        assert_eq!(field(&configs, "Report", "state"), other("BillingStatus"));
+        assert_eq!(field(&configs, "View", "state"), other("BillingStatus"));
+    }
+
+    #[test]
+    fn only_the_standard_library_duration_is_native() {
+        let source = r#"
+            use std::time::Duration;
+            use chrono::Duration as Elapsed;
+
+            #[derive(Evenframe)]
+            pub struct Timer {
+                pub limit: Duration,
+                pub spent: Option<core::time::Duration>,
+                pub chrono: Elapsed,
+            }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", source)]).expect("configs");
+        assert_eq!(field(&configs, "Timer", "limit"), FieldType::Duration);
+        assert_eq!(
+            field(&configs, "Timer", "spent"),
+            FieldType::Option(Box::new(FieldType::Duration))
+        );
+        assert_eq!(field(&configs, "Timer", "chrono"), other("Duration"));
+
+        let scanned = r#"
+            #[derive(Evenframe)]
+            pub struct Duration { pub minutes: u32 }
+
+            #[derive(Evenframe)]
+            pub struct Timer { pub limit: Duration }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", scanned)]).expect("configs");
+        assert_eq!(field(&configs, "Timer", "limit"), other("Duration"));
+    }
+
+    #[test]
+    fn a_foreign_type_claiming_duration_wins() {
+        let root = TempDir::new().expect("temp dir");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        fs::create_dir_all(root.path().join("src")).expect("source dir");
+        fs::write(
+            root.path().join("src/lib.rs"),
+            "use std::time::Duration;\n#[derive(Evenframe)]\npub struct Timer { pub limit: Duration }\n",
+        )
+        .expect("source file");
+        let foreign = toml::from_str("rust_type_names = [\"Duration\"]\nsurrealdb = \"int\"")
+            .expect("foreign type");
+        let (_, _, objects) = build_all_configs(&ScanConfig {
+            scan_path: root.path().to_path_buf(),
+            foreign_types: BTreeMap::from([("Duration".to_string(), foreign)]),
+            ..ScanConfig::default()
+        })
+        .expect("configs");
+        assert_eq!(objects["Timer"].fields[0].field_type, other("Duration"));
+    }
+
+    #[test]
+    fn an_unresolvable_reference_to_a_shared_name_is_rejected() {
+        let error = build(
+            CollisionStrategy::AutoRename,
+            &[
+                ("auth.rs", AUTH),
+                ("billing.rs", BILLING),
+                (
+                    "orphan.rs",
+                    "#[derive(Evenframe)]\npub struct Orphan { pub state: Status }\n",
+                ),
+            ],
+        )
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+        assert!(
+            error.contains("Orphan.state")
+                && error.contains("shop::auth::Status")
+                && error.contains("shop::billing::Status"),
+            "{error}"
+        );
+    }
 }
 
 #[cfg(test)]

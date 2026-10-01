@@ -11,8 +11,8 @@ Author: {
 Post: {
   id: 'string',
   title: 'string',
-  author: ['Author', "|",  "string"],
-  relatedPosts: [['Post', "|",  "string"], '[]']
+  author: ['Author', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }],
+  relatedPosts: [['Post', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }], '[]']
 },
 
 });
@@ -26,7 +26,7 @@ name: ""
 export const defaultPost: Post = {
 id: "",
 title: "",
-author: '',
+author: { table: "", key: { String: "" } },
 relatedPosts: []
 };
 

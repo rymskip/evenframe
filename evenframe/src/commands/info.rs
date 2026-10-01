@@ -1,8 +1,8 @@
 //! Info command - displays information about detected types and configuration.
 
 use crate::cli::{InfoArgs, InfoFormat};
-use crate::config_builders;
-use crate::workspace_scanner::{TypeKind, WorkspaceScanner};
+use crate::scan_cache::build_and_record;
+use evenframe_core::scan::{ScanConfig, TypeKind, WorkspaceScanner};
 use evenframe_core::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
@@ -190,8 +190,8 @@ struct SchemaSummary {
 
 impl SchemaSummary {
     fn build() -> Result<Self> {
-        let build_config = config_builders::BuildConfig::discover()?;
-        let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
+        let build_config = ScanConfig::discover()?;
+        let (enums, tables, objects) = build_and_record(&build_config)?;
         Ok(Self {
             tables: tables
                 .into_iter()

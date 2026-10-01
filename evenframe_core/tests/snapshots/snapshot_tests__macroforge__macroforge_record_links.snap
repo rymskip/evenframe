@@ -2,7 +2,7 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-export type RecordLink<T> = string | T;
+export type RecordLink<T> = { table: string; key: { String: string } | { Number: number } | { Uuid: string } } | T;
 
 /** @derive(Deserialize) */
 export interface Author {

@@ -1,8 +1,8 @@
 use crate::cli::{ExpandArgs, ExpandCommands};
 use evenframe_core::error::{EvenframeError, Result};
-use evenframe_core::tooling::BuildConfig;
-use evenframe_core::tooling::WorkspaceScanner;
-use evenframe_core::tooling::expansion_cache::{self, CacheManifest, hash_file};
+use evenframe_core::scan::ScanConfig;
+use evenframe_core::scan::WorkspaceScanner;
+use evenframe_core::scan::expansion::{self, CacheManifest, hash_file};
 use std::fs;
 use std::path::Path;
 use tracing::{info, warn};
@@ -16,8 +16,8 @@ pub async fn run(args: ExpandArgs) -> Result<()> {
 }
 
 async fn status() -> Result<()> {
-    let config = BuildConfig::discover()?;
-    let target_dir = expansion_cache::find_target_dir(&config.scan_path);
+    let config = ScanConfig::discover()?;
+    let target_dir = expansion::find_target_dir(&config.scan_path);
     let expanded_dir = target_dir.join(".evenframe-expanded");
 
     if !expanded_dir.exists() {
@@ -102,7 +102,7 @@ async fn status() -> Result<()> {
 }
 
 async fn warm() -> Result<()> {
-    let config = BuildConfig::discover()?;
+    let config = ScanConfig::discover()?;
 
     info!("Warming expansion cache for all workspace crates");
     println!("Warming expansion cache...");
@@ -116,8 +116,8 @@ async fn warm() -> Result<()> {
 }
 
 async fn clear() -> Result<()> {
-    let config = BuildConfig::discover()?;
-    let target_dir = expansion_cache::find_target_dir(&config.scan_path);
+    let config = ScanConfig::discover()?;
+    let target_dir = expansion::find_target_dir(&config.scan_path);
     let expanded_dir = target_dir.join(".evenframe-expanded");
 
     if expanded_dir.exists() {

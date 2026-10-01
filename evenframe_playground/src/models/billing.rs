@@ -9,6 +9,7 @@ use evenframe::types::RecordLink;
 use evenframe::{Evenframe, EvenframeUnion};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 #[mock_data(n = 0)]
@@ -29,6 +30,11 @@ pub struct BatchLedger {
 #[mock_data(n = 3)]
 pub struct Service {
     pub id: String,
+    /// How long the service takes.
+    #[validators(DurationValidator::LessThanOrEqualToDuration("8h"))]
+    pub length: Duration,
+    /// How long before the service can be booked again, when it needs a rest.
+    pub cooldown: Option<Duration>,
     pub name: String,
 }
 

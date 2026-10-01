@@ -163,7 +163,7 @@ mod tests {
     fn test_session_serialization() {
         let session = Session {
             id: "session:1".to_string(),
-            user: RecordLink::Id("user:1".to_string().into()),
+            user: RecordLink::Id(surrealdb_types::RecordId::new("user", 1_i64)),
             token: "token123".to_string(),
             expires_at: "2024-12-31T23:59:59Z".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),

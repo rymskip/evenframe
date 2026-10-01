@@ -1,4 +1,5 @@
-//! Build-time configuration for type generation.
+//! What a workspace scan reads: where to scan, how to read what it finds,
+//! and the outputs a build script or the CLI generates from it.
 
 use crate::config::{EvenframeConfig, ForeignTypeConfig, IncludeFile};
 use crate::error::EvenframeError;
@@ -7,9 +8,26 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
-/// Configuration for build-time type generation.
+/// The configuration a build script runs with: `.evenframe/config.toml` or
+/// evenframe.toml, found from `CARGO_MANIFEST_DIR` (if set) or the current
+/// directory upward. The database connection settings may reference unset
+/// variables, as nothing a build script runs connects.
+pub(crate) fn build_script_config() -> Result<EvenframeConfig, EvenframeError> {
+    let start_dir = match env::var_os("CARGO_MANIFEST_DIR") {
+        Some(manifest_dir) => PathBuf::from(manifest_dir),
+        None => env::current_dir()?,
+    };
+    let path = EvenframeConfig::find_config_file_from(&start_dir).ok_or_else(|| {
+        EvenframeError::ConfigNotFound {
+            search_start: start_dir.clone(),
+        }
+    })?;
+    EvenframeConfig::load_from(path, false)
+}
+
+/// What a workspace scan reads, and the type outputs generated from it.
 #[derive(Debug, Clone)]
-pub struct BuildConfig {
+pub struct ScanConfig {
     /// Root path to scan for Rust types.
     pub scan_path: PathBuf,
 
@@ -46,7 +64,7 @@ pub struct BuildConfig {
     pub include_files: Vec<IncludeFile>,
 }
 
-impl Default for BuildConfig {
+impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             scan_path: PathBuf::from("."),
@@ -64,8 +82,8 @@ impl Default for BuildConfig {
     }
 }
 
-impl BuildConfig {
-    /// Creates a new BuildConfig with default values.
+impl ScanConfig {
+    /// Creates a new ScanConfig with default values.
     pub fn new() -> Self {
         Self::default()
     }
@@ -105,11 +123,7 @@ impl BuildConfig {
     /// Returns `EvenframeError::ConfigNotFound` if no evenframe.toml is found.
     /// Returns `EvenframeError::Config` if the file cannot be parsed.
     pub fn from_toml() -> Result<Self, EvenframeError> {
-        let start_dir = match env::var_os("CARGO_MANIFEST_DIR") {
-            Some(manifest_dir) => PathBuf::from(manifest_dir),
-            None => env::current_dir()?,
-        };
-        Self::from_toml_search(&start_dir)
+        Ok(Self::from_config(&build_script_config()?))
     }
 
     /// Loads configuration from a specific evenframe.toml file. The database
@@ -120,49 +134,23 @@ impl BuildConfig {
         Ok(Self::from_config(&config))
     }
 
-    /// Searches for `.evenframe/config.toml` (preferred) or `evenframe.toml` (fallback)
-    /// starting from the given directory.
-    fn from_toml_search(start_dir: &Path) -> Result<Self, EvenframeError> {
-        let mut current = start_dir.to_path_buf();
-
-        loop {
-            // Check .evenframe/config.toml first (preferred)
-            let dotdir_config = current.join(".evenframe").join("config.toml");
-            if dotdir_config.exists() {
-                return Self::from_toml_path(&dotdir_config);
-            }
-
-            // Fall back to evenframe.toml
-            let config_path = current.join("evenframe.toml");
-            if config_path.exists() {
-                return Self::from_toml_path(&config_path);
-            }
-
-            if !current.pop() {
-                return Err(EvenframeError::ConfigNotFound {
-                    search_start: start_dir.to_path_buf(),
-                });
-            }
-        }
-    }
-
     /// Creates a builder for programmatic configuration.
-    pub fn builder() -> BuildConfigBuilder {
-        BuildConfigBuilder::new()
+    pub fn builder() -> ScanConfigBuilder {
+        ScanConfigBuilder::new()
     }
 }
 
-/// Builder for creating BuildConfig programmatically.
+/// Builder for creating ScanConfig programmatically.
 #[derive(Debug, Clone, Default)]
-pub struct BuildConfigBuilder {
-    config: BuildConfig,
+pub struct ScanConfigBuilder {
+    config: ScanConfig,
 }
 
-impl BuildConfigBuilder {
+impl ScanConfigBuilder {
     /// Creates a new builder with default configuration.
     pub fn new() -> Self {
         Self {
-            config: BuildConfig::default(),
+            config: ScanConfig::default(),
         }
     }
 
@@ -202,31 +190,29 @@ impl BuildConfigBuilder {
         self
     }
 
-    /// Builds the final BuildConfig.
-    pub fn build(self) -> BuildConfig {
+    /// Builds the final ScanConfig.
+    pub fn build(self) -> ScanConfig {
         self.config
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BuildConfig, EvenframeConfig, EvenframeError, OutputKind, PathBuf, TypesyncOutput,
-    };
+    use super::{EvenframeConfig, EvenframeError, OutputKind, PathBuf, ScanConfig, TypesyncOutput};
 
-    fn parse_at(content: &str, config_path: &str) -> Result<BuildConfig, EvenframeError> {
+    fn parse_at(content: &str, config_path: &str) -> Result<ScanConfig, EvenframeError> {
         let config = EvenframeConfig::parse(content, PathBuf::from(config_path), false)?;
-        Ok(BuildConfig::from_config(&config))
+        Ok(ScanConfig::from_config(&config))
     }
 
-    fn parse(content: &str) -> Result<BuildConfig, EvenframeError> {
+    fn parse(content: &str) -> Result<ScanConfig, EvenframeError> {
         parse_at(content, "/nonexistent-evenframe-project/evenframe.toml")
     }
 
     #[test]
     fn default_config_generates_arktype() {
         assert_eq!(
-            BuildConfig::default().outputs,
+            ScanConfig::default().outputs,
             vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")]
         );
     }
@@ -234,7 +220,7 @@ mod tests {
     #[test]
     fn builder_sets_paths_aliases_and_outputs() {
         let outputs = vec![TypesyncOutput::new(OutputKind::Effect, "/custom/output")];
-        let config = BuildConfig::builder()
+        let config = ScanConfig::builder()
             .scan_path("/custom/scan")
             .apply_alias("MyMacro")
             .apply_alias("OtherMacro")

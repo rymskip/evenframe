@@ -170,6 +170,7 @@ pub struct Comment {
 #[cfg(test)]
 mod tests {
     use super::{Author, Comment, Post, RecordLink, Tag};
+    use surrealdb_types::RecordId;
 
     #[test]
     fn test_tag_serialization() {
@@ -229,7 +230,7 @@ mod tests {
     fn test_author_serialization() {
         let author = Author {
             id: "author:1".to_string(),
-            user: RecordLink::Id("user:1".to_string().into()),
+            user: RecordLink::Id(RecordId::new("user", 1_i64)),
             bio: Some("A developer".to_string()),
             avatar_url: Some("https://example.com/avatar.png".to_string()),
             twitter_handle: Some("@dev".to_string()),
@@ -269,8 +270,8 @@ mod tests {
             slug: "test-post".to_string(),
             content: "Post content".to_string(),
             excerpt: Some("Brief excerpt".to_string()),
-            author: RecordLink::Id("author:1".to_string().into()),
-            tags: vec![RecordLink::Id("tag:1".to_string().into())],
+            author: RecordLink::Id(RecordId::new("author", 1_i64)),
+            tags: vec![RecordLink::Id(RecordId::new("tag", 1_i64))],
             featured_image: None,
             published: true,
             published_at: Some("2024-01-01T00:00:00Z".to_string()),
@@ -317,11 +318,11 @@ mod tests {
             slug: "multi-tag".to_string(),
             content: "Content".to_string(),
             excerpt: None,
-            author: RecordLink::Id("author:1".to_string().into()),
+            author: RecordLink::Id(RecordId::new("author", 1_i64)),
             tags: vec![
-                RecordLink::Id("tag:1".to_string().into()),
-                RecordLink::Id("tag:2".to_string().into()),
-                RecordLink::Id("tag:3".to_string().into()),
+                RecordLink::Id(RecordId::new("tag", 1_i64)),
+                RecordLink::Id(RecordId::new("tag", 2_i64)),
+                RecordLink::Id(RecordId::new("tag", 3_i64)),
             ],
             featured_image: None,
             published: true,
@@ -338,8 +339,8 @@ mod tests {
     fn test_comment_serialization() {
         let comment = Comment {
             id: "comment:1".to_string(),
-            post: RecordLink::Id("post:1".to_string().into()),
-            author: RecordLink::Id("author:1".to_string().into()),
+            post: RecordLink::Id(RecordId::new("post", 1_i64)),
+            author: RecordLink::Id(RecordId::new("author", 1_i64)),
             content: "Great post!".to_string(),
             parent_comment_id: None,
             is_approved: true,
@@ -375,8 +376,8 @@ mod tests {
     fn test_nested_comment() {
         let reply = Comment {
             id: "comment:2".to_string(),
-            post: RecordLink::Id("post:1".to_string().into()),
-            author: RecordLink::Id("author:2".to_string().into()),
+            post: RecordLink::Id(RecordId::new("post", 1_i64)),
+            author: RecordLink::Id(RecordId::new("author", 2_i64)),
             content: "Reply to parent".to_string(),
             parent_comment_id: Some("comment:1".to_string()),
             is_approved: true,
@@ -392,8 +393,8 @@ mod tests {
     fn test_edited_comment() {
         let comment = Comment {
             id: "comment:1".to_string(),
-            post: RecordLink::Id("post:1".to_string().into()),
-            author: RecordLink::Id("author:1".to_string().into()),
+            post: RecordLink::Id(RecordId::new("post", 1_i64)),
+            author: RecordLink::Id(RecordId::new("author", 1_i64)),
             content: "Edited content".to_string(),
             parent_comment_id: None,
             is_approved: true,

@@ -46,7 +46,8 @@ impl<'a> MapKey<'a> {
             | FieldType::Vec(_)
             | FieldType::HashMap(..)
             | FieldType::BTreeMap(..)
-            | FieldType::RecordLink(_) => Err(UNSUPPORTED),
+            | FieldType::RecordLink(_)
+            | FieldType::Duration => Err(UNSUPPORTED),
         }
     }
 

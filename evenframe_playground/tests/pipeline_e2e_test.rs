@@ -7,9 +7,10 @@
 //! 4. TypeGenerator only emits types that include the typesync pipeline
 //! 5. Existing Evenframe derives continue to participate in both pipelines
 
-use evenframe_core::tooling::{
-    BuildConfig, TypeGenerator, WorkspaceScanner, build_all_configs, filter_for_schemasync,
-    filter_for_typesync, merge_tables_and_objects,
+use evenframe_core::build::TypeGenerator;
+use evenframe_core::scan::{
+    ScanConfig, WorkspaceScanner, build_all_configs, filter_for_schemasync, filter_for_typesync,
+    merge_tables_and_objects,
 };
 use evenframe_core::types::Pipeline;
 use evenframe_core::typesync::config::{OutputKind, TypesyncOutput};
@@ -207,7 +208,7 @@ fn test_config_builder_propagates_pipeline_to_struct() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
 
     // DbOnlyRecord has id → table
@@ -261,7 +262,7 @@ fn test_config_builder_propagates_pipeline_to_enum() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, _tables, _objects) = build_all_configs(&config).unwrap();
 
     assert_eq!(enums["FrontendTheme"].pipeline, Pipeline::Typesync);
@@ -320,7 +321,7 @@ fn test_filter_for_typesync_excludes_schemasync_only() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
     let (ts_enums, ts_tables, ts_objects) = filter_for_typesync(&enums, &tables, &objects);
 
@@ -393,7 +394,7 @@ fn test_filter_for_schemasync_excludes_typesync_only() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
     let (ss_enums, ss_tables, ss_objects) = filter_for_schemasync(enums, tables, objects);
 
@@ -469,7 +470,7 @@ fn test_typegenerator_excludes_schemasync_only_types() {
         "#,
     );
 
-    let config = BuildConfig::builder()
+    let config = ScanConfig::builder()
         .scan_path(root)
         .outputs(vec![
             TypesyncOutput::new(OutputKind::Arktype, out_dir.to_string_lossy()),
@@ -550,7 +551,7 @@ fn test_merge_tables_and_objects_preserves_pipeline() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, tables, objects) = build_all_configs(&config).unwrap();
     let merged = merge_tables_and_objects(tables, objects);
 
@@ -570,7 +571,7 @@ fn test_merge_tables_and_objects_preserves_pipeline() {
 fn test_existing_playground_models_are_pipeline_both() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let config = BuildConfig::builder().scan_path(&playground_dir).build();
+    let config = ScanConfig::builder().scan_path(&playground_dir).build();
     let (enums, tables, objects) = build_all_configs(&config).unwrap();
 
     // All existing models use #[derive(Evenframe)] so they should be Pipeline::Both

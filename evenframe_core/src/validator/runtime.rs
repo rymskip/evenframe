@@ -600,9 +600,10 @@ impl DurationValue for std::time::Duration {
     }
 }
 
-impl DurationValue for crate::wrappers::EvenframeDuration {
+#[cfg(feature = "surrealdb-types")]
+impl DurationValue for surrealdb_types::Duration {
     fn nanos(&self) -> Option<i128> {
-        self.0.nanos()
+        i128::try_from(surrealdb_types::Duration::nanos(self)).ok()
     }
 }
 
@@ -723,5 +724,16 @@ mod tests {
         let window = DurationValidator::BetweenDuration("1h".into(), "2h".into());
         assert!(check_duration(&chrono::TimeDelta::minutes(90), &window).is_ok());
         assert!(check_duration("3h", &window).is_err());
+        let ninety_minutes = std::time::Duration::from_secs(90 * 60);
+        assert!(check_duration(&ninety_minutes, &window).is_ok());
+        assert!(check_duration(&std::time::Duration::from_secs(60), &window).is_err());
+    }
+
+    #[cfg(feature = "surrealdb-types")]
+    #[test]
+    fn sdk_durations_are_checked() {
+        let window = DurationValidator::BetweenDuration("1h".into(), "2h".into());
+        assert!(check_duration(&surrealdb_types::Duration::new(90 * 60, 0), &window).is_ok());
+        assert!(check_duration(&surrealdb_types::Duration::new(3 * 3600, 1), &window).is_err());
     }
 }

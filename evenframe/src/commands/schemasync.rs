@@ -1,13 +1,15 @@
 //! Schemasync command - synchronizes database schema.
 
 use crate::cli::{DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
-use crate::config_builders;
+use crate::scan_cache::build_and_record;
+use evenframe_core::scan::{ScanConfig, filter_for_schemasync};
 use evenframe_core::{
     error::Result,
     schemasync::table::TableConfig,
     schemasync::{
         Schemasync,
         config::{ConnectionOverrides, MockOverrides},
+        dump::{DumpScope, dump_surql, write_dump},
     },
     types::{StructConfig, TaggedUnion},
 };
@@ -19,9 +21,9 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
     info!("Starting schema synchronization");
 
     // Build all configs and filter to schemasync-eligible types
-    let build_config = config_builders::BuildConfig::discover()?;
-    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
-    let (enums, tables, objects) = config_builders::filter_for_schemasync(enums, tables, objects);
+    let build_config = ScanConfig::discover()?;
+    let (enums, tables, objects) = build_and_record(&build_config)?;
+    let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
 
     info!(
         "Found {} enums, {} tables, {} objects",
@@ -142,58 +144,20 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                 // This path opens no database connection, so the connection
                 // settings' env vars aren't required.
                 let config = evenframe_core::config::EvenframeConfig::new_offline()?;
-                let registry = evenframe_core::types::ForeignTypeRegistry::from_config(
-                    &config.general.foreign_types,
-                );
-                let allow_scripting = config
-                    .require_schemasync()?
-                    .mock_gen_config
-                    .scripting_asserts;
-
-                let tables_surql = evenframe_core::schemasync::dump::tables_surql(
-                    &tables,
-                    &objects,
-                    &enums,
-                    &registry,
-                    allow_scripting,
-                )?;
-                let (ddl, output_path) = match dump_args.command {
-                    Some(DumpCommands::Tables(tables_args)) => (
-                        tables_surql,
-                        tables_args.file.unwrap_or_else(|| {
-                            config.project_root().join(".evenframe/surql/tables.surql")
-                        }),
-                    ),
-                    None => (
-                        evenframe_core::schemasync::dump::schema_surql(
-                            &config.require_schemasync()?.database,
-                            &tables_surql,
-                        )?,
-                        dump_args.file.unwrap_or_else(|| {
-                            config.project_root().join(".evenframe/surql/schema.surql")
-                        }),
-                    ),
+                let (scope, chosen_file) = match dump_args.command {
+                    Some(DumpCommands::Tables(tables_args)) => {
+                        (DumpScope::Tables, tables_args.file)
+                    }
+                    None => (DumpScope::Schema, dump_args.file),
                 };
+                let ddl = dump_surql(&config, &tables, &objects, &enums, scope)?;
+                let output_path =
+                    chosen_file.unwrap_or_else(|| scope.default_path(config.project_root()));
                 let statement_count = ddl
                     .lines()
                     .filter(|line| line.trim_start().starts_with("DEFINE"))
                     .count();
-
-                if let Some(parent) = output_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        evenframe_core::error::EvenframeError::config(format!(
-                            "Failed to create output directory {}: {e}",
-                            parent.display()
-                        ))
-                    })?;
-                }
-
-                std::fs::write(&output_path, &ddl).map_err(|e| {
-                    evenframe_core::error::EvenframeError::config(format!(
-                        "Failed to write schema dump to {}: {e}",
-                        output_path.display()
-                    ))
-                })?;
+                write_dump(&output_path, &ddl)?;
 
                 println!(
                     "Wrote {statement_count} DEFINE statements across {} tables to {}",

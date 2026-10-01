@@ -1,0 +1,24 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Timer {
+    message Limit {
+        uint64 secs = 1;
+        uint32 nanos = 2;
+    }
+    message Grace {
+        uint64 secs = 1;
+        uint32 nanos = 2;
+    }
+    message LapsItem {
+        uint64 secs = 1;
+        uint32 nanos = 2;
+    }
+    string id = 1;
+    Limit limit = 2;
+    optional Grace grace = 3;
+    repeated LapsItem laps = 4;
+}

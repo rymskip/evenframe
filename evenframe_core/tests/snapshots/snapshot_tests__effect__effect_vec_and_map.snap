@@ -10,10 +10,7 @@ export class Collection extends Schema.Class<Collection>("Collection")( {
   metadata: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Metadata' is required` }),
   sortedData: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Sorted Data' is required` }),
   notesByRank: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Notes By Rank' is required` }),
-  relatedByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Union(Schema.String.pipe(Schema.nonEmptyString()), Schema.suspend((): Schema.Schema<Collection, CollectionEncoded> => Collection).annotations({ identifier: `CollectionRef` })).annotations({ message: () => ({
-                message: `Please enter a valid value`,
-                override: true,
-            }), }) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Related By Name' is required` }),
+  relatedByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Collection, CollectionEncoded> => Collection).annotations({ identifier: `CollectionRef` })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Related By Name' is required` }),
   balanceByOffset: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Balance By Offset' is required` }),
   countByLetter: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Count By Letter' is required` }),
   ownerByRole: Schema.propertySignature(Schema.Record({ key: Role, value: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }).pipe(Schema.partialWith({ exact: true })).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Owner By Role' is required` }),
@@ -33,7 +30,7 @@ export interface CollectionEncoded {
   readonly metadata: Record<string, string>;
   readonly sortedData: Record<string, number>;
   readonly notesByRank: Record<string, string | null | undefined>;
-  readonly relatedByName: Record<string, string | CollectionEncoded>;
+  readonly relatedByName: Record<string, { readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | CollectionEncoded>;
   readonly balanceByOffset: Record<string, number>;
   readonly countByLetter: Record<string, number>;
   readonly ownerByRole: Partial<Record<RoleEncoded, string>>;

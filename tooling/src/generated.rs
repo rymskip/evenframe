@@ -85,8 +85,14 @@ fn write_outputs() -> std::io::Result<Outputs> {
         }
     }
     // The typesync pipeline snapshot holds whole generated files, including
-    // per-file outputs whose files import each other.
+    // per-file outputs whose files import each other and the playground's
+    // record id codec one directory up.
     let pipeline = snapshot_body(&snapshots.join(PIPELINE_SNAPSHOT))?;
+    fs::create_dir_all(typescript.join("pipeline"))?;
+    fs::copy(
+        root.join("evenframe_playground/src/record-id.ts"),
+        typescript.join("pipeline/record-id.ts"),
+    )?;
     for (relative, content) in split_files(&pipeline) {
         let path = typescript.join("pipeline").join(relative);
         if let Some(parent) = path.parent() {

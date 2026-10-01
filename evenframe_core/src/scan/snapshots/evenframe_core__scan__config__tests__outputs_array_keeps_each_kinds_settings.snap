@@ -1,5 +1,5 @@
 ---
-source: evenframe_core/src/tooling/build_config.rs
+source: evenframe_core/src/scan/config.rs
 expression: config.outputs
 ---
 [

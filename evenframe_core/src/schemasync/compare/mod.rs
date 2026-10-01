@@ -61,7 +61,7 @@ impl std::fmt::Display for AccessChangeType {
             AccessChangeType::IssuerKeyChanged => write!(f, "Issuer key changed"),
             AccessChangeType::JwtUrlChanged => write!(f, "JWT URL changed"),
             AccessChangeType::AuthenticateClauseChanged => write!(f, "Authenticate clause changed"),
-            AccessChangeType::DurationChanged => write!(f, "EvenframeDuration changed"),
+            AccessChangeType::DurationChanged => write!(f, "Duration changed"),
             AccessChangeType::SigninChanged => write!(f, "Signin changed"),
             AccessChangeType::SignupChanged => write!(f, "Signup changed"),
             AccessChangeType::OtherChange(msg) => write!(f, "{}", msg),

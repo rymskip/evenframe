@@ -2,8 +2,9 @@ use axum::{Json, response::IntoResponse};
 use serde_json::json;
 
 use evenframe::types::RecordLink;
-use evenframe::wrappers::EvenframeRecordId;
 use std::collections::HashMap;
+use std::time::Duration;
+use surrealdb_types::RecordId;
 
 use crate::models::billing::{
     Billable, BookingKind, BookingSlot, Service, ServiceBooking, Shift, ShiftLocation,
@@ -26,6 +27,8 @@ pub async fn list_billables() -> impl IntoResponse {
         }),
         Billable::Service(Service {
             id: "service:1".to_string(),
+            length: Duration::from_secs(90 * 60),
+            cooldown: None,
             name: "Installation".to_string(),
         }),
     ];
@@ -36,14 +39,14 @@ pub async fn list_billables() -> impl IntoResponse {
     }))
 }
 
-fn service_link(id: &str) -> RecordLink<Service> {
-    RecordLink::Id(EvenframeRecordId::from(id.to_string()))
+fn service_link(key: i64) -> RecordLink<Service> {
+    RecordLink::Id(RecordId::new("service", key))
 }
 
 /// List service bookings (mock data)
 pub async fn list_bookings() -> impl IntoResponse {
     let slot = BookingSlot {
-        service: service_link("service:1"),
+        service: service_link(1),
         note: "Morning".to_string(),
     };
     let bookings = vec![
@@ -51,8 +54,8 @@ pub async fn list_bookings() -> impl IntoResponse {
             id: "service_booking:1".to_string(),
             slot: slot.clone(),
             slots: vec![slot.clone()],
-            kind: BookingKind::Scheduled(service_link("service:1")),
-            by_day: HashMap::from([("monday".to_string(), service_link("service:1"))]),
+            kind: BookingKind::Scheduled(service_link(1)),
+            by_day: HashMap::from([("monday".to_string(), service_link(1))]),
             backup: None,
         },
         ServiceBooking {
@@ -60,7 +63,7 @@ pub async fn list_bookings() -> impl IntoResponse {
             slot: slot.clone(),
             slots: vec![],
             kind: BookingKind::Package {
-                services: vec![service_link("service:1")],
+                services: vec![service_link(1)],
             },
             by_day: HashMap::new(),
             backup: Some(slot.clone()),

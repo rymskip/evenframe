@@ -3,12 +3,14 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
-use crate::config::{RECORD_LINK, fill};
+use crate::config::{RECORD_LINK, TsMapping, fill};
 use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
-use crate::typesync::config::ArrayStyle;
+use crate::typesync::config::{ArrayStyle, OutputKind};
 use crate::typesync::doc_comment::format_jsdoc;
-use crate::typesync::foreign_ts::{Reading, foreign_types_used, import_lines};
+use crate::typesync::foreign_ts::{
+    Reading, RecordLinkMapping, foreign_types_used, import_lines, record_link_mapping,
+};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
 use crate::validator::{
@@ -54,7 +56,7 @@ pub fn generate_macroforge_type_string(
     index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+) -> Result<String> {
     tracing::info!(
         struct_count = index.structs().len(),
         enum_count = index.enums().len(),
@@ -86,13 +88,13 @@ pub fn generate_macroforge_type_string(
         .collect();
 
     let mut result = String::new();
-    let extra_imports = compute_extra_imports(&all_type_names, index, registry);
+    let extra_imports = compute_extra_imports(&all_type_names, index, registry, true)?;
     if !extra_imports.lines.is_empty() {
         result.push_str(&extra_imports.lines.join("\n"));
         result.push_str("\n\n");
     }
-    if extra_imports.needs_record_link {
-        result.push_str(RECORD_LINK_TYPE);
+    if let Some(own_record_link) = &extra_imports.own_record_link {
+        result.push_str(&own_record_link.declaration());
         result.push_str("\n\n");
     }
 
@@ -109,18 +111,46 @@ pub fn generate_macroforge_type_string(
         output_length = result.len(),
         "Macroforge interface generation complete"
     );
-    result
+    Ok(result)
 }
 
-/// A record link's TypeScript type: the linked record's id, or the record.
-pub const RECORD_LINK_TYPE: &str = "export type RecordLink<T> = string | T;";
-
-/// Imports a set of types needs beyond each other, and whether evenframe must
-/// declare `RecordLink` for them: they use it and the project configures none.
+/// Imports a set of types needs beyond each other, and the `RecordLink`
+/// evenframe declares for them when they use one the project does not
+/// configure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtraImports {
+pub struct ExtraImports<'a> {
     pub lines: Vec<String>,
-    pub needs_record_link: bool,
+    pub own_record_link: Option<OwnRecordLink<'a>>,
+}
+
+/// Evenframe's own record link: the id as the project's `RecordId` mapping
+/// writes it, or the linked record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnRecordLink<'a> {
+    pub record_id: &'a TsMapping,
+}
+
+impl OwnRecordLink<'_> {
+    pub fn declaration(&self) -> String {
+        format!(
+            "export type RecordLink<T> = {} | T;",
+            self.record_id.type_expr
+        )
+    }
+
+    /// The declaration as a module of its own, after the import it needs.
+    pub fn module(&self) -> String {
+        let mut module: String = import_lines(self.record_id.import.as_ref())
+            .into_iter()
+            .map(|line| format!("{line}\n"))
+            .collect();
+        if !module.is_empty() {
+            module.push('\n');
+        }
+        module.push_str(&self.declaration());
+        module.push('\n');
+        module
+    }
 }
 
 /// Generates Macroforge TypeScript interfaces for a specific subset of types (used in per-file mode).
@@ -506,6 +536,7 @@ fn field_type_to_typescript(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize => "number".to_string(),
+        FieldType::Duration => render(&FieldType::serde_duration()),
         FieldType::Option(inner) => {
             format!("{} | null", wrap_union_type(inner, array_style, registry))
         }
@@ -774,16 +805,19 @@ pub fn macro_import_lines(
 }
 
 /// The imports a set of types needs for the foreign types they use, each from
-/// where its macroforge mapping says, including a configured `RecordLink`.
+/// where its macroforge mapping says, including a configured `RecordLink`,
+/// and the `RecordId` evenframe's own `RecordLink` names when the same file
+/// `declares_record_link`.
 ///
 /// Follows referenced structs and enums into other files too: macroforge's
 /// expansion inlines variant payloads into the parent's generated code, so the
 /// parent needs their foreign imports even where it never names them.
-pub fn compute_extra_imports(
+pub fn compute_extra_imports<'a>(
     type_names: &[String],
     index: &TypeIndex,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> ExtraImports {
+    registry: &'a crate::types::ForeignTypeRegistry,
+    declares_record_link: bool,
+) -> Result<ExtraImports<'a>> {
     let used = foreign_types_used(
         type_names,
         index,
@@ -794,22 +828,30 @@ pub fn compute_extra_imports(
             expands_held_types: true,
         },
     );
-    let configured_record_link = registry
-        .lookup(RECORD_LINK)
-        .and_then(|record_link| record_link.macroforge.as_ref());
     let mut imports: Vec<&crate::config::TsImport> = used
         .foreign
         .values()
         .filter_map(|foreign| foreign.macroforge.as_ref())
         .filter_map(|mapping| mapping.import.as_ref())
         .collect();
+    let mut own_record_link = None;
     if used.record_link {
-        imports.extend(configured_record_link.and_then(|mapping| mapping.import.as_ref()));
+        match record_link_mapping(registry, OutputKind::Macroforge, |foreign| {
+            foreign.macroforge.as_ref()
+        })? {
+            RecordLinkMapping::Configured(mapping) => imports.extend(mapping.import.as_ref()),
+            RecordLinkMapping::Own { record_id } => {
+                if declares_record_link {
+                    imports.extend(record_id.import.as_ref());
+                }
+                own_record_link = Some(OwnRecordLink { record_id });
+            }
+        }
     }
-    ExtraImports {
+    Ok(ExtraImports {
         lines: import_lines(imports),
-        needs_record_link: used.record_link && configured_record_link.is_none(),
-    }
+        own_record_link,
+    })
 }
 
 /// Convert a Validator to its Macroforge string representation.
@@ -1421,7 +1463,8 @@ mod tests {
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
-        );
+        )
+        .unwrap();
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
@@ -1528,7 +1571,8 @@ mod tests {
             &TypeIndex::new(&structs, &enums).unwrap(),
             ArrayStyle::default(),
             &registry,
-        );
+        )
+        .unwrap();
 
         // Struct: custom derives
         assert!(
@@ -1594,7 +1638,8 @@ mod tests {
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
-        );
+        )
+        .unwrap();
         assert!(
             output.contains("/** @derive(Deserialize) */"),
             "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",
@@ -1711,7 +1756,9 @@ mod tests {
             &["Event".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(
             imports.lines,
             vec!["import type { DateTime } from 'effect';".to_string()]
@@ -1747,7 +1794,9 @@ mod tests {
             &["Payment".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(
             imports.lines,
             vec!["import type { BigDecimal } from 'effect';".to_string()]
@@ -1804,7 +1853,19 @@ mod tests {
 
     #[test]
     fn imports_follow_embedded_types_but_not_tables() {
-        let registry = make_datetime_registry();
+        use crate::config::{ForeignTypeConfig, TsMapping};
+        let mut foreign_types = make_datetime_registry().configs().clone();
+        foreign_types.insert(
+            "RecordId".to_string(),
+            ForeignTypeConfig {
+                macroforge: Some(TsMapping {
+                    type_expr: "string".to_string(),
+                    import: None,
+                }),
+                ..Default::default()
+            },
+        );
+        let registry = crate::types::ForeignTypeRegistry::from_config(&foreign_types);
         let field = |field_name: &str, field_type: FieldType| StructField {
             field_name: field_name.to_string(),
             field_type,
@@ -1849,7 +1910,9 @@ mod tests {
                 &[type_name.to_string()],
                 &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
                 &registry,
+                false,
             )
+            .unwrap()
             .lines
         };
         assert_eq!(
@@ -1892,18 +1955,69 @@ mod tests {
             &["Order".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(
             imports.lines,
             vec!["import type { RecordLink } from './index';".to_string()]
         );
-        assert!(!imports.needs_record_link);
+        assert!(imports.own_record_link.is_none());
+        let unconfigured = crate::types::ForeignTypeRegistry::default();
         let without_entry = compute_extra_imports(
             &["Order".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
-            &crate::types::ForeignTypeRegistry::default(),
+            &unconfigured,
+            false,
         );
-        assert!(without_entry.needs_record_link);
+        assert!(without_entry.is_err());
+    }
+
+    #[test]
+    fn the_own_record_link_names_the_configured_record_id() {
+        use crate::config::{ForeignTypeConfig, TsImport, TsMapping};
+        let registry = crate::types::ForeignTypeRegistry::from_config(&BTreeMap::from([(
+            "RecordId".to_string(),
+            ForeignTypeConfig {
+                macroforge: Some(TsMapping {
+                    type_expr: "RecordIdEncoded".to_string(),
+                    import: Some(TsImport {
+                        from: "../record-id.ts".to_string(),
+                        name: "RecordIdEncoded".to_string(),
+                        type_only: true,
+                    }),
+                }),
+                ..Default::default()
+            },
+        )]));
+        let order = StructConfig {
+            struct_name: "Order".to_string(),
+            fields: vec![StructField {
+                field_name: "customer".to_string(),
+                field_type: FieldType::RecordLink(Box::new(FieldType::Other(
+                    "Customer".to_string(),
+                ))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let structs = BTreeMap::from([("Order".to_string(), order)]);
+        let enums = BTreeMap::new();
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let declaring =
+            compute_extra_imports(&["Order".to_string()], &index, &registry, true).unwrap();
+        assert_eq!(
+            declaring.lines,
+            vec!["import type { RecordIdEncoded } from '../record-id.ts';".to_string()]
+        );
+        assert_eq!(
+            declaring.own_record_link.map(|own| own.declaration()),
+            Some("export type RecordLink<T> = RecordIdEncoded | T;".to_string())
+        );
+        let importing =
+            compute_extra_imports(&["Order".to_string()], &index, &registry, false).unwrap();
+        assert!(importing.lines.is_empty());
+        assert!(importing.own_record_link.is_some());
     }
 
     #[test]
@@ -1942,7 +2056,9 @@ mod tests {
             &["Order".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(
             imports.lines,
             vec![
@@ -1981,9 +2097,11 @@ mod tests {
             &["User".to_string()],
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
-        );
+            false,
+        )
+        .unwrap();
         assert!(imports.lines.is_empty());
-        assert!(!imports.needs_record_link);
+        assert!(imports.own_record_link.is_none());
     }
 
     #[test]

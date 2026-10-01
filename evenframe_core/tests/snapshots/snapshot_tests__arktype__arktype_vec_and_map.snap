@@ -12,7 +12,7 @@ Collection: {
   metadata: { '+': 'reject', "[string]": 'string' },
   sortedData: { '+': 'reject', "[string]": 'number' },
   notesByRank: { '+': 'reject', "[string.integer]": [['string', '|', 'undefined'], '|', 'null'] },
-  relatedByName: { '+': 'reject', "[string]": ['Collection', "|",  "string"] },
+  relatedByName: { '+': 'reject', "[string]": ['Collection', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }] },
   balanceByOffset: { '+': 'reject', "[string.integer]": 'number' },
   countByLetter: { '+': 'reject', "[/^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$/]": 'number' },
   ownerByRole: { '+': 'reject', "Admin?": 'string', "Member?": 'string' },
