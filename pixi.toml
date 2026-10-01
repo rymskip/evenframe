@@ -23,25 +23,28 @@ snapshot-review = "cargo run -p tooling -- snapshot review"
 snapshot-update = "cargo run -p tooling -- snapshot update"
 # Takes the level: `pixi run bump patch` (or minor, major).
 bump = "cargo run -p tooling -- bump"
+# Takes the output directory: `pixi run bench-fixture <dir> [--modules N --types N]`.
+bench-fixture = "cargo run -p tooling -- bench-fixture"
 
 [dependencies]
 # Rust toolchain manager from brads-forge. The active rust version, components,
-# and targets are pinned in rust-toolchain.toml at the repo root — rustup
+# and targets are pinned in rust-toolchain.toml at the repo root; rustup
 # auto-installs that toolchain on first cargo invocation. RUSTUP_HOME is
 # shared with the global rustup install via [activation.env] below.
-# NOTE: the tooling crate shells out to `surreal` for schemasync / e2e tests,
-# but surreal is intentionally NOT a pixi dependency here (no public conda
-# package) — it's expected on PATH from a global install.
+# NOTE: the e2e tests need a running SurrealDB, but surreal is intentionally
+# NOT a pixi dependency here (no public conda package); it's expected from a
+# global install.
 rustup = "*"
 cargo-insta = ">=1.48.0,<2"
 libprotobuf = ">=7.36.2,<8"
 flatbuffers = ">=25.12.19,<26"
 deno = ">=2.9.5,<2.10"
+hyperfine = ">=1.20.0,<2"
 
 [activation.env]
 RUSTUP_HOME = "$HOME/.pixi/envs/rustup/.rustup"
 
-# mold linker — Linux only. `.cargo/config.toml` sets `-fuse-ld=mold` for the
+# mold linker, Linux only. `.cargo/config.toml` sets `-fuse-ld=mold` for the
 # linux target; this puts `mold` on the env PATH so cargo finds it. macOS uses
 # Apple's ld-prime and doesn't need it.
 [target.linux-64.dependencies]

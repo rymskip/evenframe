@@ -31,15 +31,15 @@ async fn status() -> Result<()> {
     let mut total_hits: usize = 0;
     let mut total_misses: usize = 0;
 
-    let unreadable = |path: &Path, e: std::io::Error| {
-        EvenframeError::WorkspaceScan(format!("failed to read {}: {e}", path.display()))
+    let unreadable = |path: &Path, error: std::io::Error| {
+        EvenframeError::WorkspaceScan(format!("failed to read {}: {error}", path.display()))
     };
-    for entry in fs::read_dir(&expanded_dir).map_err(|e| unreadable(&expanded_dir, e))? {
-        let entry = entry.map_err(|e| unreadable(&expanded_dir, e))?;
+    for entry in fs::read_dir(&expanded_dir).map_err(|error| unreadable(&expanded_dir, error))? {
+        let entry = entry.map_err(|error| unreadable(&expanded_dir, error))?;
         let cache_dir = entry.path();
         if !entry
             .file_type()
-            .map_err(|e| unreadable(&cache_dir, e))?
+            .map_err(|error| unreadable(&cache_dir, error))?
             .is_dir()
         {
             continue;
@@ -57,17 +57,19 @@ async fn status() -> Result<()> {
         for (rel_source, cache_entry) in &manifest.entries {
             total_entries += 1;
 
-            let frag_path = cache_dir.join(&cache_entry.fragment_path);
-            crate_size += fs::metadata(&frag_path)
-                .map_err(|e| unreadable(&frag_path, e))?
-                .len();
+            if let Some(fragment_path) = &cache_entry.fragment_path {
+                let fragment = cache_dir.join(fragment_path);
+                crate_size += fs::metadata(&fragment)
+                    .map_err(|error| unreadable(&fragment, error))?
+                    .len();
+            }
 
             let source_path = manifest.src_dir.join(rel_source);
             let is_hit = source_path.exists()
                 && match hash_file(&source_path) {
                     Ok(hash) => hash == cache_entry.input_hash,
-                    Err(e) => {
-                        warn!("Counting {} as stale: {e}", source_path.display());
+                    Err(error) => {
+                        warn!("Counting {} as stale: {error}", source_path.display());
                         false
                     }
                 };
@@ -131,10 +133,19 @@ async fn clear() -> Result<()> {
 fn dir_size(path: &Path) -> u64 {
     walkdir::WalkDir::new(path)
         .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.len())
+        .filter_map(|entry| {
+            entry
+                .inspect_err(|error| warn!("Leaving an entry out of the cache size: {error}"))
+                .ok()
+        })
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            entry
+                .metadata()
+                .inspect_err(|error| warn!("Leaving an entry out of the cache size: {error}"))
+                .ok()
+        })
+        .map(|metadata| metadata.len())
         .sum()
 }
 

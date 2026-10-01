@@ -1,5 +1,7 @@
+mod bench_fixture;
 mod bump;
 mod generated;
+mod glob_imports;
 
 use clap::{Parser, Subcommand};
 use std::process::{Command, ExitCode, Stdio};
@@ -55,6 +57,20 @@ enum Cmd {
         #[arg(value_enum)]
         level: bump::BumpLevel,
     },
+
+    /// Write a synthetic project for timing evenframe at scale
+    BenchFixture {
+        /// Directory to write the project into
+        out: std::path::PathBuf,
+
+        /// Number of modules; each links into the one before it
+        #[arg(long, default_value_t = 40)]
+        modules: usize,
+
+        /// Groups of four types (table, object, enum, recursive object) per module
+        #[arg(long, default_value_t = 8)]
+        types: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -85,6 +101,11 @@ fn main() -> ExitCode {
         Cmd::Snapshot { action } => cmd_snapshot(action),
         Cmd::Verify { fail_fast } => cmd_verify(fail_fast),
         Cmd::Bump { level } => bump::cmd_bump(level),
+        Cmd::BenchFixture {
+            out,
+            modules,
+            types,
+        } => bench_fixture::cmd_bench_fixture(&out, modules, types),
     };
 
     if ok {
@@ -194,6 +215,7 @@ type VerifyStep = (&'static str, Box<dyn Fn() -> bool>);
 
 fn cmd_verify(fail_fast: bool) -> bool {
     let steps: Vec<VerifyStep> = vec![
+        ("glob imports", Box::new(glob_imports::check)),
         (
             "fmt",
             Box::new(|| {

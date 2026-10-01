@@ -4,9 +4,7 @@
 //! Types that are exclusively used by a single other type are co-located with
 //! that type. Types used by multiple types get their own file.
 
-use crate::dependency::{analyse_recursion, deps_of};
-use crate::types::{StructConfig, TaggedUnion};
-use convert_case::{Case, Casing};
+use crate::typesync::type_index::TypeIndex;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A group of types that will be emitted into a single file.
@@ -36,131 +34,83 @@ pub struct FileOutputPlan {
     pub type_to_group: BTreeMap<String, usize>,
 }
 
-/// Computes the file grouping for all known types.
+/// Computes the file grouping for every emitted type.
 ///
 /// Algorithm:
-/// 1. Collect all type names (PascalCase) from structs + enums
-/// 2. Build forward deps using `deps_of()`
-/// 3. Invert to build reverse deps (for each type, who references it?)
-/// 4. Find SCCs using `analyse_recursion()` — types in the same SCC stay together
-/// 5. For each type T:
+/// 1. Take every emitted type (PascalCase) and its forward dependencies
+/// 2. Invert them to reverse dependencies (for each type, who references it?)
+/// 3. Take the SCCs from the index's recursion analysis; types in the same
+///    SCC stay together
+/// 4. For each type T:
 ///    - If T has exactly 1 reverse dependent AND T is not in a multi-member SCC
 ///      → co-locate with that dependent
 ///    - Otherwise → T gets its own file (it's a "primary" type)
-/// 6. SCC members that are all exclusively used by one external type
+/// 5. SCC members that are all exclusively used by one external type
 ///    → co-locate the whole SCC with that dependent
-pub fn compute_file_grouping(
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
-) -> FileOutputPlan {
-    // 1. Collect all type names in PascalCase by their own struct/enum name.
-    //    Don't follow `effective()` here: a synthetic projection whose
-    //    override redirects to a different parent struct is still its own
-    //    TS interface and needs its own file group. Schema-resolution paths
-    //    that map projections back to a parent table follow `effective()`
-    //    elsewhere.
-    //    `resolve_only` types are registered for resolution but never emitted,
-    //    so they get no file group of their own.
-    let all_types: BTreeSet<String> = structs
-        .values()
-        .filter(|s| !s.resolve_only)
-        .map(|s| s.struct_name.to_case(Case::Pascal))
-        .chain(
-            enums
-                .values()
-                .filter(|e| !e.resolve_only)
-                .map(|e| e.enum_name.to_case(Case::Pascal)),
-        )
+///
+/// Types are named by their own struct/enum name, not `effective()`: a
+/// synthetic projection whose override redirects to another struct is still
+/// its own TS interface and needs its own file. `resolve_only` types are
+/// registered for resolution but never emitted, so they get no file.
+pub fn compute_file_grouping(index: &TypeIndex) -> FileOutputPlan {
+    let all_types = index.emitted();
+
+    let mut reverse_deps: BTreeMap<&String, BTreeSet<&String>> = all_types
+        .iter()
+        .map(|name| (name, BTreeSet::new()))
         .collect();
-
-    // 2. Build forward deps.
-    let mut forward_deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for name in &all_types {
-        forward_deps.insert(name.clone(), deps_of(name, structs, enums));
-    }
-
-    // 3. Invert to build reverse deps.
-    let mut reverse_deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for name in &all_types {
-        reverse_deps.entry(name.clone()).or_default();
-    }
-    for (from, tos) in &forward_deps {
-        for to in tos {
-            reverse_deps
-                .entry(to.clone())
-                .or_default()
-                .insert(from.clone());
-        }
-    }
-    // 4. Analyse recursion to find SCCs.
-    let rec = analyse_recursion(structs, enums);
-
-    // Build a map from SCC id → members for multi-member SCCs.
-    let mut scc_members: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    for (name, &comp_id) in &rec.comp_of {
-        if let Some((is_recursive, members)) = rec.meta.get(&comp_id)
-            && *is_recursive
-            && members.len() > 1
-        {
-            scc_members.entry(comp_id).or_default();
-            if !scc_members[&comp_id].contains(name) {
-                scc_members.get_mut(&comp_id).unwrap().push(name.clone());
-            }
+    for name in all_types {
+        for dependency in index.deps(name) {
+            reverse_deps.entry(dependency).or_default().insert(name);
         }
     }
 
-    // 5. Determine which types are "co-locatable".
-    // A type can be co-located if:
-    //   - It has exactly 1 reverse dependent
-    //   - It is NOT in a multi-member SCC (or the whole SCC is co-locatable)
-    let mut co_locate_target: BTreeMap<String, String> = BTreeMap::new(); // type → target to co-locate with
+    let recursion = index.recursion();
+    let multi_member_sccs: Vec<&Vec<String>> = recursion
+        .meta
+        .values()
+        .filter(|(recursive, members)| *recursive && members.len() > 1)
+        .map(|(_, members)| members)
+        .collect();
+    let in_multi_member_scc = |name: &String| {
+        recursion
+            .comp_of
+            .get(name)
+            .and_then(|component| recursion.meta.get(component))
+            .is_some_and(|(recursive, members)| *recursive && members.len() > 1)
+    };
+
+    // Type → the type it is co-located with.
+    let mut co_locate_target: BTreeMap<String, String> = BTreeMap::new();
 
     // First handle SCC groups: if ALL members of an SCC are exclusively used by
     // one external type, co-locate the whole SCC with that type.
-    for members in scc_members.values() {
-        // Collect all external reverse deps for the SCC as a whole.
-        let scc_set: BTreeSet<&String> = members.iter().collect();
-        let mut external_users: BTreeSet<String> = BTreeSet::new();
-        for member in members {
-            if let Some(rev) = reverse_deps.get(member) {
-                for user in rev {
-                    if !scc_set.contains(user) {
-                        external_users.insert(user.clone());
-                    }
-                }
-            }
-        }
-        if external_users.len() == 1 {
-            let target = external_users.into_iter().next().unwrap();
-            // Don't co-locate if the target is itself in this SCC.
-            if !scc_set.contains(&target) {
-                for member in members {
-                    co_locate_target.insert(member.clone(), target.clone());
-                }
+    for members in multi_member_sccs {
+        let scc: BTreeSet<&String> = members.iter().collect();
+        let external_users: BTreeSet<&String> = members
+            .iter()
+            .filter_map(|member| reverse_deps.get(member))
+            .flatten()
+            .filter(|user| !scc.contains(*user))
+            .copied()
+            .collect();
+        if let [target] = external_users.into_iter().collect::<Vec<_>>().as_slice() {
+            for member in members {
+                co_locate_target.insert(member.clone(), (*target).clone());
             }
         }
     }
 
     // Then handle individual types not in multi-member SCCs.
-    for name in &all_types {
-        if co_locate_target.contains_key(name) {
-            continue; // Already handled by SCC logic.
+    for name in all_types {
+        if co_locate_target.contains_key(name) || in_multi_member_scc(name) {
+            continue;
         }
-        let comp_id = rec.comp_of.get(name);
-        let in_multi_scc = comp_id
-            .and_then(|c| rec.meta.get(c))
-            .map(|(is_rec, members)| *is_rec && members.len() > 1)
-            .unwrap_or(false);
-        if in_multi_scc {
-            continue; // Part of a multi-member SCC that wasn't co-locatable.
-        }
-        if let Some(rev) = reverse_deps.get(name)
-            && rev.len() == 1
+        if let Some(users) = reverse_deps.get(name)
+            && let [target] = users.iter().collect::<Vec<_>>().as_slice()
+            && **target != name
         {
-            let target = rev.iter().next().unwrap().clone();
-            if target != *name {
-                co_locate_target.insert(name.clone(), target.clone());
-            }
+            co_locate_target.insert(name.clone(), (**target).clone());
         }
     }
 
@@ -168,35 +118,27 @@ pub fn compute_file_grouping(
     // A should co-locate with C (the final primary).
     let resolved_targets = resolve_transitive_colocation(&co_locate_target);
 
-    // 6. Build groups.
-    // Primary types = all types NOT in co_locate_target (after resolution).
-    let primary_types: Vec<String> = {
-        let mut primaries: Vec<String> = all_types
-            .iter()
-            .filter(|name| !resolved_targets.contains_key(*name))
-            .cloned()
-            .collect();
-        primaries.sort();
-        primaries
-    };
+    // Primary types are every type not co-located with another.
+    let mut co_located_with: BTreeMap<&String, Vec<String>> = BTreeMap::new();
+    for (name, target) in &resolved_targets {
+        co_located_with
+            .entry(target)
+            .or_default()
+            .push(name.clone());
+    }
 
     let mut groups: Vec<TypeFileGroup> = Vec::new();
     let mut type_to_group: BTreeMap<String, usize> = BTreeMap::new();
-
-    for primary in &primary_types {
-        let group_idx = groups.len();
-        let mut co_located: Vec<String> = resolved_targets
-            .iter()
-            .filter(|(_, target)| *target == primary)
-            .map(|(name, _)| name.clone())
-            .collect();
-        co_located.sort();
-
-        type_to_group.insert(primary.clone(), group_idx);
-        for co in &co_located {
-            type_to_group.insert(co.clone(), group_idx);
+    for primary in all_types
+        .iter()
+        .filter(|name| !resolved_targets.contains_key(*name))
+    {
+        let group_index = groups.len();
+        let co_located = co_located_with.remove(primary).unwrap_or_default();
+        type_to_group.insert(primary.clone(), group_index);
+        for name in &co_located {
+            type_to_group.insert(name.clone(), group_index);
         }
-
         groups.push(TypeFileGroup {
             primary_type: primary.clone(),
             co_located_types: co_located,
@@ -236,8 +178,8 @@ fn resolve_transitive_colocation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::types::{FieldType, StructField};
+    use super::{BTreeMap, TypeIndex, compute_file_grouping};
+    use crate::types::{FieldType, StructConfig, StructField};
 
     fn make_struct(name: &str, fields: Vec<(&str, FieldType)>) -> StructConfig {
         StructConfig {
@@ -284,7 +226,8 @@ mod tests {
         );
         let enums = BTreeMap::new();
 
-        let plan = compute_file_grouping(&structs, &enums);
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let plan = compute_file_grouping(&index);
 
         // Address should be co-located with User
         assert_eq!(
@@ -322,7 +265,8 @@ mod tests {
         );
         let enums = BTreeMap::new();
 
-        let plan = compute_file_grouping(&structs, &enums);
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let plan = compute_file_grouping(&index);
 
         // All three should be in different groups
         assert_ne!(plan.type_to_group["User"], plan.type_to_group["Role"]);
@@ -357,7 +301,8 @@ mod tests {
         );
         let enums = BTreeMap::new();
 
-        let plan = compute_file_grouping(&structs, &enums);
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let plan = compute_file_grouping(&index);
 
         // Address co-located with User
         assert_eq!(plan.type_to_group["User"], plan.type_to_group["Address"]);
@@ -383,7 +328,8 @@ mod tests {
         );
         let enums = BTreeMap::new();
 
-        let plan = compute_file_grouping(&structs, &enums);
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let plan = compute_file_grouping(&index);
         assert_eq!(plan.groups.len(), 2);
     }
 }

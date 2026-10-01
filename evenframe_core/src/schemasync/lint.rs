@@ -10,7 +10,7 @@
 //!
 //! - A struct whose effective name resolves to a materialized table is emitted
 //!   as `record<table>` wherever it is referenced, and its own `DEFINE FIELD`s
-//!   honor every setting — such structs are skipped entirely.
+//!   honor every setting, so such structs are skipped entirely.
 //! - A struct from a `resolve_only` include that has an `id` field is inlined
 //!   (and its settings discarded) *in this run*, but the project that owns the
 //!   type may materialize it as a table and honor them. That cannot be
@@ -24,7 +24,7 @@
 //! - Fields of an enum variant's *inline* payload struct
 //!   ([`VariantData::InlineStruct`]) are inlined into the enum's literal type.
 //!   Their `default`s are honored only for the variant the `DEFAULT` walk
-//!   materializes — the `#[default]`-flagged variant, else the first declared —
+//!   materializes (the `#[default]`-flagged variant, else the first declared)
 //!   because a parent `DEFAULT` holds exactly one variant's value; a `default`
 //!   on any other variant's payload is discarded.
 //!
@@ -42,16 +42,16 @@ use std::collections::BTreeMap;
 /// wording and whether the finding is definite.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscardedContext {
-    /// Field of a struct inlined as an embedded object — discarded in every
+    /// Field of a struct inlined as an embedded object: discarded in every
     /// run by construction.
     EmbeddedObject,
-    /// Field of an enum variant's inline (anonymous) payload struct — always
+    /// Field of an enum variant's inline (anonymous) payload struct: always
     /// inlined. `default` is honored only on the variant the `DEFAULT` walk
     /// materializes (the `#[default]`-flagged one, else the first declared).
     EnumVariantPayload { enum_name: String },
     /// Field of a `resolve_only` struct that has an `id` field: discarded in
     /// this run, but the owning project may materialize the table and honor
-    /// the settings — not knowable from this run's data.
+    /// the settings, which this run's data cannot tell.
     ResolveOnlyTable,
 }
 
@@ -73,8 +73,8 @@ pub struct DiscardedAnnotation {
 /// subfield's `default`: embedded objects, and the inline payload of the
 /// variant the walk materializes. It is false for other variants' inline
 /// payloads, which the walk never reaches. The no-annotation baseline produced by
-/// [`DefineConfig::parse`] — `select`/`update`/`create` = `FULL` and
-/// `flexible(false)` — is treated as neutral, so un-annotated fields yield an
+/// [`DefineConfig::parse`] (`select`/`update`/`create` = `FULL` and
+/// `flexible(false)`) is treated as neutral, so un-annotated fields yield an
 /// empty list.
 fn discarded_settings(dc: &DefineConfig, default_is_honored: bool) -> Vec<&'static str> {
     let mut out = Vec::new();
@@ -122,8 +122,8 @@ fn discarded_settings(dc: &DefineConfig, default_is_honored: bool) -> Vec<&'stat
     out
 }
 
-/// Walk every inlined struct — embedded objects and enum inline variant
-/// payloads — and report fields whose `#[define_field_statement]` carries
+/// Walk every inlined struct (embedded objects and enum inline variant
+/// payloads) and report fields whose `#[define_field_statement]` carries
 /// settings that inlining discards.
 ///
 /// `tables` is consulted to skip structs that emission resolves to
@@ -188,7 +188,7 @@ pub fn lint_discarded_field_annotations(
                     chosen_variant_name.as_deref() == Some(variant.name.as_str());
                 // Emission uses the payload struct directly (no override
                 // resolution on the payload itself), reading each field's
-                // effective view — mirror that.
+                // effective view. Mirror that.
                 for field in &payload.fields {
                     let field = field.effective();
                     if let Some(dc) = &field.define_config {
@@ -214,7 +214,10 @@ pub fn lint_discarded_field_annotations(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, DefineConfig, DiscardedContext, StructConfig, TableConfig, TaggedUnion,
+        VariantData, discarded_settings, lint_discarded_field_annotations,
+    };
     use crate::types::{EnumRepresentation, StructField, Variant};
 
     /// All-neutral `DefineConfig` to build annotated configs from via struct update.
@@ -436,7 +439,7 @@ mod tests {
     #[test]
     fn lint_skips_structs_materialized_as_tables() {
         // A table struct's DEFINE FIELDs honor every setting, and references to
-        // it emit record<> — never a warning.
+        // it emit record<>, so it never warns.
         let mut objects = BTreeMap::new();
         objects.insert(
             "UserProfile".to_string(),
@@ -622,7 +625,7 @@ mod tests {
     #[test]
     fn enum_inline_payload_default_marked_variant_wins_over_first() {
         // `#[default]` on the payload variant makes it the chosen one even when
-        // declared last — its `default` is honored.
+        // declared last, and its `default` is honored.
         let mut chosen = plain_variant(
             "Custom",
             Some(VariantData::InlineStruct(payload_with_assert_and_default(

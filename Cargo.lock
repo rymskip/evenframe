@@ -1188,17 +1188,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
-name = "derive-syn-parse"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65d7ce8132b7c0e54497a4d9a55a1c2a0912a0d786cf894472ba818fba45762"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,7 +1285,7 @@ dependencies = [
  "diskann-wide",
  "half",
  "rand 0.9.5",
- "rand_distr 0.5.1",
+ "rand_distr",
  "rayon",
  "thiserror 2.0.20",
 ]
@@ -1537,17 +1526,14 @@ dependencies = [
  "chrono-tz",
  "clap",
  "convert_case",
- "derive-syn-parse",
  "derive_more",
  "dotenvy",
  "fancy-regex",
  "futures",
- "heck 0.5.0",
  "ignore",
  "insta",
  "linkme",
  "mockall",
- "once_cell",
  "ordered-float 5.5.0",
  "petgraph 0.8.3",
  "pretty_assertions",
@@ -1555,7 +1541,6 @@ dependencies = [
  "proptest",
  "quote",
  "rand 0.10.2",
- "rand_distr 0.6.0",
  "rayon",
  "regex",
  "serde",
@@ -2078,7 +2063,7 @@ dependencies = [
  "crunchy",
  "num-traits",
  "rand 0.9.5",
- "rand_distr 0.5.1",
+ "rand_distr",
  "zerocopy",
 ]
 
@@ -3965,16 +3950,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_distr"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
-dependencies = [
- "num-traits",
- "rand 0.10.2",
-]
-
-[[package]]
 name = "rand_pcg"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5561,7 +5536,9 @@ name = "tooling"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "proc-macro2",
  "semver",
+ "syn 3.0.5",
  "toml_edit",
 ]
 

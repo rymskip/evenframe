@@ -5,9 +5,13 @@ use tracing;
 use try_from_expr::TryFromExpr;
 
 #[cfg(feature = "mockmake")]
-use super::regex_val_gen::RegexValGen;
+use super::regex_val_gen::ParsedPattern;
 #[cfg(feature = "mockmake")]
 use rand::RngExt;
+#[cfg(feature = "mockmake")]
+use std::collections::HashMap;
+#[cfg(feature = "mockmake")]
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Generate a regex pattern for dates within a specified number of days from now
 fn generate_date_range_pattern(days: i64) -> String {
@@ -16,8 +20,8 @@ fn generate_date_range_pattern(days: i64) -> String {
 
     // Collect all valid dates in the range
     let mut date_patterns = Vec::new();
-    for i in 0..=days {
-        let date = now + Duration::days(i);
+    for offset in 0..=days {
+        let date = now + Duration::days(offset);
         date_patterns.push(format!(
             "{:04}-{:02}-{:02}",
             date.year(),
@@ -83,8 +87,8 @@ impl TryFrom<&syn::Expr> for CustomPattern {
                 "a custom format takes a regex pattern string literal",
             ));
         };
-        Self::try_from(literal.value()).map_err(|e| {
-            syn::Error::new_spanned(expr, format!("invalid custom format pattern: {e}"))
+        Self::try_from(literal.value()).map_err(|error| {
+            syn::Error::new_spanned(expr, format!("invalid custom format pattern: {error}"))
         })
     }
 }
@@ -227,11 +231,40 @@ impl Format {
             }
             _ => {}
         }
-        RegexValGen::new().generate(&self.pattern()).map_err(|e| {
+        Ok(self.parsed_pattern()?.generate(&mut rng))
+    }
+
+    /// This format's pattern, parsed on first use. The date-window formats
+    /// build theirs from today's date, so they are parsed each time.
+    fn parsed_pattern(&self) -> crate::error::Result<Arc<ParsedPattern>> {
+        static PARSED: LazyLock<Mutex<HashMap<Format, Arc<ParsedPattern>>>> =
+            LazyLock::new(|| Mutex::new(HashMap::new()));
+        let parse = || {
+            ParsedPattern::parse(&self.pattern())
+                .map(Arc::new)
+                .map_err(|error| {
+                    crate::error::EvenframeError::mock_generation(format!(
+                        "the pattern of format {self:?} cannot generate values: {error}"
+                    ))
+                })
+        };
+        if matches!(
+            self,
+            Format::DateWithinDays(_) | Format::AppointmentDateTime
+        ) {
+            return parse();
+        }
+        let mut parsed = PARSED.lock().map_err(|error| {
             crate::error::EvenframeError::mock_generation(format!(
-                "generating a value for format {self:?}: {e}"
+                "the format pattern cache is unusable: {error}"
             ))
-        })
+        })?;
+        if let Some(pattern) = parsed.get(self) {
+            return Ok(Arc::clone(pattern));
+        }
+        let pattern = parse()?;
+        parsed.insert(self.clone(), Arc::clone(&pattern));
+        Ok(pattern)
     }
 }
 
@@ -496,8 +529,8 @@ impl ToTokens for Format {
                 quote! { ::evenframe::schemasync::format::Format::AppointmentDateTime }
             }
             Format::TailwindColorSet(color) => match color {
-                Some(c) => {
-                    quote! { ::evenframe::schemasync::format::Format::TailwindColorSet(Some(#c.to_string())) }
+                Some(color) => {
+                    quote! { ::evenframe::schemasync::format::Format::TailwindColorSet(Some(#color.to_string())) }
                 }
                 None => {
                     quote! { ::evenframe::schemasync::format::Format::TailwindColorSet(None) }
@@ -525,7 +558,7 @@ impl ToTokens for Format {
 
 #[cfg(test)]
 mod pattern_tests {
-    use super::*;
+    use super::Format;
 
     #[test]
     fn phone_number_allows_one_space_per_gap() {
@@ -559,7 +592,7 @@ mod pattern_tests {
 
 #[cfg(all(test, feature = "mockmake"))]
 mod tests {
-    use super::*;
+    use super::{CustomPattern, Format, Regex};
 
     #[test]
     fn every_built_in_pattern_is_a_valid_regex() {
@@ -627,7 +660,7 @@ mod tests {
         let format = Format::HexString(8);
         let value = format.generate_formatted_value().unwrap();
         assert_eq!(value.len(), 8);
-        assert!(value.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(value.chars().all(|character| character.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -708,7 +741,9 @@ mod tests {
         println!("Generated First Name: {}", first_name);
         assert!(!first_name.is_empty(), "First name should not be empty");
         assert!(
-            first_name.chars().all(|c| c.is_alphabetic()),
+            first_name
+                .chars()
+                .all(|character| character.is_alphabetic()),
             "First name should only contain letters"
         );
 
@@ -718,7 +753,7 @@ mod tests {
         println!("Generated Last Name: {}", last_name);
         assert!(!last_name.is_empty(), "Last name should not be empty");
         assert!(
-            last_name.chars().all(|c| c.is_alphabetic()),
+            last_name.chars().all(|character| character.is_alphabetic()),
             "Last name should only contain letters"
         );
 
@@ -855,7 +890,7 @@ mod tests {
         // Just verify it's not empty and looks like a city name (contains letters and possibly spaces)
         assert!(!city.is_empty(), "City should not be empty");
         assert!(
-            city.chars().any(|c| c.is_alphabetic()),
+            city.chars().any(|character| character.is_alphabetic()),
             "City should contain letters"
         );
 
@@ -865,7 +900,9 @@ mod tests {
         println!("Generated State: {}", state);
         assert!(state.len() == 2, "State code should be 2 characters");
         assert!(
-            state.chars().all(|c| c.is_ascii_uppercase()),
+            state
+                .chars()
+                .all(|character| character.is_ascii_uppercase()),
             "State code should be uppercase"
         );
 
@@ -876,7 +913,7 @@ mod tests {
         // Just verify it's not empty and looks like a country name
         assert!(!country.is_empty(), "Country should not be empty");
         assert!(
-            country.chars().any(|c| c.is_alphabetic()),
+            country.chars().any(|character| character.is_alphabetic()),
             "Country should contain letters"
         );
 

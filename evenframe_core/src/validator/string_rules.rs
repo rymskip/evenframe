@@ -366,7 +366,7 @@ pub fn format_regex(format: &Format) -> Arc<Regex> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{StringParse, StringRule, StringTransform, StringValidator};
 
     #[test]
     fn morphs_are_classified() {

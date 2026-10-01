@@ -3,12 +3,14 @@
 //! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
 //! and `@serde({ validate: [...] })` annotations at the field level for validators.
 
+use crate::config::{RECORD_LINK, fill};
 use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
 use crate::typesync::config::ArrayStyle;
 use crate::typesync::doc_comment::format_jsdoc;
-use crate::typesync::foreign_ts::{RECORD_LINK, Reading, fill, foreign_types_used, import_lines};
+use crate::typesync::foreign_ts::{Reading, foreign_types_used, import_lines};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
+use crate::typesync::type_index::TypeIndex;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -49,44 +51,42 @@ fn enum_view(enum_def: &TaggedUnion) -> &TaggedUnion {
 
 /// Main entry point for generating Macroforge TypeScript interfaces.
 pub fn generate_macroforge_type_string(
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
     tracing::info!(
-        struct_count = structs.len(),
-        enum_count = enums.len(),
+        struct_count = index.structs().len(),
+        enum_count = index.enums().len(),
         "Generating Macroforge TypeScript interfaces"
     );
 
-    // The maps are already keyed by struct/enum name, so each entry is
-    // unique by its own name. Synthetic projections (partials whose
-    // `output_override` redirects to a different parent struct) are
-    // intentionally kept as separate entries so they get their own TS
-    // interface.
+    // Each entry is unique by its own name. Synthetic projections (partials
+    // whose `output_override` redirects to a different parent struct) are
+    // kept as separate entries so they get their own TS interface.
     // `resolve_only` types are registered for resolution but not emitted as
     // their own interface (the owning run emits them / the consumer imports).
-    let mut unique_structs: Vec<&StructConfig> =
-        structs.values().filter(|s| !s.resolve_only).collect();
-    unique_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
+    let mut unique_structs: Vec<&(String, &StructConfig)> = index
+        .named_structs()
+        .iter()
+        .filter(|(_, struct_config)| !struct_config.resolve_only)
+        .collect();
+    unique_structs.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut unique_enums: Vec<&(String, &TaggedUnion)> = index
+        .named_enums()
+        .iter()
+        .filter(|(_, tagged_union)| !tagged_union.resolve_only)
+        .collect();
+    unique_enums.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut unique_enums: Vec<&TaggedUnion> = enums.values().filter(|e| !e.resolve_only).collect();
-    unique_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
-
-    // Collect all type names for effect import computation
     let all_type_names: Vec<String> = unique_structs
         .iter()
-        .map(|s| s.struct_name.to_case(Case::Pascal))
-        .chain(
-            unique_enums
-                .iter()
-                .map(|e| e.enum_name.to_case(Case::Pascal)),
-        )
+        .map(|(name, _)| name.clone())
+        .chain(unique_enums.iter().map(|(name, _)| name.clone()))
         .collect();
 
     let mut result = String::new();
-    let extra_imports = compute_extra_imports(&all_type_names, structs, enums, registry);
+    let extra_imports = compute_extra_imports(&all_type_names, index, registry);
     if !extra_imports.lines.is_empty() {
         result.push_str(&extra_imports.lines.join("\n"));
         result.push_str("\n\n");
@@ -97,10 +97,10 @@ pub fn generate_macroforge_type_string(
     }
 
     let mut parts: Vec<String> = Vec::new();
-    for struct_config in &unique_structs {
+    for (_, struct_config) in &unique_structs {
         parts.push(generate_struct_block(struct_config, array_style, registry));
     }
-    for enum_def in &unique_enums {
+    for (_, enum_def) in &unique_enums {
         parts.push(generate_enum_block(enum_def, array_style, registry));
     }
 
@@ -126,33 +126,32 @@ pub struct ExtraImports {
 /// Generates Macroforge TypeScript interfaces for a specific subset of types (used in per-file mode).
 pub fn generate_macroforge_for_types(
     type_names: &[String],
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
+    let type_set: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
 
-    // Filter to requested types by the entry's own name (each entry is
-    // unique by struct/enum name in the input maps). See the full-output
+    // Filter to requested types by the entry's own name. See the full-output
     // path above for the rationale on not deduping by `effective()`.
-    let mut filtered_structs: Vec<&StructConfig> = structs
-        .values()
-        .filter(|s| type_set.contains(&s.struct_name.to_case(Case::Pascal)))
+    let mut filtered_structs: Vec<&(String, &StructConfig)> = index
+        .named_structs()
+        .iter()
+        .filter(|(name, _)| type_set.contains(name.as_str()))
         .collect();
-    filtered_structs.sort_by_key(|s| s.struct_name.to_case(Case::Pascal));
-
-    let mut filtered_enums: Vec<&TaggedUnion> = enums
-        .values()
-        .filter(|e| type_set.contains(&e.enum_name.to_case(Case::Pascal)))
+    filtered_structs.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut filtered_enums: Vec<&(String, &TaggedUnion)> = index
+        .named_enums()
+        .iter()
+        .filter(|(name, _)| type_set.contains(name.as_str()))
         .collect();
-    filtered_enums.sort_by_key(|e| e.enum_name.to_case(Case::Pascal));
+    filtered_enums.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut parts: Vec<String> = Vec::new();
-    for struct_config in &filtered_structs {
+    for (_, struct_config) in &filtered_structs {
         parts.push(generate_struct_block(struct_config, array_style, registry));
     }
-    for enum_def in &filtered_enums {
+    for (_, enum_def) in &filtered_enums {
         parts.push(generate_enum_block(enum_def, array_style, registry));
     }
     parts.join("\n")
@@ -720,28 +719,27 @@ const BUILT_IN_DERIVES: [&str; 9] = [
 /// from its package in `macros`. A derive with no package there is an error.
 pub fn macro_import_lines(
     type_names: &[String],
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     macros: &BTreeMap<String, String>,
 ) -> Result<Vec<String>> {
-    let type_set: BTreeSet<String> = type_names.iter().cloned().collect();
+    let type_set: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
     // Read through the views `generate_struct_block` and
     // `generate_enum_block` write, so the imports match each `@derive(...)`.
-    let derives = structs
-        .values()
-        .filter(|struct_config| {
-            !struct_config.resolve_only
-                && type_set.contains(&struct_config.struct_name.to_case(Case::Pascal))
+    let derives = index
+        .named_structs()
+        .iter()
+        .filter(|(name, struct_config)| {
+            !struct_config.resolve_only && type_set.contains(name.as_str())
         })
-        .flat_map(|struct_config| &struct_view(struct_config).macroforge_derives)
+        .flat_map(|(_, struct_config)| &struct_view(struct_config).macroforge_derives)
         .chain(
-            enums
-                .values()
-                .filter(|tagged_union| {
-                    !tagged_union.resolve_only
-                        && type_set.contains(&tagged_union.enum_name.to_case(Case::Pascal))
+            index
+                .named_enums()
+                .iter()
+                .filter(|(name, tagged_union)| {
+                    !tagged_union.resolve_only && type_set.contains(name.as_str())
                 })
-                .flat_map(|tagged_union| &enum_view(tagged_union).macroforge_derives),
+                .flat_map(|(_, tagged_union)| &enum_view(tagged_union).macroforge_derives),
         );
     let mut seen = BTreeSet::new();
     let mut by_package: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -783,14 +781,12 @@ pub fn macro_import_lines(
 /// parent needs their foreign imports even where it never names them.
 pub fn compute_extra_imports(
     type_names: &[String],
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> ExtraImports {
     let used = foreign_types_used(
         type_names,
-        structs,
-        enums,
+        index,
         registry,
         &Reading {
             struct_view,
@@ -1066,7 +1062,12 @@ fn escape_for_jsdoc(s: &str) -> String {
 /// and returns `["Default", "Serialize", "Deserialize", "Gigaform", "Overview"]`.
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayStyle, ArrayValidator, BTreeMap, FieldType, NumberValidator, StringValidator,
+        StructConfig, TaggedUnion, TypeIndex, Validator, collect_validators_for_field,
+        compute_extra_imports, field_type_to_typescript, generate_macroforge_for_types,
+        generate_macroforge_type_string, macro_import_lines, validator_to_macroforge_string,
+    };
     use crate::types::{EnumRepresentation, Pipeline, StructField, Variant};
     use ordered_float::OrderedFloat;
 
@@ -1417,8 +1418,7 @@ mod tests {
 
         let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_type_string(
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
         );
@@ -1524,8 +1524,11 @@ mod tests {
         );
 
         let registry = crate::types::ForeignTypeRegistry::default();
-        let output =
-            generate_macroforge_type_string(&structs, &enums, ArrayStyle::default(), &registry);
+        let output = generate_macroforge_type_string(
+            &TypeIndex::new(&structs, &enums).unwrap(),
+            ArrayStyle::default(),
+            &registry,
+        );
 
         // Struct: custom derives
         assert!(
@@ -1588,8 +1591,7 @@ mod tests {
 
         let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_type_string(
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
         );
@@ -1707,8 +1709,7 @@ mod tests {
 
         let imports = compute_extra_imports(
             &["Event".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
         );
         assert_eq!(
@@ -1744,8 +1745,7 @@ mod tests {
 
         let imports = compute_extra_imports(
             &["Payment".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
         );
         assert_eq!(
@@ -1778,15 +1778,24 @@ mod tests {
             ("Audit".to_string(), "@app/audit".to_string()),
         ]);
         assert_eq!(
-            macro_import_lines(&types, &structs, &BTreeMap::new(), &macros).unwrap(),
+            macro_import_lines(
+                &types,
+                &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+                &macros
+            )
+            .unwrap(),
             vec![
                 "/** import macro {Audit} from \"@app/audit\"; */".to_string(),
                 "/** import macro {Overview, Form} from \"@app/forms\"; */".to_string(),
             ]
         );
-        let unconfigured = macro_import_lines(&types, &structs, &BTreeMap::new(), &BTreeMap::new())
-            .unwrap_err()
-            .to_string();
+        let unconfigured = macro_import_lines(
+            &types,
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             unconfigured.contains("`Overview`, `Form`, `Audit`") && !unconfigured.contains("Debug"),
             "{unconfigured}"
@@ -1838,8 +1847,7 @@ mod tests {
         let imports_of = |type_name: &str| {
             compute_extra_imports(
                 &[type_name.to_string()],
-                &structs,
-                &BTreeMap::new(),
+                &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
                 &registry,
             )
             .lines
@@ -1882,8 +1890,7 @@ mod tests {
         let structs = BTreeMap::from([("Order".to_string(), order)]);
         let imports = compute_extra_imports(
             &["Order".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
         );
         assert_eq!(
@@ -1893,8 +1900,7 @@ mod tests {
         assert!(!imports.needs_record_link);
         let without_entry = compute_extra_imports(
             &["Order".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &crate::types::ForeignTypeRegistry::default(),
         );
         assert!(without_entry.needs_record_link);
@@ -1934,8 +1940,7 @@ mod tests {
 
         let imports = compute_extra_imports(
             &["Order".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &registry,
         );
         assert_eq!(
@@ -1972,8 +1977,11 @@ mod tests {
             },
         );
 
-        let imports =
-            compute_extra_imports(&["User".to_string()], &structs, &BTreeMap::new(), &registry);
+        let imports = compute_extra_imports(
+            &["User".to_string()],
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+            &registry,
+        );
         assert!(imports.lines.is_empty());
         assert!(!imports.needs_record_link);
     }
@@ -2006,8 +2014,7 @@ mod tests {
         let registry = crate::types::ForeignTypeRegistry::default();
         let output = generate_macroforge_for_types(
             &["Order".to_string()],
-            &structs,
-            &BTreeMap::new(),
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
         );

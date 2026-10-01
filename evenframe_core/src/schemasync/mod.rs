@@ -24,7 +24,7 @@ pub use mockmake::{coordinate, format};
 pub use permissions::PermissionsConfig;
 pub use table::{Bm25, IndexConfig, IndexKind, TableConfig, VectorDistance, VectorType};
 
-// PreservationMode - always available (used by MockGenerationConfig data type)
+/// How mock generation treats a changed table's existing records.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum PreservationMode {
     /// No preservation - generate all new data
@@ -36,23 +36,6 @@ pub enum PreservationMode {
     Full,
 }
 
-impl quote::ToTokens for PreservationMode {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let variant_tokens = match self {
-            PreservationMode::None => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::None }
-            }
-            PreservationMode::Smart => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::Smart }
-            }
-            PreservationMode::Full => {
-                quote::quote! { ::evenframe::schemasync::PreservationMode::Full }
-            }
-        };
-        tokens.extend(variant_tokens);
-    }
-}
-
 // Schemasync orchestrator: requires surrealdb at runtime
 #[cfg(feature = "schemasync")]
 use crate::{
@@ -62,13 +45,15 @@ use crate::{
     schemasync::config::{ConnectionOverrides, MockOverrides},
     schemasync::database::surql::{
         define::generate_define_statements,
-        execute::{execute_and_validate, split_surql_statements},
+        execute::{
+            Transaction, execute_and_validate, execute_transactions, split_surql_statements,
+        },
     },
 };
 #[cfg(feature = "schemasync")]
 use std::collections::BTreeMap;
 #[cfg(feature = "schemasync")]
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 #[cfg(feature = "schemasync")]
 use surrealdb::{
@@ -191,18 +176,6 @@ pub fn load_connected_config(overrides: &ConnectionOverrides) -> Result<Evenfram
     Ok(config)
 }
 
-#[cfg(feature = "schemasync")]
-static ACTIVE_CONNECTION: std::sync::RwLock<Option<crate::schemasync::config::DatabaseConfig>> =
-    std::sync::RwLock::new(None);
-
-/// The connection settings last used by [`connect_database`] in this
-/// process, for code that must reach the same database by other means
-/// (e.g. the `surreal import` fallback for oversized statements).
-#[cfg(feature = "schemasync")]
-pub fn active_connection() -> Option<crate::schemasync::config::DatabaseConfig> {
-    ACTIVE_CONNECTION.read().ok().and_then(|c| c.clone())
-}
-
 /// Connect to SurrealDB over HTTP, sign in as root with `SURREALDB_USER` /
 /// `SURREALDB_PASSWORD`, and select the configured namespace and database,
 /// within the configured `timeout`.
@@ -263,9 +236,6 @@ async fn open_database(
         "Connected to database namespace '{}' and database '{}'",
         database.namespace, database.database
     );
-    if let Ok(mut active) = ACTIVE_CONNECTION.write() {
-        *active = Some(database.clone());
-    }
     Ok(db)
 }
 
@@ -470,7 +440,7 @@ impl<'a> Schemasync<'a> {
         full_refresh_mode: bool,
         registry: &crate::types::ForeignTypeRegistry,
         allow_scripting: bool,
-    ) -> (BTreeMap<&'b String, String>, String) {
+    ) -> Result<(BTreeMap<&'b String, String>, String)> {
         debug!(
             "Generating table and field definition statements (full_refresh_mode: {}, allow_scripting: {})",
             full_refresh_mode, allow_scripting
@@ -488,7 +458,7 @@ impl<'a> Schemasync<'a> {
                     enums,
                     registry,
                     allow_scripting,
-                ),
+                )?,
             );
         }
 
@@ -498,7 +468,7 @@ impl<'a> Schemasync<'a> {
             .collect::<Vec<_>>()
             .join(" ");
 
-        (define_statements, define_statements_string)
+        Ok((define_statements, define_statements_string))
     }
 
     /// Run the comparison pipeline and return schema changes without applying them.
@@ -526,7 +496,7 @@ impl<'a> Schemasync<'a> {
             config.mock_gen_config.full_refresh_mode,
             registry,
             config.mock_gen_config.scripting_asserts,
-        );
+        )?;
 
         let mut comparator = SurrealdbComparator::new(&db, &config);
         comparator.run(&define_statements_string).await?;
@@ -588,7 +558,7 @@ impl<'a> Schemasync<'a> {
             config.mock_gen_config.full_refresh_mode,
             registry,
             config.mock_gen_config.scripting_asserts,
-        );
+        )?;
 
         let mut mockmaker =
             Mockmaker::new(&db, effective_tables, objects, enums, &config, registry)?;
@@ -707,7 +677,7 @@ impl<'a> Schemasync<'a> {
             config.mock_gen_config.full_refresh_mode,
             registry,
             config.mock_gen_config.scripting_asserts,
-        );
+        )?;
 
         evenframe_log!("", "all_statements.surql");
         evenframe_log!("", "results.log");
@@ -749,19 +719,18 @@ impl<'a> Schemasync<'a> {
         let remove_statements = generate_remove_statements(schema_changes);
         evenframe_log!(&remove_statements, "remove_statements.surql");
         if !remove_statements.is_empty() {
-            db.query(remove_statements)
+            execute_and_validate(&db, &remove_statements, "remove", "old schema")
                 .await
-                .and_then(|response| response.check())
                 .map_err(|e| {
                     EvenframeError::SchemaSync(format!("Failed to remove old schema: {e}"))
                 })?;
         }
 
         // Execution order matters:
-        // 1. Access first — defines SIGNUP/SIGNIN on the database (independent of tables)
-        // 2. Analyzers second — FULLTEXT indexes on tables reference them
-        // 3. Tables third — defines table schemas, fields, indexes, and events
-        // 4. Functions last — function params use typed references like `record<site>`
+        // 1. Access first: defines SIGNUP/SIGNIN on the database (independent of tables)
+        // 2. Analyzers second: FULLTEXT indexes on tables reference them
+        // 3. Tables third: defines table schemas, fields, indexes, and events
+        // 4. Functions last: function params use typed references like `record<site>`
         //    which require the referenced tables to already exist in the database
 
         info!("Executing access control setup");
@@ -807,11 +776,12 @@ impl<'a> Schemasync<'a> {
         Ok(())
     }
 
-    /// Define tables in both schemas (this stays in Schemasync)
+    /// Defines the changed tables on the database, one transaction per table,
+    /// so a table that fails is left as it was while the others apply.
     async fn define_tables(
         &self,
         db: &Surreal<Client>,
-        define_statments: BTreeMap<&String, String>,
+        define_statements: BTreeMap<&String, String>,
         schema_changes: &SchemaChanges,
         full_refresh_mode: bool,
     ) -> Result<()> {
@@ -821,231 +791,25 @@ impl<'a> Schemasync<'a> {
             schema_changes
         );
 
-        // Validates individual TABLE/FIELD statements (safe to split by ';')
-        let execute = async |name, stmt: &str| -> Result<()> {
-            let define_result = execute_and_validate(db, stmt, "define", name).await;
-            match define_result {
-                Ok(_) => {
-                    evenframe_log!(
-                        &format!("Successfully executed define statements for statements:\n{stmt}",),
-                        "results.log",
-                        true
-                    );
-                    Ok(())
-                }
-                Err(e) => {
-                    #[cfg(feature = "dev-mode")]
-                    {
-                        let error_msg =
-                            format!("Failed to execute define statements for table\n{e}:\n{stmt}",);
-                        evenframe_log!(&error_msg, "results.log", true);
-                    }
-                    Err(e.into())
-                }
-            }
-        };
-
-        // Events contain ';' inside { } blocks (e.g. `fn::foo($a, $b);`), so they
-        // can't go through execute_and_validate which naively splits by ';' to count
-        // expected results. Send event blocks directly via db.query() instead.
-        let execute_events = async |table_name: &str, event_block: &str| -> Result<()> {
-            debug!("Executing event definitions for table: {}", table_name);
-            db.query(event_block).await.map_err(|e| {
-                let error_msg = format!(
-                    "Failed to execute event definitions for table {}:\n{}\n{}",
-                    table_name, e, event_block
-                );
-                error!("{}", error_msg);
-                evenframe_log!(&error_msg, "errors.log", true);
-                EvenframeError::database(error_msg)
-            })?;
-            evenframe_log!(
-                &format!(
-                    "Successfully executed event definitions for table {}",
-                    table_name
-                ),
-                "results.log",
-                true
-            );
-            Ok(())
-        };
-
-        // In full refresh mode, define ALL tables regardless of schema changes
+        let mut transactions = Vec::new();
         if full_refresh_mode {
-            info!(
-                "Full refresh mode - defining all {} tables",
-                define_statments.len()
-            );
-            for (table_name, define_stmt) in &define_statments {
-                debug!("Defining table (full refresh): {}", table_name);
-                // TABLE and FIELD are single-line statements, safe to split by ';'
-                for stmt in split_surql_statements(define_stmt) {
-                    let trimmed = stmt.trim_start();
-                    if trimmed.starts_with("DEFINE TABLE")
-                        || trimmed.starts_with("DEFINE FIELD")
-                        || trimmed.starts_with("DEFINE INDEX")
-                    {
-                        execute(table_name, stmt).await?;
-                    }
-                }
-                // Events are sent as a raw block (bypasses ';'-based validation)
-                if let Some(idx) = define_stmt.find("DEFINE EVENT") {
-                    execute_events(table_name, &define_stmt[idx..]).await?;
-                }
+            for (table_name, block) in &define_statements {
+                transactions.push(DefineParts::split(block).whole_table(table_name));
             }
-            return Ok(());
-        }
-
-        // Process new tables first
-        if !schema_changes.new_tables.is_empty() {
-            info!("Defining {} new tables", schema_changes.new_tables.len());
+        } else {
             for table_name in &schema_changes.new_tables {
-                if let Some(define_stmt) = define_statments.get(table_name) {
-                    debug!("Defining new table: {}", table_name);
-                    for stmt in split_surql_statements(define_stmt) {
-                        let trimmed = stmt.trim_start();
-                        if trimmed.starts_with("DEFINE TABLE")
-                            || trimmed.starts_with("DEFINE FIELD")
-                            || trimmed.starts_with("DEFINE INDEX")
-                        {
-                            execute(table_name, stmt).await?;
-                        }
-                    }
-                    if let Some(idx) = define_stmt.find("DEFINE EVENT") {
-                        execute_events(table_name, &define_stmt[idx..]).await?;
-                    }
+                if let Some(block) = define_statements.get(table_name) {
+                    transactions.push(DefineParts::split(block).whole_table(table_name));
                 }
             }
-        }
-
-        // Process modified tables - only define changed fields
-        if !schema_changes.modified_tables.is_empty() {
-            info!(
-                "Processing {} modified tables",
-                schema_changes.modified_tables.len()
-            );
             for table_change in &schema_changes.modified_tables {
-                let table_name = &table_change.table_name;
-
-                if let Some(define_stmt) = define_statments.get(table_name) {
-                    debug!("Processing modified table: {}", table_name);
-
-                    // Always redefine the table itself if it has changes
-                    for stmt in split_surql_statements(define_stmt) {
-                        let trimmed = stmt.trim_start();
-                        if trimmed.starts_with("DEFINE TABLE") {
-                            debug!("Redefining table structure for: {}", table_name);
-                            execute(table_name, stmt).await?;
-                        }
-                    }
-
-                    // Only define new or modified fields
-                    if !table_change.new_fields.is_empty()
-                        || !table_change.modified_fields.is_empty()
-                    {
-                        debug!(
-                            "Defining {} new fields and {} modified fields for table {}",
-                            table_change.new_fields.len(),
-                            table_change.modified_fields.len(),
-                            table_name
-                        );
-
-                        for stmt in split_surql_statements(define_stmt) {
-                            let trimmed = stmt.trim_start();
-                            if trimmed.starts_with("DEFINE FIELD") {
-                                // Extract field name from the statement, handling optional OVERWRITE
-                                // Formats:
-                                //   DEFINE FIELD <name> ON TABLE ...
-                                //   DEFINE FIELD OVERWRITE <name> ON TABLE ...
-                                let mut tokens = trimmed.split_whitespace();
-                                let _ = tokens.next(); // DEFINE
-                                let _ = tokens.next(); // FIELD
-                                let mut name_tok = tokens.next().unwrap_or("");
-                                if name_tok.eq_ignore_ascii_case("OVERWRITE") {
-                                    name_tok = tokens.next().unwrap_or("");
-                                }
-                                if name_tok.is_empty() {
-                                    continue;
-                                }
-                                // Normalize backticks and wildcard suffix
-                                let mut norm = name_tok.trim_matches('`');
-                                if let Some(stripped) = norm.strip_suffix(".*") {
-                                    norm = stripped;
-                                }
-
-                                // Check if this field is new or modified
-                                if table_change.new_fields.contains(&norm.to_string())
-                                    || table_change
-                                        .modified_fields
-                                        .iter()
-                                        .any(|fc| fc.field_name == norm)
-                                {
-                                    trace!("Defining field: {} on table: {}", norm, table_name);
-                                    execute(table_name, stmt).await?;
-                                } else {
-                                    trace!(
-                                        "Skipping unchanged field: {} on table: {}",
-                                        norm, table_name
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Always redefine indexes for modified tables (idempotent with OVERWRITE)
-                    for stmt in split_surql_statements(define_stmt) {
-                        let trimmed = stmt.trim_start();
-                        if trimmed.starts_with("DEFINE INDEX") {
-                            execute(table_name, stmt).await?;
-                        }
-                    }
-
-                    // Define new or changed events
-                    if !table_change.new_events.is_empty() {
-                        debug!(
-                            "Defining {} new/changed events for table {}",
-                            table_change.new_events.len(),
-                            table_name
-                        );
-
-                        for event_stmt in &table_change.new_events {
-                            trace!("Defining event on table: {}", table_name);
-                            execute_events(table_name, event_stmt).await?;
-                        }
-                    }
+                if let Some(block) = define_statements.get(&table_change.table_name) {
+                    transactions.push(DefineParts::split(block).changes(table_change));
                 }
             }
         }
-
-        // Process new accesses if any
-        if !schema_changes.new_accesses.is_empty() {
-            info!(
-                "Defining {} new accesses",
-                schema_changes.new_accesses.len()
-            );
-            // Access definitions would be handled separately if needed
-        }
-
-        // Process modified accesses that need recreation
-        if !schema_changes.modified_accesses.is_empty() {
-            for access_change in &schema_changes.modified_accesses {
-                // Check if all changes are ignorable
-                let only_ignorable_changes = access_change
-                    .changes
-                    .iter()
-                    .all(|change| change.is_ignorable());
-
-                if !only_ignorable_changes {
-                    debug!(
-                        "Access {} has non-ignorable changes, needs recreation",
-                        access_change.access_name
-                    );
-                    // Access recreation would be handled here if needed
-                }
-            }
-        }
-
-        Ok(())
+        info!("Defining {} tables", transactions.len());
+        execute_transactions(db, &transactions, "define").await
     }
 
     /// Execute analyzer definitions from resolved surql on the live database.
@@ -1135,9 +899,109 @@ impl<'a> Schemasync<'a> {
     }
 }
 
+/// One table's define block, split into its statements once.
+#[cfg(feature = "schemasync")]
+struct DefineParts<'a> {
+    table: Vec<&'a str>,
+    /// Each `DEFINE FIELD` with the field it defines.
+    fields: Vec<(&'a str, &'a str)>,
+    indexes: Vec<&'a str>,
+    events: Vec<&'a str>,
+}
+
+#[cfg(feature = "schemasync")]
+impl<'a> DefineParts<'a> {
+    fn split(block: &'a str) -> Self {
+        let mut parts = DefineParts {
+            table: Vec::new(),
+            fields: Vec::new(),
+            indexes: Vec::new(),
+            events: Vec::new(),
+        };
+        for statement in split_surql_statements(block) {
+            let trimmed = statement.trim();
+            if trimmed.starts_with("DEFINE TABLE") {
+                parts.table.push(trimmed);
+            } else if trimmed.starts_with("DEFINE FIELD") {
+                if let Some(name) = defined_field_name(trimmed) {
+                    parts.fields.push((name, trimmed));
+                }
+            } else if trimmed.starts_with("DEFINE INDEX") {
+                parts.indexes.push(trimmed);
+            } else if trimmed.starts_with("DEFINE EVENT") {
+                parts.events.push(trimmed);
+            }
+        }
+        parts
+    }
+
+    /// Every statement of the table, for a new table or a full refresh.
+    fn whole_table(self, table_name: &str) -> Transaction {
+        let statements = self
+            .table
+            .into_iter()
+            .chain(self.fields.into_iter().map(|(_, statement)| statement))
+            .chain(self.indexes)
+            .chain(self.events)
+            .map(str::to_string)
+            .collect();
+        Transaction {
+            label: table_name.to_string(),
+            statements,
+        }
+    }
+
+    /// The statements a modified table needs: the table itself, its new and
+    /// modified fields, every index (each is an idempotent `OVERWRITE`) and
+    /// its new or changed events.
+    fn changes(self, table_change: &crate::schemasync::compare::TableChanges) -> Transaction {
+        let changed_fields: std::collections::BTreeSet<&str> = table_change
+            .new_fields
+            .iter()
+            .map(String::as_str)
+            .chain(
+                table_change
+                    .modified_fields
+                    .iter()
+                    .map(|change| change.field_name.as_str()),
+            )
+            .collect();
+        let statements = self
+            .table
+            .into_iter()
+            .chain(
+                self.fields
+                    .into_iter()
+                    .filter(|(name, _)| changed_fields.contains(name))
+                    .map(|(_, statement)| statement),
+            )
+            .chain(self.indexes)
+            .map(str::to_string)
+            .chain(table_change.new_events.iter().cloned())
+            .collect();
+        Transaction {
+            label: table_change.table_name.clone(),
+            statements,
+        }
+    }
+}
+
+/// The field a `DEFINE FIELD [OVERWRITE] <name> ON ...` statement defines,
+/// without backticks or an array wildcard suffix.
+#[cfg(feature = "schemasync")]
+fn defined_field_name(statement: &str) -> Option<&str> {
+    let mut tokens = statement.split_whitespace().skip(2);
+    let mut name = tokens.next()?;
+    if name.eq_ignore_ascii_case("OVERWRITE") {
+        name = tokens.next()?;
+    }
+    let name = name.trim_matches('`');
+    Some(name.strip_suffix(".*").unwrap_or(name))
+}
+
 #[cfg(all(test, feature = "mockmake", feature = "wasm-plugins"))]
 mod check_features_tests {
-    use super::*;
+    use super::{BTreeMap, TableConfig, check_features};
     use crate::schemasync::config::SchemasyncConfig;
     use crate::schemasync::mockmake::MockGenerationConfig;
 
@@ -1152,9 +1016,8 @@ mod check_features_tests {
                 .unwrap();
         let mut table = fixture.table_config;
         table.mock_generation_config = Some(MockGenerationConfig {
-            n: 1,
+            record_count: Some(1),
             coordination_rules: Vec::new(),
-            preservation_mode: PreservationMode::default(),
             plugin: Some(plugin.to_string()),
         });
         BTreeMap::from([("user".to_string(), table)])

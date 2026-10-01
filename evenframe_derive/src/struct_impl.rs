@@ -154,6 +154,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
         // Single pass over all fields.
         let mut table_field_tokens = Vec::new();
         let mut json_assignments = Vec::new();
+        // Each field's validators in field order, for the custom deserialize.
+        let mut fields_validators = Vec::new();
 
         for field in fields_named.named.iter() {
             let field_ident = match field.ident.as_ref() {
@@ -215,7 +217,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
             // Parse field-level validators
             let field_validators = match parse_field_validators(&field.attrs) {
-                Ok(validators) => validators.config_tokens(),
+                Ok(validators) => validators,
                 Err(err) => {
                     return syn::Error::new(
                         err.span(),
@@ -277,8 +279,10 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             let validators_tokens = if field_validators.is_empty() {
                 quote! { vec![] }
             } else {
-                quote! { vec![#(#field_validators),*] }
+                let config_tokens = field_validators.config_tokens();
+                quote! { vec![#(#config_tokens),*] }
             };
+            fields_validators.push(field_validators);
 
             let field_annotations_tokens = if field_annotations.is_empty() {
                 quote! { vec![] }
@@ -317,7 +321,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
         // Generate tokens for parsed attributes (shared between implementations)
         let struct_name = ident.to_string();
 
-        let table_name = ident.to_string();
+        let table_name = ident.to_string().to_case(Case::Snake);
 
         let permissions_config_tokens = if let Some(ref config) = permissions_config {
             quote! { Some(#config) }
@@ -422,7 +426,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 impl EvenframePersistableStruct for #ident {
                     fn static_table_config() -> TableConfig {
                         TableConfig {
-                            table_name: #table_name.to_case(Case::Snake),
+                            table_name: #table_name.to_owned(),
                             struct_config: ::evenframe::types::StructConfig {
                                 struct_name: #struct_name.to_owned(),
                                 fields: vec![ #(#table_field_tokens),* ],
@@ -461,7 +465,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // Generate custom deserialization if there are field validators
         let deserialize_impl = if has_field_validators {
-            generate_custom_deserialize(&input)
+            generate_custom_deserialize(&input, &fields_validators)
         } else {
             quote! {}
         };
@@ -495,12 +499,10 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             }
         } else {
             // App (non-table) struct. Generate a `static_struct_config()` method
-            // and submit it to OBJECT_REGISTRY so the runtime value-emission path
-            // can walk fields with their real `FieldType`s. Without this,
-            // `get_struct_config(name)` returns `None`, and embedded structs
-            // fall through to `to_surreal_string_inferred` — which doesn't know
-            // a `RecordLink<T>` field is anything other than a generic string,
-            // so it emits `'product:1'` (quoted) instead of `product:1` (record).
+            // and register it, so `get_struct_config(name)` gives code that
+            // renders values at runtime each embedded field's real
+            // `FieldType`, such as a `RecordLink<T>` that must not be written
+            // as a quoted string.
             let struct_config_impl = quote! {
                 impl #ident {
                     pub fn static_struct_config() -> ::evenframe::types::StructConfig {

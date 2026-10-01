@@ -3,33 +3,9 @@
 
 use crate::config::{ForeignTypeConfig, TsImport};
 use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData};
+use crate::typesync::type_index::TypeIndex;
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
-
-/// The foreign type config for evenframe's record link, which a project may
-/// configure to own its TypeScript definition.
-pub const RECORD_LINK: &str = "RecordLink";
-
-/// `type_expr` with `{0}`, `{1}` and so on replaced by `params`. Config
-/// loading rejects a placeholder no parameter can fill.
-pub fn fill(type_expr: &str, params: &[String]) -> String {
-    params
-        .iter()
-        .enumerate()
-        .fold(type_expr.to_string(), |filled, (index, param)| {
-            filled.replace(&format!("{{{index}}}"), param)
-        })
-}
-
-/// The generic parameter indices `type_expr` has placeholders for.
-pub fn placeholders(type_expr: &str) -> Vec<usize> {
-    type_expr
-        .split('{')
-        .skip(1)
-        .filter_map(|rest| rest.split_once('}'))
-        .filter_map(|(digits, _)| digits.parse().ok())
-        .collect()
-}
 
 /// The foreign types a set of generated types uses, and whether they use a
 /// record link.
@@ -54,37 +30,28 @@ pub struct Reading {
 /// `reading` reads them.
 pub fn foreign_types_used<'a>(
     type_names: &[String],
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &'a ForeignTypeRegistry,
     reading: &Reading,
 ) -> ForeignUse<'a> {
-    let wanted: BTreeSet<String> = type_names.iter().cloned().collect();
+    let wanted: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
     let mut walker = Walker {
-        structs,
-        enums,
+        structs: index.structs(),
+        enums: index.enums(),
         registry,
         reading,
         visited: BTreeSet::new(),
         used: ForeignUse::default(),
     };
-    for struct_config in structs.values() {
-        if !struct_config.resolve_only
-            && wanted.contains(&struct_config.struct_name.to_case(Case::Pascal))
-        {
-            walker
-                .visited
-                .insert(struct_config.struct_name.to_case(Case::Pascal));
+    for (name, struct_config) in index.named_structs() {
+        if !struct_config.resolve_only && wanted.contains(name.as_str()) {
+            walker.visited.insert(name.clone());
             walker.fields(struct_config);
         }
     }
-    for tagged_union in enums.values() {
-        if !tagged_union.resolve_only
-            && wanted.contains(&tagged_union.enum_name.to_case(Case::Pascal))
-        {
-            walker
-                .visited
-                .insert(tagged_union.enum_name.to_case(Case::Pascal));
+    for (name, tagged_union) in index.named_enums() {
+        if !tagged_union.resolve_only && wanted.contains(name.as_str()) {
+            walker.visited.insert(name.clone());
             walker.variants(tagged_union);
         }
     }
@@ -179,17 +146,10 @@ pub fn import_lines<'a>(imports: impl IntoIterator<Item = &'a TsImport>) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn placeholders_take_generic_parameters() {
-        assert_eq!(
-            fill("RecordLink<{0}>", &["Order".to_string()]),
-            "RecordLink<Order>"
-        );
-        assert_eq!(placeholders("Pair<{0}, {1}>"), vec![0, 1]);
-        assert!(placeholders("{ on: boolean }").is_empty());
-    }
+    use super::{
+        BTreeMap, FieldType, ForeignTypeConfig, ForeignTypeRegistry, Reading, StructConfig,
+        TaggedUnion, TsImport, TypeIndex, foreign_types_used, import_lines,
+    };
 
     #[test]
     fn a_type_that_is_never_written_uses_no_foreign_types() {
@@ -217,7 +177,9 @@ mod tests {
         let used = |struct_config: StructConfig| {
             let name = struct_config.struct_name.clone();
             let structs = BTreeMap::from([(name.clone(), struct_config)]);
-            foreign_types_used(&[name], &structs, &BTreeMap::new(), &registry, &reading)
+            let enums = BTreeMap::new();
+            let index = TypeIndex::new(&structs, &enums).unwrap();
+            foreign_types_used(&[name], &index, &registry, &reading)
                 .foreign
                 .into_keys()
                 .collect::<Vec<_>>()

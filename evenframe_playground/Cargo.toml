@@ -8,6 +8,10 @@ description = "A playground demonstrating Evenframe integration with Axum"
 # Empty workspace to exclude from parent workspace
 [workspace]
 
+[lints.clippy]
+wildcard_imports = "deny"
+enum_glob_use = "deny"
+
 [features]
 default = []
 wasm-plugins = ["evenframe_core/wasm-plugins"]

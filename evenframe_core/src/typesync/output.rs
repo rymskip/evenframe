@@ -1,35 +1,51 @@
 //! Rendering and writing one configured output's files.
 
-use crate::config::{ForeignTypeConfig, TsImport};
+use crate::config::{ForeignTypeConfig, RECORD_LINK, TsImport};
 use crate::error::{EvenframeError, Result};
 use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use crate::typesync::arktype::generate_arktype_type_string;
 use crate::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
 use crate::typesync::effect::{generate_effect_schema_for_types, generate_effect_schema_string};
-use crate::typesync::file_grouping::compute_file_grouping;
-use crate::typesync::foreign_ts::{RECORD_LINK, Reading, foreign_types_used, import_lines};
+use crate::typesync::file_grouping::TypeFileGroup;
+use crate::typesync::foreign_ts::{Reading, foreign_types_used, import_lines};
 use crate::typesync::import_resolver::{
-    barrel_filename, format_imports, generate_barrel_file, import_specifier_suffix,
+    barrel_filename, format_effect_imports, generate_barrel_file, import_specifier_suffix,
     resolve_imports, type_name_to_filename,
 };
-use convert_case::{Case, Casing};
+use crate::typesync::type_index::TypeIndex;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-/// The types an output is generated from.
+/// The types an output is generated from, indexed once for every output.
 pub struct OutputTypes<'a> {
-    pub structs: &'a BTreeMap<String, StructConfig>,
-    pub enums: &'a BTreeMap<String, TaggedUnion>,
+    pub index: TypeIndex<'a>,
     pub registry: &'a ForeignTypeRegistry,
 }
 
-/// A file an output wrote.
+impl<'a> OutputTypes<'a> {
+    pub fn new(
+        structs: &'a BTreeMap<String, StructConfig>,
+        enums: &'a BTreeMap<String, TaggedUnion>,
+        registry: &'a ForeignTypeRegistry,
+    ) -> Result<Self> {
+        Ok(Self {
+            index: TypeIndex::new(structs, enums)?,
+            registry,
+        })
+    }
+}
+
+/// A file an output produced. `changed` is false when the file already held
+/// these bytes and was left untouched.
 #[derive(Debug, Clone)]
 pub struct GeneratedFile {
     pub path: PathBuf,
-    pub bytes_written: usize,
+    pub bytes: usize,
+    pub changed: bool,
     pub kind: OutputKind,
 }
 
@@ -59,16 +75,31 @@ impl RenderedOutput {
         self.files
             .iter()
             .map(|(path, content)| {
-                write_file(path, content)?;
-                debug!("Written {}", path.display());
+                let changed = write_file(path, content)?;
+                debug!(changed, "Generated {}", path.display());
                 Ok(GeneratedFile {
                     path: path.clone(),
-                    bytes_written: content.len(),
+                    bytes: content.len(),
+                    changed,
                     kind: self.kind,
                 })
             })
             .collect()
     }
+}
+
+/// Renders each output for its directory, in parallel. Every output renders
+/// before any is written, so one that fails leaves every file as it was.
+/// `file` is passed to each, as [`render_output`] takes it.
+pub fn render_outputs(
+    outputs: &[(&TypesyncOutput, PathBuf)],
+    file: Option<&Path>,
+    types: &OutputTypes,
+) -> Result<Vec<RenderedOutput>> {
+    outputs
+        .par_iter()
+        .map(|(output, dir)| render_output(output, dir, file, types))
+        .collect()
 }
 
 /// Renders `output` for `dir`. A single-file output goes to `file` when
@@ -111,7 +142,7 @@ fn check_foreign_mappings(kind: OutputKind, registry: &ForeignTypeRegistry) -> R
         .iter()
         // The record link's own definition stands in for any output its
         // entry leaves out.
-        .filter(|(name, _)| name.as_str() != crate::typesync::foreign_ts::RECORD_LINK)
+        .filter(|(name, _)| name.as_str() != RECORD_LINK)
         .filter_map(|(name, foreign)| {
             let missing = kind.missing_foreign_mappings(foreign);
             (!missing.is_empty()).then(|| format!("{name} (missing {})", missing.join(", ")))
@@ -136,8 +167,7 @@ fn foreign_imports(
 ) -> String {
     let used = foreign_types_used(
         type_names,
-        types.structs,
-        types.enums,
+        &types.index,
         types.registry,
         &Reading {
             struct_view: StructConfig::effective,
@@ -162,20 +192,8 @@ fn foreign_imports(
 }
 
 fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<String> {
-    let OutputTypes {
-        structs,
-        enums,
-        registry,
-    } = types;
-    let all_types: Vec<String> = structs
-        .values()
-        .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
-        .chain(
-            enums
-                .values()
-                .map(|tagged_union| tagged_union.enum_name.to_case(Case::Pascal)),
-        )
-        .collect();
+    let OutputTypes { index, registry } = types;
+    let all_types: Vec<String> = index.names().cloned().collect();
     match output.kind {
         OutputKind::Arktype => Ok(format!(
             "import {{ scope }} from 'arktype';\n{}\n{}\nexport const validator = exported;\n",
@@ -184,7 +202,7 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
                 .as_ref()?
                 .import
                 .as_ref()),
-            generate_arktype_type_string(structs, enums, registry)?
+            generate_arktype_type_string(index, registry)?
         )),
         OutputKind::Effect => Ok(format!(
             "import {{ Schema }} from \"effect\";\n{}\n{}",
@@ -193,31 +211,26 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
                 .as_ref()?
                 .import
                 .as_ref()),
-            generate_effect_schema_string(structs, enums, false, registry)?
+            generate_effect_schema_string(index, false, registry)?
         )),
         OutputKind::Macroforge => {
             #[cfg(feature = "macroforge")]
-            let content = crate::typesync::macroforge::macro_import_lines(
-                &all_types,
-                structs,
-                enums,
-                &output.macros,
-            )
-            .map(|import_lines| {
-                format!(
-                    "{}{}",
-                    import_lines
-                        .iter()
-                        .map(|line| format!("{line}\n"))
-                        .collect::<String>(),
-                    crate::typesync::macroforge::generate_macroforge_type_string(
-                        structs,
-                        enums,
-                        output.files.array_style,
-                        registry,
-                    )
-                )
-            });
+            let content =
+                crate::typesync::macroforge::macro_import_lines(&all_types, index, &output.macros)
+                    .map(|import_lines| {
+                        format!(
+                            "{}{}",
+                            import_lines
+                                .iter()
+                                .map(|line| format!("{line}\n"))
+                                .collect::<String>(),
+                            crate::typesync::macroforge::generate_macroforge_type_string(
+                                index,
+                                output.files.array_style,
+                                registry,
+                            )
+                        )
+                    });
             #[cfg(not(feature = "macroforge"))]
             let content = Err(not_built(OutputKind::Macroforge));
             content
@@ -225,8 +238,8 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
         OutputKind::Flatbuffers => {
             #[cfg(feature = "flatbuffers")]
             let content = crate::typesync::flatbuffers::generate_flatbuffers_schema_string(
-                structs,
-                enums,
+                index.structs(),
+                index.enums(),
                 output.namespace.as_deref(),
                 registry,
             );
@@ -237,8 +250,8 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
         OutputKind::Protobuf => {
             #[cfg(feature = "protobuf")]
             let content = crate::typesync::protobuf::generate_protobuf_schema_string(
-                structs,
-                enums,
+                index.structs(),
+                index.enums(),
                 output.package.as_deref(),
                 output.import_validate,
                 registry,
@@ -264,15 +277,11 @@ fn render_per_file(
     dir: &Path,
     types: &OutputTypes,
 ) -> Result<RenderedOutput> {
-    let OutputTypes {
-        structs,
-        enums,
-        registry,
-    } = types;
+    let OutputTypes { index, registry } = types;
     let settings = &output.files;
-    let plan = compute_file_grouping(structs, enums);
+    let plan = index.file_plan();
     #[cfg(feature = "macroforge")]
-    let record_link = record_link_module(output, &plan, types)?;
+    let record_link = record_link_module(output, plan, types)?;
     #[cfg(not(feature = "macroforge"))]
     let record_link: Option<String> = None;
     let mut keep: BTreeSet<String> = plan
@@ -297,13 +306,11 @@ fn render_per_file(
         plan.groups.len()
     );
 
-    let mut files = Vec::new();
-    for group in &plan.groups {
+    let render_group = |group: &TypeFileGroup| -> Result<(PathBuf, String)> {
         let imports = resolve_imports(
             group,
-            &plan,
-            structs,
-            enums,
+            plan,
+            index,
             settings.file_naming,
             &settings.file_extension,
             settings.import_extension,
@@ -316,12 +323,11 @@ fn render_per_file(
                 content.push_str(&foreign_imports(&type_names, types, |foreign| {
                     foreign.effect.as_ref()?.import.as_ref()
                 }));
-                push_imports(&mut content, &format_imports(&imports));
+                push_imports(&mut content, &format_effect_imports(&imports));
                 content.push('\n');
                 content.push_str(&generate_effect_schema_for_types(
                     &type_names,
-                    structs,
-                    enums,
+                    index,
                     registry,
                 )?);
             }
@@ -345,11 +351,16 @@ fn render_per_file(
             }
         }
         let filename = type_name_to_filename(&group.primary_type, settings.file_naming);
-        files.push((
+        Ok((
             dir.join(format!("{filename}{}", settings.file_extension)),
             content,
-        ));
-    }
+        ))
+    };
+    let mut files = plan
+        .groups
+        .par_iter()
+        .map(render_group)
+        .collect::<Result<Vec<_>>>()?;
 
     #[cfg(feature = "macroforge")]
     if let Some(module) = &record_link {
@@ -361,7 +372,7 @@ fn render_per_file(
 
     if settings.barrel_file {
         let mut content = generate_barrel_file(
-            &plan,
+            plan,
             settings.file_naming,
             &settings.file_extension,
             settings.import_extension,
@@ -402,8 +413,7 @@ fn record_link_module(
         .collect();
     let extras = crate::typesync::macroforge::compute_extra_imports(
         &all_types,
-        types.structs,
-        types.enums,
+        &types.index,
         types.registry,
     );
     if !extras.needs_record_link {
@@ -429,14 +439,15 @@ fn macroforge_per_file_content(
     types: &OutputTypes,
     record_link: Option<&str>,
 ) -> Result<()> {
+    use crate::typesync::import_resolver::format_imports;
     use crate::typesync::macroforge::{
         compute_extra_imports, generate_macroforge_for_types, macro_import_lines,
     };
-    for import_line in macro_import_lines(type_names, types.structs, types.enums, &output.macros)? {
+    for import_line in macro_import_lines(type_names, &types.index, &output.macros)? {
         content.push_str(&import_line);
         content.push('\n');
     }
-    let extras = compute_extra_imports(type_names, types.structs, types.enums, types.registry);
+    let extras = compute_extra_imports(type_names, &types.index, types.registry);
     for import_line in &extras.lines {
         content.push_str(import_line);
         content.push('\n');
@@ -457,8 +468,7 @@ fn macroforge_per_file_content(
     }
     content.push_str(&generate_macroforge_for_types(
         type_names,
-        types.structs,
-        types.enums,
+        &types.index,
         output.files.array_style,
         types.registry,
     ));
@@ -480,19 +490,19 @@ fn remove_obsolete_files(per_file: &PerFileDir) -> Result<()> {
         extension,
         keep,
     } = per_file;
-    let unreadable = |e: std::io::Error| {
-        EvenframeError::config(format!("Failed to read {}: {e}", dir.display()))
+    let unreadable = |error: std::io::Error| {
+        EvenframeError::config(format!("Failed to read {}: {error}", dir.display()))
     };
     for entry in fs::read_dir(dir).map_err(unreadable)? {
         let path = entry.map_err(unreadable)?.path();
         let file_name = path
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_default();
         if file_name.ends_with(extension.as_str()) && !keep.contains(&file_name) {
             info!("Removing obsolete file: {}", path.display());
-            fs::remove_file(&path).map_err(|e| {
-                EvenframeError::config(format!("Failed to remove {}: {e}", path.display()))
+            fs::remove_file(&path).map_err(|error| {
+                EvenframeError::config(format!("Failed to remove {}: {error}", path.display()))
             })?;
         }
     }
@@ -500,26 +510,44 @@ fn remove_obsolete_files(per_file: &PerFileDir) -> Result<()> {
 }
 
 fn create_dir(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir).map_err(|e| {
+    fs::create_dir_all(dir).map_err(|error| {
         EvenframeError::config(format!(
-            "Failed to create output directory {}: {e}",
+            "Failed to create output directory {}: {error}",
             dir.display()
         ))
     })
 }
 
-/// Writes one file, creating its directory first.
-fn write_file(path: &Path, content: &str) -> Result<()> {
+/// Writes one file, creating its directory first, unless it already holds
+/// `content`: an untouched file keeps its mtime, so file watchers do not
+/// rebuild on it. Returns whether the file was written.
+fn write_file(path: &Path, content: &str) -> Result<bool> {
+    match fs::read(path) {
+        Ok(existing) if existing == content.as_bytes() => return Ok(false),
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(EvenframeError::config(format!(
+                "Failed to read {}: {error}",
+                path.display()
+            )));
+        }
+    }
     if let Some(dir) = path.parent() {
         create_dir(dir)?;
     }
-    fs::write(path, content)
-        .map_err(|e| EvenframeError::config(format!("Failed to write {}: {e}", path.display())))
+    fs::write(path, content).map_err(|error| {
+        EvenframeError::config(format!("Failed to write {}: {error}", path.display()))
+    })?;
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, ForeignTypeRegistry, GeneratedFile, OutputKind, OutputMode, OutputTypes, Path,
+        Result, TypesyncOutput, fs, render_output,
+    };
     use tempfile::TempDir;
 
     fn write(
@@ -528,11 +556,8 @@ mod tests {
         file: Option<&Path>,
     ) -> Result<Vec<GeneratedFile>> {
         let registry = ForeignTypeRegistry::default();
-        let types = OutputTypes {
-            structs: &BTreeMap::new(),
-            enums: &BTreeMap::new(),
-            registry: &registry,
-        };
+        let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
+        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
         render_output(output, dir, file, &types)?.write()
     }
 
@@ -554,14 +579,28 @@ mod tests {
     }
 
     #[test]
+    fn an_unchanged_file_is_left_untouched() {
+        let tmp = TempDir::new().unwrap();
+        let output = TypesyncOutput::new(OutputKind::Arktype, "unused");
+        let first = write(&output, tmp.path(), None).unwrap();
+        assert!(first[0].changed);
+        let modified = fs::metadata(&first[0].path).unwrap().modified().unwrap();
+
+        let second = write(&output, tmp.path(), None).unwrap();
+        assert!(!second[0].changed);
+        let untouched = fs::metadata(&second[0].path).unwrap().modified().unwrap();
+        assert_eq!(untouched, modified);
+
+        fs::write(&first[0].path, "stale").unwrap();
+        assert!(write(&output, tmp.path(), None).unwrap()[0].changed);
+    }
+
+    #[test]
     fn rendering_writes_nothing_until_written() {
         let tmp = TempDir::new().unwrap();
         let registry = ForeignTypeRegistry::default();
-        let types = OutputTypes {
-            structs: &BTreeMap::new(),
-            enums: &BTreeMap::new(),
-            registry: &registry,
-        };
+        let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
+        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
         let mut per_file = TypesyncOutput::new(OutputKind::Effect, "unused");
         per_file.files.mode = OutputMode::PerFile;
         per_file.files.barrel_file = true;
@@ -598,11 +637,8 @@ mod tests {
         .unwrap();
         let registry =
             ForeignTypeRegistry::from_config(&BTreeMap::from([("DateTime".to_string(), foreign)]));
-        let types = OutputTypes {
-            structs: &BTreeMap::new(),
-            enums: &BTreeMap::new(),
-            registry: &registry,
-        };
+        let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
+        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
 
         let arktype = TypesyncOutput::new(OutputKind::Arktype, "unused");
         let error = render_output(&arktype, tmp.path(), None, &types)
@@ -636,11 +672,11 @@ mod tests {
             ..Default::default()
         };
         let registry = ForeignTypeRegistry::default();
-        let types = OutputTypes {
-            structs: &BTreeMap::from([("Post".to_string(), post)]),
-            enums: &BTreeMap::new(),
-            registry: &registry,
-        };
+        let (structs, enums) = (
+            BTreeMap::from([("Post".to_string(), post)]),
+            BTreeMap::new(),
+        );
+        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
         render_output(&output, tmp.path(), None, &types)
             .unwrap()
             .write()

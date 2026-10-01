@@ -223,7 +223,7 @@ fn string_assertion(
 /// otherwise those validators contribute no assertion.
 ///
 /// Pure transformation morphs (`Trim`, `Lower`, `Capitalize`, `*Parse`, …) and
-/// the no-op `String`/`Regex` (no pattern) variants never produce an assertion —
+/// the no-op `String`/`Regex` (no pattern) variants never produce an assertion:
 /// an ASSERT validates a stored value, it cannot transform it.
 pub fn generate_assert_from_validators(
     validators: &[Validator],
@@ -492,7 +492,10 @@ fn push_duration(assertions: &mut Vec<String>, value_var: &str, op: &str, bound:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
+        NumberValidator, StringValidator, Validator, generate_assert_from_validators, keywords,
+    };
     use crate::schemasync::mockmake::format::Format;
     use ordered_float::OrderedFloat;
 
@@ -583,7 +586,7 @@ mod tests {
         assert!(cc.starts_with("string::matches($value, "));
         assert!(cc.contains(" AND function($value) { const v = arguments[0]; "));
         assert!(cc.contains("sum % 10 === 0"));
-        // No newlines — must be single-line for stable round-trip.
+        // No newlines: it must be single-line for a stable round-trip.
         assert!(!cc.contains('\n'));
 
         assert_eq!(

@@ -2,7 +2,6 @@ use crate::{
     error::EvenframeError,
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
-    schemasync::mockmake::coordinate::CoordinationId,
     schemasync::mockmake::format::Format,
     schemasync::mockmake::validator_gen,
     types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructField, VariantData},
@@ -13,17 +12,62 @@ use bon::Builder;
 use chrono_tz::TZ_VARIANTS;
 use convert_case::{Case, Casing};
 use rand::{RngExt, rngs::ThreadRng, seq::IndexedRandom};
-use std::collections::BTreeSet;
+use std::fmt;
+use std::rc::Rc;
 use tracing;
 
-// The context struct is now simple again, with a direct reference.
+/// One value to generate, and where it sits in the field.
 #[derive(Clone)]
 struct Frame<'a> {
     field: &'a StructField,
     table_config: &'a TableConfig,
     field_type: &'a FieldType,
-    field_path: String,              // Track the full path for nested fields
-    visited_types: BTreeSet<String>, // Track visited types to avoid infinite recursion
+    /// The dotted path of the value, shared by the frames that keep it.
+    field_path: Rc<str>,
+    /// The object and enum types around this value, to stop at a type that
+    /// holds itself.
+    visited_types: Option<Rc<Visited<'a>>>,
+}
+
+/// A type the value is nested in, linked to the types around it, so a child
+/// frame extends its parent's chain instead of copying it.
+struct Visited<'a> {
+    type_name: &'a str,
+    outer: Option<Rc<Visited<'a>>>,
+}
+
+impl<'a> Frame<'a> {
+    fn visits(&self, type_name: &str) -> bool {
+        let mut current = self.visited_types.as_deref();
+        while let Some(visited) = current {
+            if visited.type_name == type_name {
+                return true;
+            }
+            current = visited.outer.as_deref();
+        }
+        false
+    }
+
+    /// The visited chain of a child nested in `type_name`.
+    fn inside(&self, type_name: &'a str) -> Option<Rc<Visited<'a>>> {
+        Some(Rc::new(Visited {
+            type_name,
+            outer: self.visited_types.clone(),
+        }))
+    }
+}
+
+/// Where a generated value goes, written out only when an error names it.
+#[derive(Clone, Copy)]
+struct FieldLocation<'l> {
+    table_name: &'l str,
+    field_path: &'l str,
+}
+
+impl fmt::Display for FieldLocation<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}", self.table_name, self.field_path)
+    }
 }
 
 enum WorkItem<'a> {
@@ -72,8 +116,8 @@ impl<'a> FieldValueGenerator<'a> {
             field: self.field,
             table_config: self.table_config,
             field_type: &self.field.field_type,
-            field_path: self.field.field_name.clone(),
-            visited_types: BTreeSet::new(),
+            field_path: Rc::from(self.field.field_name.as_str()),
+            visited_types: None,
         };
         work_stack.push(WorkItem::Generate(initial_context));
 
@@ -86,7 +130,7 @@ impl<'a> FieldValueGenerator<'a> {
                         .table_config
                         .mock_generation_config
                         .as_ref()
-                        .and_then(|c| c.plugin.as_ref())
+                        .and_then(|config| config.plugin.as_ref())
                     {
                         let pm_cell = self.mockmaker.plugin_manager.as_ref().ok_or_else(|| {
                             EvenframeError::mock_generation(format!(
@@ -108,7 +152,7 @@ impl<'a> FieldValueGenerator<'a> {
                             })?;
                         let input = super::plugin_types::PluginFieldInput {
                             table_name: self.table_config.table_name.to_string(),
-                            field_name: ctx.field_path.clone(),
+                            field_name: ctx.field_path.to_string(),
                             field_type: format!("{:?}", ctx.field_type),
                             record_index: *self.id_index,
                             total_records: self.mockmaker.record_count(self.table_config),
@@ -129,21 +173,22 @@ impl<'a> FieldValueGenerator<'a> {
                         }
                     }
 
-                    let location = format!("{}.{}", self.table_config.table_name, ctx.field_path);
-                    if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(&(
+                    let location = FieldLocation {
+                        table_name: &self.table_config.table_name,
+                        field_path: &ctx.field_path,
+                    };
+                    if let Some(coordinated_value) = self.mockmaker.coordinated_values.get(
+                        &self.table_config.table_name,
+                        &ctx.field_path,
                         *self.id_index,
-                        CoordinationId::builder()
-                            .field_name(ctx.field_path.clone())
-                            .table_name(self.table_config.table_name.to_string())
-                            .build(),
-                    )) {
+                    ) {
                         value_stack.push(coordinated_value.to_string());
                     } else if let Some(format) = &ctx.field.format {
                         value_stack.push(self.handle_format(
                             format,
                             ctx.field_type,
                             &ctx.field.validators,
-                            &location,
+                            location,
                         )?);
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
@@ -153,10 +198,8 @@ impl<'a> FieldValueGenerator<'a> {
                         value_stack.push(value);
                     } else {
                         match ctx.field_type {
-                            FieldType::String => value_stack.push(generate_string_with_retry(
-                                &ctx.field.validators,
-                                &location,
-                            )?),
+                            FieldType::String => value_stack
+                                .push(generate_string_with_retry(&ctx.field.validators, location)?),
                             FieldType::Char => value_stack
                                 .push(format!("'{}'", rng.random_range(32u8..=126u8) as char)),
                             FieldType::Bool => {
@@ -166,7 +209,7 @@ impl<'a> FieldValueGenerator<'a> {
                             FieldType::F32 | FieldType::F64 => {
                                 value_stack.push(generate_float_with_retry(
                                     &ctx.field.validators,
-                                    &location,
+                                    location,
                                     &mut rng,
                                 )?)
                             }
@@ -184,7 +227,7 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::Usize => value_stack.push(generate_integer_with_retry(
                                 ctx.field_type,
                                 &ctx.field.validators,
-                                &location,
+                                location,
                                 &mut rng,
                             )?),
                             FieldType::Option(inner_type) => {
@@ -238,11 +281,10 @@ impl<'a> FieldValueGenerator<'a> {
                                 for (nested_field_name, ftype) in fields.iter().rev() {
                                     work_stack.push(WorkItem::Generate(Frame {
                                         field_type: ftype,
-                                        field_path: format!(
-                                            "{}.{}",
-                                            ctx.field_path.clone(),
-                                            nested_field_name
-                                        ),
+                                        field_path: Rc::from(format!(
+                                            "{}.{nested_field_name}",
+                                            ctx.field_path
+                                        )),
                                         ..ctx.clone()
                                     }));
                                 }
@@ -384,7 +426,7 @@ impl<'a> FieldValueGenerator<'a> {
                                 }
 
                                 // Check if we've already visited this type to avoid infinite recursion
-                                if ctx.visited_types.contains(type_name) {
+                                if ctx.visits(type_name) {
                                     tracing::debug!(
                                         type_name = %type_name,
                                         field_path = %ctx.field_path,
@@ -399,7 +441,7 @@ impl<'a> FieldValueGenerator<'a> {
                                 // schema defines it; an enum held by value is written inline.
                                 let table_targets = if self.mockmaker.enums.contains_key(type_name)
                                 {
-                                    Vec::new()
+                                    std::rc::Rc::from([])
                                 } else {
                                     self.mockmaker.link_target_tables(type_name)
                                 };
@@ -418,27 +460,22 @@ impl<'a> FieldValueGenerator<'a> {
                                     let field_names: Vec<String> = struct_config
                                         .fields
                                         .iter()
-                                        .map(|f| f.field_name.clone())
+                                        .map(|field| field.field_name.clone())
                                         .collect();
                                     work_stack.push(WorkItem::AssembleStruct { field_names });
 
-                                    // Add current type to visited types for nested fields
-                                    let mut new_visited = ctx.visited_types.clone();
-                                    new_visited.insert(type_name.clone());
-
+                                    let visited_types = ctx.inside(type_name);
                                     for struct_field in struct_config.fields.iter().rev() {
-                                        let new_ctx = Frame {
+                                        work_stack.push(WorkItem::Generate(Frame {
                                             field: struct_field,
                                             field_type: &struct_field.field_type,
-                                            field_path: format!(
+                                            field_path: Rc::from(format!(
                                                 "{}.{}",
-                                                ctx.field_path.clone(),
-                                                struct_field.field_name
-                                            ),
+                                                ctx.field_path, struct_field.field_name
+                                            )),
                                             table_config: ctx.table_config,
-                                            visited_types: new_visited.clone(),
-                                        };
-                                        work_stack.push(WorkItem::Generate(new_ctx));
+                                            visited_types: visited_types.clone(),
+                                        }));
                                     }
                                 } else if let Some(tagged_union) =
                                     self.mockmaker.enums.get(type_name)
@@ -458,7 +495,7 @@ impl<'a> FieldValueGenerator<'a> {
                                                 let field_names: Vec<String> = struct_config
                                                     .fields
                                                     .iter()
-                                                    .map(|f| f.field_name.clone())
+                                                    .map(|field| field.field_name.clone())
                                                     .collect();
 
                                                 match repr {
@@ -507,24 +544,20 @@ impl<'a> FieldValueGenerator<'a> {
                                                     }
                                                 }
 
-                                                let mut new_visited = ctx.visited_types.clone();
-                                                new_visited.insert(type_name.clone());
-
+                                                let visited_types = ctx.inside(type_name);
                                                 for struct_field in
                                                     struct_config.fields.iter().rev()
                                                 {
-                                                    let new_ctx = Frame {
+                                                    work_stack.push(WorkItem::Generate(Frame {
                                                         field: struct_field,
                                                         field_type: &struct_field.field_type,
-                                                        field_path: format!(
+                                                        field_path: Rc::from(format!(
                                                             "{}.{}",
-                                                            ctx.field_path.clone(),
-                                                            struct_field.field_name
-                                                        ),
+                                                            ctx.field_path, struct_field.field_name
+                                                        )),
                                                         table_config: ctx.table_config,
-                                                        visited_types: new_visited.clone(),
-                                                    };
-                                                    work_stack.push(WorkItem::Generate(new_ctx));
+                                                        visited_types: visited_types.clone(),
+                                                    }));
                                                 }
 
                                                 // For adjacently tagged, push tag value after struct fields (processed first due to LIFO)
@@ -653,12 +686,12 @@ impl<'a> FieldValueGenerator<'a> {
         }
     }
 
-    pub fn handle_format(
+    fn handle_format(
         &self,
         format: &Format,
         target: &FieldType,
         validators: &[Validator],
-        location: &str,
+        location: FieldLocation<'_>,
     ) -> Result<String, EvenframeError> {
         let mut scalar = target;
         while let FieldType::Option(inner) = scalar {
@@ -685,19 +718,20 @@ impl<'a> FieldValueGenerator<'a> {
 
         // A format hint can contradict the field's validators, and the
         // validators are what the database enforces (they become ASSERT
-        // clauses). Check the value in the domain the database will see —
-        // numeric fields as numbers, everything else as strings — and
+        // clauses). Check the value in the domain the database will see
+        // (numeric fields as numbers, everything else as strings), and
         // regenerate through the validator path on a mismatch.
         if !validators.is_empty() {
             let satisfied = if scalar.is_numeric() {
-                match generated.parse::<f64>() {
-                    Ok(n) => validators.iter().all(|v| v.matches(&MockValue::Num(n))),
-                    Err(_) => false,
-                }
+                generated.parse::<f64>().is_ok_and(|number| {
+                    validators
+                        .iter()
+                        .all(|validator| validator.matches(&MockValue::Num(number)))
+                })
             } else {
                 validators
                     .iter()
-                    .all(|v| v.matches(&MockValue::Str(&generated)))
+                    .all(|validator| validator.matches(&MockValue::Str(&generated)))
             };
             if !satisfied {
                 return generate_scalar_with_retry(scalar, validators, location, &mut rand::rng());
@@ -709,7 +743,7 @@ impl<'a> FieldValueGenerator<'a> {
             Format::Latitude | Format::Longitude | Format::AppointmentDurationNs => generated,
             Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
                 // A Rust `String` field maps to surql TYPE string, where a
-                // d'…' datetime literal fails coercion — only datetime-typed
+                // d'…' datetime literal fails coercion. Only datetime-typed
                 // fields (foreign types like chrono) take the literal form.
                 if matches!(scalar, FieldType::String) {
                     format!("'{}'", generated)
@@ -729,12 +763,12 @@ impl<'a> FieldValueGenerator<'a> {
         field_path: &str,
         rng: &mut ThreadRng,
     ) -> Result<String, EvenframeError> {
-        let ids: Vec<&String> = targets
+        let pools: Vec<&[String]> = targets
             .iter()
             .filter_map(|table| self.mockmaker.id_map.get(table))
-            .flatten()
+            .map(Vec::as_slice)
             .collect();
-        let id = ids.choose(rng).ok_or_else(|| {
+        let id = draw_from_pools(&pools, rng).ok_or_else(|| {
             EvenframeError::mock_generation(format!(
                 "`{field_path}` must link to {}, which has no records",
                 targets.join(" or ")
@@ -757,9 +791,9 @@ impl<'a> FieldValueGenerator<'a> {
             let one_to_one = table_config
                 .mock_generation_config
                 .as_ref()
-                .is_some_and(|c| {
-                    c.coordination_rules.iter().any(|r| {
-                        matches!(r, crate::schemasync::mockmake::coordinate::Coordination::OneToOne(f) if f == field_name)
+                .is_some_and(|config| {
+                    config.coordination_rules.iter().any(|rule| {
+                        matches!(rule, crate::schemasync::mockmake::coordinate::Coordination::OneToOne(coordinated) if coordinated == field_name)
                     })
                 });
             let tables = if field_name == "in" {
@@ -769,7 +803,7 @@ impl<'a> FieldValueGenerator<'a> {
             };
             let ids = tables
                 .iter()
-                .find_map(|t| self.mockmaker.id_map.get(t))
+                .find_map(|table| self.mockmaker.id_map.get(table))
                 .filter(|ids| !ids.is_empty())
                 .ok_or_else(|| {
                     EvenframeError::mock_generation(format!(
@@ -814,7 +848,7 @@ fn take_last(stack: &mut Vec<String>, count: usize) -> Result<Vec<String>, Evenf
 /// field's validator set.
 const RETRY_ATTEMPTS: usize = 32;
 
-fn unsatisfied(location: &str, validators: &[Validator]) -> EvenframeError {
+fn unsatisfied(location: FieldLocation<'_>, validators: &[Validator]) -> EvenframeError {
     let expected = validators
         .iter()
         .map(Validator::describe)
@@ -831,7 +865,7 @@ fn unsatisfied(location: &str, validators: &[Validator]) -> EvenframeError {
 fn generate_scalar_with_retry(
     scalar: &FieldType,
     validators: &[Validator],
-    location: &str,
+    location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
     match scalar {
@@ -854,9 +888,26 @@ fn generate_scalar_with_retry(
     }
 }
 
+/// One id drawn uniformly from all of `pools` together, without gathering
+/// them into one list, or `None` when they are all empty.
+fn draw_from_pools<'p>(pools: &[&'p [String]], rng: &mut impl RngExt) -> Option<&'p String> {
+    let total: usize = pools.iter().map(|pool| pool.len()).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut drawn = rng.random_range(0..total);
+    for pool in pools {
+        match pool.get(drawn) {
+            Some(id) => return Some(id),
+            None => drawn -= pool.len(),
+        }
+    }
+    None
+}
+
 fn generate_string_with_retry(
     validators: &[Validator],
-    location: &str,
+    location: FieldLocation<'_>,
 ) -> Result<String, EvenframeError> {
     (0..RETRY_ATTEMPTS)
         .map(|_| Mockmaker::random_string(8))
@@ -871,7 +922,7 @@ fn generate_string_with_retry(
 
 fn generate_float_with_retry(
     validators: &[Validator],
-    location: &str,
+    location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
     if validators.is_empty() {
@@ -901,7 +952,7 @@ fn generate_float_with_retry(
 fn generate_integer_with_retry(
     field_type: &FieldType,
     validators: &[Validator],
-    location: &str,
+    location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
     if validators.is_empty() {
@@ -924,4 +975,29 @@ fn generate_integer_with_retry(
         })
         .map(|candidate| candidate.to_string())
         .ok_or_else(|| unsatisfied(location, validators))
+}
+
+#[cfg(test)]
+mod draw_tests {
+    use super::draw_from_pools;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn a_link_reaches_every_target_table_and_nothing_else() {
+        let users = vec!["user:1".to_string(), "user:2".to_string()];
+        let teams = vec!["team:1".to_string()];
+        let pools = [users.as_slice(), &[][..], teams.as_slice()];
+        let mut rng = rand::rng();
+        let drawn: BTreeSet<&String> = (0..500)
+            .filter_map(|_| draw_from_pools(&pools, &mut rng))
+            .collect();
+        let expected: BTreeSet<&String> = users.iter().chain(&teams).collect();
+        assert_eq!(drawn, expected);
+    }
+
+    #[test]
+    fn empty_pools_have_nothing_to_draw() {
+        let mut rng = rand::rng();
+        assert!(draw_from_pools(&[&[][..], &[][..]], &mut rng).is_none());
+    }
 }

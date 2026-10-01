@@ -5,6 +5,7 @@
 
 use crate::types::{ForeignTypeRegistry, StructConfig, StructField, TaggedUnion};
 use crate::typesync::macroforge::generate_macroforge_type_string;
+use crate::typesync::type_index::TypeIndex;
 use std::collections::BTreeMap;
 
 /// Result of running a plugin through the generator pipeline.
@@ -73,8 +74,7 @@ pub fn generate_struct_with_override(
     let registry = ForeignTypeRegistry::default();
 
     let output = generate_macroforge_type_string(
-        &structs,
-        &enums,
+        &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
     );
@@ -108,8 +108,7 @@ pub fn generate_enum_with_override(
     let registry = ForeignTypeRegistry::default();
 
     let output = generate_macroforge_type_string(
-        &structs,
-        &enums,
+        &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
     );
@@ -138,7 +137,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BTreeMap, StructConfig, StructField, generate_struct_with_override, test_field};
 
     #[test]
     fn override_replaces_struct_body_at_top_level_iteration() {
@@ -146,7 +145,7 @@ mod tests {
         // scanned form wholesale. Consumers (typesync, schemasync, mockmake,
         // …) read via `.effective()`, so the override's body, derives, and
         // annotations are emitted instead of the originals. The original
-        // fields are NOT carried over — plugin writers who want
+        // fields are NOT carried over; plugin writers who want
         // self-augmentation must include the original fields in their
         // override.
         let override_config = StructConfig {
@@ -183,7 +182,7 @@ mod tests {
         output.assert_contains("export interface Site");
         output.assert_contains("@overview");
         output.assert_contains("Gigaform");
-        // Original fields do not bleed through — the override has fields: vec![].
+        // Original fields do not bleed through: the override has fields: vec![].
         output.assert_not_contains("id: string");
         output.assert_not_contains("name: string");
     }

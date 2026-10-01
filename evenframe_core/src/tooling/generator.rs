@@ -5,7 +5,7 @@ use crate::error::EvenframeError;
 use crate::types::ForeignTypeRegistry;
 use crate::typesync::checks::check_types;
 use crate::typesync::config::TypesyncOutput;
-use crate::typesync::output::{GeneratedFile, OutputTypes, render_output};
+use crate::typesync::output::{GeneratedFile, OutputTypes, render_outputs};
 use tracing::{debug, info};
 
 /// Report of the generation process.
@@ -50,44 +50,34 @@ impl TypeGenerator {
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
         check_types(&enums, &tables, &objects, &registry)?;
-        let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
-        let structs = merge_tables_and_objects(&tables, &objects);
+        let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
+        let (tables_processed, structs_processed) = (tables.len(), objects.len());
         debug!(
-            "Processing {} enums, {} tables, {} objects",
-            enums.len(),
-            tables.len(),
-            objects.len()
+            "Processing {} enums, {tables_processed} tables, {structs_processed} objects",
+            enums.len()
         );
+        let structs = merge_tables_and_objects(tables, objects);
 
-        let types = OutputTypes {
-            structs: &structs,
-            enums: &enums,
-            registry: &registry,
-        };
-        // Every output renders before any is written, so one that fails
-        // leaves every output's files as they were.
-        let rendered = outputs
+        let types = OutputTypes::new(&structs, &enums, &registry)?;
+        let targets: Vec<_> = outputs
             .iter()
-            .map(|output| {
-                render_output(
-                    output,
-                    &output.resolve_dir(&self.config.scan_path),
-                    None,
-                    &types,
-                )
-            })
-            .collect::<Result<Vec<_>, EvenframeError>>()?;
+            .map(|output| (output, output.resolve_dir(&self.config.scan_path)))
+            .collect();
         let mut files = Vec::new();
-        for output in &rendered {
+        for output in render_outputs(&targets, None, &types)? {
             files.extend(output.write()?);
         }
-        info!("Generation complete. Generated {} files", files.len());
+        info!(
+            "Generation complete. Generated {} files, {} changed",
+            files.len(),
+            files.iter().filter(|file| file.changed).count()
+        );
 
         Ok(GenerationReport {
             files,
             enums_processed: enums.len(),
-            structs_processed: objects.len(),
-            tables_processed: tables.len(),
+            structs_processed,
+            tables_processed,
         })
     }
 }

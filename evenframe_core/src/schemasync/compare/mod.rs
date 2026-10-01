@@ -31,8 +31,6 @@ pub struct Comparator;
 // Schema Change Types
 // ============================================================================
 
-pub use super::PreservationMode;
-
 /// Types of changes that can occur in an access definition
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccessChangeType {
@@ -721,48 +719,29 @@ impl Comparator {
         }
     }
 
-    /// Compare two field definitions
+    /// The change between two definitions of a field, or `None` when they
+    /// match. Types are rendered only for a field that changed.
     fn compare_fields(
         field_name: &str,
         old_field: &FieldDefinition,
         new_field: &FieldDefinition,
     ) -> Option<FieldChange> {
-        let mut changed = false;
-
-        // Check for basic changes first
-        let mut basic_change = FieldChange {
+        let required_changed = old_field.required != new_field.required;
+        let default_changed = old_field.default_value != new_field.default_value;
+        // Assertions are normalized so SurrealDB's reformatting of an ASSERT
+        // clause does not read as a change.
+        let changed = required_changed
+            || default_changed
+            || old_field.field_type != new_field.field_type
+            || normalize_assert(&old_field.assertions) != normalize_assert(&new_field.assertions);
+        changed.then(|| FieldChange {
             field_name: field_name.to_string(),
             old_type: old_field.field_type.to_string(),
             new_type: new_field.field_type.to_string(),
             change_type: ChangeType::Modified,
-            required_changed: false,
-            default_changed: false,
-        };
-
-        // Check required change
-        if old_field.required != new_field.required {
-            basic_change.required_changed = true;
-            changed = true;
-        }
-
-        // Check default value change
-        if old_field.default_value != new_field.default_value {
-            basic_change.default_changed = true;
-            changed = true;
-        }
-
-        // Check type change
-        if old_field.field_type != new_field.field_type {
-            changed = true;
-        }
-
-        // Check assertion change (validator-derived or manual ASSERT clauses).
-        // Normalized so cosmetic reformatting by SurrealDB doesn't cause churn.
-        if normalize_assert(&old_field.assertions) != normalize_assert(&new_field.assertions) {
-            changed = true;
-        }
-
-        if changed { Some(basic_change) } else { None }
+            required_changed,
+            default_changed,
+        })
     }
 
     /// Deep comparison of object types to find granular changes
@@ -994,7 +973,7 @@ fn normalize_event_statement(stmt: &str) -> String {
         let c = bytes[i];
         match quote {
             Some(q) => {
-                // Inside a string literal — pass through, but emit a
+                // Inside a string literal: pass through, but emit a
                 // canonical `'` for the closing quote so `"foo"` and
                 // `'foo'` normalize to the same form.
                 if c == q {
@@ -1011,7 +990,7 @@ fn normalize_event_statement(stmt: &str) -> String {
                     out.push('\'');
                     i += 1;
                 } else if c == b';' {
-                    // Drop semicolons outside string literals — they're
+                    // Drop semicolons outside string literals: they're
                     // always optional terminators in SurrealQL events.
                     i += 1;
                 } else if c.is_ascii_whitespace() {
@@ -1168,7 +1147,10 @@ fn fulltext_analyzer(definition: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod index_diff_tests {
-    use super::*;
+    use super::{
+        AnalyzerDefinition, BTreeMap, Comparator, SchemaDefinition, TableDefinition,
+        fulltext_analyzer,
+    };
     use crate::schemasync::compare::types::{IndexDefinition, SchemaType};
 
     fn table_with_indexes(name: &str, indexes: Vec<IndexDefinition>) -> TableDefinition {

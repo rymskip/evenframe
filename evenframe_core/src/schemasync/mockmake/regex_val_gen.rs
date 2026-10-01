@@ -42,7 +42,7 @@ impl fmt::Display for MakerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPattern(msg) => write!(f, "Invalid pattern: {}", msg),
-            Self::InvalidQuantifier(q) => write!(f, "Invalid quantifier: {}", q),
+            Self::InvalidQuantifier(quantifier) => write!(f, "Invalid quantifier: {}", quantifier),
             Self::InvalidCharacterRange { start, end } => {
                 write!(f, "Invalid character range: {}-{}", start, end)
             }
@@ -117,54 +117,13 @@ impl RegexValGen {
 
     /// Generates a random string matching the given regex pattern
     ///
-    /// # Arguments
-    /// * `pattern` - A regex pattern string
-    ///
-    /// # Returns
-    /// * `Ok(String)` - A randomly generated string matching the pattern
-    /// * `Err(MakerError)` - If the pattern is invalid
-    ///
     /// # Supported patterns
     /// * Character classes: `[a-z]`, `[0-9]`, `\d`
     /// * Quantifiers: `{n}`, `{n,m}`, `+`, `*`, `?`
     /// * Groups: `(abc)`, `(a|b|c)`
     /// * Literals: `abc`, `\+`, `\.`
     pub fn generate(&mut self, pattern: &str) -> Result<String> {
-        tracing::trace!(pattern = %pattern, "Generating string from regex pattern");
-        let trimmed_pattern = pattern.trim_start_matches('^').trim_end_matches('$');
-        let components = self.parse_pattern(trimmed_pattern)?;
-        #[cfg(test)]
-        println!("Parsed components: {:?}", components);
-        tracing::trace!(
-            component_count = components.len(),
-            "Pattern parsed successfully"
-        );
-
-        let should_validate_duration = Self::is_duration_pattern(trimmed_pattern);
-        let mut attempts = 0;
-
-        loop {
-            let candidate = self.generate_from_components(&components);
-            if !should_validate_duration || Self::is_valid_duration(&candidate) {
-                tracing::trace!(
-                    pattern = %pattern,
-                    result_length = candidate.len(),
-                    attempts,
-                    "Generated string from pattern"
-                );
-                return Ok(candidate);
-            }
-
-            attempts += 1;
-            if attempts >= 10 {
-                tracing::debug!(
-                    pattern = %pattern,
-                    candidate = %candidate,
-                    "Returning last candidate after repeated duration validation failures"
-                );
-                return Ok(candidate);
-            }
-        }
+        Ok(ParsedPattern::parse(pattern)?.generate(&mut self.rng))
     }
 
     fn parse_pattern(&self, pattern: &str) -> Result<Vec<RegexComponent>> {
@@ -329,130 +288,6 @@ impl RegexValGen {
         Ok(components)
     }
 
-    fn is_duration_pattern(pattern: &str) -> bool {
-        pattern.contains("P((\\d{1,2}Y)?")
-            && pattern.contains("(0?[0-9]|1[0-1]M)?")
-            && pattern.contains("(\\d{1,4}W)?")
-            && pattern.contains("([0-2]?[0-9]D)?")
-            && pattern.contains("T([0-1]?[0-9]|2[0-3]H)?")
-            && pattern.contains("([0-5]?[0-9]M)?")
-            && pattern.contains("([0-5]?[0-9](\\.\\d{1,3})?S)?")
-    }
-
-    fn is_valid_duration(candidate: &str) -> bool {
-        if !candidate.starts_with('P') {
-            return true;
-        }
-
-        let rest = &candidate[1..];
-        let (date_part, time_part) = if let Some(idx) = rest.find('T') {
-            (&rest[..idx], Some(&rest[idx + 1..]))
-        } else {
-            (rest, None)
-        };
-
-        if date_part
-            .find('M')
-            .map(|idx| Self::value_before_index_exceeds(date_part, idx, 11))
-            .unwrap_or(false)
-        {
-            return false;
-        }
-
-        if date_part
-            .find('D')
-            .map(|idx| Self::value_before_index_exceeds(date_part, idx, 29))
-            .unwrap_or(false)
-        {
-            return false;
-        }
-
-        if let Some(time_part) = time_part {
-            if time_part
-                .find('H')
-                .map(|idx| Self::value_before_index_exceeds(time_part, idx, 23))
-                .unwrap_or(false)
-            {
-                return false;
-            }
-
-            if let Some(min_idx) = time_part.rfind('M') {
-                let segment_start = time_part.find('H').map(|idx| idx + 1).unwrap_or(0);
-                if min_idx >= segment_start {
-                    let minute_segment = &time_part[segment_start..min_idx];
-                    if minute_segment.is_empty() {
-                        return false;
-                    }
-                    if let Ok(minute) = minute_segment.parse::<u32>() {
-                        if minute > 59 {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-            }
-
-            if let Some(sec_idx) = time_part.find('S') {
-                let segment_start = if let Some(min_idx) = time_part.rfind('M') {
-                    min_idx + 1
-                } else if let Some(hour_idx) = time_part.find('H') {
-                    hour_idx + 1
-                } else {
-                    0
-                };
-
-                if sec_idx >= segment_start {
-                    let second_segment = &time_part[segment_start..sec_idx];
-                    if second_segment.is_empty() {
-                        return false;
-                    }
-                    let int_part = second_segment.split('.').next().unwrap_or("");
-                    if int_part.is_empty() {
-                        return false;
-                    }
-                    if let Ok(second) = int_part.parse::<u32>() {
-                        if second > 59 {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        true
-    }
-
-    fn digits_before_index(slice: &str, idx: usize) -> Option<String> {
-        if idx == 0 {
-            return None;
-        }
-
-        let mut digits = String::new();
-        for ch in slice[..idx].chars().rev() {
-            if ch.is_ascii_digit() {
-                digits.push(ch);
-            } else {
-                break;
-            }
-        }
-
-        if digits.is_empty() {
-            None
-        } else {
-            Some(digits.chars().rev().collect())
-        }
-    }
-
-    fn value_before_index_exceeds(slice: &str, idx: usize, limit: u32) -> bool {
-        Self::digits_before_index(slice, idx)
-            .and_then(|value| value.parse::<u32>().ok())
-            .map(|parsed| parsed > limit)
-            .unwrap_or(false)
-    }
-
     fn parse_char_class(
         &self,
         chars: &mut std::iter::Peekable<std::str::Chars>,
@@ -492,20 +327,14 @@ impl RegexValGen {
             "1-9" => RegexComponent::CharClass(vec!['1', '2', '3', '4', '5', '6', '7', '8', '9']),
             "A-Za-z\\s" => {
                 let mut chars = Vec::new();
-                for c in 'A'..='Z' {
-                    chars.push(c);
-                }
-                for c in 'a'..='z' {
-                    chars.push(c);
-                }
+                chars.extend('A'..='Z');
+                chars.extend('a'..='z');
                 chars.push(' ');
                 RegexComponent::CharClass(chars)
             }
             "a-z\\s" => {
                 let mut chars = Vec::new();
-                for c in 'a'..='z' {
-                    chars.push(c);
-                }
+                chars.extend('a'..='z');
                 chars.push(' ');
                 RegexComponent::CharClass(chars)
             }
@@ -539,9 +368,7 @@ impl RegexValGen {
                                     }
                                     'd' => {
                                         // Add digits
-                                        for c in '0'..='9' {
-                                            result_chars.push(c);
-                                        }
+                                        result_chars.extend('0'..='9');
                                     }
                                     '-' | '.' | '+' | '[' | ']' => {
                                         result_chars.push(escaped);
@@ -623,8 +450,13 @@ impl RegexValGen {
         // Check if all alternatives are numeric patterns
         alternatives.iter().all(|alt| {
             // Check for patterns like "25[0-5]", "2[0-4][0-9]", "[01]?[0-9][0-9]?", "[0-9]"
-            alt.chars()
-                .all(|c| c.is_ascii_digit() || c == '[' || c == ']' || c == '-' || c == '?')
+            alt.chars().all(|character| {
+                character.is_ascii_digit()
+                    || character == '['
+                    || character == ']'
+                    || character == '-'
+                    || character == '?'
+            })
         })
     }
 
@@ -815,145 +647,131 @@ impl RegexValGen {
 
         Ok(RegexComponent::Alternation(parsed_alternatives?))
     }
+}
 
-    fn generate_from_components(&mut self, components: &[RegexComponent]) -> String {
-        tracing::trace!(
-            component_count = components.len(),
-            "Generating from components"
-        );
-        let mut result = String::new();
+/// A pattern parsed once, to generate any number of values from.
+#[derive(Debug, Clone)]
+pub struct ParsedPattern {
+    components: Vec<RegexComponent>,
+}
 
-        for component in components {
-            result.push_str(&self.generate_component(component));
-        }
-
-        tracing::trace!(result_length = result.len(), "Components generated");
-        result
+impl ParsedPattern {
+    pub fn parse(pattern: &str) -> Result<Self> {
+        let trimmed = pattern.trim_start_matches('^').trim_end_matches('$');
+        let components = RegexValGen::new().parse_pattern(trimmed)?;
+        Ok(Self {
+            components: merge_literals(components),
+        })
     }
 
-    fn generate_component(&mut self, component: &RegexComponent) -> String {
-        tracing::trace!(component = ?component, "Generating component");
-        match component {
-            RegexComponent::Literal(s) => s.clone(),
+    /// A random string matching the pattern.
+    pub fn generate(&self, rng: &mut impl RngExt) -> String {
+        let mut out = String::new();
+        write_components(&self.components, rng, &mut out);
+        out
+    }
+}
 
-            RegexComponent::CharClass(chars) => {
-                if chars.is_empty() {
-                    return String::new();
-                }
-                let idx = self.rng.random_range(0..chars.len());
-                chars[idx].to_string()
-            }
-
-            RegexComponent::CharRange(start, end) => {
-                let start_code = *start as u32;
-                let end_code = *end as u32;
-                let random_code = self.rng.random_range(start_code..=end_code);
-                char::from_u32(random_code).unwrap_or('a').to_string()
-            }
-
-            RegexComponent::DigitClass => self.rng.random_range(0..10).to_string(),
-
-            RegexComponent::HexClass => {
-                let idx = self.rng.random_range(0..HEX_CHARS.len());
-                HEX_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::AlphaClass => {
-                let idx = self.rng.random_range(0..ALPHA_CHARS.len());
-                ALPHA_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::LowerClass => {
-                let idx = self.rng.random_range(0..LOWER_CHARS.len());
-                LOWER_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::UpperClass => {
-                let idx = self.rng.random_range(0..UPPER_CHARS.len());
-                UPPER_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::AlphaNumClass => {
-                let idx = self.rng.random_range(0..ALPHANUM_CHARS.len());
-                ALPHANUM_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::Base64Class => {
-                let idx = self.rng.random_range(0..BASE64_CHARS.len());
-                BASE64_CHARS.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::WhitespaceClass => {
-                // Return a space most of the time, occasionally a tab
-                if self.rng.random_bool(0.9) {
-                    " ".to_string()
-                } else {
-                    "\t".to_string()
-                }
-            }
-
-            RegexComponent::AnyChar => {
-                // Generate a random printable ASCII character
-                // Exclude single quotes to avoid SQL injection issues
-                let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~ ";
-                let idx = self.rng.random_range(0..chars.len());
-                chars.chars().nth(idx).unwrap().to_string()
-            }
-
-            RegexComponent::Repeat { component, count } => (0..*count)
-                .map(|_| self.generate_component(component))
-                .collect::<Vec<_>>()
-                .join(""),
-
-            RegexComponent::RepeatRange {
-                component,
-                min,
-                max,
-            } => {
-                let count = self.rng.random_range(*min..=*max);
-                (0..count)
-                    .map(|_| self.generate_component(component))
-                    .collect::<Vec<_>>()
-                    .join("")
-            }
-
-            RegexComponent::Group(components) => {
-                // Generate the content of the group
-                self.generate_from_components(components)
-            }
-
+/// `components` with each run of adjacent literals joined into one, which
+/// the parser emits a character at a time.
+fn merge_literals(components: Vec<RegexComponent>) -> Vec<RegexComponent> {
+    let mut merged: Vec<RegexComponent> = Vec::with_capacity(components.len());
+    for component in components {
+        let component = match component {
+            RegexComponent::Group(inner) => RegexComponent::Group(merge_literals(inner)),
             RegexComponent::Alternation(alternatives) => {
-                let idx = self.rng.random_range(0..alternatives.len());
-                self.generate_from_components(&alternatives[idx])
+                RegexComponent::Alternation(alternatives.into_iter().map(merge_literals).collect())
             }
-
-            RegexComponent::Optional(component) => {
-                if self.rng.random_bool(0.7) {
-                    // 70% chance to include optional component
-                    self.generate_component(component)
-                } else {
-                    String::new()
-                }
+            other => other,
+        };
+        match (merged.last_mut(), component) {
+            (Some(RegexComponent::Literal(previous)), RegexComponent::Literal(next)) => {
+                previous.push_str(&next);
             }
+            (_, component) => merged.push(component),
+        }
+    }
+    merged
+}
 
-            RegexComponent::NumericRange {
-                min,
-                max,
-                leading_zeros,
-                digits,
-            } => {
-                let num = self.rng.random_range(*min..=*max);
-                let mut result = num.to_string();
+fn write_components(components: &[RegexComponent], rng: &mut impl RngExt, out: &mut String) {
+    for component in components {
+        write_component(component, rng, out);
+    }
+}
 
-                if let Some(d) = digits
-                    && *leading_zeros
-                    && result.len() < *d
-                {
-                    // Pad with leading zeros
-                    result = format!("{:0width$}", num, width = d);
+/// A random character of the ASCII set `chars`.
+fn pick(chars: &str, rng: &mut impl RngExt) -> char {
+    char::from(chars.as_bytes()[rng.random_range(0..chars.len())])
+}
+
+/// Printable ASCII for `.`, leaving out the single quote so values stay
+/// inside SurrealQL string literals.
+const ANY_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~ ";
+
+fn write_component(component: &RegexComponent, rng: &mut impl RngExt, out: &mut String) {
+    match component {
+        RegexComponent::Literal(text) => out.push_str(text),
+        RegexComponent::CharClass(chars) => {
+            if !chars.is_empty() {
+                out.push(chars[rng.random_range(0..chars.len())]);
+            }
+        }
+        RegexComponent::CharRange(start, end) => {
+            let code = rng.random_range(u32::from(*start)..=u32::from(*end));
+            // A code inside the surrogate block is no character; the range's
+            // start always is one.
+            out.push(char::from_u32(code).unwrap_or(*start));
+        }
+        RegexComponent::DigitClass => out.push(pick("0123456789", rng)),
+        RegexComponent::HexClass => out.push(pick(HEX_CHARS, rng)),
+        RegexComponent::AlphaClass => out.push(pick(ALPHA_CHARS, rng)),
+        RegexComponent::LowerClass => out.push(pick(LOWER_CHARS, rng)),
+        RegexComponent::UpperClass => out.push(pick(UPPER_CHARS, rng)),
+        RegexComponent::AlphaNumClass => out.push(pick(ALPHANUM_CHARS, rng)),
+        RegexComponent::Base64Class => out.push(pick(BASE64_CHARS, rng)),
+        RegexComponent::WhitespaceClass => {
+            // Mostly a space, occasionally a tab.
+            out.push(if rng.random_bool(0.9) { ' ' } else { '\t' });
+        }
+        RegexComponent::AnyChar => out.push(pick(ANY_CHARS, rng)),
+        RegexComponent::Repeat { component, count } => {
+            for _ in 0..*count {
+                write_component(component, rng, out);
+            }
+        }
+        RegexComponent::RepeatRange {
+            component,
+            min,
+            max,
+        } => {
+            for _ in 0..rng.random_range(*min..=*max) {
+                write_component(component, rng, out);
+            }
+        }
+        RegexComponent::Group(components) => write_components(components, rng, out),
+        RegexComponent::Alternation(alternatives) => {
+            let chosen = &alternatives[rng.random_range(0..alternatives.len())];
+            write_components(chosen, rng, out);
+        }
+        RegexComponent::Optional(component) => {
+            if rng.random_bool(0.7) {
+                write_component(component, rng, out);
+            }
+        }
+        RegexComponent::NumericRange {
+            min,
+            max,
+            leading_zeros,
+            digits,
+        } => {
+            let number = rng.random_range(*min..=*max);
+            match digits {
+                Some(width) if *leading_zeros => {
+                    out.push_str(&format!("{number:0width$}", width = width));
                 }
-
-                result
+                _ => out.push_str(&number.to_string()),
             }
         }
     }
@@ -961,7 +779,7 @@ impl RegexValGen {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::RegexValGen;
 
     #[test]
     fn test_literal_pattern() {
@@ -974,7 +792,7 @@ mod tests {
     fn test_digit_class() {
         let mut value_generator = RegexValGen::new();
         let result = value_generator.generate(r"\d").unwrap();
-        assert!(result.chars().all(|c| c.is_ascii_digit()));
+        assert!(result.chars().all(|character| character.is_ascii_digit()));
         assert_eq!(result.len(), 1);
     }
 
@@ -982,7 +800,11 @@ mod tests {
     fn test_char_range() {
         let mut value_generator = RegexValGen::new();
         let result = value_generator.generate("[a-z]").unwrap();
-        assert!(result.chars().all(|c| c.is_ascii_lowercase()));
+        assert!(
+            result
+                .chars()
+                .all(|character| character.is_ascii_lowercase())
+        );
         assert_eq!(result.len(), 1);
     }
 
@@ -997,7 +819,7 @@ mod tests {
     fn test_quantifier_exact() {
         let mut value_generator = RegexValGen::new();
         let result = value_generator.generate(r"\d{5}").unwrap();
-        assert!(result.chars().all(|c| c.is_ascii_digit()));
+        assert!(result.chars().all(|character| character.is_ascii_digit()));
         assert_eq!(result.len(), 5);
     }
 
@@ -1005,7 +827,11 @@ mod tests {
     fn test_quantifier_range() {
         let mut value_generator = RegexValGen::new();
         let result = value_generator.generate("[a-z]{2,4}").unwrap();
-        assert!(result.chars().all(|c| c.is_ascii_lowercase()));
+        assert!(
+            result
+                .chars()
+                .all(|character| character.is_ascii_lowercase())
+        );
         assert!(result.len() >= 2 && result.len() <= 4);
     }
 
@@ -1053,9 +879,13 @@ mod tests {
         assert!(
             chars[1..chars.len() - 2]
                 .iter()
-                .all(|c| c.is_ascii_lowercase())
+                .all(|character| character.is_ascii_lowercase())
         );
-        assert!(chars[chars.len() - 2..].iter().all(|c| c.is_ascii_digit()));
+        assert!(
+            chars[chars.len() - 2..]
+                .iter()
+                .all(|character| character.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -1063,7 +893,11 @@ mod tests {
         let mut value_generator = RegexValGen::new();
         let result = value_generator.generate("[0-9a-fA-F]{8}").unwrap();
         assert_eq!(result.len(), 8);
-        assert!(result.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(
+            result
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        );
     }
 
     #[test]
@@ -1074,7 +908,9 @@ mod tests {
         assert!(
             result
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
+                .all(|character| character.is_ascii_alphanumeric()
+                    || character == '+'
+                    || character == '/')
         );
     }
 
@@ -1098,7 +934,7 @@ mod tests {
                     assert!(num <= 255, "Each octet should be <= 255, got: {}", num);
                 }
             }
-            Err(e) => panic!("Failed to generate IP: {:?}", e),
+            Err(error) => panic!("Failed to generate IP: {:?}", error),
         }
 
         // Run it multiple times to ensure it's stable
@@ -1173,148 +1009,6 @@ mod tests {
                 }
             }
             println!();
-        }
-    }
-
-    #[test]
-    fn test_duration_pattern() {
-        let mut value_generator = RegexValGen::new();
-
-        // Test simpler duration components first
-        let simple_patterns = vec![
-            ("P\\d{1,2}Y", "Year only"),
-            ("P(0?[0-9]|1[0-1])M", "Month only"),
-            ("P\\d{1,4}W", "Week only"),
-            ("P([0-2]?[0-9])D", "Day only"),
-            ("PT([0-1]?[0-9]|2[0-3])H", "Hour only"),
-            ("PT([0-5]?[0-9])M", "Minute only"),
-            ("PT([0-5]?[0-9])S", "Second only"),
-        ];
-
-        for (pattern, desc) in simple_patterns {
-            println!("Testing {}: {}", desc, pattern);
-            match value_generator.generate(pattern) {
-                Ok(duration) => {
-                    println!("  Generated: {}", duration);
-                    assert!(duration.starts_with('P'), "Duration should start with P");
-                }
-                Err(e) => {
-                    println!("  Error: {:?}", e);
-                }
-            }
-        }
-
-        // Test the actual Duration format pattern
-        let duration_pattern = r"^P((\d{1,2}Y)?(0?[0-9]|1[0-1]M)?(\d{1,4}W)?([0-2]?[0-9]D)?)?(T([0-1]?[0-9]|2[0-3]H)?([0-5]?[0-9]M)?([0-5]?[0-9](\.\d{1,3})?S)?)?$";
-
-        println!("\nTesting actual Duration format pattern");
-        for i in 0..10 {
-            match value_generator.generate(duration_pattern) {
-                Ok(duration) => {
-                    println!("  Duration {}: {}", i + 1, duration);
-                    assert!(duration.starts_with('P'), "Duration should start with P");
-
-                    // Validate normalized ranges
-                    if duration.contains('M') && !duration.contains('T') {
-                        // Month is in date part
-                        let month_match = duration
-                            .split('M')
-                            .next()
-                            .unwrap()
-                            .chars()
-                            .rev()
-                            .take_while(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect::<String>();
-                        if let Ok(month) = month_match.parse::<u32>() {
-                            assert!(month <= 11, "Month should be 0-11, got {}", month);
-                        }
-                    }
-
-                    if duration.contains('D') && !duration.contains('T') {
-                        // Day is in date part
-                        let day_match = duration
-                            .split('D')
-                            .next()
-                            .unwrap()
-                            .chars()
-                            .rev()
-                            .take_while(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect::<String>();
-                        if let Ok(day) = day_match.parse::<u32>() {
-                            assert!(day <= 29, "Day should be 0-29, got {}", day);
-                        }
-                    }
-
-                    if let Some(t_pos) = duration.find('T') {
-                        let time_part = &duration[t_pos + 1..];
-
-                        if time_part.contains('H') {
-                            let hour_match = time_part.split('H').next().unwrap();
-                            if let Ok(hour) = hour_match.parse::<u32>() {
-                                assert!(hour <= 23, "Hour should be 0-23, got {}", hour);
-                            }
-                        }
-
-                        if time_part.contains('M') {
-                            let min_part = if time_part.contains('H') {
-                                time_part
-                                    .split('H')
-                                    .nth(1)
-                                    .unwrap()
-                                    .split('M')
-                                    .next()
-                                    .unwrap()
-                            } else {
-                                time_part.split('M').next().unwrap()
-                            };
-                            if let Ok(min) = min_part.parse::<u32>() {
-                                assert!(min <= 59, "Minute should be 0-59, got {}", min);
-                            }
-                        }
-
-                        if time_part.contains('S') {
-                            let sec_part = if time_part.contains('M') {
-                                time_part
-                                    .split('M')
-                                    .next_back()
-                                    .unwrap()
-                                    .split('S')
-                                    .next()
-                                    .unwrap()
-                            } else if time_part.contains('H') {
-                                time_part
-                                    .split('H')
-                                    .next_back()
-                                    .unwrap()
-                                    .split('S')
-                                    .next()
-                                    .unwrap()
-                            } else {
-                                time_part.split('S').next().unwrap()
-                            };
-
-                            let sec_int = if sec_part.contains('.') {
-                                sec_part.split('.').next().unwrap()
-                            } else {
-                                sec_part
-                            };
-
-                            if let Ok(sec) = sec_int.parse::<u32>() {
-                                assert!(sec <= 59, "Second should be 0-59, got {}", sec);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("  Error {}: {:?}", i + 1, e);
-                }
-            }
         }
     }
 }

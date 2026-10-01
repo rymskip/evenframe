@@ -1,10 +1,13 @@
 use crate::{
+    error::{EvenframeError, Result},
     schemasync::table::TableConfig,
     types::{StructConfig, TaggedUnion},
 };
 use std::collections::BTreeMap;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
+/// The DEFINE statements for `table_name`: the table, its fields, indexes
+/// and events. Fails naming the field whose type has no definition.
 pub fn generate_define_statements(
     table_name: &str,
     table_config: &TableConfig,
@@ -13,7 +16,7 @@ pub fn generate_define_statements(
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
     allow_scripting: bool,
-) -> String {
+) -> Result<String> {
     info!("Generating define statements for table {table_name}");
     debug!(
         query_details_count = query_details.len(),
@@ -84,29 +87,22 @@ pub fn generate_define_statements(
                 && table_field.field_name != "id")
         {
             if table_field.define_config.is_some() {
-                match table_field.generate_define_statement(
-                    enums.clone(),
-                    server_only.clone(),
-                    query_details.clone(),
-                    &table_name.to_string(),
-                    registry,
-                    allow_scripting,
-                ) {
-                    Ok(statement) => output.push_str(&statement),
-                    Err(e) => {
-                        error!(
-                            table_name = %table_name,
-                            field_name = %table_field.field_name,
-                            error = %e,
-                            "Failed to generate define statement for field"
-                        );
-                        // Continue with a fallback definition
-                        output.push_str(&format!(
-                            "DEFINE FIELD OVERWRITE {} ON TABLE {} TYPE any PERMISSIONS FULL;\n",
-                            table_field.field_name, table_name
-                        ));
-                    }
-                }
+                let statement = table_field
+                    .generate_define_statement(
+                        enums,
+                        server_only,
+                        query_details,
+                        &table_name.to_string(),
+                        registry,
+                        allow_scripting,
+                    )
+                    .map_err(|error| {
+                        EvenframeError::database(format!(
+                            "Cannot define field '{}' on table '{table_name}': {error}",
+                            table_field.field_name
+                        ))
+                    })?;
+                output.push_str(&statement);
             } else {
                 output.push_str(&format!(
                     "DEFINE FIELD OVERWRITE {} ON TABLE {} TYPE any PERMISSIONS FULL;\n",
@@ -149,12 +145,12 @@ pub fn generate_define_statements(
 
     info!(table_name = %table_name, output_length = output.len(), "Completed define statements generation");
     trace!(table_name = %table_name, "Generated output: {}", output);
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BTreeMap, TableConfig, generate_define_statements};
     use crate::schemasync::{DefineConfig, EventConfig};
     use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
 
@@ -198,7 +194,8 @@ mod tests {
             &enums,
             &crate::types::ForeignTypeRegistry::default(),
             true,
-        );
+        )
+        .unwrap();
 
         assert!(statements.contains("DEFINE EVENT user_change ON TABLE user"));
         assert!(statements.trim().ends_with(';'));
@@ -238,9 +235,9 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
                 true,
@@ -289,9 +286,9 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
                 true,
@@ -336,9 +333,9 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"user".to_string(),
                 &crate::types::ForeignTypeRegistry::default(),
                 true,
@@ -446,7 +443,8 @@ mod tests {
             &enums,
             &crate::types::ForeignTypeRegistry::default(),
             true,
-        );
+        )
+        .unwrap();
 
         // Should contain unique index for email but not for name
         assert!(
@@ -556,7 +554,8 @@ mod tests {
             &enums,
             &crate::types::ForeignTypeRegistry::default(),
             true,
-        );
+        )
+        .unwrap();
 
         assert!(
             statements.contains(
@@ -617,9 +616,9 @@ mod tests {
         let reg = crate::types::ForeignTypeRegistry::default();
         let gen_stmt = |f: StructField, allow_scripting: bool| {
             f.generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"user".to_string(),
                 &reg,
                 allow_scripting,
@@ -763,9 +762,9 @@ mod tests {
         let reg = crate::types::ForeignTypeRegistry::default();
         let gen_stmt = |f: StructField| {
             f.generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"t".to_string(),
                 &reg,
                 true,

@@ -10,7 +10,7 @@ use evenframe_core::{
     typesync::{
         checks::check_types,
         config::{OutputKind, OutputMode, TypesyncOutput},
-        output::{OutputTypes, render_output},
+        output::{OutputTypes, render_outputs},
     },
 };
 use std::collections::BTreeMap;
@@ -20,9 +20,9 @@ use tracing::info;
 /// Runs the typesync command.
 pub async fn run(cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let config = EvenframeConfig::new_offline()?;
-    let build_config = config_builders::BuildConfig::discover()?;
+    let build_config = config_builders::BuildConfig::from_config(&config);
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
-    generate(cli, args, &config, enums, tables, objects)
+    generate(cli, args, &config, &enums, &tables, &objects)
 }
 
 /// Generates the types for an already-scanned project, so `generate` can
@@ -31,20 +31,16 @@ pub(crate) fn generate(
     cli: &Cli,
     args: TypesyncArgs,
     config: &EvenframeConfig,
-    enums: BTreeMap<String, TaggedUnion>,
-    tables: BTreeMap<String, TableConfig>,
-    objects: BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
 ) -> Result<()> {
     info!("Starting type generation");
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
-    check_types(&enums, &tables, &objects, &registry)?;
+    check_types(enums, tables, objects, &registry)?;
     let (enums, tables, objects) = config_builders::filter_for_typesync(enums, tables, objects);
-    let structs = config_builders::merge_tables_and_objects(&tables, &objects);
-    let types = OutputTypes {
-        structs: &structs,
-        enums: &enums,
-        registry: &registry,
-    };
+    let structs = config_builders::merge_tables_and_objects(tables, objects);
+    let types = OutputTypes::new(&structs, &enums, &registry)?;
 
     let (mut outputs, file) = select_outputs(cli, &args, config)?;
     if outputs.is_empty() {
@@ -70,30 +66,38 @@ pub(crate) fn generate(
         (None, _) => None,
     };
 
-    // Every output renders before any is written, so one that fails leaves
-    // every output's files as they were.
-    let rendered = outputs
+    // `--output` is taken as given (relative to where the command runs); a
+    // configured `dir` is relative to the project root.
+    let targets: Vec<_> = outputs
         .iter()
         .map(|output| {
-            // `--output` is taken as given (relative to where the command
-            // runs); a configured `dir` is relative to the project root.
             let dir = dir_override
                 .clone()
                 .unwrap_or_else(|| output.resolve_dir(config.project_root()));
-            let rendered = render_output(output, &dir, file.as_deref(), &types)?;
-            Ok((output, dir, rendered))
+            (output, dir)
         })
-        .collect::<Result<Vec<_>>>()?;
-    for (output, dir, rendered) in rendered {
+        .collect();
+    let rendered = render_outputs(&targets, file.as_deref(), &types)?;
+    for ((output, dir), rendered) in targets.iter().zip(rendered) {
         let written = rendered.write()?;
         match output.files.mode {
             OutputMode::Single => {
                 for generated in &written {
-                    println!("Wrote {}", generated.path.display());
+                    let verb = if generated.changed {
+                        "Wrote"
+                    } else {
+                        "Unchanged"
+                    };
+                    println!("{verb} {}", generated.path.display());
                 }
             }
             OutputMode::PerFile => {
-                println!("Wrote {} (files: {})", dir.display(), written.len());
+                println!(
+                    "Generated {} (files: {}, changed: {})",
+                    dir.display(),
+                    written.len(),
+                    written.iter().filter(|generated| generated.changed).count()
+                );
             }
         }
     }
@@ -110,23 +114,37 @@ fn select_outputs(
     let Some(command) = &args.command else {
         let outputs = configured
             .iter()
-            .filter(|o| args.formats.as_ref().is_none_or(|f| f.contains(&o.kind)))
-            .filter(|o| args.skip.as_ref().is_none_or(|s| !s.contains(&o.kind)))
+            .filter(|output| {
+                args.formats
+                    .as_ref()
+                    .is_none_or(|formats| formats.contains(&output.kind))
+            })
+            .filter(|output| {
+                args.skip
+                    .as_ref()
+                    .is_none_or(|skipped| !skipped.contains(&output.kind))
+            })
             .cloned()
             .collect();
         return Ok((outputs, None));
     };
 
     let (kind, file) = match command {
-        TypesyncCommands::Arktype(a) => (OutputKind::Arktype, a.file.clone()),
-        TypesyncCommands::Effect(a) => (OutputKind::Effect, a.file.clone()),
-        TypesyncCommands::Macroforge(a) => (OutputKind::Macroforge, a.file.clone()),
-        TypesyncCommands::Flatbuffers(a) => (OutputKind::Flatbuffers, a.file.clone()),
-        TypesyncCommands::Protobuf(a) => (OutputKind::Protobuf, a.file.clone()),
+        TypesyncCommands::Arktype(command_args) => (OutputKind::Arktype, command_args.file.clone()),
+        TypesyncCommands::Effect(command_args) => (OutputKind::Effect, command_args.file.clone()),
+        TypesyncCommands::Macroforge(command_args) => {
+            (OutputKind::Macroforge, command_args.file.clone())
+        }
+        TypesyncCommands::Flatbuffers(command_args) => {
+            (OutputKind::Flatbuffers, command_args.file.clone())
+        }
+        TypesyncCommands::Protobuf(command_args) => {
+            (OutputKind::Protobuf, command_args.file.clone())
+        }
     };
     let mut outputs: Vec<TypesyncOutput> = configured
         .iter()
-        .filter(|o| o.kind == kind)
+        .filter(|output| output.kind == kind)
         .cloned()
         .collect();
     if outputs.is_empty() {
@@ -151,18 +169,18 @@ fn select_outputs(
 
     for output in outputs.iter_mut() {
         match command {
-            TypesyncCommands::Flatbuffers(a) => {
-                if let Some(namespace) = &a.namespace {
+            TypesyncCommands::Flatbuffers(command_args) => {
+                if let Some(namespace) = &command_args.namespace {
                     output.namespace = Some(namespace.clone());
                 }
             }
-            TypesyncCommands::Protobuf(a) => {
-                if let Some(package) = &a.package {
+            TypesyncCommands::Protobuf(command_args) => {
+                if let Some(package) = &command_args.package {
                     output.package = Some(package.clone());
                 }
-                if a.import_validate {
+                if command_args.import_validate {
                     output.import_validate = true;
-                } else if a.no_import_validate {
+                } else if command_args.no_import_validate {
                     output.import_validate = false;
                 }
             }

@@ -2,13 +2,16 @@
 
 // Common modules (always compiled)
 pub mod config;
+#[cfg(feature = "surrealdb")]
 pub mod default;
 pub mod dependency;
 pub mod derive;
 pub mod error;
+#[cfg(feature = "tooling")]
 pub mod lock;
 pub mod log;
 pub mod registry;
+#[cfg(feature = "tooling")]
 pub mod tooling;
 pub mod traits;
 pub mod types;

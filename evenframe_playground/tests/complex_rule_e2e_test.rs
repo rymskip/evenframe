@@ -18,6 +18,7 @@
 #![cfg(feature = "wasm-plugins")]
 
 use evenframe_core::config::OutputRulePluginConfig;
+use evenframe_core::error::EvenframeError;
 use evenframe_core::types::{FieldType, StructConfig, StructField};
 use evenframe_core::typesync::plugin::OutputRulePluginManager;
 use evenframe_core::typesync::plugin_types::{OutputRulePluginInput, OutputRulePluginOutput};
@@ -41,7 +42,7 @@ fn mgr() -> OutputRulePluginManager {
         .expect("failed to load complex_rule plugin")
 }
 
-fn f(name: &str, ty: &str) -> StructField {
+fn field(name: &str, ty: &str) -> StructField {
     StructField {
         field_name: name.to_string(),
         field_type: FieldType::Other(ty.to_string()),
@@ -49,23 +50,23 @@ fn f(name: &str, ty: &str) -> StructField {
     }
 }
 
-fn f_ann(name: &str, ty: &str, anns: Vec<&str>) -> StructField {
-    let mut out = f(name, ty);
-    out.annotations = anns.into_iter().map(|s| s.to_string()).collect();
+fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> StructField {
+    let mut out = field(name, ty);
+    out.annotations = anns.into_iter().map(|text| text.to_string()).collect();
     out
 }
 
-fn f_val(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
-    let mut out = f(name, ty);
+fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
+    let mut out = field(name, ty);
     out.validators = vals
         .into_iter()
-        .map(|s| Validator::StringValidator(StringValidator::StringEmbedded(s.to_string())))
+        .map(|text| Validator::StringValidator(StringValidator::StringEmbedded(text.to_string())))
         .collect();
     out
 }
 
-/// Fluent builder for `OutputRulePluginInput::Struct` — keeps the test setup
-/// concise without a megadose positional helper.
+/// Fluent builder for the struct a plugin input borrows, so test setup stays
+/// concise without a long positional helper.
 struct Builder {
     name: String,
     derives: Vec<String>,
@@ -87,33 +88,36 @@ impl Builder {
         }
     }
 
-    fn derives(mut self, d: Vec<&str>) -> Self {
-        self.derives = d.into_iter().map(|s| s.to_string()).collect();
+    fn derives(mut self, derives: Vec<&str>) -> Self {
+        self.derives = derives.into_iter().map(|text| text.to_string()).collect();
         self
     }
 
-    fn annotations(mut self, a: Vec<&str>) -> Self {
-        self.annotations = a.into_iter().map(|s| s.to_string()).collect();
+    fn annotations(mut self, annotation: Vec<&str>) -> Self {
+        self.annotations = annotation
+            .into_iter()
+            .map(|text| text.to_string())
+            .collect();
         self
     }
 
-    fn pipeline(mut self, p: &str) -> Self {
-        self.pipeline = p.to_string();
+    fn pipeline(mut self, pipeline: &str) -> Self {
+        self.pipeline = pipeline.to_string();
         self
     }
 
-    fn generator(mut self, g: &str) -> Self {
-        self.generator = g.to_string();
+    fn generator(mut self, generator: &str) -> Self {
+        self.generator = generator.to_string();
         self
     }
 
-    fn fields(mut self, f: Vec<StructField>) -> Self {
-        self.fields = f;
+    fn fields(mut self, field: Vec<StructField>) -> Self {
+        self.fields = field;
         self
     }
 
-    fn build(self) -> OutputRulePluginInput {
-        OutputRulePluginInput::Struct {
+    fn build(self) -> BuiltStruct {
+        BuiltStruct {
             pipeline: self.pipeline,
             generator: self.generator,
             config: StructConfig {
@@ -127,18 +131,40 @@ impl Builder {
     }
 }
 
-fn full_match_input(generator: &str) -> OutputRulePluginInput {
+/// A struct the builder made, which the plugin input borrows.
+struct BuiltStruct {
+    pipeline: String,
+    generator: String,
+    config: StructConfig,
+}
+
+/// The loaded plugin's output for `built`.
+fn transform(
+    manager: &mut OutputRulePluginManager,
+    built: &BuiltStruct,
+) -> Result<OutputRulePluginOutput, EvenframeError> {
+    let input = OutputRulePluginInput::Struct {
+        pipeline: built.pipeline.clone(),
+        generator: built.generator.clone(),
+        config: &built.config,
+    };
+    let mut outputs = manager.transform(&input)?;
+    assert_eq!(outputs.len(), 1, "one plugin is loaded");
+    Ok(outputs.remove(0).1)
+}
+
+fn full_match_input(generator: &str) -> BuiltStruct {
     Builder::new("Invoice")
         .derives(vec!["Debug", "Clone", "Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .generator(generator)
         .fields(vec![
-            f("id", "String"),
-            f("total", "Decimal"),
-            f("tax", "f64"),
-            f("line_count", "i64"),
-            f("currency_code", "String"),
-            f("description", "String"),
+            field("id", "String"),
+            field("total", "Decimal"),
+            field("tax", "f64"),
+            field("line_count", "i64"),
+            field("currency_code", "String"),
+            field("description", "String"),
         ])
         .build()
 }
@@ -162,28 +188,26 @@ fn type_annotations(output: &OutputRulePluginOutput) -> &[String] {
 #[test]
 fn full_match_effect_generator_brands_monetary_fields() {
     let mut pm = mgr();
-    let result = pm
-        .transform_type("complex", &full_match_input("effect"))
-        .unwrap();
+    let result = transform(&mut pm, &full_match_input("effect")).unwrap();
     assert!(result.error.is_none());
 
     // Type-level rename + generator + count annotations
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@rename(\"InvoiceMonetary\")"),
+            .any(|annotation| annotation == "@rename(\"InvoiceMonetary\")"),
         "expected @rename; got: {:?}",
         type_annotations(&result)
     );
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@generator(\"effect\")")
+            .any(|annotation| annotation == "@generator(\"effect\")")
     );
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@monetary_count(3)"),
+            .any(|annotation| annotation == "@monetary_count(3)"),
         "expected @monetary_count(3); got: {:?}",
         type_annotations(&result)
     );
@@ -200,7 +224,8 @@ fn full_match_effect_generator_brands_monetary_fields() {
         );
         assert!(
             anns.iter()
-                .any(|a| a.contains("currency_field") && a.contains("currency_code")),
+                .any(|annotation| annotation.contains("currency_field")
+                    && annotation.contains("currency_code")),
             "field `{}` missing @monetary linking to currency_code; got: {:?}",
             field_name,
             anns
@@ -222,14 +247,12 @@ fn full_match_effect_generator_brands_monetary_fields() {
 #[test]
 fn full_match_macroforge_generator_uses_macroforge_generator_annotation() {
     let mut pm = mgr();
-    let result = pm
-        .transform_type("complex", &full_match_input("macroforge"))
-        .unwrap();
+    let result = transform(&mut pm, &full_match_input("macroforge")).unwrap();
 
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@generator(\"macroforge\")"),
+            .any(|annotation| annotation == "@generator(\"macroforge\")"),
         "expected macroforge generator annotation; got: {:?}",
         type_annotations(&result)
     );
@@ -244,16 +267,19 @@ fn full_match_macroforge_generator_uses_macroforge_generator_annotation() {
 #[test]
 fn missing_serialize_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Debug", "Deserialize"])
         .annotations(vec!["@monetary"])
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         !type_annotations(&result)
             .iter()
-            .any(|a| a.starts_with("@rename("))
+            .any(|annotation| annotation.starts_with("@rename("))
     );
     assert!(ann(&result, "total").is_empty());
 }
@@ -261,77 +287,92 @@ fn missing_serialize_blocks_rule() {
 #[test]
 fn missing_deserialize_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize"])
         .annotations(vec!["@monetary"])
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").is_empty());
 }
 
 #[test]
 fn missing_monetary_type_annotation_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").is_empty());
 }
 
 #[test]
 fn wrong_generator_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .generator("arktype")
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").is_empty());
 }
 
 #[test]
 fn wrong_pipeline_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .pipeline("Schemasync")
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").is_empty());
 }
 
 #[test]
 fn no_monetary_field_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
-        .fields(vec![f("name", "String"), f("currency_code", "String")])
+        .fields(vec![
+            field("name", "String"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         !type_annotations(&result)
             .iter()
-            .any(|a| a.starts_with("@rename("))
+            .any(|annotation| annotation.starts_with("@rename("))
     );
 }
 
 #[test]
 fn no_currency_field_blocks_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
-        .fields(vec![f("total", "Decimal"), f("name", "String")])
+        .fields(vec![field("total", "Decimal"), field("name", "String")])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").is_empty());
 }
 
@@ -342,16 +383,16 @@ fn no_currency_field_blocks_rule() {
 #[test]
 fn raw_annotated_field_is_skipped() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .fields(vec![
-            f("total", "Decimal"),
-            f_ann("raw_total", "Decimal", vec!["@raw"]),
-            f("currency_code", "String"),
+            field("total", "Decimal"),
+            field_with_annotations("raw_total", "Decimal", vec!["@raw"]),
+            field("currency_code", "String"),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "total").contains(&"@brand(\"MonetaryAmount\")".to_string()));
     assert!(
         ann(&result, "raw_total").is_empty(),
@@ -367,16 +408,16 @@ fn raw_annotated_field_is_skipped() {
 #[test]
 fn raw_amount_field_is_marked_skipped() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .fields(vec![
-            f("total", "Decimal"),
-            f("raw_amount", "Decimal"),
-            f("currency_code", "String"),
+            field("total", "Decimal"),
+            field("raw_amount", "Decimal"),
+            field("currency_code", "String"),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "raw_amount").contains(&"@skip_raw_amount".to_string()));
     assert!(!ann(&result, "raw_amount").contains(&"@brand(\"MonetaryAmount\")".to_string()));
     assert!(ann(&result, "total").contains(&"@brand(\"MonetaryAmount\")".to_string()));
@@ -389,16 +430,19 @@ fn raw_amount_field_is_marked_skipped() {
 #[test]
 fn already_monetary_suffix_is_not_renamed_again() {
     let mut pm = mgr();
-    let i = Builder::new("InvoiceMonetary")
+    let built = Builder::new("InvoiceMonetary")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         !type_annotations(&result)
             .iter()
-            .any(|a| a.starts_with("@rename(")),
+            .any(|annotation| annotation.starts_with("@rename(")),
         "type already ending in Monetary should not be renamed; got: {:?}",
         type_annotations(&result)
     );
@@ -413,33 +457,33 @@ fn already_monetary_suffix_is_not_renamed_again() {
 #[test]
 fn internal_annotation_triggers_skip_marker_without_monetary_gate() {
     let mut pm = mgr();
-    let i = Builder::new("Simple")
+    let built = Builder::new("Simple")
         .derives(vec!["Debug"])
         .generator("macroforge")
         .fields(vec![
-            f("name", "String"),
-            f_ann("secret", "String", vec!["@internal"]),
+            field("name", "String"),
+            field_with_annotations("secret", "String", vec!["@internal"]),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(ann(&result, "secret").contains(&"@skip_internal".to_string()));
 }
 
 #[test]
 fn heavily_validated_annotation_fires() {
     let mut pm = mgr();
-    let i = Builder::new("Validated")
+    let built = Builder::new("Validated")
         .generator("macroforge")
         .fields(vec![
-            f_val(
+            field_with_validators(
                 "email",
                 "String",
                 vec!["email", "min_length(5)", "max_length(255)"],
             ),
-            f_val("name", "String", vec!["min_length(1)"]),
+            field_with_validators("name", "String", vec!["min_length(1)"]),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         ann(&result, "email").contains(&"@heavily_validated".to_string()),
         "email with 3 validators should get @heavily_validated; got: {:?}",
@@ -454,19 +498,20 @@ fn heavily_validated_annotation_fires() {
 #[test]
 fn nested_collection_detection_fires() {
     let mut pm = mgr();
-    let i = Builder::new("Order")
+    let built = Builder::new("Order")
         .generator("macroforge")
         .fields(vec![
-            f("items", "Vec<LineItem>"),
-            f("line_item_ref", "LineItem"),
-            f("name", "String"),
+            field("items", "Vec<LineItem>"),
+            field("line_item_ref", "LineItem"),
+            field("name", "String"),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         ann(&result, "items")
             .iter()
-            .any(|a| a.contains("@nested_collection") && a.contains("LineItem")),
+            .any(|annotation| annotation.contains("@nested_collection")
+                && annotation.contains("LineItem")),
         "Vec<LineItem> should get @nested_collection when LineItem appears as a field type; got: {:?}",
         ann(&result, "items")
     );
@@ -479,13 +524,16 @@ fn nested_collection_detection_fires() {
 #[test]
 fn typesync_pipeline_passes_main_rule() {
     let mut pm = mgr();
-    let i = Builder::new("Invoice")
+    let built = Builder::new("Invoice")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .pipeline("Typesync")
-        .fields(vec![f("total", "Decimal"), f("currency_code", "String")])
+        .fields(vec![
+            field("total", "Decimal"),
+            field("currency_code", "String"),
+        ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(
         ann(&result, "total").contains(&"@brand(\"MonetaryAmount\")".to_string()),
         "Typesync pipeline should pass the gate; got: {:?}",
@@ -500,18 +548,18 @@ fn typesync_pipeline_passes_main_rule() {
 #[test]
 fn mixed_monetary_types_all_get_branded() {
     let mut pm = mgr();
-    let i = Builder::new("FinancialRecord")
+    let built = Builder::new("FinancialRecord")
         .derives(vec!["Serialize", "Deserialize"])
         .annotations(vec!["@monetary"])
         .fields(vec![
-            f("decimal_amount", "Decimal"),
-            f("float_amount", "f64"),
-            f("int_amount", "i64"),
-            f("name", "String"),
-            f("currency", "String"),
+            field("decimal_amount", "Decimal"),
+            field("float_amount", "f64"),
+            field("int_amount", "i64"),
+            field("name", "String"),
+            field("currency", "String"),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
 
     for field_name in ["decimal_amount", "float_amount", "int_amount"] {
         assert!(
@@ -526,7 +574,7 @@ fn mixed_monetary_types_all_get_branded() {
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@monetary_count(3)"),
+            .any(|annotation| annotation == "@monetary_count(3)"),
         "expected @monetary_count(3); got: {:?}",
         type_annotations(&result)
     );
@@ -539,16 +587,23 @@ fn mixed_monetary_types_all_get_branded() {
 #[test]
 fn fifty_rapid_calls_stable() {
     let mut pm = mgr();
-    for i in 0..50 {
-        let name = format!("Type{}", i);
+    for index in 0..50 {
+        let name = format!("Type{}", index);
         let input = Builder::new(&name)
             .derives(vec!["Serialize", "Deserialize"])
             .annotations(vec!["@monetary"])
-            .generator(if i % 2 == 0 { "effect" } else { "macroforge" })
-            .fields(vec![f("amount", "Decimal"), f("currency_code", "String")])
+            .generator(if index % 2 == 0 {
+                "effect"
+            } else {
+                "macroforge"
+            })
+            .fields(vec![
+                field("amount", "Decimal"),
+                field("currency_code", "String"),
+            ])
             .build();
-        let result = pm.transform_type("complex", &input);
-        assert!(result.is_ok(), "call {} failed: {:?}", i, result.err());
+        let result = transform(&mut pm, &input);
+        assert!(result.is_ok(), "call {} failed: {:?}", index, result.err());
         let output = result.unwrap();
         assert!(output.error.is_none());
         assert!(ann(&output, "amount").contains(&"@brand(\"MonetaryAmount\")".to_string()));
@@ -562,7 +617,7 @@ fn fifty_rapid_calls_stable() {
 #[test]
 fn kitchen_sink_everything_at_once() {
     let mut pm = mgr();
-    let i = Builder::new("MegaInvoiceDto")
+    let built = Builder::new("MegaInvoiceDto")
         .derives(vec![
             "Debug",
             "Clone",
@@ -573,38 +628,38 @@ fn kitchen_sink_everything_at_once() {
         .annotations(vec!["@monetary", "@audit"])
         .generator("effect")
         .fields(vec![
-            f("id", "String"),
-            f("total", "Decimal"),                            // monetary
-            f("tax", "f64"),                                  // monetary
-            f("item_count", "i64"),                           // monetary
-            f_ann("raw_total", "Decimal", vec!["@raw"]),      // exempted by @raw
-            f("raw_amount", "Decimal"),                       // skipped by name
-            f_ann("secret_key", "String", vec!["@internal"]), // @skip_internal
-            f("currency_code", "String"),                     // @iso4217
-            f("created_at", "String"),
-            f_val(
+            field("id", "String"),
+            field("total", "Decimal"),  // monetary
+            field("tax", "f64"),        // monetary
+            field("item_count", "i64"), // monetary
+            field_with_annotations("raw_total", "Decimal", vec!["@raw"]), // exempted by @raw
+            field("raw_amount", "Decimal"), // skipped by name
+            field_with_annotations("secret_key", "String", vec!["@internal"]), // @skip_internal
+            field("currency_code", "String"), // @iso4217
+            field("created_at", "String"),
+            field_with_validators(
                 "email",
                 "String",
                 vec!["email", "min_length(3)", "max_length(255)"],
             ), // @heavily_validated
-            f("items", "Vec<LineItem>"), // @nested_collection
-            f("metadata", "LineItem"),   // struct ref
-            f("description", "String"),
+            field("items", "Vec<LineItem>"), // @nested_collection
+            field("metadata", "LineItem"),   // struct ref
+            field("description", "String"),
         ])
         .build();
-    let result = pm.transform_type("complex", &i).unwrap();
+    let result = transform(&mut pm, &built).unwrap();
     assert!(result.error.is_none());
 
-    // Type rename — MegaInvoiceDto does not end with Monetary.
+    // Type rename: MegaInvoiceDto does not end with Monetary.
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@rename(\"MegaInvoiceDtoMonetary\")")
+            .any(|annotation| annotation == "@rename(\"MegaInvoiceDtoMonetary\")")
     );
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@generator(\"effect\")")
+            .any(|annotation| annotation == "@generator(\"effect\")")
     );
 
     // Monetary brand markers.
@@ -633,13 +688,13 @@ fn kitchen_sink_everything_at_once() {
     assert!(
         ann(&result, "items")
             .iter()
-            .any(|a| a.contains("@nested_collection"))
+            .any(|annotation| annotation.contains("@nested_collection"))
     );
 
     // Monetary count embedded as a type annotation.
     assert!(
         type_annotations(&result)
             .iter()
-            .any(|a| a == "@monetary_count(3)")
+            .any(|annotation| annotation == "@monetary_count(3)")
     );
 }

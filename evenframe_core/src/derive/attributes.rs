@@ -48,8 +48,12 @@ pub fn parse_mock_data_attribute(
             match result {
                 Ok(metas) => {
                     debug!("Successfully parsed {} meta arguments", metas.len());
-                    // Start with defaults from MockGenerationConfig::default()
-                    let mut base_config = MockGenerationConfig::default();
+                    // Unset settings fall back to the configured defaults at run time.
+                    let mut base_config = MockGenerationConfig {
+                        record_count: None,
+                        coordination_rules: Vec::new(),
+                        plugin: None,
+                    };
 
                     for (meta_index, meta) in metas.iter().enumerate() {
                         trace!("Processing meta {} of {}", meta_index + 1, metas.len());
@@ -63,7 +67,7 @@ pub fn parse_mock_data_attribute(
                                     match lit.base10_parse::<usize>() {
                                         Ok(value) => {
                                             debug!("Successfully parsed n value: {}", value);
-                                            base_config.n = value;
+                                            base_config.record_count = Some(value);
                                         }
                                         Err(_) => {
                                             error!(
@@ -159,8 +163,8 @@ pub fn parse_mock_data_attribute(
                     }
 
                     info!(
-                        "Successfully parsed mock_data attribute: n={}, coordination_rules_count={}",
-                        base_config.n,
+                        "Successfully parsed mock_data attribute: record_count={:?}, coordination_rules_count={}",
+                        base_config.record_count,
                         coordination_rules.len()
                     );
 
@@ -1269,7 +1273,7 @@ pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig
                     }));
                 }
                 Err(_) => {
-                    // No arguments — bare #[relation]
+                    // No arguments: bare #[relation]
                     info!("Parsed bare #[relation] attribute");
                     return Ok(Some(EdgeConfig {
                         edge_name: String::new(),
@@ -1655,7 +1659,9 @@ pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<Format>,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Attribute, EnumRepresentation, parse_event_attributes, parse_serde_enum_representation,
+    };
     use syn::parse_quote;
 
     #[test]

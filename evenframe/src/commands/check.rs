@@ -98,7 +98,7 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{CacheStatus, Report, ScanCache};
     use evenframe_core::tooling::CACHE_FORMAT_VERSION;
     use evenframe_core::types::StructConfig;
     use std::collections::BTreeMap;
@@ -107,6 +107,7 @@ mod tests {
         ScanCache {
             format_version: CACHE_FORMAT_VERSION,
             evenframe_version: "0.0.0".to_string(),
+            stamped_at_ns: 0,
             inputs: BTreeMap::new(),
             enums: BTreeMap::new(),
             tables: BTreeMap::new(),

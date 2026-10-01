@@ -344,9 +344,9 @@ impl StructField {
     #[cfg(feature = "schemasync")]
     pub fn generate_define_statement(
         &self,
-        enums: BTreeMap<String, TaggedUnion>,
-        app_structs: BTreeMap<String, StructConfig>,
-        persistable_structs: BTreeMap<String, TableConfig>,
+        enums: &BTreeMap<String, TaggedUnion>,
+        app_structs: &BTreeMap<String, StructConfig>,
+        persistable_structs: &BTreeMap<String, TableConfig>,
         table_name: &String,
         registry: &ForeignTypeRegistry,
         allow_scripting: bool,
@@ -430,9 +430,9 @@ impl StructField {
                                     if let FieldType::Other(type_name) = inner.as_ref() {
                                         let resolved = record_link_target_surql(
                                             type_name,
-                                            &persistable_structs,
-                                            &app_structs,
-                                            &enums,
+                                            persistable_structs,
+                                            app_structs,
+                                            enums,
                                         )
                                         .unwrap_or_else(|| type_name.to_case(Case::Snake));
                                         value_stack.push((
@@ -885,8 +885,8 @@ impl StructField {
                     &self.field_name,
                     table_name,
                     &self.field_type,
-                    &enums,
-                    &app_structs,
+                    enums,
+                    app_structs,
                     registry,
                 )
             {
@@ -1073,7 +1073,12 @@ pub fn record_link_target_surql(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, EnumRepresentation, FieldType, Pipeline, StructConfig, StructField, TaggedUnion,
+        Variant, VariantData,
+    };
+    #[cfg(feature = "schemasync")]
+    use super::{ForeignTypeRegistry, TableConfig};
 
     // ==================== TaggedUnion Tests ====================
 
@@ -1818,9 +1823,9 @@ mod tests {
 
         let stmt = field
             .generate_define_statement(
-                BTreeMap::new(),
-                app_structs,
-                tables,
+                &BTreeMap::new(),
+                &app_structs,
+                &tables,
                 &"errand_channel".to_string(),
                 &ForeignTypeRegistry::default(),
                 true,
@@ -1877,9 +1882,9 @@ mod tests {
 
         let stmt = field
             .generate_define_statement(
-                BTreeMap::new(),
-                BTreeMap::new(),
-                BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
                 &"errand_channel".to_string(),
                 &ForeignTypeRegistry::default(),
                 true,

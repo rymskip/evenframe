@@ -62,7 +62,7 @@ impl ForeignTypeRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BTreeMap, ForeignTypeConfig, ForeignTypeRegistry};
 
     #[test]
     fn test_empty_registry() {

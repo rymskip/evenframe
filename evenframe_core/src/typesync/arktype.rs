@@ -1,19 +1,17 @@
-use crate::default::field_type_to_default_value;
+use crate::config::{RECORD_LINK, fill};
 use crate::error::{EvenframeError, Result};
-use crate::types::{
-    EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, Variant, VariantData,
-};
+use crate::types::{EnumRepresentation, FieldType, StructField, Variant, VariantData};
+use crate::typesync::default_value::field_type_to_default_value;
 use crate::typesync::doc_comment::format_jsdoc;
-use crate::typesync::foreign_ts::{RECORD_LINK, fill};
 use crate::typesync::js_checks::{self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
+use crate::typesync::type_index::TypeIndex;
 use crate::validator::string_rules::StringRule;
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator, bounds,
 };
 use convert_case::{Case, Casing};
-use std::collections::BTreeMap;
 use tracing;
 
 /// Converts a single enum variant into its ArkType representation,
@@ -22,7 +20,7 @@ use tracing;
 fn variant_to_arktype(
     variant: &Variant,
     representation: &EnumRepresentation,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
@@ -40,7 +38,7 @@ fn variant_to_arktype(
     };
     let payload = match variant_data {
         VariantData::InlineStruct(inline) => {
-            let entries = struct_field_entries(&inline.fields, enums, registry, helpers)?;
+            let entries = struct_field_entries(&inline.fields, index, registry, helpers)?;
             if let EnumRepresentation::InternallyTagged { tag } = representation {
                 // The tag is a field of the variant's own object.
                 let mut merged = vec![tag_entry(tag)];
@@ -50,7 +48,7 @@ fn variant_to_arktype(
             format!("{{ {} }}", entries.join(", "))
         }
         VariantData::DataStructureRef(field_type) => {
-            field_type_to_arktype(field_type, enums, registry)?
+            field_type_to_arktype(field_type, index, registry)?
         }
     };
     Ok(match representation {
@@ -69,7 +67,7 @@ fn variant_to_arktype(
 /// A struct's fields as ArkType object entries, validators applied.
 fn struct_field_entries(
     fields: &[StructField],
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<Vec<String>> {
@@ -79,7 +77,7 @@ fn struct_field_entries(
             Ok(format!(
                 "{}: {}",
                 field.field_name.to_case(Case::Camel),
-                field_arktype(field, enums, registry, helpers)?
+                field_arktype(field, index, registry, helpers)?
             ))
         })
         .collect()
@@ -87,7 +85,7 @@ fn struct_field_entries(
 
 fn field_type_to_arktype(
     field_type: &FieldType,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     tracing::trace!(field_type = ?field_type, "Converting field type to Arktype");
@@ -114,7 +112,7 @@ fn field_type_to_arktype(
             "[{}]",
             types
                 .iter()
-                .map(|item| field_type_to_arktype(item, enums, registry))
+                .map(|item| field_type_to_arktype(item, index, registry))
                 .collect::<Result<Vec<String>>>()?
                 .join(", ")
         ),
@@ -127,7 +125,7 @@ fn field_type_to_arktype(
                     Ok(format!(
                         "{}: {}",
                         name,
-                        field_type_to_arktype(field_type, enums, registry)?
+                        field_type_to_arktype(field_type, index, registry)?
                     ))
                 })
                 .collect::<Result<Vec<String>>>()?
@@ -136,22 +134,22 @@ fn field_type_to_arktype(
 
         FieldType::Option(inner) => format!(
             "[[{}, '|', 'undefined'], '|', 'null']",
-            field_type_to_arktype(inner, enums, registry)?
+            field_type_to_arktype(inner, index, registry)?
         ),
 
         FieldType::Vec(inner) => {
-            format!("[{}, '[]']", field_type_to_arktype(inner, enums, registry)?)
+            format!("[{}, '[]']", field_type_to_arktype(inner, index, registry)?)
         }
 
         FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => map_to_arktype(
             key,
-            &field_type_to_arktype(value, enums, registry)?,
-            enums,
+            &field_type_to_arktype(value, index, registry)?,
+            index,
             registry,
         )?,
 
         FieldType::RecordLink(inner) => {
-            let linked = field_type_to_arktype(inner, enums, registry)?;
+            let linked = field_type_to_arktype(inner, index, registry)?;
             match registry
                 .lookup(RECORD_LINK)
                 .and_then(|record_link| record_link.arktype.as_ref())
@@ -182,10 +180,10 @@ fn field_type_to_arktype(
 fn map_to_arktype(
     key: &FieldType,
     value: &str,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
-    let index = |definition: &str| -> Result<Vec<String>> {
+    let index_signature = |definition: &str| -> Result<Vec<String>> {
         Ok(vec![format!(
             "{}: {value}",
             string_literal(&format!("[{definition}]"))?
@@ -197,10 +195,10 @@ fn map_to_arktype(
             .collect()
     };
     let entries = match MapKey::require(key)? {
-        MapKey::Text => index("string")?,
+        MapKey::Text => index_signature("string")?,
         MapKey::Bool => optional(&mut BOOL_KEYS.into_iter())?,
-        MapKey::Char => index(&format!("/{ONE_CHARACTER}/"))?,
-        MapKey::Integer => index("string.integer")?,
+        MapKey::Char => index_signature(&format!("/{ONE_CHARACTER}/"))?,
+        MapKey::Integer => index_signature("string.integer")?,
         MapKey::Named(type_name) => match registry.lookup(type_name) {
             Some(foreign) => {
                 let definition = foreign
@@ -208,7 +206,7 @@ fn map_to_arktype(
                     .as_ref()
                     .map(|mapping| mapping.type_expr.as_str())
                     .unwrap_or_default();
-                index(
+                index_signature(
                     definition
                         .strip_prefix('\'')
                         .and_then(|inner| inner.strip_suffix('\''))
@@ -222,16 +220,11 @@ fn map_to_arktype(
                 )?
             }
             None => {
-                let pascal = type_name.to_case(Case::Pascal);
-                let tagged_union = enums
-                    .values()
-                    .map(TaggedUnion::effective)
-                    .find(|tagged_union| tagged_union.enum_name.to_case(Case::Pascal) == pascal)
-                    .ok_or_else(|| {
-                        EvenframeError::type_sync(format!(
-                            "map key `{type_name}` is neither a foreign type nor a scanned enum"
-                        ))
-                    })?;
+                let tagged_union = index.effective_enum_named(type_name).ok_or_else(|| {
+                    EvenframeError::type_sync(format!(
+                        "map key `{type_name}` is neither a foreign type nor a scanned enum"
+                    ))
+                })?;
                 optional(
                     &mut tagged_union
                         .variants
@@ -251,13 +244,12 @@ fn map_to_arktype(
 }
 
 pub fn generate_arktype_type_string(
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     tracing::info!(
-        struct_count = structs.len(),
-        enum_count = enums.len(),
+        struct_count = index.structs().len(),
+        enum_count = index.enums().len(),
         "Generating Arktype type string"
     );
     let mut output = String::new();
@@ -270,7 +262,7 @@ pub fn generate_arktype_type_string(
 
     // First, process all enums. Use `effective()` so overrides replace
     // the scanned type.
-    for schema_enum in enums.values() {
+    for schema_enum in index.enums().values() {
         // `resolve_only` types are kept in the maps for reference resolution
         // (below) but are not emitted as their own interface.
         if schema_enum.resolve_only {
@@ -297,7 +289,7 @@ pub fn generate_arktype_type_string(
             let item_str = variant_to_arktype(
                 variant,
                 &schema_enum.representation,
-                enums,
+                index,
                 registry,
                 &mut helpers,
             )?;
@@ -325,7 +317,7 @@ pub fn generate_arktype_type_string(
     // Then, process all structs. Use `effective()` so overrides replace
     // the scanned type.
     tracing::debug!("Processing structs for Arktype");
-    for struct_config in structs.values() {
+    for struct_config in index.structs().values() {
         // `resolve_only` types are kept in the maps for reference resolution
         // but are not emitted as their own interface.
         if struct_config.resolve_only {
@@ -343,10 +335,10 @@ pub fn generate_arktype_type_string(
         scope_output.push_str(&format!("{}: {{\n", type_name));
         defaults_output.push_str(&format!(
             "export const default{}: {} = {{\n",
-            &type_name, &type_name
+            type_name, type_name
         ));
 
-        for (index, field) in struct_config.fields.iter().enumerate() {
+        for (position, field) in struct_config.fields.iter().enumerate() {
             let field_name = field.field_name.to_case(Case::Camel);
 
             // Write field doc comment if present
@@ -357,15 +349,15 @@ pub fn generate_arktype_type_string(
             scope_output.push_str(&format!(
                 "  {}: {}",
                 field_name,
-                field_arktype(field, enums, registry, &mut helpers)?
+                field_arktype(field, index, registry, &mut helpers)?
             ));
             defaults_output.push_str(&format!(
                 "{}: {}",
                 field_name,
-                field_type_to_default_value(&field.field_type, structs, enums, registry)?
+                field_type_to_default_value(&field.field_type, index, registry)?
             ));
             // Add a comma if it's not the last field
-            if index + 1 < struct_config.fields.len() {
+            if position + 1 < struct_config.fields.len() {
                 scope_output.push_str(",\n");
                 defaults_output.push_str(",\n");
             } else {
@@ -420,13 +412,13 @@ enum Step {
 /// validators. An optional field's validators apply to the present value.
 fn field_arktype(
     field: &StructField,
-    enums: &BTreeMap<String, TaggedUnion>,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
     let validated = |field_type: &FieldType, helpers: &mut Helpers| {
         validated_arktype(
-            field_type_to_arktype(field_type, enums, registry)?,
+            field_type_to_arktype(field_type, index, registry)?,
             &field.validators,
             &field.field_name,
             helpers,
@@ -697,8 +689,9 @@ fn duration_step(validator: &DurationValidator) -> Result<Step> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{FieldType, TypeIndex, field_type_to_arktype};
     use crate::types::ForeignTypeRegistry;
+    use std::collections::BTreeMap;
 
     #[test]
     fn maps_become_index_signatures_keyed_as_json_writes_them() {
@@ -708,7 +701,12 @@ mod tests {
             Box::new(FieldType::Option(Box::new(FieldType::String))),
         );
         assert_eq!(
-            field_type_to_arktype(&by_rank, &BTreeMap::new(), &registry).unwrap(),
+            field_type_to_arktype(
+                &by_rank,
+                &TypeIndex::new(&BTreeMap::new(), &BTreeMap::new()).unwrap(),
+                &registry
+            )
+            .unwrap(),
             r#"{ '+': 'reject', "[string.integer]": [['string', '|', 'undefined'], '|', 'null'] }"#
         );
     }
@@ -718,7 +716,12 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
         let by_flag = FieldType::HashMap(Box::new(FieldType::Bool), Box::new(FieldType::String));
         assert_eq!(
-            field_type_to_arktype(&by_flag, &BTreeMap::new(), &registry).unwrap(),
+            field_type_to_arktype(
+                &by_flag,
+                &TypeIndex::new(&BTreeMap::new(), &BTreeMap::new()).unwrap(),
+                &registry
+            )
+            .unwrap(),
             r#"{ '+': 'reject', "true?": 'string', "false?": 'string' }"#
         );
     }
@@ -727,9 +730,13 @@ mod tests {
     fn a_map_key_with_no_json_object_key_is_rejected() {
         let registry = ForeignTypeRegistry::default();
         let by_nothing = FieldType::HashMap(Box::new(FieldType::Unit), Box::new(FieldType::String));
-        let error = field_type_to_arktype(&by_nothing, &BTreeMap::new(), &registry)
-            .unwrap_err()
-            .to_string();
+        let error = field_type_to_arktype(
+            &by_nothing,
+            &TypeIndex::new(&BTreeMap::new(), &BTreeMap::new()).unwrap(),
+            &registry,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             error.contains("a map keyed by `()` has no JSON object key"),
             "{error}"

@@ -23,7 +23,7 @@ pub async fn run_default(cli: &Cli) -> Result<()> {
 pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
     info!("Starting Evenframe code generation");
     let config = EvenframeConfig::new()?;
-    let build_config = config_builders::BuildConfig::discover()?;
+    let build_config = config_builders::BuildConfig::from_config(&config);
     let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
 
     if args.skip_typesync {
@@ -36,14 +36,7 @@ pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
             skip: None,
             per_file: false,
         };
-        super::typesync::generate(
-            cli,
-            typesync_args,
-            &config,
-            enums.clone(),
-            tables.clone(),
-            objects.clone(),
-        )?;
+        super::typesync::generate(cli, typesync_args, &config, &enums, &tables, &objects)?;
     }
 
     if args.skip_schemasync {

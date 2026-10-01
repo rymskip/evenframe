@@ -23,11 +23,47 @@ pub struct CoordinationId {
     pub field_name: String,
 }
 
+/// Each coordinated field's value for every record, by table, field path
+/// and record index, so a lookup borrows its key.
+#[cfg(feature = "mockmake")]
+#[derive(Debug, Default)]
+pub struct CoordinatedValues {
+    by_table: BTreeMap<String, BTreeMap<String, BTreeMap<usize, String>>>,
+}
+
+#[cfg(feature = "mockmake")]
+impl CoordinatedValues {
+    pub fn insert(&mut self, index: usize, coordination_id: &CoordinationId, value: String) {
+        self.by_table
+            .entry(coordination_id.table_name.clone())
+            .or_default()
+            .entry(coordination_id.field_name.clone())
+            .or_default()
+            .insert(index, value);
+    }
+
+    /// The value of the field at `field_path` in record `index` of `table_name`.
+    pub fn get(&self, table_name: &str, field_path: &str, index: usize) -> Option<&str> {
+        self.by_table
+            .get(table_name)?
+            .get(field_path)?
+            .get(&index)
+            .map(String::as_str)
+    }
+
+    pub fn clear(&mut self) {
+        self.by_table.clear();
+    }
+}
+
 #[cfg(feature = "mockmake")]
 impl CoordinationId {
     /// The field this id names: a field of its table, or one nested in
     /// objects along a dotted path.
-    pub fn get_field(&self, mockmaker: &Mockmaker<'_>) -> Result<StructField, EvenframeError> {
+    pub fn get_field<'a>(
+        &self,
+        mockmaker: &Mockmaker<'a>,
+    ) -> Result<&'a StructField, EvenframeError> {
         let unknown = |reason: String| {
             EvenframeError::mock_generation(format!(
                 "coordinated field `{}.{}` {reason}",
@@ -44,10 +80,10 @@ impl CoordinationId {
         while let Some(segment) = segments.next() {
             let field = fields
                 .iter()
-                .find(|f| f.field_name == segment)
+                .find(|field| field.field_name == segment)
                 .ok_or_else(|| unknown(format!("has no field `{segment}`")))?;
             if segments.peek().is_none() {
-                return Ok(field.clone());
+                return Ok(field);
             }
             fields = &object_name(&field.field_type)
                 .and_then(|name| mockmaker.objects.get(name))
@@ -59,6 +95,12 @@ impl CoordinationId {
         }
         Err(unknown("has an empty path".into()))
     }
+}
+
+/// The last segment of a dotted field path.
+#[cfg(feature = "mockmake")]
+fn last_segment(path: &str) -> &str {
+    path.rsplit('.').next().unwrap_or(path)
 }
 
 /// The object type a field holds, looking through `Option`.
@@ -169,7 +211,7 @@ impl Mockmaker<'_> {
         // Process each coordination group
         for coordination_group in coordination_groups {
             // Get the maximum record count from all tables in this group
-            let n = coordination_group
+            let record_count = coordination_group
                 .tables
                 .iter()
                 .filter_map(|table_name| self.tables.get(table_name))
@@ -177,140 +219,86 @@ impl Mockmaker<'_> {
                 .max()
                 .unwrap_or(self.schemasync_config.mock_gen_config.default_record_count);
 
-            // Process coordinated values for this group
-            for index in 0..n {
-                for coordination_pair in &coordination_group.coordination_pairs {
-                    match &coordination_pair.coordination {
+            // Each pair's fields, resolved once for every record.
+            let pairs = coordination_group
+                .coordination_pairs
+                .iter()
+                .map(|pair| {
+                    let fields = pair
+                        .coordinated_fields
+                        .iter()
+                        .map(|coordination_id| coordination_id.get_field(self))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok((pair, fields))
+                })
+                .collect::<Result<Vec<_>, EvenframeError>>()?;
+
+            for index in 0..record_count {
+                for (pair, fields) in &pairs {
+                    let targets = || pair.coordinated_fields.iter().zip(fields.iter().copied());
+                    match &pair.coordination {
                         Coordination::InitializeEqual(_) => {
-                            let Some(first_coord) = coordination_pair.coordinated_fields.first()
-                            else {
+                            let Some((first_id, first_field)) = targets().next() else {
                                 continue;
                             };
-                            let value = self.generate_coordinated_field(first_coord, index)?;
-
-                            for coordination_id in &coordination_pair.coordinated_fields {
-                                self.coordinated_values
-                                    .insert((index, coordination_id.clone()), value.clone());
+                            let value =
+                                self.generate_coordinated_field(first_id, first_field, index)?;
+                            for coordination_id in &pair.coordinated_fields {
+                                self.coordinated_values.insert(
+                                    index,
+                                    coordination_id,
+                                    value.clone(),
+                                );
                             }
                         }
-
-                        Coordination::InitializeSequential {
-                            field_names: _,
-                            increment,
-                        } => {
-                            // Collect the fields for this coordination
-                            let fields: Vec<StructField> = coordination_pair
-                                .coordinated_fields
-                                .iter()
-                                .map(|coord_id| coord_id.get_field(self))
-                                .collect::<Result<_, _>>()?;
-                            let field_refs: Vec<&StructField> = fields.iter().collect();
-
-                            // Generate sequential values using the dedicated function
-                            let values = Self::generate_sequential_values(&field_refs, increment);
-
-                            // Store the generated values
-                            for coordination_id in &coordination_pair.coordinated_fields {
-                                let field_name = coordination_id
-                                    .field_name
-                                    .split('.')
-                                    .next_back()
-                                    .unwrap_or(&coordination_id.field_name);
-
-                                if let Some(value) = values.get(field_name) {
-                                    self.store_raw_coordinated_value(
-                                        index,
-                                        coordination_id,
-                                        value,
-                                    )?;
-                                }
-                            }
+                        Coordination::InitializeSequential { increment, .. } => {
+                            let values = Self::generate_sequential_values(fields, increment);
+                            self.store_by_field_name(index, targets(), &values);
                         }
-                        Coordination::InitializeSum {
-                            field_names: _,
-                            total,
-                        } => {
-                            // Collect the fields for this coordination
-                            let fields: Vec<StructField> = coordination_pair
-                                .coordinated_fields
-                                .iter()
-                                .map(|coord_id| coord_id.get_field(self))
-                                .collect::<Result<_, _>>()?;
-                            let field_refs: Vec<&StructField> = fields.iter().collect();
-
-                            // Generate sum values using the dedicated function
-                            let values = Self::generate_sum_values(&field_refs, *total);
-
-                            // Store the generated values
-                            for coordination_id in &coordination_pair.coordinated_fields {
-                                let field_name = coordination_id
-                                    .field_name
-                                    .split('.')
-                                    .next_back()
-                                    .unwrap_or(&coordination_id.field_name);
-
-                                if let Some(value) = values.get(field_name) {
-                                    self.store_raw_coordinated_value(
-                                        index,
-                                        coordination_id,
-                                        value,
-                                    )?;
-                                }
-                            }
+                        Coordination::InitializeSum { total, .. } => {
+                            let values = Self::generate_sum_values(fields, *total);
+                            self.store_by_field_name(index, targets(), &values);
                         }
                         Coordination::InitializeDerive {
                             source_field_names,
                             target_field_name,
                             derivation,
                         } => {
-                            // Separate source and target fields
+                            let mut source_values = BTreeMap::new();
                             let mut source_fields = Vec::new();
-                            let mut source_coord_ids = Vec::new();
-                            let mut target_coord_id = None;
-
-                            for coordination_id in &coordination_pair.coordinated_fields {
-                                let field_name = coordination_id
-                                    .field_name
-                                    .split('.')
-                                    .next_back()
-                                    .unwrap_or(&coordination_id.field_name);
-
-                                if source_field_names.contains(&field_name.to_string()) {
-                                    source_fields.push(coordination_id.get_field(self)?);
-                                    source_coord_ids.push(coordination_id.clone());
+                            let mut target = None;
+                            for (coordination_id, field) in targets() {
+                                let field_name = last_segment(&coordination_id.field_name);
+                                if source_field_names.iter().any(|source| source == field_name) {
+                                    let value = self.generate_coordinated_field(
+                                        coordination_id,
+                                        field,
+                                        index,
+                                    )?;
+                                    source_values
+                                        .insert(field.field_name.clone(), literal_to_raw(&value));
+                                    self.coordinated_values
+                                        .insert(index, coordination_id, value);
+                                    source_fields.push(field);
                                 } else if field_name == target_field_name {
-                                    target_coord_id = Some(coordination_id.clone());
+                                    target = Some((coordination_id, field));
                                 }
                             }
-
-                            // Generate source values first
-                            let mut source_values_map = BTreeMap::new();
-                            for (coord_id, field) in
-                                source_coord_ids.iter().zip(source_fields.iter())
-                            {
-                                let value = self.generate_coordinated_field(coord_id, index)?;
-
-                                let field_name = field.field_name.clone();
-                                source_values_map.insert(field_name, literal_to_raw(&value));
-                                self.coordinated_values
-                                    .insert((index, coord_id.clone()), value);
-                            }
-
-                            // Generate derived value using the dedicated function
-                            let source_field_refs: Vec<&StructField> =
-                                source_fields.iter().collect();
-                            let derived_values = Self::generate_derive_values(
-                                &source_field_refs,
+                            let derived = Self::generate_derive_values(
+                                &source_fields,
                                 target_field_name,
                                 derivation,
-                                &source_values_map,
+                                &source_values,
                             );
-
-                            // Store the derived value
-                            if let (Some(target_id), Some(value)) =
-                                (target_coord_id, derived_values.get(target_field_name))
+                            if let (Some((coordination_id, field)), Some(value)) =
+                                (target, derived.get(target_field_name))
                             {
-                                self.store_raw_coordinated_value(index, &target_id, value)?;
+                                self.store_raw_coordinated_value(
+                                    index,
+                                    coordination_id,
+                                    field,
+                                    value,
+                                );
                             }
                         }
                         Coordination::OneToOne(_) => {
@@ -319,39 +307,26 @@ impl Mockmaker<'_> {
                         }
                         Coordination::InitializeCoherent(coherent_dataset) => {
                             let values = Self::generate_coherent_values(coherent_dataset, index);
-
-                            // Store the generated values
-                            // For coherent datasets, we need to match the field name from the dataset
-                            // to the actual field name which might include a path
-                            for coordination_id in &coordination_pair.coordinated_fields {
-                                // Try to match by the last part of the field name
-                                let field_key = coordination_id
-                                    .field_name
-                                    .split('.')
-                                    .next_back()
-                                    .unwrap_or(&coordination_id.field_name);
-
-                                // Try exact match first
-                                if let Some(value) = values.get(field_key) {
+                            // A dataset names its fields by their last path
+                            // segment, or by a suffix of the full path.
+                            for (coordination_id, field) in targets() {
+                                let value = values
+                                    .get(last_segment(&coordination_id.field_name))
+                                    .or_else(|| {
+                                        values
+                                            .iter()
+                                            .find(|(key, _)| {
+                                                coordination_id.field_name.ends_with(key.as_str())
+                                            })
+                                            .map(|(_, value)| value)
+                                    });
+                                if let Some(value) = value {
                                     self.store_raw_coordinated_value(
                                         index,
                                         coordination_id,
+                                        field,
                                         value,
-                                    )?;
-                                } else {
-                                    // Try to find a matching key in the values map
-                                    for (key, value) in &values {
-                                        if coordination_id.field_name.ends_with(key)
-                                            || key == field_key
-                                        {
-                                            self.store_raw_coordinated_value(
-                                                index,
-                                                coordination_id,
-                                                value,
-                                            )?;
-                                            break;
-                                        }
-                                    }
+                                    );
                                 }
                             }
                         }
@@ -362,16 +337,16 @@ impl Mockmaker<'_> {
         Ok(())
     }
 
-    /// A generated value for the coordinated field `id` of record `index`.
+    /// A generated value for the coordinated `field` of record `index`.
     fn generate_coordinated_field(
         &self,
-        id: &CoordinationId,
+        coordination_id: &CoordinationId,
+        field: &StructField,
         index: usize,
     ) -> Result<String, EvenframeError> {
-        let field = id.get_field(self)?;
-        let table_config = self.table(&id.table_name)?;
+        let table_config = self.table(&coordination_id.table_name)?;
         FieldValueGenerator::builder()
-            .field(&field)
+            .field(field)
             .id_index(&index)
             .mockmaker(self)
             .table_config(table_config)
@@ -380,20 +355,32 @@ impl Mockmaker<'_> {
             .run()
     }
 
+    /// Stores each target's value from `values`, which a coordination keys
+    /// by the last segment of the field's path.
+    fn store_by_field_name<'f>(
+        &mut self,
+        index: usize,
+        targets: impl Iterator<Item = (&'f CoordinationId, &'f StructField)>,
+        values: &BTreeMap<String, String>,
+    ) {
+        for (coordination_id, field) in targets {
+            if let Some(value) = values.get(last_segment(&coordination_id.field_name)) {
+                self.store_raw_coordinated_value(index, coordination_id, field, value);
+            }
+        }
+    }
+
     /// Store a raw (unquoted) coordinated value for record `index`, rendered
     /// as a SurrealQL literal for its field.
     fn store_raw_coordinated_value(
         &mut self,
         index: usize,
         coordination_id: &CoordinationId,
+        field: &StructField,
         raw: &str,
-    ) -> Result<(), EvenframeError> {
-        let field = coordination_id.get_field(self)?;
-        self.coordinated_values.insert(
-            (index, coordination_id.clone()),
-            coordinated_literal(&field, raw),
-        );
-        Ok(())
+    ) {
+        self.coordinated_values
+            .insert(index, coordination_id, coordinated_literal(field, raw));
     }
 
     /// Values for `fields` that step by `increment`: dates or datetimes
@@ -409,24 +396,28 @@ impl Mockmaker<'_> {
         let kind = date_kind(first_field);
         let now = Utc::now();
         let base: f64 = rand::rng().random_range(0.0..100.0);
-        let step = |i: usize| {
-            let i = i as i64;
+        let step = |position: usize| {
+            let position = position as i64;
             match increment {
-                CoordinateIncrement::Days(d) => Duration::days(i64::from(*d) * i),
-                CoordinateIncrement::Hours(h) => Duration::hours(i64::from(*h) * i),
-                CoordinateIncrement::Minutes(m) => Duration::minutes(i64::from(*m) * i),
+                CoordinateIncrement::Days(days) => Duration::days(i64::from(*days) * position),
+                CoordinateIncrement::Hours(hours) => Duration::hours(i64::from(*hours) * position),
+                CoordinateIncrement::Minutes(minutes) => {
+                    Duration::minutes(i64::from(*minutes) * position)
+                }
                 CoordinateIncrement::Numeric(_) => Duration::zero(),
             }
         };
         fields
             .iter()
             .enumerate()
-            .map(|(i, field)| {
+            .map(|(position, field)| {
                 let value = match (kind, increment) {
-                    (Some(DateKind::Date), _) => (BASE_DATE + step(i)).to_string(),
-                    (Some(DateKind::DateTime), _) => (now + step(i)).to_rfc3339(),
-                    (None, CoordinateIncrement::Numeric(n)) => (base + n * i as f64).to_string(),
-                    (None, _) => (base + i as f64).to_string(),
+                    (Some(DateKind::Date), _) => (BASE_DATE + step(position)).to_string(),
+                    (Some(DateKind::DateTime), _) => (now + step(position)).to_rfc3339(),
+                    (None, CoordinateIncrement::Numeric(amount)) => {
+                        (base + amount * position as f64).to_string()
+                    }
+                    (None, _) => (base + position as f64).to_string(),
                 };
                 (field.field_name.clone(), value)
             })
@@ -451,8 +442,8 @@ impl Mockmaker<'_> {
         let mut remaining = total;
         let mut generated_values = Vec::new();
 
-        for i in 0..fields.len() - 1 {
-            let max_value = remaining / (fields.len() - i) as f64 * 1.5; // Allow some variance
+        for index in 0..fields.len() - 1 {
+            let max_value = remaining / (fields.len() - index) as f64 * 1.5; // Allow some variance
             let value = rng.random_range(0.0..max_value.min(remaining));
             generated_values.push(value);
             remaining -= value;
@@ -464,7 +455,7 @@ impl Mockmaker<'_> {
         // Assign values to fields, but handle rounding carefully for percentages
         let is_percentage = fields
             .iter()
-            .any(|f| matches!(f.format, Some(Format::Percentage)));
+            .any(|field| matches!(field.format, Some(Format::Percentage)));
 
         if is_percentage {
             // Round all but the last value, which takes the rest, so the
@@ -578,7 +569,10 @@ impl Mockmaker<'_> {
                             format!(
                                 "{:x}",
                                 source_value.len() * 31
-                                    + source_value.chars().map(|c| c as usize).sum::<usize>()
+                                    + source_value
+                                        .chars()
+                                        .map(|character| character as usize)
+                                        .sum::<usize>()
                             )
                         }
                     };
@@ -596,8 +590,6 @@ impl Mockmaker<'_> {
         index: usize,
     ) -> BTreeMap<String, String> {
         tracing::trace!(index = index, "Generating coherent values");
-        use crate::schemasync::mockmake::coordinate::*;
-
         /// Coherent address data
         const COHERENT_ADDRESSES: &[(&str, &str, &str, &str)] = &[
             ("New York", "NY", "10001", "USA"),
@@ -785,10 +777,10 @@ impl Coordination {
             let mut current_fields = &table_config.struct_config.fields;
             let mut current_field: Option<&StructField> = None;
 
-            for (i, part) in parts.iter().enumerate() {
+            for (index, part) in parts.iter().enumerate() {
                 let field = current_fields
                     .iter()
-                    .find(|f| &f.field_name == part)
+                    .find(|field| &field.field_name == part)
                     .ok_or_else(|| {
                         EvenframeError::Validation(format!(
                             "Field path '{}' is invalid: '{}' not found in '{}'",
@@ -799,7 +791,7 @@ impl Coordination {
                 current_field = Some(field);
 
                 // If not the last part, we need to traverse into a struct
-                if i < parts.len() - 1 {
+                if index < parts.len() - 1 {
                     match &field.field_type {
                         FieldType::Struct(_nested_fields) => {
                             // For inline structs, we'd need to handle this differently
@@ -1650,9 +1642,12 @@ pub const PRODUCT_CATALOG: &[(&str, &str, f64, &str)] = &[
     ("Certification Exam", "CRT-030", 299.99, "Education"),
 ];
 
-#[cfg(all(test, feature = "surrealdb"))]
+#[cfg(all(test, feature = "mockmake"))]
 mod tests {
-    use super::*;
+    use super::{
+        CoherentDataset, FieldType, Format, Mockmaker, StructField, coordinated_literal,
+        literal_to_raw,
+    };
 
     fn field(field_type: FieldType, format: Option<Format>) -> StructField {
         StructField {
@@ -1716,12 +1711,12 @@ mod tests {
 
     /// Haversine distance in km between two (lat, lng) points in degrees.
     fn haversine_km(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
-        let r = 6371.0_f64;
+        let earth_radius_km = 6371.0_f64;
         let dlat = (lat2 - lat1).to_radians();
         let dlng = (lng2 - lng1).to_radians();
-        let a = (dlat / 2.0).sin().powi(2)
+        let haversine = (dlat / 2.0).sin().powi(2)
             + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlng / 2.0).sin().powi(2);
-        r * 2.0 * a.sqrt().asin()
+        earth_radius_km * 2.0 * haversine.sqrt().asin()
     }
 
     #[test]
@@ -1734,8 +1729,8 @@ mod tests {
             radius_km: 25.0,
         };
 
-        for i in 0..100 {
-            let values = Mockmaker::generate_coherent_values(&dataset, i);
+        for index in 0..100 {
+            let values = Mockmaker::generate_coherent_values(&dataset, index);
             let lat: f64 = values["lat"].parse().expect("lat should be a valid f64");
             let lng: f64 = values["lng"].parse().expect("lng should be a valid f64");
 
@@ -1764,8 +1759,8 @@ mod tests {
         };
 
         let mut lats = std::collections::BTreeSet::new();
-        for i in 0..20 {
-            let values = Mockmaker::generate_coherent_values(&dataset, i);
+        for index in 0..20 {
+            let values = Mockmaker::generate_coherent_values(&dataset, index);
             lats.insert(values["lat"].clone());
         }
         assert!(
@@ -1829,10 +1824,10 @@ impl quote::ToTokens for CoordinateIncrement {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let ty = coordinate_path("CoordinateIncrement");
         tokens.extend(match self {
-            CoordinateIncrement::Days(n) => quote::quote! { #ty::Days(#n) },
-            CoordinateIncrement::Hours(n) => quote::quote! { #ty::Hours(#n) },
-            CoordinateIncrement::Minutes(n) => quote::quote! { #ty::Minutes(#n) },
-            CoordinateIncrement::Numeric(n) => quote::quote! { #ty::Numeric(#n) },
+            CoordinateIncrement::Days(amount) => quote::quote! { #ty::Days(#amount) },
+            CoordinateIncrement::Hours(amount) => quote::quote! { #ty::Hours(#amount) },
+            CoordinateIncrement::Minutes(amount) => quote::quote! { #ty::Minutes(#amount) },
+            CoordinateIncrement::Numeric(amount) => quote::quote! { #ty::Numeric(#amount) },
         });
     }
 }
@@ -1864,7 +1859,9 @@ impl quote::ToTokens for DerivationType {
                     TransformType::Uppercase => quote::quote! { #transform_ty::Uppercase },
                     TransformType::Lowercase => quote::quote! { #transform_ty::Lowercase },
                     TransformType::Capitalize => quote::quote! { #transform_ty::Capitalize },
-                    TransformType::Truncate(n) => quote::quote! { #transform_ty::Truncate(#n) },
+                    TransformType::Truncate(length) => {
+                        quote::quote! { #transform_ty::Truncate(#length) }
+                    }
                     TransformType::Hash => quote::quote! { #transform_ty::Hash },
                 };
                 quote::quote! { #ty::Transform(#transform) }

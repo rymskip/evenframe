@@ -6,5 +6,11 @@ publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+# Line numbers for the glob-import check's findings.
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+syn = { workspace = true, features = ["visit"] }
 semver = "1.0.28"
 toml_edit = "0.25.15"
+
+[lints]
+workspace = true

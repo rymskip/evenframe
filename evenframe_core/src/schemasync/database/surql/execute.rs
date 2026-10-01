@@ -1,7 +1,17 @@
+use crate::error::{EvenframeError, Result};
 use crate::evenframe_log;
-use serde_json::Value;
-use surrealdb::IndexedResults;
+use std::io::Write;
+use surrealdb::types::Variables;
+use surrealdb::{Connection, IndexedResults, Surreal};
 use tracing::{debug, error, info, trace, warn};
+
+/// Results a transaction's `BEGIN` and `COMMIT` add to a response: one
+/// each, before and after its statements' results.
+const TRANSACTION_CONTROL_RESULTS: usize = 2;
+
+/// What a statement reports when it was cancelled because another statement
+/// in its transaction failed.
+const CANCELLED_BY_TRANSACTION: &str = "failed transaction";
 
 #[derive(Debug)]
 pub struct QueryValidationError {
@@ -38,52 +48,56 @@ pub fn strip_surql_comments(block: &str) -> String {
     let mut copied = 0;
     let mut depth: i32 = 0;
     let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if let Some(q) = quote {
-            if c == b'\\' {
-                i += 2;
+    let mut position = 0;
+    while position < bytes.len() {
+        let byte = bytes[position];
+        if let Some(open) = quote {
+            if byte == b'\\' {
+                position += 2;
                 continue;
             }
-            if c == q {
+            if byte == open {
                 quote = None;
             }
-            i += 1;
+            position += 1;
             continue;
         }
-        let next = bytes.get(i + 1).copied();
-        let comment_end = match (c, next) {
+        let next = bytes.get(position + 1).copied();
+        let comment_end = match (byte, next) {
             _ if depth > 0 => None,
             (b'-', Some(b'-')) | (b'/', Some(b'/')) | (b'#', _) => {
                 // Line comment: drop up to (not including) the newline
-                Some(block[i..].find('\n').map_or(block.len(), |n| i + n))
+                Some(
+                    block[position..]
+                        .find('\n')
+                        .map_or(block.len(), |offset| position + offset),
+                )
             }
             (b'/', Some(b'*')) => {
                 // Block comment: drop through `*/`, or to the end if unclosed
                 Some(
-                    block[i + 2..]
+                    block[position + 2..]
                         .find("*/")
-                        .map_or(block.len(), |n| i + 2 + n + 2),
+                        .map_or(block.len(), |offset| position + 2 + offset + 2),
                 )
             }
             _ => None,
         };
         if let Some(end) = comment_end {
-            out.push_str(&block[copied..i]);
+            out.push_str(&block[copied..position]);
             // Keep the block comment's line breaks so line structure survives
-            out.extend(block[i..end].chars().filter(|&ch| ch == '\n'));
+            out.extend(block[position..end].chars().filter(|&ch| ch == '\n'));
             copied = end;
-            i = end;
+            position = end;
             continue;
         }
-        match c {
-            b'"' | b'\'' | b'`' => quote = Some(c),
+        match byte {
+            b'"' | b'\'' | b'`' => quote = Some(byte),
             b'{' | b'(' | b'[' => depth += 1,
             b'}' | b')' | b']' => depth = depth.saturating_sub(1),
             _ => {}
         }
-        i += 1;
+        position += 1;
     }
     out.push_str(&block[copied..]);
     out
@@ -105,32 +119,32 @@ pub fn split_surql_statements(block: &str) -> Vec<&str> {
     let mut start = 0;
     let mut depth: i32 = 0;
     let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
+    let mut position = 0;
+    while position < bytes.len() {
+        let byte = bytes[position];
         match quote {
-            Some(q) => {
-                if c == b'\\' {
+            Some(open) => {
+                if byte == b'\\' {
                     // Skip the escaped character.
-                    i += 2;
+                    position += 2;
                     continue;
                 }
-                if c == q {
+                if byte == open {
                     quote = None;
                 }
             }
-            None => match c {
-                b'"' | b'\'' | b'`' => quote = Some(c),
+            None => match byte {
+                b'"' | b'\'' | b'`' => quote = Some(byte),
                 b'{' | b'(' | b'[' => depth += 1,
                 b'}' | b')' | b']' => depth = depth.saturating_sub(1),
                 b';' if depth == 0 => {
-                    out.push(&block[start..=i]);
-                    start = i + 1;
+                    out.push(&block[start..=position]);
+                    start = position + 1;
                 }
                 _ => {}
             },
         }
-        i += 1;
+        position += 1;
     }
     if start < block.len() {
         let tail = &block[start..];
@@ -141,153 +155,206 @@ pub fn split_surql_statements(block: &str) -> Vec<&str> {
     out
 }
 
-/// Validates a SurrealDB response and panics if any errors are found
-/// This includes checking for:
-/// - Parse errors
-/// - Validation errors
-/// - Partial failures (some statements succeed, some fail)
-/// - Empty results when records should have been created
+/// Checks that `response` has one result for each statement in
+/// `statements` and that none of them failed, returning how many ran. Each
+/// failure is reported with its statement.
 pub async fn validate_surql_response(
     mut response: IndexedResults,
     statements: &str,
-    expected_operation: &str,
-) -> Result<Vec<Value>, Vec<QueryValidationError>> {
-    info!(expected_operation = %expected_operation, statement_length = statements.len(), "Validating SurrealQL response");
-    trace!("Statements to validate: {}", statements);
-    let mut errors = Vec::new();
-    let mut results = Vec::new();
-    debug!("Initialized validation state");
-
-    // Split statements for error reporting. Brace/string-aware so embedded
-    // JavaScript function bodies (which contain their own `;`) aren't split
-    // mid-statement and miscounted against the response. Comments are
-    // stripped first: SurrealDB returns no result for them, so a `;` inside a
-    // comment or a comment-only fragment would throw the count off.
+) -> std::result::Result<usize, Vec<QueryValidationError>> {
+    // Brace/string-aware so embedded JavaScript function bodies (which
+    // contain their own `;`) aren't split mid-statement and miscounted
+    // against the response. Comments are stripped first: SurrealDB returns
+    // no result for them.
     let uncommented = strip_surql_comments(statements);
     let statement_lines: Vec<&str> = split_surql_statements(&uncommented)
         .into_iter()
-        .filter(|s| !s.trim().is_empty())
+        .filter(|statement| !statement.trim().is_empty())
         .collect();
 
-    // Process each result from the response
-    for (index, statement) in statement_lines.iter().enumerate() {
-        match response.take::<surrealdb::types::Value>(index) {
-            Ok(surreal_value) => {
-                let value: Value = serde_json::to_value(&surreal_value).unwrap_or(Value::Null);
-                // Check if the result is an error disguised as success
-                if let Some(obj) = value.as_object() {
-                    // Check for error indicators in the response
-                    if obj.contains_key("error") || obj.contains_key("code") {
-                        errors.push(QueryValidationError {
-                            statement_index: index,
-                            error_type: QueryErrorType::UnknownError,
-                            message: format!("Hidden error in response: {:?}", obj),
-                            statement: Some(statement.to_string()),
-                        });
-                    } else if expected_operation == "UPSERT" || expected_operation == "INSERT" {
-                        // For UPSERT/INSERT, we expect a non-empty result
-                        if value.is_null()
-                            || (value.is_array() && value.as_array().unwrap().is_empty())
-                        {
-                            errors.push(QueryValidationError {
-                                statement_index: index,
-                                error_type: QueryErrorType::PartialFailure,
-                                message: "UPSERT/INSERT returned empty result".to_string(),
-                                statement: Some(statement.to_string()),
-                            });
-                        }
-                    }
+    let mut errors: Vec<QueryValidationError> = response
+        .take_errors()
+        .into_iter()
+        .map(|(index, error)| {
+            let message = error.to_string();
+            let lowered = message.to_lowercase();
+            let error_type = match lowered {
+                ref text if text.contains("parse") => QueryErrorType::ParseError,
+                ref text if text.contains("validation") || text.contains("schema") => {
+                    QueryErrorType::ValidationError
                 }
-
-                // Check for specific error patterns in string results
-                if let Some(s) = value.as_str()
-                    && (s.contains("error") || s.contains("failed") || s.contains("violation"))
-                {
-                    errors.push(QueryValidationError {
-                        statement_index: index,
-                        error_type: QueryErrorType::UnknownError,
-                        message: format!("Potential error in string result: {}", s),
-                        statement: Some(statement.to_string()),
-                    });
-                }
-
-                results.push(value);
+                ref text if text.contains("constraint") => QueryErrorType::ConstraintViolation,
+                ref text if text.contains("not found") => QueryErrorType::RecordNotFound,
+                ref text if text.contains("permission") => QueryErrorType::PermissionDenied,
+                ref text if text.contains("transaction") => QueryErrorType::TransactionRollback,
+                _ => QueryErrorType::UnknownError,
+            };
+            QueryValidationError {
+                statement_index: index,
+                error_type,
+                message,
+                statement: statement_lines
+                    .get(index)
+                    .map(|statement| statement.to_string()),
             }
-            Err(e) => {
-                let error_string = e.to_string().to_lowercase();
-                let error_type = match error_string {
-                    s if s.contains("parse") => QueryErrorType::ParseError,
-                    s if s.contains("validation") || s.contains("schema") => {
-                        QueryErrorType::ValidationError
-                    }
-                    s if s.contains("constraint") => QueryErrorType::ConstraintViolation,
-                    s if s.contains("not found") => QueryErrorType::RecordNotFound,
-                    s if s.contains("permission") => QueryErrorType::PermissionDenied,
-                    s if s.contains("transaction") => QueryErrorType::TransactionRollback,
-                    _ => QueryErrorType::UnknownError,
-                };
+        })
+        .collect();
+    errors.sort_by_key(|error| error.statement_index);
 
-                errors.push(QueryValidationError {
-                    statement_index: index,
-                    error_type,
-                    message: e.to_string(),
-                    statement: Some(statement.to_string()),
-                });
-            }
-        }
+    let results = response.num_statements() + errors.len();
+    if results != statement_lines.len() {
+        errors.push(QueryValidationError {
+            statement_index: results,
+            error_type: QueryErrorType::PartialFailure,
+            message: format!(
+                "{} statements were sent but {results} results came back",
+                statement_lines.len()
+            ),
+            statement: None,
+        });
     }
-
     if errors.is_empty() {
-        Ok(results)
+        Ok(statement_lines.len())
     } else {
         Err(errors)
     }
 }
 
+/// The largest request body sent to SurrealDB. Its HTTP endpoint refuses
+/// bodies near 1 MB, so larger work is split across requests.
+pub const RPC_SIZE_LIMIT: usize = 800_000;
+
+/// How often a statement rolled back by a conflicting writer is retried.
+const CONFLICT_RETRIES: u32 = 5;
+
 /// Executes `statements` and returns every failed statement as an error.
-/// Statements over the RPC size limit are imported with `surreal import`
-/// instead.
+/// Statements that together exceed [`RPC_SIZE_LIMIT`] are sent in several
+/// requests, split between statements; a single statement over the limit is
+/// imported instead (see [`import_oversized`]).
 pub async fn execute_and_validate<C>(
-    db: &surrealdb::Surreal<C>,
+    db: &Surreal<C>,
     statements: &str,
     operation_type: &str,
     table_name: &str,
-) -> Result<Vec<Value>, Box<dyn std::error::Error>>
+) -> Result<usize>
 where
-    C: surrealdb::Connection,
+    C: Connection,
+{
+    if statements.len() <= RPC_SIZE_LIMIT {
+        return execute_request(
+            db,
+            statements,
+            &Variables::default(),
+            operation_type,
+            table_name,
+        )
+        .await;
+    }
+    info!(
+        operation_type = %operation_type,
+        table_name = %table_name,
+        size = statements.len(),
+        "Splitting statements across requests"
+    );
+    let uncommented = strip_surql_comments(statements);
+    let mut executed = 0;
+    let mut request = String::new();
+    for statement in split_surql_statements(&uncommented) {
+        if statement.len() > RPC_SIZE_LIMIT {
+            if !request.is_empty() {
+                executed += execute_request(
+                    db,
+                    &request,
+                    &Variables::default(),
+                    operation_type,
+                    table_name,
+                )
+                .await?;
+                request.clear();
+            }
+            import_oversized(db, statement, operation_type, table_name).await?;
+            executed += 1;
+            continue;
+        }
+        if request.len() + statement.len() + 1 > RPC_SIZE_LIMIT {
+            executed += execute_request(
+                db,
+                &request,
+                &Variables::default(),
+                operation_type,
+                table_name,
+            )
+            .await?;
+            request.clear();
+        }
+        request.push_str(statement);
+        request.push('\n');
+    }
+    if !request.trim().is_empty() {
+        executed += execute_request(
+            db,
+            &request,
+            &Variables::default(),
+            operation_type,
+            table_name,
+        )
+        .await?;
+    }
+    Ok(executed)
+}
+
+/// Executes `statements` as one request with the query parameters they name
+/// bound to `variables`, which keeps long values out of the statement text.
+/// Validated and retried like [`execute_and_validate`].
+pub async fn execute_bound<C>(
+    db: &Surreal<C>,
+    statements: &str,
+    variables: &Variables,
+    operation_type: &str,
+    table_name: &str,
+) -> Result<usize>
+where
+    C: Connection,
+{
+    execute_request(db, statements, variables, operation_type, table_name).await
+}
+
+/// Sends `statements` as one request, with `variables` bound, and validates
+/// every statement's result.
+async fn execute_request<C>(
+    db: &Surreal<C>,
+    statements: &str,
+    variables: &Variables,
+    operation_type: &str,
+    table_name: &str,
+) -> Result<usize>
+where
+    C: Connection,
 {
     info!(operation_type = %operation_type, table_name = %table_name, statement_length = statements.len(), "Executing and validating statements");
     trace!("Statements: {}", statements);
 
-    // SurrealDB's HTTP RPC has a ~1MB payload limit. For large statements,
-    // skip the RPC path entirely and import via the CLI.
-    const RPC_SIZE_LIMIT: usize = 800_000; // 800KB threshold (conservative)
-    if statements.len() > RPC_SIZE_LIMIT {
-        info!(
-            operation_type = %operation_type,
-            table_name = %table_name,
-            size = statements.len(),
-            "Statement exceeds RPC size limit, using surreal import"
-        );
-        return import_via_cli(statements, operation_type, table_name).await;
-    }
-
     // A statement that hits a transaction conflict with a concurrent writer
     // is rolled back and can be run again; only those statements are
     // retried, since the others already committed.
-    const CONFLICT_RETRIES: u32 = 5;
     let mut pending = statements.to_string();
     let mut attempt = 0;
     let outcome = loop {
         debug!("Sending query to database");
-        let response = db.query(pending.as_str()).await.map_err(|e| {
-            error!(operation_type = %operation_type, table_name = %table_name, error = %e, "Database query failed");
-            e
+        let response = db
+            .query(pending.as_str())
+            .bind(variables.clone())
+            .await
+            .map_err(|error| {
+            error!(operation_type = %operation_type, table_name = %table_name, error = %error, "Database query failed");
+            EvenframeError::database(format!(
+                "{operation_type} on {table_name}: the request failed: {error}"
+            ))
         })?;
-        match validate_surql_response(response, &pending, operation_type).await {
+        match validate_surql_response(response, &pending).await {
             Err(errors)
                 if attempt < CONFLICT_RETRIES
-                    && errors.iter().all(|e| e.message.contains("can be retried")) =>
+                    && errors.iter().all(|error| is_retryable(&error.message)) =>
             {
                 attempt += 1;
                 warn!(
@@ -297,10 +364,10 @@ where
                     attempt,
                     "Retrying statements rolled back by a transaction conflict"
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(50 << attempt)).await;
+                tokio::time::sleep(conflict_backoff(attempt)).await;
                 pending = errors
                     .iter()
-                    .filter_map(|e| e.statement.as_deref())
+                    .filter_map(|error| error.statement.as_deref())
                     .map(|statement| format!("{statement};"))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -310,23 +377,17 @@ where
     };
 
     match outcome {
-        Ok(results) => {
-            // Log success with details
+        Ok(executed) => {
             evenframe_log!(
                 &format!(
-                    "Successfully executed {} {} statements for table {} with {} results",
-                    results.len(),
-                    operation_type,
-                    table_name,
-                    results.iter().filter(|v| !v.is_null()).count()
+                    "Successfully executed {executed} {operation_type} statements for table {table_name}"
                 ),
                 "results.log",
                 true
             );
-            Ok(results)
+            Ok(executed)
         }
         Err(errors) => {
-            // Log every error before returning them
             evenframe_log!(
                 &format!(
                     "ERRORS executing {} for table {}: {} errors found",
@@ -337,7 +398,6 @@ where
                 "errors.log",
                 true
             );
-
             for error in &errors {
                 evenframe_log!(
                     &format!(
@@ -347,116 +407,290 @@ where
                     "errors.log",
                     true
                 );
-
-                #[cfg(feature = "dev-mode")]
-                if let Some(stmt) = &error.statement {
-                    evenframe_log!(&format!("Failed statement: {}", stmt), "errors.log", true);
-                }
             }
 
-            Err(crate::error::EvenframeError::database(format!(
+            Err(EvenframeError::database(format!(
                 "SurrealDB query validation failed for {} on table {}:\n{}",
                 operation_type,
                 table_name,
                 errors
                     .iter()
-                    .map(|e| format!(
+                    .map(|error| format!(
                         "  - Statement {}: {:?} - {}\n    {}",
-                        e.statement_index,
-                        e.error_type,
-                        e.message,
-                        e.statement
-                            .as_ref()
-                            .unwrap_or(&"<no statement>".to_string())
+                        error.statement_index,
+                        error.error_type,
+                        error.message,
+                        error.statement.as_deref().unwrap_or("<no statement>")
                     ))
                     .collect::<Vec<_>>()
                     .join("\n")
-            ))
-            .into())
+            )))
         }
     }
 }
 
-/// Fallback: write statements to a temp `.surql` file and import via `surreal import` CLI.
-/// Used when the HTTP RPC body exceeds SurrealDB's payload limit (413).
-async fn import_via_cli(
-    statements: &str,
+fn is_retryable(message: &str) -> bool {
+    message.contains("can be retried")
+}
+
+fn conflict_backoff(attempt: u32) -> std::time::Duration {
+    std::time::Duration::from_millis(50 << attempt)
+}
+
+/// Imports one statement too large for a request through the database's
+/// import endpoint, which takes a file that opens with `OPTION IMPORT`.
+/// Import mode fires no events and does not process fields (no defaults,
+/// `VALUE` or `ASSERT` clauses), so this is logged; its errors fail the run
+/// like any statement's.
+async fn import_oversized<C>(
+    db: &Surreal<C>,
+    statement: &str,
     operation_type: &str,
     table_name: &str,
-) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
-    use std::io::Write;
-
-    // Target the database this process connected to (which may come from
-    // CLI overrides), falling back to the configured one.
-    let connection = match crate::schemasync::active_connection() {
-        Some(connection) => connection,
-        None => crate::config::EvenframeConfig::new()?
-            .require_schemasync()?
-            .database
-            .clone(),
+) -> Result<()>
+where
+    C: Connection,
+{
+    let failed = |error: String| {
+        EvenframeError::database(format!(
+            "{operation_type} on {table_name}: importing a statement too large for one request failed: {error}"
+        ))
     };
-    let url = &connection.url;
-    let namespace = &connection.namespace;
-    let database = &connection.database;
-    let username = std::env::var("SURREALDB_USER").unwrap_or_else(|_| "root".to_string());
-    let password = std::env::var("SURREALDB_PASSWORD").unwrap_or_else(|_| "root".to_string());
-
-    // Ensure the endpoint has the http:// scheme for the CLI
-    let endpoint = if url.starts_with("http://") || url.starts_with("https://") {
-        url.to_string()
+    let mut file = tempfile::Builder::new()
+        .suffix(".surql")
+        .tempfile()
+        .map_err(|error| failed(error.to_string()))?;
+    file.write_all(b"OPTION IMPORT;\n")
+        .and_then(|()| file.write_all(statement.as_bytes()))
+        .and_then(|()| file.flush())
+        .map_err(|error| failed(error.to_string()))?;
+    db.import(file.path())
+        .await
+        .map_err(|error| failed(error.to_string()))?;
+    let what = if operation_type == "mock data" {
+        "this record"
     } else {
-        format!("http://{url}")
+        "this statement"
     };
-
-    let mut tmp = tempfile::NamedTempFile::with_suffix(".surql")?;
-    tmp.write_all(b"OPTION IMPORT;\n")?;
-    tmp.write_all(statements.as_bytes())?;
-    tmp.flush()?;
-    let tmp_path = tmp.path().to_path_buf();
-
-    debug!(
-        operation_type = %operation_type,
-        table_name = %table_name,
-        file = %tmp_path.display(),
-        size = statements.len(),
-        "Importing via surreal CLI"
-    );
-
-    let output = std::process::Command::new("surreal")
-        .arg("import")
-        .arg("--endpoint")
-        .arg(&endpoint)
-        .arg("--namespace")
-        .arg(namespace)
-        .arg("--database")
-        .arg(database)
-        .arg("--username")
-        .arg(&username)
-        .arg("--password")
-        .arg(&password)
-        .arg(&tmp_path)
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        error!(
-            operation_type = %operation_type,
-            table_name = %table_name,
-            "surreal import failed: {stderr}"
-        );
-        return Err(format!(
-            "surreal import failed for {operation_type} on {table_name}: {stderr}"
-        )
-        .into());
-    }
-
     warn!(
         operation_type = %operation_type,
         table_name = %table_name,
-        "Executed via surreal import (payload was too large for RPC)"
+        size = statement.len(),
+        "A statement larger than one request was imported; events did not fire and fields were not processed for {what}"
     );
+    Ok(())
+}
 
-    Ok(vec![])
+/// Statements that apply together or not at all, such as one table's
+/// definitions.
+#[derive(Debug, Clone)]
+pub struct Transaction {
+    /// What the statements define, for messages.
+    pub label: String,
+    pub statements: Vec<String>,
+}
+
+impl Transaction {
+    fn surql(&self) -> String {
+        let mut surql = String::from("BEGIN TRANSACTION;\n");
+        for statement in &self.statements {
+            surql.push_str(statement.trim().trim_end_matches(';'));
+            surql.push_str(";\n");
+        }
+        surql.push_str("COMMIT TRANSACTION;\n");
+        surql
+    }
+}
+
+/// Applies `transactions`, packing as many into each request as fit under
+/// [`RPC_SIZE_LIMIT`]. Each applies whole or not at all, and one failing
+/// leaves the others applied. A conflict with a concurrent writer re-sends
+/// the whole transaction. One too large for any request runs statement by
+/// statement instead, which is logged because it is then not atomic. Fails
+/// listing every transaction that did not apply.
+pub async fn execute_transactions<C>(
+    db: &Surreal<C>,
+    transactions: &[Transaction],
+    operation_type: &str,
+) -> Result<()>
+where
+    C: Connection,
+{
+    let mut failures = Vec::new();
+    let mut batch: Vec<&Transaction> = Vec::new();
+    let mut batch_surql = String::new();
+    for transaction in transactions {
+        if transaction.statements.is_empty() {
+            continue;
+        }
+        let surql = transaction.surql();
+        if surql.len() > RPC_SIZE_LIMIT {
+            warn!(
+                operation_type = %operation_type,
+                label = %transaction.label,
+                size = surql.len(),
+                "Too large for one request, so applied statement by statement and not atomically"
+            );
+            for statement in &transaction.statements {
+                if let Err(error) =
+                    execute_and_validate(db, statement, operation_type, &transaction.label).await
+                {
+                    failures.push(format!("{}: {error}", transaction.label));
+                    break;
+                }
+            }
+            continue;
+        }
+        if !batch.is_empty() && batch_surql.len() + surql.len() > RPC_SIZE_LIMIT {
+            failures.extend(run_transactions(db, &batch, &batch_surql, operation_type).await?);
+            batch.clear();
+            batch_surql.clear();
+        }
+        batch.push(transaction);
+        batch_surql.push_str(&surql);
+    }
+    if !batch.is_empty() {
+        failures.extend(run_transactions(db, &batch, &batch_surql, operation_type).await?);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(EvenframeError::database(format!(
+            "{operation_type} failed for {} of {} tables, which were left unchanged:\n{}",
+            failures.len(),
+            transactions.len(),
+            failures.join("\n")
+        )))
+    }
+}
+
+/// Why a transaction did not apply.
+struct TransactionFailure {
+    /// Each failed statement with its error.
+    errors: Vec<(String, String)>,
+    retryable: bool,
+}
+
+impl TransactionFailure {
+    fn describe(&self, label: &str) -> String {
+        let errors = self
+            .errors
+            .iter()
+            .map(|(statement, message)| format!("  - {message}\n    {statement}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{label}:\n{errors}")
+    }
+}
+
+/// Sends `surql`, the packed `batch`, as one request and returns a message
+/// for each transaction that did not apply, after retrying conflicts.
+async fn run_transactions<C>(
+    db: &Surreal<C>,
+    batch: &[&Transaction],
+    surql: &str,
+    operation_type: &str,
+) -> Result<Vec<String>>
+where
+    C: Connection,
+{
+    let outcomes = send_transactions(db, batch, surql, operation_type).await?;
+    let mut failures = Vec::new();
+    for (transaction, outcome) in batch.iter().zip(outcomes) {
+        let mut outcome = outcome;
+        let mut attempt = 0;
+        while let Some(failure) = &outcome
+            && failure.retryable
+            && attempt < CONFLICT_RETRIES
+        {
+            attempt += 1;
+            warn!(
+                label = %transaction.label,
+                attempt,
+                "Retrying a transaction rolled back by a conflict"
+            );
+            tokio::time::sleep(conflict_backoff(attempt)).await;
+            outcome = send_transactions(db, &[transaction], &transaction.surql(), operation_type)
+                .await?
+                .pop()
+                .flatten();
+        }
+        if let Some(failure) = outcome {
+            failures.push(failure.describe(&transaction.label));
+        }
+    }
+    Ok(failures)
+}
+
+/// Each transaction's failure, if it had one, from a request of `batch`.
+async fn send_transactions<C>(
+    db: &Surreal<C>,
+    batch: &[&Transaction],
+    surql: &str,
+    operation_type: &str,
+) -> Result<Vec<Option<TransactionFailure>>>
+where
+    C: Connection,
+{
+    trace!("Transactions: {}", surql);
+    let mut response = db.query(surql).await.map_err(|error| {
+        EvenframeError::database(format!("{operation_type}: the request failed: {error}"))
+    })?;
+    let expected: usize = batch
+        .iter()
+        .map(|transaction| transaction.statements.len() + TRANSACTION_CONTROL_RESULTS)
+        .sum();
+    if response.num_statements() != expected {
+        return Err(EvenframeError::database(format!(
+            "{operation_type}: expected {expected} results for {} transactions, got {}",
+            batch.len(),
+            response.num_statements()
+        )));
+    }
+    let mut errors = response.take_errors();
+    let mut index = 0;
+    let mut outcomes = Vec::with_capacity(batch.len());
+    for transaction in batch {
+        let mut control = Vec::new();
+        if let Some(error) = errors.remove(&index) {
+            control.push(("BEGIN TRANSACTION;".to_string(), error.to_string()));
+        }
+        index += TRANSACTION_CONTROL_RESULTS / 2;
+        let mut failed = Vec::new();
+        let mut cancelled = Vec::new();
+        for statement in &transaction.statements {
+            if let Some(error) = errors.remove(&index) {
+                let message = error.to_string();
+                let entry = (statement.clone(), message.clone());
+                if message.contains(CANCELLED_BY_TRANSACTION) {
+                    cancelled.push(entry);
+                } else {
+                    failed.push(entry);
+                }
+            }
+            index += 1;
+        }
+        if let Some(error) = errors.remove(&index) {
+            control.push(("COMMIT TRANSACTION;".to_string(), error.to_string()));
+        }
+        index += TRANSACTION_CONTROL_RESULTS - TRANSACTION_CONTROL_RESULTS / 2;
+        // A statement that failed explains the transaction; without one, the
+        // BEGIN or COMMIT that failed does, such as a commit that conflicted
+        // with a concurrent writer. The rest only report that they were
+        // cancelled with it.
+        let errors = if !failed.is_empty() {
+            failed
+        } else if !control.is_empty() {
+            control
+        } else {
+            cancelled
+        };
+        outcomes.push((!errors.is_empty()).then(|| TransactionFailure {
+            retryable: errors.iter().all(|(_, message)| is_retryable(message)),
+            errors,
+        }));
+    }
+    Ok(outcomes)
 }
 
 #[cfg(test)]
@@ -517,8 +751,8 @@ mod split_tests {
 
     #[test]
     fn does_not_split_inside_js_function_body() {
-        // The embedded JS body has its own `;` — they must not split the
-        // DEFINE FIELD statement (regression for the playground apply failure).
+        // The embedded JS body has its own `;`, which must not split the
+        // DEFINE FIELD statement.
         let block = "DEFINE FIELD card ON t TYPE string ASSERT function($value) { const v = arguments[0]; if (v) { return true; } return false; };\nDEFINE FIELD next ON t TYPE int;\n";
         let parts = split_surql_statements(block);
         assert_eq!(
@@ -545,5 +779,117 @@ mod split_tests {
             "DEFINE FIELD a ON t TYPE string ASSERT string::starts_with($value, \"a\\\";b\");\n",
         );
         assert_eq!(parts.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod transaction_tests {
+    use super::{Transaction, execute_transactions};
+    use surrealdb::Surreal;
+    use surrealdb::engine::local::{Db, Mem};
+
+    async fn database() -> Surreal<Db> {
+        let db = Surreal::new::<Mem>(()).await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        db
+    }
+
+    async fn table_names(db: &Surreal<Db>) -> Vec<String> {
+        let mut names: Vec<String> = db
+            .query("RETURN object::keys((INFO FOR DB).tables)")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn a_statement_over_the_request_limit_is_imported() {
+        let db = database().await;
+        let comment = "x".repeat(super::RPC_SIZE_LIMIT + 1);
+        let statements = format!(
+            "DEFINE TABLE big SCHEMAFULL;\nDEFINE FIELD note ON big TYPE string COMMENT '{comment}';\n"
+        );
+        super::execute_and_validate(&db, &statements, "define", "big")
+            .await
+            .unwrap();
+        let fields: Vec<String> = db
+            .query("RETURN object::keys((INFO FOR TABLE big).fields)")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(fields, vec!["note".to_string()]);
+    }
+
+    fn transaction(label: &str, statements: &[&str]) -> Transaction {
+        Transaction {
+            label: label.to_string(),
+            statements: statements
+                .iter()
+                .map(|statement| statement.to_string())
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn packed_transactions_all_apply() {
+        let db = database().await;
+        execute_transactions(
+            &db,
+            &[
+                transaction(
+                    "first",
+                    &[
+                        "DEFINE TABLE first SCHEMAFULL",
+                        "DEFINE FIELD name ON TABLE first TYPE string",
+                    ],
+                ),
+                transaction("second", &["DEFINE TABLE second SCHEMAFULL"]),
+            ],
+            "define",
+        )
+        .await
+        .unwrap();
+        assert_eq!(table_names(&db).await, ["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_transaction_leaves_only_its_own_table_unchanged() {
+        let db = database().await;
+        let error = execute_transactions(
+            &db,
+            &[
+                transaction(
+                    "first",
+                    &[
+                        "DEFINE TABLE first SCHEMAFULL",
+                        "DEFINE FIELD name ON TABLE first TYPE string",
+                    ],
+                ),
+                transaction(
+                    "broken",
+                    &[
+                        "DEFINE TABLE broken SCHEMAFULL",
+                        "DEFINE TABLE broken SCHEMAFULL",
+                    ],
+                ),
+                transaction("last", &["DEFINE TABLE last SCHEMAFULL"]),
+            ],
+            "define",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        println!("{error}");
+        assert!(error.contains("broken:"), "{error}");
+        assert!(error.contains("already exists"), "{error}");
+        assert!(
+            !error.contains("first:") && !error.contains("last:"),
+            "{error}"
+        );
+        assert_eq!(table_names(&db).await, ["first", "last"]);
     }
 }

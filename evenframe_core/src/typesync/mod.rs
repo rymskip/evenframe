@@ -1,17 +1,33 @@
-// Always compiled (core typesync)
-pub mod arktype;
-pub mod checks;
+// Always compiled: EvenframeConfig and the mock plugins use these.
 pub mod config;
-pub mod doc_comment;
-pub mod effect;
-pub mod file_grouping;
-pub mod foreign_ts;
-pub mod import_resolver;
-pub mod js_checks;
-pub mod map_key;
-pub mod output;
 pub mod plugin_types;
+
+#[cfg(feature = "typesync")]
+pub mod arktype;
+#[cfg(feature = "typesync")]
+pub mod checks;
+#[cfg(feature = "typesync")]
+pub mod default_value;
+#[cfg(feature = "typesync")]
+pub mod doc_comment;
+#[cfg(feature = "typesync")]
+pub mod effect;
+#[cfg(feature = "typesync")]
+pub mod file_grouping;
+#[cfg(feature = "typesync")]
+pub mod foreign_ts;
+#[cfg(feature = "typesync")]
+pub mod import_resolver;
+#[cfg(feature = "typesync")]
+pub mod js_checks;
+#[cfg(feature = "typesync")]
+pub mod map_key;
+#[cfg(feature = "typesync")]
+pub mod output;
+#[cfg(feature = "typesync")]
 pub mod struct_variants;
+#[cfg(feature = "typesync")]
+pub mod type_index;
 
 #[cfg(feature = "wasm-plugins")]
 pub mod plugin;

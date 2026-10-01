@@ -9,14 +9,14 @@ use std::collections::{BTreeMap, BTreeSet};
 impl Mockmaker<'_> {
     /// The mock data each table receives after `schema_changes`: new records
     /// up to its count with every field, and its existing records rewritten
-    /// where their fields changed. What gets rewritten follows the table's
+    /// where their fields changed. What gets rewritten follows the configured
     /// preservation mode: `None` regenerates every field of a changed table,
     /// `Smart` writes new and modified fields, `Full` only new ones, and both
     /// unset removed fields. `always_regenerate` fields are rewritten in
     /// every mode.
     pub fn plan_table_mocks(&self, schema_changes: &SchemaChanges) -> BTreeMap<String, TableMocks> {
         tracing::debug!("Planning mock data for changed tables");
-        let default_preservation_mode = &self
+        let preservation_mode = &self
             .schemasync_config
             .mock_gen_config
             .default_preservation_mode;
@@ -33,12 +33,6 @@ impl Mockmaker<'_> {
             let rewrite_fields = if schema_changes.new_tables.contains(table_name) {
                 Vec::new()
             } else {
-                let preservation_mode = table_config
-                    .mock_generation_config
-                    .as_ref()
-                    .map_or(default_preservation_mode, |config| {
-                        &config.preservation_mode
-                    });
                 rewritten_fields(
                     table_config,
                     modified_tables.get(table_name.as_str()).copied(),

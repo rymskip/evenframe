@@ -29,33 +29,40 @@ impl RecursionInfo {
     }
 }
 
-/// Build the dependency graph from your `FieldType` tree and analyze recursion
-pub fn analyse_recursion(
+/// Each type's direct dependencies: the other scanned types its fields or
+/// variants reference, keyed by PascalCase name. Types that share a name
+/// share one entry.
+pub fn dependency_map(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
-) -> RecursionInfo {
-    let known: BTreeSet<_> = structs
+) -> BTreeMap<String, BTreeSet<String>> {
+    let known: BTreeSet<String> = structs
         .values()
         .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
-        .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
+        .chain(
+            enums
+                .values()
+                .map(|tagged_union| tagged_union.enum_name.to_case(Case::Pascal)),
+        )
         .collect();
 
     let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-
     for struct_config in structs.values() {
-        let from = struct_config.struct_name.to_case(Case::Pascal);
-        let entry = deps.entry(from.clone()).or_default();
-        for f in &struct_config.fields {
-            collect_refs(&f.field_type, &known, entry);
+        let entry = deps
+            .entry(struct_config.struct_name.to_case(Case::Pascal))
+            .or_default();
+        for field in &struct_config.fields {
+            collect_refs(&field.field_type, &known, entry);
         }
     }
-    tracing::debug!("Collecting dependencies from enums");
-    for e in enums.values() {
-        let from = e.enum_name.to_case(Case::Pascal);
-        tracing::trace!(enum_name = %from, "Processing enum dependencies");
-        let entry = deps.entry(from.clone()).or_default();
-        for v in &e.variants {
-            match &v.data {
+    for tagged_union in enums.values() {
+        let entry = deps
+            .entry(tagged_union.enum_name.to_case(Case::Pascal))
+            .or_default();
+        for variant in &tagged_union.variants {
+            match &variant.data {
+                // A struct variant's fields are written inline, so their
+                // types are the enum's own dependencies.
                 Some(VariantData::InlineStruct(inline)) => {
                     for field in &inline.fields {
                         collect_refs(&field.field_type, &known, entry);
@@ -68,188 +75,55 @@ pub fn analyse_recursion(
             }
         }
     }
+    deps
+}
 
-    // Build graph
-    tracing::debug!("Building dependency graph");
-    let mut g: DiGraphMap<&str, ()> = DiGraphMap::new();
-    for (from, tos) in &deps {
-        // ensure node exists even if it has no outgoing edges
-        g.add_node(from.as_str());
+/// The strongly connected components of the dependency graph `deps`, and
+/// which of them are recursive.
+pub fn recursion_of(deps: &BTreeMap<String, BTreeSet<String>>) -> RecursionInfo {
+    let mut graph: DiGraphMap<&str, ()> = DiGraphMap::new();
+    for (from, tos) in deps {
+        // A type with no dependencies is still a node.
+        graph.add_node(from.as_str());
         for to in tos {
-            g.add_edge(from.as_str(), to.as_str(), ());
+            graph.add_edge(from.as_str(), to.as_str(), ());
         }
     }
-    tracing::trace!(
-        node_count = g.node_count(),
-        edge_count = g.edge_count(),
-        "Graph built"
-    );
-
-    // Strongly connected components
-    tracing::debug!("Finding strongly connected components");
-    let sccs = kosaraju_scc(&g); // Vec<Vec<&str>>
-    tracing::debug!(scc_count = sccs.len(), "SCCs found");
 
     let mut comp_of = BTreeMap::<String, usize>::new();
     let mut meta = BTreeMap::<usize, (bool, Vec<String>)>::new();
-
-    for (idx, comp) in sccs.iter().enumerate() {
-        let self_loop = comp.len() == 1 && g.contains_edge(comp[0], comp[0]);
-        let recursive = self_loop || comp.len() > 1;
-        let members = comp.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        for m in &members {
-            comp_of.insert(m.clone(), idx);
+    for (index, component) in kosaraju_scc(&graph).iter().enumerate() {
+        let self_loop = component.len() == 1 && graph.contains_edge(component[0], component[0]);
+        let recursive = self_loop || component.len() > 1;
+        let members: Vec<String> = component.iter().map(|name| (*name).to_string()).collect();
+        for member in &members {
+            comp_of.insert(member.clone(), index);
         }
-        meta.insert(idx, (recursive, members));
+        meta.insert(index, (recursive, members));
     }
-
     RecursionInfo { comp_of, meta }
 }
 
-/// Returns the set of **direct** dependencies of a type name
-/// (other structs / enums that it references in its fields or variants).
-pub fn deps_of(
-    name: &str,
-    structs: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
-) -> BTreeSet<String> {
-    tracing::trace!(name = %name, "Getting direct dependencies of type");
-    // Build a quick "known-types" set so we don't count primitives.
-    let known: BTreeSet<_> = structs
-        .values()
-        .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
-        .chain(enums.values().map(|e| e.enum_name.to_case(Case::Pascal)))
-        .collect();
-
-    let mut acc = BTreeSet::new();
-
-    // If `name` is a struct, walk its fields
-    if let Some(struct_config) = structs
-        .values()
-        .find(|struct_config| struct_config.struct_name.to_case(Case::Pascal) == name)
-    {
-        tracing::trace!(struct_name = %struct_config.struct_name, field_count = struct_config.fields.len(), "Walking struct fields for dependencies");
-        for f in &struct_config.fields {
-            collect_refs(&f.field_type, &known, &mut acc);
-        }
-    }
-
-    // If `name` is an enum, walk its variants
-    if let Some(e) = enums
-        .values()
-        .find(|e| e.enum_name.to_case(Case::Pascal) == name)
-    {
-        tracing::trace!(enum_name = %e.enum_name, variant_count = e.variants.len(), "Walking enum variants for dependencies");
-        for v in &e.variants {
-            if let Some(variant_data) = &v.data {
-                match variant_data {
-                    VariantData::InlineStruct(inline) => {
-                        // A struct variant's fields are written inline, so
-                        // their types are the enum's own dependencies.
-                        for field in &inline.fields {
-                            collect_refs(&field.field_type, &known, &mut acc);
-                        }
-                    }
-                    VariantData::DataStructureRef(field_type) => {
-                        collect_refs(field_type, &known, &mut acc);
-                    }
-                }
-            }
-        }
-    }
-
-    tracing::trace!(dependency_count = acc.len(), "Dependencies collected");
-    acc
-}
-
 /// Collect references to other types from a FieldType
-pub fn collect_refs(ft: &FieldType, known: &BTreeSet<String>, acc: &mut BTreeSet<String>) {
-    tracing::trace!(field_type = ?ft, "Collecting references from field type");
-    use FieldType::*;
-    match ft {
-        Tuple(v) => v.iter().for_each(|f| collect_refs(f, known, acc)),
-        Struct(v) => v.iter().for_each(|(_, f)| collect_refs(f, known, acc)),
-        Option(i) | Vec(i) | RecordLink(i) => collect_refs(i, known, acc),
-        HashMap(k, v) | BTreeMap(k, v) => {
-            collect_refs(k, known, acc);
-            collect_refs(v, known, acc);
+pub fn collect_refs(field_type: &FieldType, known: &BTreeSet<String>, acc: &mut BTreeSet<String>) {
+    tracing::trace!(field_type = ?field_type, "Collecting references from field type");
+    match field_type {
+        FieldType::Tuple(items) => items.iter().for_each(|item| collect_refs(item, known, acc)),
+        FieldType::Struct(members) => members
+            .iter()
+            .for_each(|(_, member)| collect_refs(member, known, acc)),
+        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
+            collect_refs(inner, known, acc)
         }
-        Other(name) if known.contains(name) => {
+        FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
+            collect_refs(key, known, acc);
+            collect_refs(value, known, acc);
+        }
+        FieldType::Other(name) if known.contains(name) => {
             acc.insert(name.clone());
         }
         _ => {}
     }
-}
-
-/// Analyze recursion specifically for tables (TableConfig)
-/// This is a specialized version that only considers table dependencies
-pub fn analyse_recursion_tables(
-    tables: &BTreeMap<String, crate::schemasync::TableConfig>,
-) -> RecursionInfo {
-    tracing::info!(
-        table_count = tables.len(),
-        "Analyzing recursion in table dependencies"
-    );
-    // Convert tables to structs for analysis
-    let structs: BTreeMap<String, StructConfig> = tables
-        .iter()
-        .map(|(name, table)| (name.clone(), table.struct_config.clone()))
-        .collect();
-    tracing::debug!("Converted tables to structs for analysis");
-
-    // Tables don't have enums, so pass empty map
-    let enums = BTreeMap::new();
-
-    // Use the regular analyse_recursion with converted data
-    tracing::debug!("Delegating to main recursion analyzer");
-    analyse_recursion(&structs, &enums)
-}
-
-/// Get dependencies of a table by analyzing its struct config
-pub fn deps_of_table(
-    table_name: &str,
-    tables: &BTreeMap<String, crate::schemasync::TableConfig>,
-) -> BTreeSet<String> {
-    tracing::debug!(table_name = %table_name, "Getting dependencies of table");
-    // Build set of known table names in PascalCase
-    let known: BTreeSet<_> = tables.keys().map(|s| s.to_case(Case::Pascal)).collect();
-    tracing::trace!(
-        known_table_count = known.len(),
-        "Built set of known table names"
-    );
-
-    // Build a map from PascalCase to original table names
-    let pascal_to_original: BTreeMap<String, String> = tables
-        .keys()
-        .map(|k| (k.to_case(Case::Pascal), k.clone()))
-        .collect();
-
-    let mut acc = BTreeSet::new();
-
-    // Find the table and analyze its fields
-    if let Some(table) = tables.get(table_name) {
-        tracing::trace!(
-            table = %table_name,
-            field_count = table.struct_config.fields.len(),
-            "Analyzing table fields for dependencies"
-        );
-        for field in &table.struct_config.fields {
-            collect_refs(&field.field_type, &known, &mut acc);
-        }
-    } else {
-        tracing::warn!(table_name = %table_name, "Table not found");
-    }
-
-    // Convert PascalCase dependencies back to original table names
-    let result: BTreeSet<String> = acc
-        .into_iter()
-        .filter_map(|pascal_name| pascal_to_original.get(&pascal_name).cloned())
-        .collect();
-    tracing::debug!(
-        dependency_count = result.len(),
-        "Table dependencies collected"
-    );
-    result
 }
 
 /// Collect all dependencies of a table including nested objects and enums
@@ -493,7 +367,7 @@ pub fn sort_tables_by_dependencies(
         // Log dependencies for debugging
         if !dependencies.is_empty() {
             evenframe_log!(
-                &format!("Table '{}' depends on: {:?}", table_name, &dependencies),
+                &format!("Table '{}' depends on: {:?}", table_name, dependencies),
                 "results.log",
                 true
             );
@@ -647,7 +521,10 @@ pub fn sort_tables_by_dependencies(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, BTreeSet, RecursionInfo, TableConfig, collect_field_type_dependencies,
+        collect_refs, dependency_map, recursion_of, sort_tables_by_dependencies,
+    };
     use crate::types::{
         EnumRepresentation, FieldType, Pipeline, StructConfig, StructField, TaggedUnion, Variant,
         VariantData,
@@ -923,7 +800,7 @@ mod tests {
         assert!(acc.contains("DeepType"));
     }
 
-    // ==================== analyse_recursion Tests ====================
+    // ==================== recursion_of Tests ====================
 
     fn create_struct_config(name: &str, fields: Vec<StructField>) -> StructConfig {
         StructConfig {
@@ -942,18 +819,18 @@ mod tests {
     }
 
     #[test]
-    fn test_analyse_recursion_no_types() {
+    fn test_recursion_of_no_types() {
         let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
         let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
-        let info = analyse_recursion(&structs, &enums);
+        let info = recursion_of(&dependency_map(&structs, &enums));
 
         assert!(info.comp_of.is_empty());
         assert!(info.meta.is_empty());
     }
 
     #[test]
-    fn test_analyse_recursion_single_struct_no_deps() {
+    fn test_recursion_of_single_struct_no_deps() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "User".to_string(),
@@ -966,7 +843,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &BTreeMap::new());
+        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
 
         assert!(info.comp_of.contains_key("User"));
         let scc_id = info.comp_of["User"];
@@ -975,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn test_analyse_recursion_self_referential() {
+    fn test_recursion_of_self_referential() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "Node".to_string(),
@@ -991,7 +868,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &BTreeMap::new());
+        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
 
         assert!(info.comp_of.contains_key("Node"));
         // Self-loop should be detected as recursive
@@ -1000,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn test_analyse_recursion_mutual_recursion() {
+    fn test_recursion_of_mutual_recursion() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "TypeA".to_string(),
@@ -1023,7 +900,7 @@ mod tests {
             ),
         );
 
-        let info = analyse_recursion(&structs, &BTreeMap::new());
+        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
 
         // Both should be in the same SCC
         assert_eq!(info.comp_of.get("TypeA"), info.comp_of.get("TypeB"));
@@ -1033,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn test_analyse_recursion_chain_no_cycle() {
+    fn test_recursion_of_chain_no_cycle() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "A".to_string(),
@@ -1054,7 +931,7 @@ mod tests {
             create_struct_config("C", vec![create_struct_field("value", FieldType::I32)]),
         );
 
-        let info = analyse_recursion(&structs, &BTreeMap::new());
+        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
 
         // All should be in different SCCs (no cycles)
         assert_ne!(info.comp_of.get("A"), info.comp_of.get("B"));
@@ -1066,10 +943,10 @@ mod tests {
         }
     }
 
-    // ==================== deps_of Tests ====================
+    // ==================== dependency_map Tests ====================
 
     #[test]
-    fn test_deps_of_no_deps() {
+    fn test_dependency_map_no_deps() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "Simple".to_string(),
@@ -1079,13 +956,15 @@ mod tests {
             ),
         );
 
-        let deps = deps_of("Simple", &structs, &BTreeMap::new());
+        let deps = dependency_map(&structs, &BTreeMap::new())
+            .remove("Simple")
+            .unwrap_or_default();
 
         assert!(deps.is_empty());
     }
 
     #[test]
-    fn test_deps_of_with_deps() {
+    fn test_dependency_map_with_deps() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "Parent".to_string(),
@@ -1105,23 +984,26 @@ mod tests {
             ),
         );
 
-        let deps = deps_of("Parent", &structs, &BTreeMap::new());
+        let deps = dependency_map(&structs, &BTreeMap::new())
+            .remove("Parent")
+            .unwrap_or_default();
 
         assert!(deps.contains("Child"));
         assert_eq!(deps.len(), 1);
     }
 
     #[test]
-    fn test_deps_of_unknown_type() {
+    fn test_dependency_map_unknown_type() {
         let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
-        let deps = deps_of("Unknown", &structs, &BTreeMap::new());
+        let deps = dependency_map(&structs, &BTreeMap::new())
+            .remove("Unknown")
+            .unwrap_or_default();
 
         assert!(deps.is_empty());
     }
 
     #[test]
-    fn test_deps_of_enum_with_variants() {
-        let _structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+    fn test_dependency_map_enum_with_variants() {
         let mut enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
         enums.insert(
@@ -1172,12 +1054,14 @@ mod tests {
             ),
         );
 
-        let deps = deps_of("Status", &structs_with_user, &enums);
+        let deps = dependency_map(&structs_with_user, &enums)
+            .remove("Status")
+            .unwrap_or_default();
 
         assert!(deps.contains("UserData"));
     }
 
-    // ==================== analyse_recursion_tables Tests ====================
+    // ==================== table fixtures ====================
 
     fn create_table_config(name: &str, fields: Vec<StructField>) -> TableConfig {
         TableConfig {
@@ -1190,73 +1074,6 @@ mod tests {
             indexes: Vec::new(),
             output_override: None,
         }
-    }
-
-    #[test]
-    fn test_analyse_recursion_tables_empty() {
-        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
-        let info = analyse_recursion_tables(&tables);
-
-        assert!(info.comp_of.is_empty());
-    }
-
-    #[test]
-    fn test_analyse_recursion_tables_no_recursion() {
-        let mut tables = BTreeMap::new();
-        tables.insert(
-            "user".to_string(),
-            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
-        );
-
-        let info = analyse_recursion_tables(&tables);
-
-        assert!(info.comp_of.contains_key("User"));
-    }
-
-    // ==================== deps_of_table Tests ====================
-
-    #[test]
-    fn test_deps_of_table_no_deps() {
-        let mut tables = BTreeMap::new();
-        tables.insert(
-            "user".to_string(),
-            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
-        );
-
-        let deps = deps_of_table("user", &tables);
-
-        assert!(deps.is_empty());
-    }
-
-    #[test]
-    fn test_deps_of_table_with_reference() {
-        let mut tables = BTreeMap::new();
-        tables.insert(
-            "post".to_string(),
-            create_table_config(
-                "post",
-                vec![
-                    create_struct_field("title", FieldType::String),
-                    create_struct_field("author", FieldType::Other("User".to_string())),
-                ],
-            ),
-        );
-        tables.insert(
-            "user".to_string(),
-            create_table_config("user", vec![create_struct_field("name", FieldType::String)]),
-        );
-
-        let deps = deps_of_table("post", &tables);
-
-        assert!(deps.contains("user"));
-    }
-
-    #[test]
-    fn test_deps_of_table_unknown() {
-        let tables: BTreeMap<String, TableConfig> = BTreeMap::new();
-        let deps = deps_of_table("unknown", &tables);
-
-        assert!(deps.is_empty());
     }
 
     // ==================== sort_tables_by_dependencies Tests ====================

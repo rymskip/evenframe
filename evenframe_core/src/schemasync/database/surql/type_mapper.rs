@@ -113,7 +113,10 @@ impl<'a> SurrealdbTypeMapper<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, FieldType, ForeignTypeRegistry, StructConfig, SurrealdbTypeMapper, TableConfig,
+        TaggedUnion,
+    };
 
     fn vec_record(name: &str) -> FieldType {
         FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(FieldType::Other(

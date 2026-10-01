@@ -1,6 +1,4 @@
 use crate::schemasync::compare::SchemaChanges;
-#[cfg(feature = "mockmake")]
-use crate::schemasync::mockmake::Mockmaker;
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
@@ -92,24 +90,6 @@ pub fn generate_remove_event_statements(schema_changes: &SchemaChanges) -> Strin
     output
 }
 
-#[cfg(feature = "mockmake")]
-impl Mockmaker<'_> {
-    /// DELETE statements for the records beyond each table's count. Links
-    /// are only generated to ids kept in the pool, so no new record points at
-    /// an excess one.
-    pub(crate) fn excess_record_deletes(&self) -> String {
-        let mut output = String::new();
-        for (table_name, excess) in self.excess_ids.iter().filter(|(_, ids)| !ids.is_empty()) {
-            output.push_str(&format!("-- Removing excess records from {table_name}\n"));
-            for id in excess {
-                output.push_str(&format!("DELETE {id};\n"));
-            }
-            output.push('\n');
-        }
-        output
-    }
-}
-
 /// REMOVE statements for what `schema_changes` removed from the schema.
 pub fn generate_remove_statements(schema_changes: &SchemaChanges) -> String {
     info!("Generating remove statements based on schema changes");
@@ -198,7 +178,10 @@ pub fn generate_remove_statements(schema_changes: &SchemaChanges) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        extract_event_name, generate_remove_analyzer_statements, generate_remove_event_statements,
+        generate_remove_index_statements,
+    };
     use crate::schemasync::compare::{IndexDefinition, SchemaChanges, TableChanges};
 
     fn empty_table_change(name: &str) -> TableChanges {

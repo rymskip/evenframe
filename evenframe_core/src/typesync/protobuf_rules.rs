@@ -705,7 +705,10 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidator, FieldRules, FieldType, NumberValidator, Result, StringValidator, Validator,
+        field_rules,
+    };
     use crate::types::ForeignTypeRegistry;
     use ordered_float::OrderedFloat;
 

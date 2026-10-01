@@ -1,0 +1,3 @@
+# Flag every glob import, including `use super::*` in test modules and
+# prelude imports, which `wildcard_imports` otherwise exempts.
+warn-on-all-wildcard-imports = true

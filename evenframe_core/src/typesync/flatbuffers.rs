@@ -643,7 +643,12 @@ fn escape_for_fbs(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ArrayValidator, BTreeMap, BTreeSet, BigIntValidator, DateValidator, DurationValidator, Fbs,
+        FieldType, NumberValidator, StringValidator, StructConfig, TaggedUnion, Validator,
+        collect_validators_for_field, escape_for_fbs, generate_flatbuffers_schema_string,
+        validator_to_flatbuffers_string,
+    };
     use crate::types::{EnumRepresentation, StructField};
     use ordered_float::OrderedFloat;
 

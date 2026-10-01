@@ -2,31 +2,64 @@
 source: evenframe_core/src/tooling/build_config.rs
 expression: "errors.join(\"\\n\\n\")"
 ---
-Configuration error: Failed to parse [typesync]: unknown field `should_generate_arktype_types`, expected one of `output`, `outputs`, `collision_strategy`, `struct_variants`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 2, column 1
+  |
+2 | should_generate_arktype_types = true
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+unknown field `should_generate_arktype_types`, expected one of `output`, `outputs`, `collision_strategy`, `struct_variants`
 
 
-Configuration error: Failed to parse [typesync]: unknown variant `arcktype`, expected one of `arktype`, `effect`, `macroforge`, `flatbuffers`, `protobuf`
-in `output.kind`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 2, column 19
+  |
+2 | output = { kind = "arcktype", dir = "g" }
+  |                   ^^^^^^^^^^
+unknown variant `arcktype`, expected one of `arktype`, `effect`, `macroforge`, `flatbuffers`, `protobuf`
 
 
-Configuration error: Failed to parse [typesync]: `output` and `outputs` cannot both be set
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 1, column 1
+  |
+1 | [typesync]
+  | ^^^^^^^^^^
+`output` and `outputs` cannot both be set
 
 
-Configuration error: Failed to parse [typesync]: the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 1, column 1
+  |
+1 | [typesync]
+  | ^^^^^^^^^^
+the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
 
 
-Configuration error: Failed to parse [typesync]: `package` and `import_validate` only apply to protobuf outputs, not `effect`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 1, column 1
+  |
+1 | [typesync]
+  | ^^^^^^^^^^
+`package` and `import_validate` only apply to protobuf outputs, not `effect`
 
 
-Configuration error: Failed to parse [typesync]: `macros` only applies to macroforge outputs, not `effect`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 1, column 1
+  |
+1 | [typesync]
+  | ^^^^^^^^^^
+`macros` only applies to macroforge outputs, not `effect`
 
 
-Configuration error: Failed to parse [typesync]: `file` names a single output file, but the `effect` output is per-file
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 1, column 1
+  |
+1 | [typesync]
+  | ^^^^^^^^^^
+`file` names a single output file, but the `effect` output is per-file
 
 
-Configuration error: Failed to parse [typesync]: unknown variant `kebabcase`, expected one of `pascal`, `kebab`, `snake`, `camel`
-in `output.file_naming`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 2, column 58
+  |
+2 | output = { kind = "macroforge", dir = "g", file_naming = "kebabcase" }
+  |                                                          ^^^^^^^^^^^
+unknown variant `kebabcase`, expected one of `pascal`, `kebab`, `snake`, `camel`
 
 
-Configuration error: Failed to parse [typesync]: unknown variant `autorename`, expected `error` or `auto_rename`
-in `collision_strategy`
+Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 2, column 22
+  |
+2 | collision_strategy = "autorename"
+  |                      ^^^^^^^^^^^^
+unknown variant `autorename`, expected `error` or `auto_rename`

@@ -1,12 +1,16 @@
 use crate::imports::generate_deserialize_imports;
 use convert_case::{Case, Casing};
-use evenframe_core::derive::validator_parser::parse_field_validators;
+use evenframe_core::derive::validator_parser::FieldValidators;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, spanned::Spanned};
 
-/// Generates a custom Deserialize implementation that includes field validation
-/// This is used when structs have validators that need to be applied during deserialization
-pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStream {
+/// Generates a custom Deserialize implementation that applies each field's
+/// validators while deserializing. `fields_validators` holds the validators of
+/// every named field, in field order.
+pub fn generate_custom_deserialize(
+    input: &DeriveInput,
+    fields_validators: &[FieldValidators],
+) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
 
     // Extract fields from the struct
@@ -49,55 +53,57 @@ pub fn generate_custom_deserialize(input: &DeriveInput) -> proc_macro2::TokenStr
     }
 
     // Generate field deserialization with validation
-    let field_deserializations = fields.iter().map(|field| {
-        let field_name = match field.ident.as_ref() {
-            Some(ident) => ident,
-            None => {
-                return syn::Error::new(
-                    field.span(),
-                    "Internal error: Named field should have an identifier",
-                )
-                .to_compile_error();
-            }
-        };
-        let field_type = &field.ty;
-        let enum_variant = quote::format_ident!("{}", field_name.to_string().to_case(Case::Pascal));
-
-        let validators = match parse_field_validators(&field.attrs) {
-            Ok(validators) => validators,
-            Err(err) => return err.to_compile_error(),
-        };
-
-        if !validators.is_empty() {
-            let temp_var = quote::format_ident!("__temp_{}", field_name);
-            let read = match validators.read_tokens(&temp_var, field_type, &field_name.to_string())
-            {
-                Ok(read) => read,
-                Err(err) => return err.to_compile_error(),
+    let field_deserializations = fields
+        .iter()
+        .zip(fields_validators)
+        .map(|(field, validators)| {
+            let field_name = match field.ident.as_ref() {
+                Some(ident) => ident,
+                None => {
+                    return syn::Error::new(
+                        field.span(),
+                        "Internal error: Named field should have an identifier",
+                    )
+                    .to_compile_error();
+                }
             };
-            quote! {
-                Field::#enum_variant => {
-                    if #field_name.is_some() {
-                        return Err(de::Error::duplicate_field(stringify!(#field_name)));
-                    }
-                    #read
-                    #field_name = Some(#temp_var);
-                }
-            }
-        } else {
-            // Standard deserialization without validation
-            quote! {
-                Field::#enum_variant => {
-                    if #field_name.is_some() {
-                        return Err(de::Error::duplicate_field(stringify!(#field_name)));
-                    }
-                    #field_name = Some(map.next_value()?);
-                }
-            }
-        }
-    });
+            let field_type = &field.ty;
+            let enum_variant =
+                quote::format_ident!("{}", field_name.to_string().to_case(Case::Pascal));
 
-    let field_names: Vec<_> = fields.iter().filter_map(|f| f.ident.as_ref()).collect();
+            if !validators.is_empty() {
+                let temp_var = quote::format_ident!("__temp_{}", field_name);
+                let read =
+                    match validators.read_tokens(&temp_var, field_type, &field_name.to_string()) {
+                        Ok(read) => read,
+                        Err(err) => return err.to_compile_error(),
+                    };
+                quote! {
+                    Field::#enum_variant => {
+                        if #field_name.is_some() {
+                            return Err(de::Error::duplicate_field(stringify!(#field_name)));
+                        }
+                        #read
+                        #field_name = Some(#temp_var);
+                    }
+                }
+            } else {
+                // Standard deserialization without validation
+                quote! {
+                    Field::#enum_variant => {
+                        if #field_name.is_some() {
+                            return Err(de::Error::duplicate_field(stringify!(#field_name)));
+                        }
+                        #field_name = Some(map.next_value()?);
+                    }
+                }
+            }
+        });
+
+    let field_names: Vec<_> = fields
+        .iter()
+        .filter_map(|field| field.ident.as_ref())
+        .collect();
 
     // Validate that all fields have names (this should always be true after our earlier check)
     if field_names.len() != fields.len() {

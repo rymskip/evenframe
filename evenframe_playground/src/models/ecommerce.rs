@@ -204,7 +204,9 @@ pub struct Purchased {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Address, CartItem, Customer, Order, OrderStatus, Product, ProductCategory, RecordLink,
+    };
 
     #[test]
     fn test_order_status_serialization() {

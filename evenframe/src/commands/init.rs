@@ -127,7 +127,7 @@ SURREALDB_PASSWORD=root
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{generate_full_config, generate_minimal_config};
     use evenframe_core::config::EvenframeConfig;
 
     fn parse(template: &str) -> EvenframeConfig {

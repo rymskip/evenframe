@@ -1,3 +1,5 @@
+#![cfg(feature = "typesync")]
+
 use evenframe_core::config::ForeignTypeConfig;
 use evenframe_core::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use evenframe_core::typesync::config::StructVariants;
@@ -39,7 +41,8 @@ mod arktype {
     ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::arktype::generate_arktype_type_string(
-            &structs, &enums, &registry,
+            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
+            &registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -62,7 +65,9 @@ mod effect {
     ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::effect::generate_effect_schema_string(
-            &structs, &enums, true, &registry,
+            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
+            true,
+            &registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -86,8 +91,7 @@ mod macroforge {
     ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
         let output = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
-            &structs,
-            &enums,
+            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
             Default::default(),
             &registry,
         );
@@ -209,7 +213,8 @@ mod surrealql {
                 &fixture.enums,
                 &registry,
                 true,
-            );
+            )
+            .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()

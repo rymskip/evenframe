@@ -75,7 +75,7 @@ pub struct Session {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{RecordLink, Role, Session, User};
 
     #[test]
     fn test_role_serialization() {

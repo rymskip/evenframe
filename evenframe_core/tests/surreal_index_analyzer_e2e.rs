@@ -9,10 +9,10 @@
 //! so they also prove SurrealDB accepts the syntax and that the export parser
 //! understands what SurrealDB writes back.
 
-#![cfg(feature = "surrealdb")]
+#![cfg(all(feature = "schemasync", feature = "tooling"))]
 
 use evenframe_core::schemasync::TableConfig;
-use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schemas};
+use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schema};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::config::{
     AccessConfig, AccessType, AccessesSource, DatabaseConfig,
@@ -29,7 +29,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, Mem};
-use surrealdb::engine::remote::http::Client;
 use tempfile::TempDir;
 
 const ANALYZERS: &str = "DEFINE ANALYZER OVERWRITE english TOKENIZERS blank, class \
@@ -104,6 +103,7 @@ fn define_statements(tables: &BTreeMap<String, TableConfig>) -> String {
                 &registry,
                 true,
             )
+            .unwrap()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -118,9 +118,9 @@ async fn mem_db() -> Surreal<Db> {
 async fn apply(db: &Surreal<Db>, surql: &str) {
     db.query(surql)
         .await
-        .unwrap_or_else(|e| panic!("query failed: {e}\n{surql}"))
+        .unwrap_or_else(|error| panic!("query failed: {error}\n{surql}"))
         .check()
-        .unwrap_or_else(|e| panic!("statement rejected: {e}\n{surql}"));
+        .unwrap_or_else(|error| panic!("statement rejected: {error}\n{surql}"));
 }
 
 /// Export both databases the way schemasync does and parse the exports.
@@ -128,11 +128,10 @@ async fn export_and_parse(
     old: &Surreal<Db>,
     new: &Surreal<Db>,
 ) -> (SchemaDefinition, SchemaDefinition, String) {
-    let (old_export, new_export) = export_schemas(old, new).await.unwrap();
-    let client = Surreal::<Client>::init();
-    let importer = SchemaImporter::new(&client);
-    let old_schema = importer.parse_schema_from_export(&old_export).unwrap();
-    let new_schema = importer.parse_schema_from_export(&new_export).unwrap();
+    let old_export = export_schema(old, "old schema").await.unwrap();
+    let new_export = export_schema(new, "new schema").await.unwrap();
+    let old_schema = SchemaImporter::parse_schema_from_export(&old_export).unwrap();
+    let new_schema = SchemaImporter::parse_schema_from_export(&new_export).unwrap();
     (old_schema, new_schema, new_export)
 }
 
@@ -141,14 +140,14 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
     let tables = scan(POST_SOURCE);
     let surql = define_statements(&tables);
 
-    let a = mem_db().await;
-    let b = mem_db().await;
-    for db in [&a, &b] {
+    let first_db = mem_db().await;
+    let second_db = mem_db().await;
+    for db in [&first_db, &second_db] {
         apply(db, ANALYZERS).await;
         apply(db, &surql).await;
     }
 
-    let (schema_a, schema_b, export) = export_and_parse(&a, &b).await;
+    let (schema_a, schema_b, export) = export_and_parse(&first_db, &second_db).await;
 
     let post = schema_b.tables.get("post").unwrap_or_else(|| {
         panic!("`post` missing from parsed export:\n{export}");
@@ -156,7 +155,7 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
     let index = |name: &str| {
         post.indexes
             .iter()
-            .find(|i| i.name == name)
+            .find(|candidate| candidate.name == name)
             .unwrap_or_else(|| {
                 panic!(
                     "index `{name}` missing; parsed {:?}\n{export}",
@@ -208,7 +207,10 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
         "field-level #[unique(...)] options must win over the bare StructField flag"
     );
     assert_eq!(
-        post.indexes.iter().filter(|i| i.unique).count(),
+        post.indexes
+            .iter()
+            .filter(|candidate| candidate.unique)
+            .count(),
         1,
         "#[unique(...)] must not also produce a second unique index"
     );
@@ -223,12 +225,12 @@ async fn generated_indexes_are_accepted_and_round_trip_through_export() {
 
     // The full-text index is actually usable.
     apply(
-        &b,
+        &second_db,
         "CREATE post:one SET slug = 'one', body = 'Hello search world', tags = ['a'], \
          created_at = '2026-01-01', embedding = [0.1, 0.2, 0.3], published = true;",
     )
     .await;
-    let mut response = b
+    let mut response = second_db
         .query("SELECT VALUE search::score(1) FROM post WHERE body @1@ 'searching';")
         .await
         .unwrap();
@@ -275,7 +277,7 @@ async fn changed_fulltext_parameters_are_detected() {
     let post = changes
         .modified_tables
         .iter()
-        .find(|t| t.table_name == "post")
+        .find(|table| table.table_name == "post")
         .expect("post should be flagged as modified");
     assert_eq!(post.modified_indexes.len(), 1, "{post:#?}");
     assert_eq!(post.modified_indexes[0].name, "post_search");
@@ -421,7 +423,7 @@ async fn modified_analyzer_rebuilds_dependent_fulltext_index() {
     let doc = changes
         .modified_tables
         .iter()
-        .find(|t| t.table_name == "doc")
+        .find(|table| table.table_name == "doc")
         .expect("doc should be revisited for its dependent index");
     assert_eq!(doc.modified_indexes[0].name, "doc_search");
 
@@ -482,13 +484,17 @@ async fn commented_analyzer_file_validates() {
 
     let db = mem_db().await;
     let response = db.query(surql).await.unwrap();
-    let results = validate_surql_response(response, surql, "define")
+    let executed = validate_surql_response(response, surql)
         .await
         .unwrap_or_else(|errors| panic!("validation failed: {errors:#?}"));
-    assert_eq!(results.len(), 2);
+    assert_eq!(executed, 2);
 
     let (_, schema, _) = export_and_parse(&db, &db).await;
-    let names: Vec<&str> = schema.analyzers.iter().map(|a| a.name.as_str()).collect();
+    let names: Vec<&str> = schema
+        .analyzers
+        .iter()
+        .map(|analyzer| analyzer.name.as_str())
+        .collect();
     assert_eq!(names, vec!["a", "b"]);
 }
 
@@ -501,7 +507,8 @@ async fn full_schema_dump_applies_top_to_bottom() {
         &BTreeMap::new(),
         &ForeignTypeRegistry::default(),
         true,
-    );
+    )
+    .unwrap();
 
     let mut database = DatabaseConfig::for_testing();
     database.accesses = AccessesSource::Inline(vec![
@@ -521,7 +528,7 @@ async fn full_schema_dump_applies_top_to_bottom() {
         "DEFINE FUNCTION OVERWRITE fn::post_count($p: record<post>) { RETURN count($p) };"
             .to_string(),
     );
-    let dump = schema_surql(&database, &tables_surql);
+    let dump = schema_surql(&database, &tables_surql).unwrap();
 
     let db = mem_db().await;
     apply(&db, &dump).await;
@@ -531,7 +538,7 @@ async fn full_schema_dump_applies_top_to_bottom() {
     let info = response
         .take::<Option<surrealdb::types::Value>>(0)
         .unwrap()
-        .map(|v| serde_json::to_string(&v).unwrap())
+        .map(|value| serde_json::to_string(&value).unwrap())
         .expect("INFO FOR DB result");
     for definition in [
         "DEFINE ACCESS reader ON DATABASE",
@@ -547,7 +554,7 @@ async fn full_schema_dump_applies_top_to_bottom() {
         schema.tables["post"]
             .indexes
             .iter()
-            .any(|i| i.name == "post_search"),
+            .any(|candidate| candidate.name == "post_search"),
         "full-text index from the dump missing"
     );
 }
@@ -594,7 +601,8 @@ async fn indexes_on_nested_paths_serve_searches() {
         &enums,
         &ForeignTypeRegistry::default(),
         true,
-    );
+    )
+    .unwrap();
     assert!(
         surql.contains(
             "DEFINE INDEX OVERWRITE deal_first_name_search ON TABLE deal \
@@ -654,7 +662,7 @@ async fn indexes_on_nested_paths_serve_searches() {
     let search = deal
         .indexes
         .iter()
-        .find(|i| i.name == "deal_last_name_search")
+        .find(|candidate| candidate.name == "deal_last_name_search")
         .unwrap_or_else(|| panic!("index missing from export:\n{export}"));
     assert_eq!(search.columns, vec!["customer_name.last_name".to_string()]);
     let changes = Comparator::compare(&schema_a, &schema_b).unwrap();

@@ -509,7 +509,10 @@ impl Proto<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, Cell, FieldType, Nested, Proto, StructConfig, TaggedUnion, Validator,
+        generate_protobuf_schema_string, scalar,
+    };
     use crate::types::{EnumRepresentation, StructField};
     use crate::validator::{NumberValidator, StringValidator};
     use ordered_float::OrderedFloat;
