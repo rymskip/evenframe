@@ -1,14 +1,89 @@
 //! Offline SurrealQL dumps of the resolved schema, as written by
-//! `evenframe schemasync dump`. Nothing here connects to a database.
+//! `evenframe schemasync dump` and by build scripts. Nothing here connects to
+//! a database.
 
-use crate::error::Result;
+use crate::config::EvenframeConfig;
+use crate::error::{EvenframeError, Result};
 use crate::schemasync::TableConfig;
-use crate::schemasync::compare::surql::analyzers_reference_functions;
 use crate::schemasync::config::DatabaseConfig;
 use crate::schemasync::database::surql::access::access_definitions_surql;
 use crate::schemasync::database::surql::define::generate_define_statements;
 use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// What a dump holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpScope {
+    /// The `DEFINE TABLE`/`FIELD`/`INDEX`/`EVENT` statements only.
+    Tables,
+    /// Everything schemasync defines, in the order it applies it.
+    Schema,
+}
+
+impl DumpScope {
+    /// Where a dump of this scope is written unless told otherwise.
+    pub fn default_path(self, project_root: &Path) -> PathBuf {
+        let file = match self {
+            DumpScope::Tables => "tables.surql",
+            DumpScope::Schema => "schema.surql",
+        };
+        project_root.join(".evenframe").join("surql").join(file)
+    }
+}
+
+/// The SurrealQL of `scope` for the scanned types, with `config`'s foreign
+/// types, scripting setting and database definitions.
+pub fn dump_surql(
+    config: &EvenframeConfig,
+    tables: &BTreeMap<String, TableConfig>,
+    objects: &BTreeMap<String, StructConfig>,
+    enums: &BTreeMap<String, TaggedUnion>,
+    scope: DumpScope,
+) -> Result<String> {
+    let schemasync = config.require_schemasync()?;
+    let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
+    let tables = tables_surql(
+        tables,
+        objects,
+        enums,
+        &registry,
+        schemasync.mock_gen_config.scripting_asserts,
+    )?;
+    match scope {
+        DumpScope::Tables => Ok(tables),
+        DumpScope::Schema => schema_surql(&schemasync.database, &tables),
+    }
+}
+
+/// Writes `surql` to `path`, creating its directory. An unchanged file is
+/// left untouched, so a build script rerunning does not bump its mtime.
+pub fn write_dump(path: &Path, surql: &str) -> Result<()> {
+    if fs::read(path).is_ok_and(|existing| existing == surql.as_bytes()) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            EvenframeError::config(format!(
+                "Failed to create output directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::write(path, surql).map_err(|error| {
+        EvenframeError::config(format!(
+            "Failed to write schema dump to {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Whether any `DEFINE ANALYZER` in `surql` uses a `FUNCTION fn::...`
+/// preprocessor, which must exist before the analyzer is defined.
+pub fn analyzers_reference_functions(surql: &str) -> bool {
+    surql.to_uppercase().contains("FUNCTION FN::")
+}
 
 /// The `DEFINE TABLE`/`FIELD`/`INDEX`/`EVENT` statements for every table,
 /// resolving each table's `output_override` and passing the full
@@ -69,7 +144,7 @@ pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> Result<Str
 
 #[cfg(test)]
 mod tests {
-    use super::{DatabaseConfig, schema_surql};
+    use super::{DatabaseConfig, analyzers_reference_functions, schema_surql};
     use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource};
 
     fn database(analyzers: &str, functions: &str) -> DatabaseConfig {
@@ -88,6 +163,16 @@ mod tests {
         dump.lines()
             .filter_map(|line| line.strip_prefix("-- "))
             .collect()
+    }
+
+    #[test]
+    fn detects_function_preprocessors_in_analyzers() {
+        assert!(analyzers_reference_functions(
+            "DEFINE ANALYZER a FUNCTION fn::strip TOKENIZERS blank;"
+        ));
+        assert!(!analyzers_reference_functions(
+            "DEFINE ANALYZER a TOKENIZERS blank;"
+        ));
     }
 
     #[test]

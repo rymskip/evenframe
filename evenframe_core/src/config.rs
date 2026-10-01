@@ -52,6 +52,24 @@ pub struct EffectMapping {
     pub import: Option<TsImport>,
 }
 
+/// A foreign type's mapping in one TypeScript output.
+pub trait TsOutputMapping {
+    /// The import the mapped type needs, if any.
+    fn import(&self) -> Option<&TsImport>;
+}
+
+impl TsOutputMapping for TsMapping {
+    fn import(&self) -> Option<&TsImport> {
+        self.import.as_ref()
+    }
+}
+
+impl TsOutputMapping for EffectMapping {
+    fn import(&self) -> Option<&TsImport> {
+        self.import.as_ref()
+    }
+}
+
 /// Configuration for a single foreign (external crate) type.
 /// Defines how a Rust type from an external crate maps to each database
 /// and TypeScript target.
@@ -103,12 +121,6 @@ pub struct ForeignTypeConfig {
     #[serde(default)]
     pub default_value_surql: String,
 
-    // --- SurrealQL value conversion strategy ---
-    /// One of: "quoted_string", "datetime", "duration_from_nanos",
-    ///         "decimal_number", "record_id", "passthrough"
-    #[serde(default)]
-    pub surql_value_format: String,
-
     // --- Mock data generation strategy ---
     /// One of: "datetime", "duration", "timezone", "decimal", "record_id", "string"
     #[serde(default)]
@@ -134,6 +146,10 @@ where
 /// The foreign type config for evenframe's record link, which a project may
 /// configure to own its TypeScript definition.
 pub const RECORD_LINK: &str = "RecordLink";
+
+/// The foreign type config for the SurrealDB SDK's `RecordId`, which a record
+/// link holds. Evenframe's own `RecordLink` writes its id as this type does.
+pub const RECORD_ID: &str = "RecordId";
 
 /// `type_expr` with `{0}`, `{1}` and so on replaced by `params`. Config
 /// loading rejects a placeholder no parameter can fill.
@@ -561,28 +577,27 @@ impl EvenframeConfig {
         if let Some(path) = CONFIG_FILE.get() {
             return Ok(path.clone());
         }
-        let current_dir = env::current_dir()?;
-        debug!("Starting config file search from: {:?}", current_dir);
+        Self::find_config_file_from(&env::current_dir()?).ok_or_else(|| {
+            EvenframeError::config(
+                "Configuration file not found. Expected '.evenframe/config.toml' or 'evenframe.toml' in current or any parent directory.",
+            )
+        })
+    }
 
-        for path in current_dir.ancestors() {
-            // Check .evenframe/config.toml first (preferred location)
+    /// `.evenframe/config.toml` (preferred) or `evenframe.toml`, in `start` or
+    /// the nearest of its ancestors that has one.
+    pub fn find_config_file_from(start: &Path) -> Option<PathBuf> {
+        debug!("Starting config file search from: {:?}", start);
+        start.ancestors().find_map(|path| {
             let dotdir_config = path.join(".evenframe").join("config.toml");
             trace!("Checking for config at: {:?}", dotdir_config);
             if dotdir_config.exists() {
-                return Ok(dotdir_config);
+                return Some(dotdir_config);
             }
-
-            // Fall back to evenframe.toml (backwards compatible)
             let legacy_config = path.join("evenframe.toml");
             trace!("Checking for config at: {:?}", legacy_config);
-            if legacy_config.exists() {
-                return Ok(legacy_config);
-            }
-        }
-
-        Err(EvenframeError::config(
-            "Configuration file not found. Expected '.evenframe/config.toml' or 'evenframe.toml' in current or any parent directory.",
-        ))
+            legacy_config.exists().then_some(legacy_config)
+        })
     }
 
     /// Locates the project root by the same ancestor walk as config loading,

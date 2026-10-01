@@ -5,7 +5,7 @@
 //! 2. Custom generic instantiations (MyEnum<i32>)
 //! 3. Deriving Evenframe on generic types (expected to be limited/unsupported)
 
-use evenframe_core::tooling::{BuildConfig, build_all_configs};
+use evenframe_core::scan::{ScanConfig, build_all_configs};
 use evenframe_core::types::FieldType;
 use std::fs;
 use tempfile::TempDir;
@@ -54,7 +54,7 @@ fn test_built_in_generics_are_parsed_correctly() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     let container = &objects["Container"];
@@ -109,7 +109,7 @@ fn test_custom_generic_instantiations_are_collapsed() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     let usage = &objects["Usage"];
@@ -156,7 +156,7 @@ fn test_scanner_with_generic_definition() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     // The scanner should still find the types, but the instantiation will be collapsed.

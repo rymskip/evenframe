@@ -286,7 +286,8 @@ fn collect<'a>(
         | FieldType::U32
         | FieldType::U64
         | FieldType::U128
-        | FieldType::Usize => {}
+        | FieldType::Usize
+        | FieldType::Duration => {}
     }
 }
 

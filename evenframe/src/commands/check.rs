@@ -1,15 +1,16 @@
 //! Check command - reports whether the scan cache matches the Rust sources.
 
 use crate::cli::CheckArgs;
+use crate::scan_cache::{CACHE_REFRESH_COMMAND, CacheStatus, ScanCache};
 use evenframe_core::{
     error::{EvenframeError, Result},
-    tooling::{BuildConfig, CACHE_REFRESH_COMMAND, CacheStatus, ScanCache},
+    scan::ScanConfig,
 };
 use serde::Serialize;
 
 /// Runs the check command.
 pub async fn run(args: CheckArgs) -> Result<()> {
-    let config = BuildConfig::discover()?;
+    let config = ScanConfig::discover()?;
     let report = Report::new(
         ScanCache::path(&config.scan_path).display().to_string(),
         ScanCache::status(&config)?,
@@ -99,7 +100,7 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::{CacheStatus, Report, ScanCache};
-    use evenframe_core::tooling::CACHE_FORMAT_VERSION;
+    use crate::scan_cache::CACHE_FORMAT_VERSION;
     use evenframe_core::types::StructConfig;
     use std::collections::BTreeMap;
 

@@ -99,21 +99,25 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
         };
 
         quote! {
-            const _: () = {
-                impl ::evenframe::traits::EvenframePersistableStruct for #ident {
-                    fn static_table_config() -> ::evenframe::schemasync::TableConfig {
-                        panic!("EvenframeUnion types do not support static_table_config() because the configuration depends on which variant is present. Use the instance method table_config(&self) instead.")
-                    }
+            impl ::evenframe::traits::EvenframeTable for #ident {}
 
-                    fn table_config(&self) -> ::evenframe::schemasync::TableConfig {
-                        match self {
-                            #(#table_config_arms),*
+            ::evenframe::__metadata! {
+                const _: () = {
+                    impl ::evenframe::traits::EvenframePersistableStruct for #ident {
+                        fn static_table_config() -> ::evenframe::schemasync::TableConfig {
+                            panic!("EvenframeUnion types do not support static_table_config() because the configuration depends on which variant is present. Use the instance method table_config(&self) instead.")
+                        }
+
+                        fn table_config(&self) -> ::evenframe::schemasync::TableConfig {
+                            match self {
+                                #(#table_config_arms),*
+                            }
                         }
                     }
-                }
 
-                #registry_submission
-            };
+                    #registry_submission
+                };
+            }
         }
     } else {
         syn::Error::new(

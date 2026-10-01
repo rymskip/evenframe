@@ -18,7 +18,7 @@ wasm-plugins = ["evenframe_core/wasm-plugins"]
 
 [dependencies]
 # Evenframe dependencies
-evenframe = { path = "../evenframe", features = ["schemasync"] }
+evenframe = { path = "../evenframe", features = ["metadata", "schemasync"] }
 evenframe_derive = { path = "../evenframe_derive" }
 evenframe_core = { path = "../evenframe_core" }
 
@@ -33,6 +33,9 @@ serde_json = "1"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The SDK's record id, which record links hold
+surrealdb-types = "3.2.4"
 
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }

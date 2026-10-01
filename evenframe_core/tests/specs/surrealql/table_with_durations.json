@@ -1,0 +1,63 @@
+{
+  "description": "Table with std::time::Duration fields",
+  "table_name": "timer",
+  "table_config": {
+    "table_name": "timer",
+    "struct_config": {
+      "struct_name": "Timer",
+      "fields": [
+        {
+          "field_name": "id",
+          "field_type": "String",
+          "validators": [],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "limit",
+          "field_type": "Duration",
+          "validators": [
+            {
+              "DurationValidator": {
+                "LessThanOrEqualToDuration": "8h"
+              }
+            }
+          ],
+          "always_regenerate": false,
+          "define_config": {
+            "should_skip": false
+          }
+        },
+        {
+          "field_name": "grace",
+          "field_type": {
+            "Option": "Duration"
+          },
+          "validators": [],
+          "always_regenerate": false,
+          "define_config": {
+            "should_skip": false
+          }
+        },
+        {
+          "field_name": "laps",
+          "field_type": {
+            "Vec": "Duration"
+          },
+          "validators": [],
+          "always_regenerate": false,
+          "define_config": {
+            "should_skip": false
+          }
+        }
+      ],
+      "validators": []
+    },
+    "relation": null,
+    "permissions": null,
+    "mock_generation_config": null,
+    "events": []
+  },
+  "query_details": {},
+  "server_only": {},
+  "enums": {}
+}

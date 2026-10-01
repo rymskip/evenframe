@@ -1,7 +1,5 @@
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource, DatabaseConfig};
-use crate::schemasync::database::surql::execute::execute_and_validate;
-use surrealdb::{Surreal, engine::remote::http::Client};
 
 /// The `DEFINE ACCESS` statement for an inline access, or `None` for a
 /// SYSTEM access, which `DEFINE ACCESS` does not define. A JWT access needs
@@ -29,21 +27,6 @@ pub fn generate_access_definition(access_config: &AccessConfig) -> Result<Option
     Ok(Some(format!(
         "DEFINE ACCESS OVERWRITE {name} ON DATABASE{kind};"
     )))
-}
-
-/// Applies the access definitions to the database, checking every statement.
-pub async fn execute_access_query(
-    db: &Surreal<Client>,
-    access_query: &str,
-    db_name: &str,
-) -> Result<()> {
-    if access_query.trim().is_empty() {
-        return Ok(());
-    }
-    tracing::debug!(query_length = access_query.len(), "Executing access query");
-    execute_and_validate(db, access_query, "define access", db_name).await?;
-    tracing::info!(db = %db_name, "Access definitions applied");
-    Ok(())
 }
 
 /// The `DEFINE ACCESS` statements for the configured accesses: generated for

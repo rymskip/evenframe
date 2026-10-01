@@ -22,11 +22,12 @@
 //! On the next run, unchanged files are served directly from cache.
 
 use crate::error::{EvenframeError, Result};
-use crate::tooling::config_builders::ParsedType;
-use crate::tooling::workspace_scanner::{EvenframeType, ScannedItem};
+use crate::scan::configs::ParsedType;
+use crate::scan::paths::ModuleScope;
+use crate::scan::workspace::{EvenframeType, Scan, ScannedItem};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,7 +35,7 @@ use tracing::{debug, trace, warn};
 
 /// Current manifest schema version. Bump when the on-disk format changes in
 /// an incompatible way; loads of older versions fall back to an empty cache.
-pub const MANIFEST_VERSION: u32 = 5;
+pub const MANIFEST_VERSION: u32 = 6;
 
 /// Top-level cache manifest, one per crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +65,8 @@ pub struct CacheEntry {
     pub fragment_path: Option<String>,
     /// The Evenframe types extracted from this file.
     pub items: Vec<CachedItem>,
+    /// The scopes of the file's modules, by module path.
+    pub scopes: BTreeMap<String, ModuleScope>,
 }
 
 /// An extracted type with its parsed configuration, or `None` when parsing
@@ -75,18 +78,20 @@ pub struct CachedItem {
 }
 
 impl CacheEntry {
-    /// The entry for a fragment and the types scanned from it.
+    /// The entry for a fragment and what was scanned from it.
     pub fn new(
         input_hash: String,
         module_path: String,
         fragment_path: Option<String>,
-        items: &[ScannedItem],
+        scan: &Scan,
     ) -> Self {
         Self {
             input_hash,
             module_path,
             fragment_path,
-            items: items
+            scopes: scan.scopes.clone(),
+            items: scan
+                .items
                 .iter()
                 .map(|item| CachedItem {
                     evenframe_type: item.evenframe_type.clone(),
@@ -96,9 +101,11 @@ impl CacheEntry {
         }
     }
 
-    /// The recorded types, or `None` when one of them has to be parsed again.
-    pub fn recorded_items(&self) -> Option<Vec<ScannedItem>> {
-        self.items
+    /// The recorded scan, or `None` when one of its types has to be parsed
+    /// again.
+    pub fn recorded_scan(&self) -> Option<Scan> {
+        let items = self
+            .items
             .iter()
             .map(|item| {
                 item.parsed.clone().map(|parsed| ScannedItem {
@@ -106,7 +113,11 @@ impl CacheEntry {
                     parsed: Ok(parsed),
                 })
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        Some(Scan {
+            items,
+            scopes: self.scopes.clone(),
+        })
     }
 }
 
@@ -368,8 +379,8 @@ pub fn write_fragment(cache_dir: &Path, rel_source_path: &str, contents: &str) -
 #[cfg(test)]
 mod tests {
     use super::{
-        CacheEntry, CacheManifest, HashSet, MANIFEST_VERSION, Path, fragment_source, fs, hash_file,
-        split_by_file, write_fragment,
+        BTreeMap, CacheEntry, CacheManifest, HashSet, MANIFEST_VERSION, Path, fragment_source, fs,
+        hash_file, split_by_file, write_fragment,
     };
     use tempfile::TempDir;
 
@@ -407,6 +418,7 @@ mod tests {
                 module_path: "my_crate".to_string(),
                 fragment_path: Some("fragments/lib.rs.expanded".to_string()),
                 items: vec![],
+                scopes: BTreeMap::new(),
             },
         );
         m.save(cache_dir).unwrap();
@@ -433,6 +445,7 @@ mod tests {
                 module_path: "my_crate".to_string(),
                 fragment_path: Some("fragments/lib.rs.expanded".to_string()),
                 items: vec![],
+                scopes: BTreeMap::new(),
             },
         );
         m.save(cache_dir).unwrap();
@@ -453,6 +466,7 @@ mod tests {
                 module_path: "my_crate".to_string(),
                 fragment_path: Some("fragments/lib.rs.expanded".to_string()),
                 items: vec![],
+                scopes: BTreeMap::new(),
             },
         );
         m.save(cache_dir).unwrap();
@@ -579,6 +593,7 @@ mod tests {
                 module_path: "my_crate::empty".to_string(),
                 fragment_path: None,
                 items: vec![],
+                scopes: BTreeMap::new(),
             },
         );
         manifest.save(dir.path()).unwrap();

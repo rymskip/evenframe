@@ -1,7 +1,7 @@
 mod cli;
 mod commands;
-mod config_builders;
-mod workspace_scanner;
+mod lock;
+mod scan_cache;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -48,13 +48,13 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: &Cli) -> Result<()> {
-    // Serialize concurrent runs against the same project — schema sync, type
-    // generation, and the .evenframe caches all mutate shared state, so a
-    // second process waits for the first instead of interleaving with it.
+    // Serialize concurrent runs against the same project: schemasync, typesync
+    // and the .evenframe caches all mutate shared state, so a second process
+    // waits for the first instead of interleaving with it.
     // Held until the command finishes; released by the OS even on a crash. No lock
     // when no project exists yet (e.g. `evenframe init`).
     let _lock = EvenframeConfig::find_project_root()
-        .map(|root| evenframe_core::lock::ProcessLock::acquire(&root))
+        .map(|root| lock::ProcessLock::acquire(&root))
         .transpose()?;
 
     match &cli.command {

@@ -1,13 +1,15 @@
 //! Rendering and writing one configured output's files.
 
-use crate::config::{ForeignTypeConfig, RECORD_LINK, TsImport};
+use crate::config::{ForeignTypeConfig, RECORD_LINK, TsOutputMapping};
 use crate::error::{EvenframeError, Result};
 use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
 use crate::typesync::arktype::generate_arktype_type_string;
 use crate::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
 use crate::typesync::effect::{generate_effect_schema_for_types, generate_effect_schema_string};
 use crate::typesync::file_grouping::TypeFileGroup;
-use crate::typesync::foreign_ts::{Reading, foreign_types_used, import_lines};
+use crate::typesync::foreign_ts::{
+    Reading, RecordLinkMapping, foreign_types_used, import_lines, record_link_mapping,
+};
 use crate::typesync::import_resolver::{
     barrel_filename, format_effect_imports, generate_barrel_file, import_specifier_suffix,
     resolve_imports, type_name_to_filename,
@@ -158,13 +160,14 @@ fn check_foreign_mappings(kind: OutputKind, registry: &ForeignTypeRegistry) -> R
 }
 
 /// The import lines, each ending in a newline, for the foreign types
-/// `type_names` use in an output whose mapping `import_of` reads, including a
-/// configured `RecordLink`.
-fn foreign_imports(
+/// `type_names` use in `output`, whose mapping of a foreign type `mapping`
+/// reads, including what their record links need.
+fn foreign_imports<M: TsOutputMapping>(
     type_names: &[String],
     types: &OutputTypes,
-    import_of: impl for<'a> Fn(&'a ForeignTypeConfig) -> Option<&'a TsImport>,
-) -> String {
+    output: OutputKind,
+    mapping: impl for<'a> Fn(&'a ForeignTypeConfig) -> Option<&'a M>,
+) -> Result<String> {
     let used = foreign_types_used(
         type_names,
         &types.index,
@@ -175,20 +178,26 @@ fn foreign_imports(
             expands_held_types: false,
         },
     );
-    let record_link = used
-        .record_link
-        .then(|| types.registry.lookup(RECORD_LINK))
-        .flatten();
+    let record_link = if used.record_link {
+        Some(
+            match record_link_mapping(types.registry, output, &mapping)? {
+                RecordLinkMapping::Configured(configured) => configured,
+                RecordLinkMapping::Own { record_id } => record_id,
+            },
+        )
+    } else {
+        None
+    };
     let imports = used
         .foreign
         .values()
-        .copied()
+        .filter_map(|foreign| mapping(foreign))
         .chain(record_link)
-        .filter_map(import_of);
-    import_lines(imports)
+        .filter_map(TsOutputMapping::import);
+    Ok(import_lines(imports)
         .into_iter()
         .map(|line| format!("{line}\n"))
-        .collect()
+        .collect())
 }
 
 fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<String> {
@@ -197,39 +206,36 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
     match output.kind {
         OutputKind::Arktype => Ok(format!(
             "import {{ scope }} from 'arktype';\n{}\n{}\nexport const validator = exported;\n",
-            foreign_imports(&all_types, types, |foreign| foreign
+            foreign_imports(&all_types, types, OutputKind::Arktype, |foreign| foreign
                 .arktype
-                .as_ref()?
-                .import
-                .as_ref()),
+                .as_ref())?,
             generate_arktype_type_string(index, registry)?
         )),
         OutputKind::Effect => Ok(format!(
             "import {{ Schema }} from \"effect\";\n{}\n{}",
-            foreign_imports(&all_types, types, |foreign| foreign
+            foreign_imports(&all_types, types, OutputKind::Effect, |foreign| foreign
                 .effect
-                .as_ref()?
-                .import
-                .as_ref()),
+                .as_ref())?,
             generate_effect_schema_string(index, false, registry)?
         )),
         OutputKind::Macroforge => {
             #[cfg(feature = "macroforge")]
             let content =
                 crate::typesync::macroforge::macro_import_lines(&all_types, index, &output.macros)
-                    .map(|import_lines| {
-                        format!(
-                            "{}{}",
-                            import_lines
-                                .iter()
-                                .map(|line| format!("{line}\n"))
-                                .collect::<String>(),
+                    .and_then(|import_lines| {
+                        let interfaces =
                             crate::typesync::macroforge::generate_macroforge_type_string(
                                 index,
                                 output.files.array_style,
                                 registry,
-                            )
-                        )
+                            )?;
+                        Ok(format!(
+                            "{}{interfaces}",
+                            import_lines
+                                .iter()
+                                .map(|line| format!("{line}\n"))
+                                .collect::<String>(),
+                        ))
                     });
             #[cfg(not(feature = "macroforge"))]
             let content = Err(not_built(OutputKind::Macroforge));
@@ -283,7 +289,7 @@ fn render_per_file(
     #[cfg(feature = "macroforge")]
     let record_link = record_link_module(output, plan, types)?;
     #[cfg(not(feature = "macroforge"))]
-    let record_link: Option<String> = None;
+    let record_link: Option<RecordLinkModule> = None;
     let mut keep: BTreeSet<String> = plan
         .groups
         .iter()
@@ -297,7 +303,7 @@ fn render_per_file(
         .collect();
     keep.insert(barrel_filename(&settings.file_extension));
     if let Some(module) = &record_link {
-        keep.insert(format!("{module}{}", settings.file_extension));
+        keep.insert(format!("{}{}", module.name, settings.file_extension));
     }
     info!(
         "Generating {} output (per-file) to {} ({} files)",
@@ -320,9 +326,12 @@ fn render_per_file(
         match output.kind {
             OutputKind::Effect => {
                 content.push_str("import { Schema } from \"effect\";\n");
-                content.push_str(&foreign_imports(&type_names, types, |foreign| {
-                    foreign.effect.as_ref()?.import.as_ref()
-                }));
+                content.push_str(&foreign_imports(
+                    &type_names,
+                    types,
+                    OutputKind::Effect,
+                    |foreign| foreign.effect.as_ref(),
+                )?);
                 push_imports(&mut content, &format_effect_imports(&imports));
                 content.push('\n');
                 content.push_str(&generate_effect_schema_for_types(
@@ -339,7 +348,7 @@ fn render_per_file(
                     &imports,
                     output,
                     types,
-                    record_link.as_deref(),
+                    record_link.as_ref().map(|module| module.name.as_str()),
                 )?;
                 #[cfg(not(feature = "macroforge"))]
                 return Err(not_built(OutputKind::Macroforge));
@@ -362,11 +371,10 @@ fn render_per_file(
         .map(render_group)
         .collect::<Result<Vec<_>>>()?;
 
-    #[cfg(feature = "macroforge")]
-    if let Some(module) = &record_link {
+    if let Some(module) = record_link.as_ref() {
         files.push((
-            dir.join(format!("{module}{}", settings.file_extension)),
-            format!("{}\n", crate::typesync::macroforge::RECORD_LINK_TYPE),
+            dir.join(format!("{}{}", module.name, settings.file_extension)),
+            module.content.clone(),
         ));
     }
 
@@ -380,7 +388,7 @@ fn render_per_file(
         if let Some(module) = &record_link {
             let suffix =
                 import_specifier_suffix(&settings.file_extension, settings.import_extension);
-            content.push_str(&format!("\nexport * from \"./{module}{suffix}\";"));
+            content.push_str(&format!("\nexport * from \"./{}{suffix}\";", module.name));
         }
         files.push((dir.join(barrel_filename(&settings.file_extension)), content));
     }
@@ -395,14 +403,21 @@ fn render_per_file(
     })
 }
 
+/// The module a per-file macroforge output declares evenframe's own
+/// `RecordLink` in: its file name, without the extension, and its content.
+struct RecordLinkModule {
+    name: String,
+    content: String,
+}
+
 /// The module a per-file macroforge output declares `RecordLink` in, when
-/// any of its types uses one.
+/// any of its types uses one the project does not configure.
 #[cfg(feature = "macroforge")]
 fn record_link_module(
     output: &TypesyncOutput,
     plan: &crate::typesync::file_grouping::FileOutputPlan,
     types: &OutputTypes,
-) -> Result<Option<String>> {
+) -> Result<Option<RecordLinkModule>> {
     if output.kind != OutputKind::Macroforge {
         return Ok(None);
     }
@@ -415,19 +430,20 @@ fn record_link_module(
         &all_types,
         &types.index,
         types.registry,
-    );
-    if !extras.needs_record_link {
+        false,
+    )?;
+    let Some(own_record_link) = extras.own_record_link else {
         return Ok(None);
-    }
+    };
     if all_types.iter().any(|name| name == "RecordLink") {
         return Err(EvenframeError::config(
             "a generated type named `RecordLink` collides with the record link type the macroforge output declares",
         ));
     }
-    Ok(Some(type_name_to_filename(
-        "RecordLink",
-        output.files.file_naming,
-    )))
+    Ok(Some(RecordLinkModule {
+        name: type_name_to_filename("RecordLink", output.files.file_naming),
+        content: own_record_link.module(),
+    }))
 }
 
 #[cfg(feature = "macroforge")]
@@ -447,12 +463,12 @@ fn macroforge_per_file_content(
         content.push_str(&import_line);
         content.push('\n');
     }
-    let extras = compute_extra_imports(type_names, &types.index, types.registry);
+    let extras = compute_extra_imports(type_names, &types.index, types.registry, false)?;
     for import_line in &extras.lines {
         content.push_str(import_line);
         content.push('\n');
     }
-    if extras.needs_record_link {
+    if extras.own_record_link.is_some() {
         let module = record_link.ok_or_else(|| {
             EvenframeError::config("a type uses RecordLink but no RecordLink module was planned")
         })?;
@@ -655,13 +671,8 @@ mod tests {
     }
 
     #[cfg(feature = "macroforge")]
-    #[test]
-    fn per_file_macroforge_declares_record_link_in_its_own_module() {
+    fn post_linking_an_author() -> BTreeMap<String, crate::types::StructConfig> {
         use crate::types::{FieldType, StructConfig, StructField};
-        let tmp = TempDir::new().unwrap();
-        let mut output = TypesyncOutput::new(OutputKind::Macroforge, "unused");
-        output.files.mode = OutputMode::PerFile;
-        output.files.barrel_file = true;
         let post = StructConfig {
             struct_name: "Post".to_string(),
             fields: vec![StructField {
@@ -671,11 +682,25 @@ mod tests {
             }],
             ..Default::default()
         };
-        let registry = ForeignTypeRegistry::default();
-        let (structs, enums) = (
-            BTreeMap::from([("Post".to_string(), post)]),
-            BTreeMap::new(),
-        );
+        BTreeMap::from([("Post".to_string(), post)])
+    }
+
+    #[cfg(feature = "macroforge")]
+    #[test]
+    fn per_file_macroforge_declares_record_link_in_its_own_module() {
+        let tmp = TempDir::new().unwrap();
+        let mut output = TypesyncOutput::new(OutputKind::Macroforge, "unused");
+        output.files.mode = OutputMode::PerFile;
+        output.files.barrel_file = true;
+        let record_id: crate::config::ForeignTypeConfig = toml::from_str(
+            "macroforge = { type = \"RecordIdEncoded\", import = { from = \"../record-id.ts\", name = \"RecordIdEncoded\" } }",
+        )
+        .unwrap();
+        let registry = ForeignTypeRegistry::from_config(&BTreeMap::from([(
+            "RecordId".to_string(),
+            record_id,
+        )]));
+        let (structs, enums) = (post_linking_an_author(), BTreeMap::new());
         let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
         render_output(&output, tmp.path(), None, &types)
             .unwrap()
@@ -683,16 +708,46 @@ mod tests {
             .unwrap();
 
         let module = fs::read_to_string(tmp.path().join("record-link.ts")).unwrap();
-        assert_eq!(module.trim(), crate::typesync::macroforge::RECORD_LINK_TYPE);
+        assert_eq!(
+            module,
+            "import type { RecordIdEncoded } from '../record-id.ts';\n\n\
+             export type RecordLink<T> = RecordIdEncoded | T;\n"
+        );
         let post_file = fs::read_to_string(tmp.path().join("post.ts")).unwrap();
         assert!(
             post_file.contains("import type { RecordLink } from './record-link';"),
             "{post_file}"
         );
+        assert!(!post_file.contains("RecordIdEncoded"), "{post_file}");
         let barrel = fs::read_to_string(tmp.path().join("index.ts")).unwrap();
         assert!(
             barrel.contains("export * from \"./record-link\";"),
             "{barrel}"
         );
+    }
+
+    #[cfg(feature = "macroforge")]
+    #[test]
+    fn a_record_link_needs_a_record_id_mapping() {
+        let tmp = TempDir::new().unwrap();
+        let registry = ForeignTypeRegistry::default();
+        let (structs, enums) = (post_linking_an_author(), BTreeMap::new());
+        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        for kind in [
+            OutputKind::Arktype,
+            OutputKind::Effect,
+            OutputKind::Macroforge,
+        ] {
+            let error = render_output(
+                &TypesyncOutput::new(kind, "unused"),
+                tmp.path(),
+                None,
+                &types,
+            )
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+            assert!(error.contains("foreign_types.RecordId"), "{kind}: {error}");
+        }
     }
 }

@@ -6,7 +6,7 @@
 //! 3. Path-qualified derives (e.g., serde::Serialize) use the last segment
 //! 4. Playground models with Serialize/Deserialize report those derives
 
-use evenframe_core::tooling::{BuildConfig, build_all_configs, merge_tables_and_objects};
+use evenframe_core::scan::{ScanConfig, build_all_configs, merge_tables_and_objects};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -50,7 +50,7 @@ fn test_struct_rust_derives_collected() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, tables, _objects) = build_all_configs(&config).unwrap();
 
     let user = &tables["user"].struct_config;
@@ -95,7 +95,7 @@ fn test_enum_rust_derives_collected() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (enums, _tables, _objects) = build_all_configs(&config).unwrap();
 
     let status = &enums["Status"];
@@ -125,7 +125,7 @@ fn test_multiple_derive_attributes_merged() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, tables, _objects) = build_all_configs(&config).unwrap();
 
     let md = &tables["multi_derive"].struct_config;
@@ -155,7 +155,7 @@ fn test_object_without_id_has_rust_derives() {
         "#,
     );
 
-    let config = BuildConfig::builder().scan_path(root).build();
+    let config = ScanConfig::builder().scan_path(root).build();
     let (_enums, _tables, objects) = build_all_configs(&config).unwrap();
 
     let resp = &objects["ApiResponse"];
@@ -172,7 +172,7 @@ fn test_object_without_id_has_rust_derives() {
 fn test_playground_models_have_serialize_derive() {
     let playground_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let config = BuildConfig::builder().scan_path(&playground_dir).build();
+    let config = ScanConfig::builder().scan_path(&playground_dir).build();
     let (_enums, tables, objects) = build_all_configs(&config).unwrap();
     let structs = merge_tables_and_objects(tables, objects);
 

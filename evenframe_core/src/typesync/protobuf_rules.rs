@@ -101,7 +101,8 @@ fn kind(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) ->
         | FieldType::Struct(_)
         | FieldType::HashMap(..)
         | FieldType::BTreeMap(..)
-        | FieldType::RecordLink(_) => Kind::Other,
+        | FieldType::RecordLink(_)
+        | FieldType::Duration => Kind::Other,
     }
 }
 

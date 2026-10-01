@@ -1,7 +1,7 @@
 //! Type generation for build-time usage.
 
-use super::{BuildConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects};
 use crate::error::EvenframeError;
+use crate::scan::{ScanConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects};
 use crate::types::ForeignTypeRegistry;
 use crate::typesync::checks::check_types;
 use crate::typesync::config::TypesyncOutput;
@@ -23,12 +23,12 @@ pub struct GenerationReport {
 
 /// Generator for TypeScript types and schemas.
 pub struct TypeGenerator {
-    config: BuildConfig,
+    config: ScanConfig,
 }
 
 impl TypeGenerator {
     /// Creates a new TypeGenerator with the given configuration.
-    pub fn new(config: BuildConfig) -> Self {
+    pub fn new(config: ScanConfig) -> Self {
         Self { config }
     }
 

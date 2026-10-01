@@ -318,6 +318,22 @@ fn schemasync_leaves_links_to_empty_tables_empty() {
 }
 
 #[test]
+fn schemasync_stores_durations_within_their_validators() {
+    let project = Project::new();
+    project.run_ok(&["schemasync"]);
+    let definition: String = project.value("(INFO FOR TABLE service).fields.length");
+    assert!(definition.contains("TYPE duration"), "{definition}");
+    let lengths: Vec<std::time::Duration> = project.values("(SELECT VALUE length FROM service)");
+    assert_eq!(lengths.len(), 3);
+    assert!(
+        lengths
+            .iter()
+            .all(|length| *length <= std::time::Duration::from_secs(8 * 3600)),
+        "{lengths:?}"
+    );
+}
+
+#[test]
 fn schemasync_links_point_at_existing_records() {
     let project = Project::new();
     project.run_ok(&["schemasync"]);

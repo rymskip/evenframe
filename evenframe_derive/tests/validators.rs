@@ -93,3 +93,49 @@ fn optional_fields_validate_only_a_present_value() {
         "{error}"
     );
 }
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Timer {
+    #[validators(DurationValidator::LessThanOrEqualToDuration("8h"))]
+    pub limit: std::time::Duration,
+    #[validators(DurationValidator::GreaterThanDuration("1m"))]
+    pub grace: Option<std::time::Duration>,
+}
+
+#[test]
+fn durations_are_read_as_serde_writes_them_and_checked() {
+    let timer: Timer = serde_json::from_value(serde_json::json!({
+        "limit": { "secs": 5400, "nanos": 0 },
+        "grace": null,
+    }))
+    .unwrap();
+    assert_eq!(timer.limit, std::time::Duration::from_secs(5400));
+    assert_eq!(
+        serde_json::to_value(&timer).unwrap()["limit"],
+        serde_json::json!({ "secs": 5400, "nanos": 0 })
+    );
+
+    let error = serde_json::from_value::<Timer>(serde_json::json!({
+        "limit": { "secs": 9 * 3600, "nanos": 0 },
+        "grace": null,
+    }))
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("limit: must be at most 8h long"),
+        "{error}"
+    );
+
+    let error = serde_json::from_value::<Timer>(serde_json::json!({
+        "limit": { "secs": 60, "nanos": 0 },
+        "grace": { "secs": 30, "nanos": 0 },
+    }))
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("grace: must be longer than 1m"),
+        "{error}"
+    );
+}

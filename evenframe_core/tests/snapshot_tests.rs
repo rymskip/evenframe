@@ -94,7 +94,8 @@ mod macroforge {
             &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
             Default::default(),
             &registry,
-        );
+        )
+        .unwrap();
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()

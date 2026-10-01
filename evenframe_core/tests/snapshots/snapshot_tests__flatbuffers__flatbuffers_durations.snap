@@ -1,0 +1,27 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Timer {
+    id: string;
+    limit: TimerLimit (validate: "lessThanOrEqualToDuration(\"8h\")");
+    grace: TimerGrace (validate: "greaterThanDuration(\"1m\")");
+    laps: [TimerLapsItem];
+}
+
+table TimerLimit {
+    secs: uint64;
+    nanos: uint32;
+}
+
+table TimerGrace {
+    secs: uint64;
+    nanos: uint32;
+}
+
+table TimerLapsItem {
+    secs: uint64;
+    nanos: uint32;
+}

@@ -278,6 +278,7 @@ impl Fbs<'_> {
                 self.declare(hint, &fields)?;
                 hint.to_string()
             }
+            FieldType::Duration => self.value(&FieldType::serde_duration(), hint)?,
             FieldType::RecordLink(inner) => self.value(inner, hint)?,
             FieldType::Other(type_name) => match self.registry.lookup(type_name) {
                 Some(foreign) if !foreign.flatbuffers.is_empty() => foreign.flatbuffers.clone(),

@@ -6,7 +6,8 @@
 //!
 //! Run with: cargo test --test array_style_e2e_test
 
-use evenframe_core::tooling::{BuildConfig, TypeGenerator};
+use evenframe_core::build::TypeGenerator;
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::typesync::config::{ArrayStyle, OutputConfig, OutputKind, TypesyncOutput};
 use std::fs;
 use tempfile::TempDir;
@@ -21,8 +22,12 @@ fn generate_macroforge_with_style(style: ArrayStyle) -> String {
 
     let mut output = TypesyncOutput::new(OutputKind::Macroforge, temp_dir.path().to_string_lossy());
     output.files.array_style = style;
-    let config = BuildConfig::builder()
+    // The playground's record links need its `RecordId` mapping.
+    let playground = ScanConfig::from_toml_path(playground_root().join("evenframe.toml"))
+        .expect("the playground config loads");
+    let config = ScanConfig::builder()
         .scan_path(playground_root())
+        .foreign_types(playground.foreign_types)
         .outputs(vec![output])
         .build();
 

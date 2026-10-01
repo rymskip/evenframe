@@ -23,15 +23,15 @@ fn derive_plugin() -> &'static Path {
 const TRACKED_PACKAGE: &str = "@playground/macros";
 
 /// The playground's config writing only macroforge, per file, with the derive
-/// plugin and `general` appended to `[general]`.
-fn macroforge_config(config: String, general: &str) -> String {
+/// plugin.
+fn macroforge_config(config: String) -> String {
     let (sections, _) = config
         .split_once("[typesync]")
         .expect("the playground config has a [typesync] section");
     let sections = sections.replacen(
         "[general]\n",
         &format!(
-            "[general]\noutput_rule_plugins = {{ derive = {{ path = \"{}\" }} }}\n{general}",
+            "[general]\noutput_rule_plugins = {{ derive = {{ path = \"{}\" }} }}\n",
             derive_plugin().display()
         ),
         1,
@@ -42,15 +42,12 @@ fn macroforge_config(config: String, general: &str) -> String {
     )
 }
 
-fn default_record_link(config: String) -> String {
-    macroforge_config(config, "")
-}
-
 fn configured_record_link(config: String) -> String {
-    macroforge_config(
-        config,
-        "foreign_types = { RecordLink = { macroforge = { type = \"RecordLink<{0}>\", \
-         import = { from = \"./links.js\", name = \"RecordLink\" } } } }\n",
+    macroforge_config(config).replacen(
+        "[typesync]",
+        "[general.foreign_types.RecordLink]\nmacroforge = { type = \"RecordLink<{0}>\", \
+         import = { from = \"./links.js\", name = \"RecordLink\" } }\n\n[typesync]",
+        1,
     )
 }
 
@@ -87,9 +84,8 @@ fn file_declaring<'a>(files: &'a [(String, String)], declaration: &str) -> &'a (
 
 #[test]
 fn a_struct_variant_payload_is_a_named_type_in_its_enums_file() {
-    let files = files(
-        &generated("macroforge_default_record_link", default_record_link).join("src/bindings"),
-    );
+    let files =
+        files(&generated("macroforge_default_record_link", macroforge_config).join("src/bindings"));
     let (enum_file, contents) = file_declaring(&files, "export type BookingKind =");
     let (payload_file, _) = file_declaring(&files, "export interface Package {");
     assert_eq!(
@@ -120,10 +116,14 @@ fn a_struct_variant_payload_is_a_named_type_in_its_enums_file() {
 
 #[test]
 fn without_a_record_link_entry_evenframe_declares_record_link() {
-    let files = files(
-        &generated("macroforge_default_record_link", default_record_link).join("src/bindings"),
+    let files =
+        files(&generated("macroforge_default_record_link", macroforge_config).join("src/bindings"));
+    let (link_file, link) = file_declaring(&files, "export type RecordLink<");
+    assert!(
+        link.contains("import type { RecordIdEncoded } from '../record-id.ts';")
+            && link.contains("export type RecordLink<T> = RecordIdEncoded | T;"),
+        "evenframe's RecordLink holds the playground's record id:\n{link}"
     );
-    let (link_file, _) = file_declaring(&files, "export type RecordLink<");
     let (_, contents) = file_declaring(&files, "export type BookingKind =");
     let module = link_file.trim_end_matches(".ts");
     assert!(

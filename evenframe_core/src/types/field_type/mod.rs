@@ -24,6 +24,8 @@ pub enum FieldType {
     U64,
     U128,
     Usize,
+    /// `std::time::Duration`.
+    Duration,
     Tuple(Vec<FieldType>),
     Struct(Vec<(String, FieldType)>),
     Option(Box<FieldType>),
@@ -34,7 +36,19 @@ pub enum FieldType {
     Other(String),
 }
 
+/// The paths that name `std::time::Duration` without any import.
+pub const STD_DURATION_PATHS: [&str; 2] = ["std::time::Duration", "core::time::Duration"];
+
 impl FieldType {
+    /// The shape serde writes a `std::time::Duration` in: its whole seconds
+    /// and the nanoseconds past them.
+    pub fn serde_duration() -> FieldType {
+        FieldType::Struct(vec![
+            ("secs".to_string(), FieldType::U64),
+            ("nanos".to_string(), FieldType::U32),
+        ])
+    }
+
     /// True when the field stores a number (float or integer), looking
     /// through `Option` layers.
     pub fn is_numeric(&self) -> bool {
@@ -79,6 +93,7 @@ impl ToTokens for FieldType {
             FieldType::U64 => tokens.extend(quote! { FieldType::U64 }),
             FieldType::U128 => tokens.extend(quote! { FieldType::U128 }),
             FieldType::Usize => tokens.extend(quote! { FieldType::Usize }),
+            FieldType::Duration => tokens.extend(quote! { FieldType::Duration }),
             FieldType::Unit => tokens.extend(quote! { FieldType::Unit }),
             FieldType::Other(s) => {
                 let lit = syn::LitStr::new(s, proc_macro2::Span::call_site());
@@ -118,14 +133,25 @@ impl ToTokens for FieldType {
     }
 }
 
+/// How a parsed field type names a type it does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathNames {
+    /// By the path's last segment, which is how foreign types and scanned
+    /// types are looked up once resolved.
+    Last,
+    /// By the whole path as written, for the scanner to resolve against the
+    /// defining module's imports.
+    Written,
+}
+
 impl FieldType {
     /// What serde writes for a tuple variant: a newtype variant writes its one
     /// field, and any other count, none included, writes an array.
-    pub fn parse_tuple_variant(fields: &syn::FieldsUnnamed) -> FieldType {
+    pub fn parse_tuple_variant(fields: &syn::FieldsUnnamed, names: PathNames) -> FieldType {
         let items: Vec<FieldType> = fields
             .unnamed
             .iter()
-            .map(|field| FieldType::parse_syn_ty(&field.ty))
+            .map(|field| FieldType::parse(&field.ty, names))
             .collect();
         match <[FieldType; 1]>::try_from(items) {
             Ok([only]) => only,
@@ -133,47 +159,53 @@ impl FieldType {
         }
     }
 
+    /// `ty` as a field type, naming unknown types by their last segment.
     pub fn parse_syn_ty(ty: &SynType) -> FieldType {
+        Self::parse(ty, PathNames::Last)
+    }
+
+    /// `ty` as a field type, naming unknown types as `names` says.
+    pub fn parse(ty: &SynType, names: PathNames) -> FieldType {
         use quote::ToTokens;
         tracing::trace!("Parsing syn type: {}", ty.to_token_stream());
 
         let result = match ty {
-            SynType::Path(tp) => Self::handle_type_path(tp),
-            SynType::Tuple(t) => Self::handle_tuple(t),
-            SynType::Slice(s) => FieldType::Vec(Box::new(Self::parse_syn_ty(&s.elem))),
-            SynType::Array(arr) => FieldType::Vec(Box::new(Self::parse_syn_ty(&arr.elem))),
-            SynType::Reference(r) => Self::parse_syn_ty(&r.elem),
-            SynType::Ptr(p) => Self::parse_syn_ty(&p.elem),
-            SynType::Paren(p) => Self::parse_syn_ty(&p.elem),
-            SynType::Group(g) => Self::parse_syn_ty(&g.elem),
-            SynType::ImplTrait(it) => {
+            SynType::Path(path) => Self::handle_type_path(path, names),
+            SynType::Tuple(tuple) => Self::handle_tuple(tuple, names),
+            SynType::Slice(slice) => FieldType::Vec(Box::new(Self::parse(&slice.elem, names))),
+            SynType::Array(array) => FieldType::Vec(Box::new(Self::parse(&array.elem, names))),
+            SynType::Reference(reference) => Self::parse(&reference.elem, names),
+            SynType::Ptr(pointer) => Self::parse(&pointer.elem, names),
+            SynType::Paren(paren) => Self::parse(&paren.elem, names),
+            SynType::Group(group) => Self::parse(&group.elem, names),
+            SynType::ImplTrait(impl_trait) => {
                 tracing::debug!(
                     "impl Trait not directly supported: {}",
-                    it.to_token_stream()
+                    impl_trait.to_token_stream()
                 );
-                FieldType::Other(it.to_token_stream().to_string())
+                FieldType::Other(impl_trait.to_token_stream().to_string())
             }
-            SynType::TraitObject(to) => {
+            SynType::TraitObject(trait_object) => {
                 tracing::debug!(
                     "Trait object not directly supported: {}",
-                    to.to_token_stream()
+                    trait_object.to_token_stream()
                 );
-                FieldType::Other(to.to_token_stream().to_string())
+                FieldType::Other(trait_object.to_token_stream().to_string())
             }
-            SynType::FnPtr(f) => {
+            SynType::FnPtr(function) => {
                 tracing::debug!(
                     "Function pointer not directly supported: {}",
-                    f.to_token_stream()
+                    function.to_token_stream()
                 );
-                FieldType::Other(f.to_token_stream().to_string())
+                FieldType::Other(function.to_token_stream().to_string())
             }
-            SynType::Infer(i) => FieldType::Other(i.to_token_stream().to_string()),
-            SynType::Never(n) => FieldType::Other(n.to_token_stream().to_string()),
-            SynType::Macro(m) => {
-                tracing::debug!("Type macro not supported: {}", m.to_token_stream());
-                FieldType::Other(m.to_token_stream().to_string())
+            SynType::Infer(infer) => FieldType::Other(infer.to_token_stream().to_string()),
+            SynType::Never(never) => FieldType::Other(never.to_token_stream().to_string()),
+            SynType::Macro(type_macro) => {
+                tracing::debug!("Type macro not supported: {}", type_macro.to_token_stream());
+                FieldType::Other(type_macro.to_token_stream().to_string())
             }
-            SynType::Verbatim(ts) => FieldType::Other(ts.to_string()),
+            SynType::Verbatim(tokens) => FieldType::Other(tokens.to_string()),
             _ => {
                 tracing::warn!("Unknown type variant: {}", ty.to_token_stream());
                 FieldType::Other(ty.to_token_stream().to_string())
@@ -184,71 +216,69 @@ impl FieldType {
         result
     }
 
-    fn handle_tuple(t: &syn::TypeTuple) -> FieldType {
-        if t.elems.is_empty() {
+    fn handle_tuple(tuple: &syn::TypeTuple, names: PathNames) -> FieldType {
+        if tuple.elems.is_empty() {
             FieldType::Unit
         } else {
-            let elems = t.elems.iter().map(Self::parse_syn_ty).collect();
+            let elems = tuple
+                .elems
+                .iter()
+                .map(|elem| Self::parse(elem, names))
+                .collect();
             FieldType::Tuple(elems)
         }
     }
 
-    fn handle_type_path(tp: &syn::TypePath) -> FieldType {
+    fn handle_type_path(type_path: &syn::TypePath, names: PathNames) -> FieldType {
         use quote::ToTokens;
 
-        if tp.qself.is_some() {
-            return FieldType::Other(tp.to_token_stream().to_string());
+        if type_path.qself.is_some() {
+            return FieldType::Other(type_path.to_token_stream().to_string());
         }
 
-        let last = match tp.path.segments.last() {
-            Some(s) => s,
-            None => return FieldType::Other(tp.to_token_stream().to_string()),
+        let last = match type_path.path.segments.last() {
+            Some(segment) => segment,
+            None => return FieldType::Other(type_path.to_token_stream().to_string()),
         };
 
         let ident = last.ident.to_string();
+        // Resolution decides what a written path names; by its last segment,
+        // only the standard library's own paths name its `Duration`.
+        if names == PathNames::Last {
+            let path = path_text(&type_path.path);
+            let path = path.trim_start_matches("::");
+            if path == "Duration" || STD_DURATION_PATHS.contains(&path) {
+                return FieldType::Duration;
+            }
+        }
+        let unknown = || match names {
+            PathNames::Last => FieldType::Other(ident.clone()),
+            PathNames::Written => FieldType::Other(path_text(&type_path.path)),
+        };
 
         // Handle generic types with angle brackets
         if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
             let type_args: Vec<_> = args
                 .args
                 .iter()
-                .filter_map(|ga| match ga {
-                    syn::GenericArgument::Type(t) => Some(t),
+                .filter_map(|argument| match argument {
+                    syn::GenericArgument::Type(argument_type) => Some(argument_type),
                     _ => None,
                 })
                 .collect();
+            let parse = |position: usize| Box::new(Self::parse(type_args[position], names));
 
-            match ident.as_str() {
-                "Option" if type_args.len() == 1 => {
-                    return FieldType::Option(Box::new(Self::parse_syn_ty(type_args[0])));
-                }
-                "Vec" if type_args.len() == 1 => {
-                    return FieldType::Vec(Box::new(Self::parse_syn_ty(type_args[0])));
-                }
-                "Box" if type_args.len() == 1 => {
-                    return Self::parse_syn_ty(type_args[0]);
-                }
-                "HashMap" if type_args.len() == 2 => {
-                    return FieldType::HashMap(
-                        Box::new(Self::parse_syn_ty(type_args[0])),
-                        Box::new(Self::parse_syn_ty(type_args[1])),
-                    );
-                }
-                "BTreeMap" if type_args.len() == 2 => {
-                    return FieldType::BTreeMap(
-                        Box::new(Self::parse_syn_ty(type_args[0])),
-                        Box::new(Self::parse_syn_ty(type_args[1])),
-                    );
-                }
-                "RecordLink" if type_args.len() == 1 => {
-                    return FieldType::RecordLink(Box::new(Self::parse_syn_ty(type_args[0])));
-                }
-                _ => {
-                    // For any unknown generic type (e.g., DateTime<Utc>),
-                    // store just the base name as Other so foreign type config can match it.
-                    return FieldType::Other(ident);
-                }
-            }
+            return match ident.as_str() {
+                "Option" if type_args.len() == 1 => FieldType::Option(parse(0)),
+                "Vec" if type_args.len() == 1 => FieldType::Vec(parse(0)),
+                "Box" if type_args.len() == 1 => *parse(0),
+                "HashMap" if type_args.len() == 2 => FieldType::HashMap(parse(0), parse(1)),
+                "BTreeMap" if type_args.len() == 2 => FieldType::BTreeMap(parse(0), parse(1)),
+                "RecordLink" if type_args.len() == 1 => FieldType::RecordLink(parse(0)),
+                // Any other generic type (e.g. `DateTime<Utc>`) is named
+                // without its arguments, so foreign type config can match it.
+                _ => unknown(),
+            };
         }
 
         // Match known built-in types without generics
@@ -271,101 +301,25 @@ impl FieldType {
             "u128" => FieldType::U128,
             "usize" => FieldType::Usize,
             _ => {
-                // Unknown type - store as Other (use only the last segment identifier,
-                // not the full path, so `crate::module::Foo` becomes just `Foo`)
-                let type_str = ident.clone();
-                tracing::trace!("Unknown type '{}', storing as Other", type_str);
-                FieldType::Other(type_str)
+                tracing::trace!("Unknown type '{}', storing as Other", ident);
+                unknown()
             }
         }
     }
+}
 
-    pub fn parse_type_str(type_str: &str) -> FieldType {
-        let clean_str = type_str
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>();
-
-        match clean_str.as_str() {
-            "String" => FieldType::String,
-            "char" => FieldType::Char,
-            "bool" => FieldType::Bool,
-            "f32" => FieldType::F32,
-            "f64" => FieldType::F64,
-            "i8" => FieldType::I8,
-            "i16" => FieldType::I16,
-            "i32" => FieldType::I32,
-            "i64" => FieldType::I64,
-            "i128" => FieldType::I128,
-            "isize" => FieldType::Isize,
-            "u8" => FieldType::U8,
-            "u16" => FieldType::U16,
-            "u32" => FieldType::U32,
-            "u64" => FieldType::U64,
-            "u128" => FieldType::U128,
-            "usize" => FieldType::Usize,
-            "()" => FieldType::Unit,
-            _ => {
-                // Check for generic types like Option<T> or Vec<T>
-                if let Some(start) = clean_str.find('<') {
-                    if let Some(end) = clean_str.rfind('>') {
-                        let outer = &clean_str[..start];
-                        let inner = &clean_str[start + 1..end];
-
-                        match outer {
-                            "Option" => {
-                                let inner_type = Self::parse_type_str(inner);
-                                FieldType::Option(Box::new(inner_type))
-                            }
-                            "Vec" => {
-                                let inner_type = Self::parse_type_str(inner);
-                                FieldType::Vec(Box::new(inner_type))
-                            }
-                            "Box" => Self::parse_type_str(inner),
-                            // For any generic type (e.g., DateTime<Utc>), store just the base name
-                            _ => FieldType::Other(outer.to_string()),
-                        }
-                    } else {
-                        FieldType::Other(clean_str)
-                    }
-                } else if clean_str.starts_with('(') && clean_str.ends_with(')') {
-                    let inner = &clean_str[1..clean_str.len() - 1];
-
-                    let mut elements = Vec::new();
-                    let mut current = String::new();
-                    let mut depth = 0;
-
-                    for c in inner.chars() {
-                        match c {
-                            '<' => {
-                                depth += 1;
-                                current.push(c);
-                            }
-                            '>' => {
-                                depth -= 1;
-                                current.push(c);
-                            }
-                            ',' if depth == 0 => {
-                                if !current.is_empty() {
-                                    elements.push(Self::parse_type_str(&current));
-                                    current.clear();
-                                }
-                            }
-                            _ => current.push(c),
-                        }
-                    }
-
-                    if !current.is_empty() {
-                        elements.push(Self::parse_type_str(&current));
-                    }
-
-                    FieldType::Tuple(elements)
-                } else {
-                    // Unknown or complex type — could be a foreign type or custom struct/enum
-                    FieldType::Other(clean_str)
-                }
-            }
-        }
+/// The text of a type path as written, without generic arguments.
+fn path_text(path: &syn::Path) -> String {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    if path.leading_colon.is_some() {
+        format!("::{segments}")
+    } else {
+        segments
     }
 }
 
@@ -393,6 +347,7 @@ impl FieldType {
             FieldType::U64 => "u64".to_string(),
             FieldType::U128 => "u128".to_string(),
             FieldType::Usize => "usize".to_string(),
+            FieldType::Duration => "Duration".to_string(),
             FieldType::Tuple(types) => {
                 let inner: Vec<String> = types.iter().map(|t| t.canonical_name()).collect();
                 format!("({})", inner.join(", "))
@@ -439,6 +394,7 @@ impl fmt::Display for FieldType {
             FieldType::U64 => write!(f, "U64"),
             FieldType::U128 => write!(f, "U128"),
             FieldType::Usize => write!(f, "Usize"),
+            FieldType::Duration => write!(f, "Duration"),
             FieldType::Tuple(types) => {
                 write!(f, "Tuple(")?;
                 let mut first = true;
@@ -475,16 +431,40 @@ impl fmt::Display for FieldType {
 
 #[cfg(test)]
 mod tests {
-    use super::FieldType;
+    use super::{FieldType, PathNames};
 
     fn variant_types(item: syn::ItemEnum) -> Vec<FieldType> {
         item.variants
             .iter()
             .filter_map(|variant| match &variant.fields {
-                syn::Fields::Unnamed(fields) => Some(FieldType::parse_tuple_variant(fields)),
+                syn::Fields::Unnamed(fields) => {
+                    Some(FieldType::parse_tuple_variant(fields, PathNames::Last))
+                }
                 syn::Fields::Named(_) | syn::Fields::Unit => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn only_the_standard_library_duration_is_native() {
+        let parse = |ty: syn::Type| FieldType::parse_syn_ty(&ty);
+        assert_eq!(parse(syn::parse_quote!(Duration)), FieldType::Duration);
+        assert_eq!(
+            parse(syn::parse_quote!(std::time::Duration)),
+            FieldType::Duration
+        );
+        assert_eq!(
+            parse(syn::parse_quote!(::core::time::Duration)),
+            FieldType::Duration
+        );
+        assert_eq!(
+            parse(syn::parse_quote!(chrono::Duration)),
+            FieldType::Other("Duration".to_string())
+        );
+        assert_eq!(
+            FieldType::parse(&syn::parse_quote!(Duration), PathNames::Written),
+            FieldType::Other("Duration".to_string())
+        );
     }
 
     #[test]

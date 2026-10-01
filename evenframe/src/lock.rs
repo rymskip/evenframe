@@ -1,6 +1,6 @@
 //! Cross-process serialization of evenframe runs.
 
-use crate::error::{EvenframeError, Result};
+use evenframe_core::error::{EvenframeError, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::{Hash, Hasher};

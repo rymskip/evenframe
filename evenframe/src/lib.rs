@@ -1,11 +1,11 @@
 pub use evenframe_core::{
-    config,
+    __metadata, config,
     error::{self, EvenframeError, Result},
-    registry, schemasync, traits, types, typesync, validator, wrappers,
+    registry, schemasync, traits, types, typesync, validator,
 };
 
-#[cfg(feature = "tooling")]
-pub use evenframe_core::tooling;
+#[cfg(any(feature = "build-typesync", feature = "build-schemadump"))]
+pub use evenframe_core::{build, scan};
 
 pub use evenframe_derive::{Evenframe, EvenframeUnion, Schemasync, Typesync};
 pub use linkme;

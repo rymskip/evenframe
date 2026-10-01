@@ -1,7 +1,8 @@
 //! Validate command - validates configuration and types.
 
 use crate::cli::ValidateArgs;
-use crate::config_builders;
+use crate::scan_cache::build_and_record;
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
@@ -74,8 +75,8 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
 }
 
 fn validate_types() -> Result<(usize, usize, usize)> {
-    let build_config = config_builders::BuildConfig::discover()?;
-    let (enums, tables, objects) = config_builders::build_and_record(&build_config)?;
+    let build_config = ScanConfig::discover()?;
+    let (enums, tables, objects) = build_and_record(&build_config)?;
     Ok((enums.len(), tables.len(), objects.len()))
 }
 

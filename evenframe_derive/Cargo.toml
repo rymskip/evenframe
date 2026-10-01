@@ -29,7 +29,7 @@ syn = { version = "3.0.5", features = ["full"] }
 trybuild = "1.0"
 proptest = "1.11"
 pretty_assertions = "1.4"
-evenframe = { path = "../evenframe", default-features = false }
+evenframe = { path = "../evenframe", default-features = false, features = ["metadata"] }
 linkme = "0.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true }

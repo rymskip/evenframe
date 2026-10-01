@@ -1,6 +1,7 @@
 use crate::error::{EvenframeError, Result};
 use crate::evenframe_log;
 use std::io::Write;
+use surrealdb::engine::remote::http::Client;
 use surrealdb::types::Variables;
 use surrealdb::{Connection, IndexedResults, Surreal};
 use tracing::{debug, error, info, trace, warn};
@@ -226,6 +227,21 @@ pub const RPC_SIZE_LIMIT: usize = 800_000;
 
 /// How often a statement rolled back by a conflicting writer is retried.
 const CONFLICT_RETRIES: u32 = 5;
+
+/// Applies the access definitions to the database, checking every statement.
+pub async fn execute_access_query(
+    db: &Surreal<Client>,
+    access_query: &str,
+    db_name: &str,
+) -> Result<()> {
+    if access_query.trim().is_empty() {
+        return Ok(());
+    }
+    tracing::debug!(query_length = access_query.len(), "Executing access query");
+    execute_and_validate(db, access_query, "define access", db_name).await?;
+    tracing::info!(db = %db_name, "Access definitions applied");
+    Ok(())
+}
 
 /// Executes `statements` and returns every failed statement as an error.
 /// Statements that together exceed [`RPC_SIZE_LIMIT`] are sent in several

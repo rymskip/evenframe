@@ -1,4 +1,4 @@
-//! Rejects glob imports in every tracked Rust file. Clippy's
+//! Rejects glob imports in every Rust file git does not ignore. Clippy's
 //! `wildcard_imports` covers all of them except `use super::*` in code
 //! compiled for tests, which it exempts even with
 //! `warn-on-all-wildcard-imports`; this check closes that gap.
@@ -12,7 +12,14 @@ use syn::{ItemUse, UseTree};
 pub fn check() -> bool {
     let root = project_root();
     let listed = match Command::new("git")
-        .args(["ls-files", "*.rs"])
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--deduplicate",
+            "*.rs",
+        ])
         .current_dir(&root)
         .output()
     {
@@ -33,6 +40,10 @@ pub fn check() -> bool {
     let mut found = Vec::new();
     for relative in String::from_utf8_lossy(&listed).lines() {
         let path = root.join(relative);
+        // A tracked file deleted from the working tree has nothing to check.
+        if !path.exists() {
+            continue;
+        }
         let source = match fs::read_to_string(&path) {
             Ok(source) => source,
             Err(error) => {

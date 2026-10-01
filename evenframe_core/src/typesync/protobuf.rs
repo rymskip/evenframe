@@ -382,6 +382,9 @@ impl Proto<'_> {
                 nested.declare(owner, hint, self.message(hint, &fields, indent)?)?;
                 hint.to_string()
             }
+            FieldType::Duration => {
+                self.single(&FieldType::serde_duration(), hint, owner, nested, indent)?
+            }
             FieldType::RecordLink(inner) => self.single(inner, hint, owner, nested, indent)?,
             FieldType::Other(name) => match self.registry.lookup(name) {
                 Some(foreign) if !foreign.protobuf.is_empty() => foreign.protobuf.clone(),

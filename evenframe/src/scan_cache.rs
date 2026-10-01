@@ -13,10 +13,13 @@
 //! are project-relative, so moving the project keeps it valid, and content
 //! hashes ignore CRLF vs LF.
 
-use super::{AllConfigs, BuildConfig, MAX_SCAN_DEPTH};
-use crate::error::{EvenframeError, Result};
-use crate::schemasync::TableConfig;
-use crate::types::{StructConfig, TaggedUnion};
+use evenframe_core::error::{EvenframeError, Result};
+use evenframe_core::scan::{
+    AllConfigs, MAX_SCAN_DEPTH, ScanConfig, build_all_configs, canonical_manifests, find_manifests,
+    member_has_own_manifest,
+};
+use evenframe_core::schemasync::TableConfig;
+use evenframe_core::types::{StructConfig, TaggedUnion};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Bumped whenever the cache layout changes incompatibly.
-pub const CACHE_FORMAT_VERSION: u32 = 3;
+pub const CACHE_FORMAT_VERSION: u32 = 4;
 
 /// Where the cache lives, relative to the project root.
 pub const CACHE_RELATIVE_PATH: &str = ".evenframe/cache.json";
@@ -189,7 +192,7 @@ impl ScanCache {
 
     /// Why this cache no longer describes the project `config` points
     /// at, or `None` when it is current.
-    pub fn stale_reason(&self, config: &BuildConfig) -> Result<Option<String>> {
+    pub fn stale_reason(&self, config: &ScanConfig) -> Result<Option<String>> {
         if let Some(reason) = self.version_change() {
             return Ok(Some(reason));
         }
@@ -200,7 +203,7 @@ impl ScanCache {
     }
 
     /// Load the cache and fail with an actionable error if it is stale.
-    pub fn load_current(config: &BuildConfig) -> Result<Self> {
+    pub fn load_current(config: &ScanConfig) -> Result<Self> {
         let cache = Self::load(&config.scan_path)?;
         if let Some(reason) = cache.stale_reason(config)? {
             return Err(EvenframeError::config(format!(
@@ -212,7 +215,7 @@ impl ScanCache {
 
     /// Inspect the cache without failing on a missing or stale one, for
     /// callers that report the state rather than depend on it.
-    pub fn status(config: &BuildConfig) -> Result<CacheStatus> {
+    pub fn status(config: &ScanConfig) -> Result<CacheStatus> {
         if !Self::path(&config.scan_path).exists() {
             return Ok(CacheStatus::Absent);
         }
@@ -280,7 +283,7 @@ pub enum CacheStatus {
 
 /// The workspace's types: the cached ones when the cache still matches the
 /// sources, otherwise a fresh scan, which is then recorded in the cache.
-pub fn build_and_record(config: &BuildConfig) -> Result<AllConfigs> {
+pub fn build_and_record(config: &ScanConfig) -> Result<AllConfigs> {
     let previous = ScanCache::load_reusable(&config.scan_path);
     let stamped_at_ns = now_ns();
     let inputs = scan_inputs(config, previous.as_ref())?;
@@ -293,7 +296,7 @@ pub fn build_and_record(config: &BuildConfig) -> Result<AllConfigs> {
             Some(changes) => tracing::debug!("Rescanning: {changes}"),
         }
     }
-    let cache = ScanCache::from_parts(stamped_at_ns, inputs, super::build_all_configs(config)?);
+    let cache = ScanCache::from_parts(stamped_at_ns, inputs, build_all_configs(config)?);
     let path = cache.write(&config.scan_path)?;
     tracing::debug!("Scan cache written to {}", path.display());
     Ok(cache.into_configs())
@@ -301,22 +304,22 @@ pub fn build_and_record(config: &BuildConfig) -> Result<AllConfigs> {
 
 /// Stamp every file a scan with `config` reads, reusing the hashes in
 /// `previous` for files whose metadata has not moved. Mirrors the discovery
-/// rules of [`super::WorkspaceScanner`] without parsing any Rust: the
+/// rules of [`WorkspaceScanner`](evenframe_core::scan::WorkspaceScanner) without parsing any Rust: the
 /// non-gitignored `Cargo.toml`s under the scan path (see
-/// [`super::find_manifests`]), the `src` trees of their packages and
+/// [`find_manifests`]), the `src` trees of their packages and
 /// workspace members (minus `tests`/`benches` directories and symlinks), the
 /// include files (gitignored or not), the config file, any plugin binaries
 /// and, when expanding macros, the lockfile each crate builds against.
 pub fn scan_inputs(
-    config: &BuildConfig,
+    config: &ScanConfig,
     previous: Option<&ScanCache>,
 ) -> Result<BTreeMap<String, InputStamp>> {
     let root = &config.scan_path;
     let mut files: Vec<PathBuf> = Vec::new();
     let mut lockfiles: BTreeSet<PathBuf> = BTreeSet::new();
 
-    let manifests = super::find_manifests(root);
-    let known_manifests = super::canonical_manifests(&manifests);
+    let manifests = find_manifests(root);
+    let known_manifests = canonical_manifests(&manifests);
     for manifest in &manifests {
         files.push(manifest.clone());
         let manifest_dir = manifest
@@ -336,7 +339,7 @@ pub fn scan_inputs(
         {
             for member in members.iter().filter_map(|member| member.as_str()) {
                 let member_dir = manifest_dir.join(member);
-                if !super::member_has_own_manifest(&member_dir, &known_manifests) {
+                if !member_has_own_manifest(&member_dir, &known_manifests) {
                     collect_src_files(&member_dir.join("src"), &mut files)?;
                 }
             }
@@ -587,18 +590,18 @@ fn describe_changes(
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, BuildConfig, CACHE_FORMAT_VERSION, CACHE_REFRESH_COMMAND, CacheStatus,
-        EvenframeError, InputStamp, MAX_SCAN_DEPTH, RACY_WINDOW_NS, ScanCache, build_and_record,
-        fs, now_ns, scan_inputs,
+        BTreeMap, CACHE_FORMAT_VERSION, CACHE_REFRESH_COMMAND, CacheStatus, EvenframeError,
+        InputStamp, MAX_SCAN_DEPTH, RACY_WINDOW_NS, ScanCache, ScanConfig, build_all_configs,
+        build_and_record, fs, now_ns, scan_inputs,
     };
     use tempfile::TempDir;
 
     /// A cache of a fresh scan of `config`'s project.
-    fn scanned(config: &BuildConfig) -> ScanCache {
+    fn scanned(config: &ScanConfig) -> ScanCache {
         ScanCache::from_parts(
             now_ns(),
             scan_inputs(config, None).unwrap(),
-            super::super::build_all_configs(config).unwrap(),
+            build_all_configs(config).unwrap(),
         )
     }
 
@@ -609,7 +612,7 @@ mod tests {
             .collect()
     }
 
-    fn project() -> (TempDir, BuildConfig) {
+    fn project() -> (TempDir, ScanConfig) {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         fs::write(
@@ -627,10 +630,10 @@ mod tests {
         fs::write(root.join("src/models/post.rs"), "pub struct Post;\n").unwrap();
         fs::write(root.join("src/tests/ignored.rs"), "").unwrap();
         fs::write(root.join("evenframe.toml"), "[general]\n").unwrap();
-        let config = BuildConfig {
+        let config = ScanConfig {
             scan_path: root.to_path_buf(),
             config_path: Some(root.join("evenframe.toml")),
-            ..BuildConfig::default()
+            ..ScanConfig::default()
         };
         (tmp, config)
     }
@@ -673,9 +676,9 @@ mod tests {
             fs::write(dir.join("src").join(module).join("user.rs"), "").unwrap();
             fs::write(dir.join("src/tests/skipped.rs"), "").unwrap();
         }
-        let config = BuildConfig {
+        let config = ScanConfig {
             scan_path: root.to_path_buf(),
-            ..BuildConfig::default()
+            ..ScanConfig::default()
         };
         let inputs = scan_inputs(&config, None).unwrap();
         insta::assert_debug_snapshot!(inputs.keys().collect::<Vec<_>>());
@@ -726,16 +729,16 @@ mod tests {
             !inputs.keys().any(|k| k.starts_with("generated/")),
             "gitignored crate fingerprinted: {inputs:?}"
         );
-        let (_, tables, _) = super::super::build_all_configs(&config).unwrap();
+        let (_, tables, _) = build_all_configs(&config).unwrap();
         assert!(!tables.contains_key("hidden"), "gitignored crate scanned");
 
-        config.include_files = vec![crate::config::IncludeFile {
+        config.include_files = vec![evenframe_core::config::IncludeFile {
             path: root.join("generated/src/lib.rs"),
             resolve_only: false,
         }];
         let inputs = scan_inputs(&config, None).unwrap();
         assert!(inputs.contains_key("generated/src/lib.rs"), "{inputs:?}");
-        let (_, tables, _) = super::super::build_all_configs(&config).unwrap();
+        let (_, tables, _) = build_all_configs(&config).unwrap();
         assert!(tables.contains_key("hidden"), "included file not scanned");
     }
 

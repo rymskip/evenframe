@@ -53,11 +53,6 @@ impl ForeignTypeRegistry {
     pub fn is_foreign(&self, name: &str) -> bool {
         self.name_to_canonical.contains_key(name)
     }
-
-    /// Return all configured foreign types.
-    pub fn all(&self) -> &BTreeMap<String, ForeignTypeConfig> {
-        &self.configs
-    }
 }
 
 #[cfg(test)]

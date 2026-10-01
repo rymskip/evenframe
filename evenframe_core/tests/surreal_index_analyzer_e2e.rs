@@ -9,8 +9,9 @@
 //! so they also prove SurrealDB accepts the syntax and that the export parser
 //! understands what SurrealDB writes back.
 
-#![cfg(all(feature = "schemasync", feature = "tooling"))]
+#![cfg(all(feature = "schemasync", feature = "scan"))]
 
+use evenframe_core::scan::{ScanConfig, build_all_configs};
 use evenframe_core::schemasync::TableConfig;
 use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schema};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
@@ -23,7 +24,6 @@ use evenframe_core::schemasync::database::surql::remove::{
     generate_remove_analyzer_statements, generate_remove_index_statements,
 };
 use evenframe_core::schemasync::dump::{schema_surql, tables_surql};
-use evenframe_core::tooling::{BuildConfig, build_all_configs};
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
 use std::fs;
@@ -81,9 +81,9 @@ fn scan(source: &str) -> BTreeMap<String, TableConfig> {
     fs::create_dir_all(tmp.path().join("src")).unwrap();
     fs::write(tmp.path().join("src/lib.rs"), source).unwrap();
 
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
     tables
@@ -590,9 +590,9 @@ async fn indexes_on_nested_paths_serve_searches() {
     .unwrap();
     fs::create_dir_all(tmp.path().join("src")).unwrap();
     fs::write(tmp.path().join("src/lib.rs"), DEAL_WITH_NESTED_SEARCH).unwrap();
-    let config = BuildConfig {
+    let config = ScanConfig {
         scan_path: tmp.path().to_path_buf(),
-        ..BuildConfig::default()
+        ..ScanConfig::default()
     };
     let (enums, tables, objects) = build_all_configs(&config).expect("build_all_configs");
     let surql = tables_surql(

@@ -310,6 +310,16 @@ fn cmd_verify(fail_fast: bool) -> bool {
             }),
         ),
         (
+            "derive without features, then with metadata",
+            Box::new(|| {
+                run("cargo", |c| {
+                    c.args(["test", "-p", "derive_check"]);
+                }) && run("cargo", |c| {
+                    c.args(["test", "-p", "derive_check", "--features", "metadata"]);
+                })
+            }),
+        ),
+        (
             "e2e tests (evenframe_playground)",
             Box::new(|| {
                 run("cargo", |c| {

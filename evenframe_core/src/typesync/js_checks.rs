@@ -188,11 +188,13 @@ const a = parse(String(left)); const b = parse(String(right)); \
 if (a.negative !== b.negative) return a.negative ? -1 : 1; \
 return a.negative ? magnitude(b, a) : magnitude(a, b); };\n";
 
-/// SurrealDB-style durations (`1h30m`) in nanoseconds, `durationNanos(v)`,
-/// for generated code that bounds durations held as strings or numbers.
-/// Malformed text gives `null`.
+/// A duration in nanoseconds, `durationNanos(v)`, for generated code that
+/// bounds durations held as serde's `{ secs, nanos }`, as numbers, or as
+/// SurrealDB-style text (`1h30m`). Anything else gives `null`.
 pub const DURATION_NANOS: &str = "const durationNanos = (value: unknown): bigint | null => { \
 if (typeof value === \"bigint\") return value; if (typeof value === \"number\") return Number.isInteger(value) ? BigInt(value) : null; \
+if (typeof value === \"object\" && value !== null && \"secs\" in value && \"nanos\" in value) \
+return typeof value.secs === \"number\" && typeof value.nanos === \"number\" ? BigInt(value.secs) * 1000000000n + BigInt(value.nanos) : null; \
 const text = String(value); if (!/^(?:\\d+(?:ns|us|µs|ms|s|m|h|d|w|y))+$/.test(text)) return null; \
 const units: Record<string, bigint> = { ns: 1n, us: 1000n, \"µs\": 1000n, ms: 1000000n, s: 1000000000n, m: 60000000000n, h: 3600000000000n, d: 86400000000000n, w: 604800000000000n, y: 31536000000000000n }; \
 let total = 0n; for (const [, amount, unit] of text.matchAll(/(\\d+)(ns|us|µs|ms|s|m|h|d|w|y)/g)) total += BigInt(amount) * units[unit]; return total; };\n";

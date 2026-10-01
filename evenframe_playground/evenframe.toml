@@ -1,6 +1,21 @@
 [general]
 apply_aliases = []
 
+# The SurrealDB SDK's record id, which record links hold. serde writes it as
+# `{ table, key: { String | Number | Uuid: ... } }`; `src/record-id.ts` types
+# that form and converts it to the JavaScript SDK's `RecordId`.
+[general.foreign_types.RecordId]
+crate = "surrealdb"
+rust_type_names = ["RecordId"]
+surrealdb = "record"
+mock_strategy = "record_id"
+arktype = { type = "RecordIdCodec.ark", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
+effect = { type = "RecordIdCodec.schema", encoded = "Schema.Schema.Encoded<typeof RecordIdCodec.schema>", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
+macroforge = { type = "RecordIdEncoded", import = { from = "../record-id.ts", name = "RecordIdEncoded" } }
+protobuf = "string"
+flatbuffers = "string"
+default_value_ts = "RecordIdCodec.empty"
+
 [schemasync]
 should_generate_mocks = true
 
@@ -30,9 +45,9 @@ full_refresh_mode = false
 # Emit embedded-JavaScript ASSERTs for field validators that have no native
 # SurrealQL equivalent (credit-card/Luhn, JSON, Unicode normalization,
 # finiteness, capitalization). These require the SurrealDB server to run with
-# --allow-scripting. Set to false to skip them — every native assertion still
-# applies — so the generated schema stays applicable on servers without
-# scripting. Default: true.
+# --allow-scripting. Set to false to skip them, so the generated schema stays
+# applicable on servers without scripting; every native assertion still
+# applies. Default: true.
 scripting_asserts = true
 
 [typesync]

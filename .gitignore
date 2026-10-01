@@ -4,7 +4,6 @@
 /evenframe/remote_schema.surql
 /evenframe/new_schema.surql
 /evenframe/backup.surql
-/docs
 AGENTS.md
 CLAUDE.md
 .DS_Store

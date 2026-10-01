@@ -206,6 +206,21 @@ impl<'a> FieldValueGenerator<'a> {
                                 value_stack.push(format!("{}", rng.random_bool(0.5)))
                             }
                             FieldType::Unit => value_stack.push("NONE".to_string()),
+                            FieldType::Duration => {
+                                // The generator draws inside every duration
+                                // bound, so bounds it could not meet are disjoint.
+                                if ctx.field.validators.iter().any(|validator| {
+                                    matches!(validator, Validator::DurationValidator(_))
+                                }) {
+                                    return Err(disjoint_durations(
+                                        location,
+                                        &ctx.field.validators,
+                                    ));
+                                }
+                                value_stack.push(validator_gen::duration_literal(
+                                    rng.random_range(0..validator_gen::DAY_NANOS),
+                                ));
+                            }
                             FieldType::F32 | FieldType::F64 => {
                                 value_stack.push(generate_float_with_retry(
                                     &ctx.field.validators,
@@ -849,15 +864,26 @@ fn take_last(stack: &mut Vec<String>, count: usize) -> Result<Vec<String>, Evenf
 const RETRY_ATTEMPTS: usize = 32;
 
 fn unsatisfied(location: FieldLocation<'_>, validators: &[Validator]) -> EvenframeError {
-    let expected = validators
+    EvenframeError::mock_generation(format!(
+        "no value generated for `{location}` in {RETRY_ATTEMPTS} attempts is all of: {}. \
+         Check that these validators can hold at once",
+        describe_all(validators)
+    ))
+}
+
+fn disjoint_durations(location: FieldLocation<'_>, validators: &[Validator]) -> EvenframeError {
+    EvenframeError::mock_generation(format!(
+        "no duration for `{location}` is all of: {}. These bounds do not overlap",
+        describe_all(validators)
+    ))
+}
+
+fn describe_all(validators: &[Validator]) -> String {
+    validators
         .iter()
         .map(Validator::describe)
         .collect::<Vec<_>>()
-        .join(", ");
-    EvenframeError::mock_generation(format!(
-        "no value generated for `{location}` in {RETRY_ATTEMPTS} attempts is all of: {expected}. \
-         Check that these validators can hold at once"
-    ))
+        .join(", ")
 }
 
 /// A value of `scalar` satisfying `validators`, generated from the validators

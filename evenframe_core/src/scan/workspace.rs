@@ -1,13 +1,14 @@
 //! Workspace scanning for finding Rust types with Evenframe derives.
 
-use super::config_builders::{ParsedType, parse_scanned_item};
+use super::configs::{ParsedType, parse_scanned_item};
+use super::paths::{ModuleScope, rust_path};
 use crate::config::IncludeFile;
 use crate::error::{EvenframeError, Result};
-use crate::tooling::expansion_cache::{self, CacheEntry, CacheManifest};
+use crate::scan::expansion::{self, CacheEntry, CacheManifest};
 use ignore::WalkBuilder;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -122,6 +123,31 @@ pub struct ScannedItem {
     pub parsed: Result<ParsedType>,
 }
 
+/// What a scan found: every Evenframe type, and the scope of every module it
+/// parsed, by module path, for resolving the types fields name.
+#[derive(Debug, Default)]
+pub struct Scan {
+    pub items: Vec<ScannedItem>,
+    pub scopes: BTreeMap<String, ModuleScope>,
+}
+
+impl Scan {
+    fn extend(&mut self, other: Scan) {
+        self.items.extend(other.items);
+        self.scopes.extend(other.scopes);
+    }
+}
+
+impl FromIterator<Scan> for Scan {
+    fn from_iter<I: IntoIterator<Item = Scan>>(scans: I) -> Self {
+        let mut all = Scan::default();
+        for scan in scans {
+            all.extend(scan);
+        }
+        all
+    }
+}
+
 /// A struct/enum discovered during scanning, pending resolution against
 /// manual trait impls found elsewhere in the crate.
 struct PendingType {
@@ -153,17 +179,20 @@ struct CrateScanState {
     /// type ident → pipeline from a manual `impl EvenframeXxx for T` block.
     manual_impls: HashMap<String, crate::types::Pipeline>,
     deferred: Vec<DeferredFile>,
+    scopes: BTreeMap<String, ModuleScope>,
 }
 
 impl CrateScanState {
-    /// Every pending type that qualifies, with its configuration parsed.
-    fn finalize(self, resolve_only: bool) -> Vec<ScannedItem> {
+    /// Every pending type that qualifies, with its configuration parsed, and
+    /// the scopes of the modules scanned.
+    fn finalize(self, resolve_only: bool) -> Scan {
         let CrateScanState {
             pending,
             manual_impls,
+            scopes,
             ..
         } = self;
-        pending
+        let items = pending
             .into_iter()
             .filter_map(|pending_type| {
                 let pipeline = pending_type
@@ -191,7 +220,22 @@ impl CrateScanState {
                     parsed,
                 })
             })
-            .collect()
+            .collect();
+        Scan { items, scopes }
+    }
+
+    /// Records the scope of the module `items` make up at `module_path`, and
+    /// of each inline module among them.
+    fn record_scopes(&mut self, items: &[Item], module_path: &str) {
+        self.scopes
+            .insert(rust_path(module_path), ModuleScope::of(items, module_path));
+        for item in items {
+            if let Item::Mod(item_mod) = item
+                && let Some((_, mod_items)) = &item_mod.content
+            {
+                self.record_scopes(mod_items, &format!("{module_path}::{}", item_mod.ident));
+            }
+        }
     }
 }
 
@@ -249,6 +293,7 @@ impl WorkspaceScanner {
     pub fn scan_for_evenframe_types(&self) -> Result<Vec<EvenframeType>> {
         Ok(self
             .scan()?
+            .items
             .into_iter()
             .map(|item| item.evenframe_type)
             .collect())
@@ -259,7 +304,7 @@ impl WorkspaceScanner {
     ///
     /// Top-level crates are processed in parallel via rayon; each crate gets
     /// its own isolated scan state.
-    pub fn scan(&self) -> Result<Vec<ScannedItem>> {
+    pub fn scan(&self) -> Result<Scan> {
         info!(
             "Starting workspace scan for Evenframe types from path: {:?}",
             self.start_path
@@ -286,8 +331,8 @@ impl WorkspaceScanner {
         // - In the raw-source path, there's no cargo contention and one
         //   broken manifest shouldn't kill the whole scan, so a crate that
         //   fails to scan is logged and skipped.
-        let mut scanned: Vec<ScannedItem> = if self.expand_macros {
-            let mut all = Vec::new();
+        let mut scanned: Scan = if self.expand_macros {
+            let mut all = Scan::default();
             for manifest_path in &manifests {
                 let items = self
                     .process_manifest(manifest_path, &known_manifests)
@@ -311,13 +356,12 @@ impl WorkspaceScanner {
                                 "Failed to process manifest at {:?}: {}",
                                 manifest_path, error
                             );
-                            Vec::new()
+                            Scan::default()
                         }
                     },
                 )
-                .collect::<Vec<Vec<ScannedItem>>>()
+                .collect::<Vec<Scan>>()
                 .into_iter()
-                .flatten()
                 .collect()
         };
 
@@ -329,7 +373,7 @@ impl WorkspaceScanner {
             debug!(
                 "Included file {:?} contributed {} Evenframe types (resolve_only={})",
                 extra.path,
-                found.len(),
+                found.items.len(),
                 extra.resolve_only
             );
             scanned.extend(found);
@@ -337,7 +381,7 @@ impl WorkspaceScanner {
 
         info!(
             "Workspace scan complete. Found {} Evenframe types",
-            scanned.len()
+            scanned.items.len()
         );
         Ok(scanned)
     }
@@ -345,8 +389,9 @@ impl WorkspaceScanner {
     /// Parses a single included file (or a directory, scanned recursively like
     /// a crate `src` tree) outside the scan subtree, and returns its Evenframe
     /// types, each tagged with `extra.resolve_only`. The module path is
-    /// derived from the file stem (it is not consumed by typesync output).
-    fn scan_extra_file(&self, extra: &IncludeFile) -> Result<Vec<ScannedItem>> {
+    /// derived from the file stem, so a path into the file from elsewhere
+    /// resolves to its types by name.
+    fn scan_extra_file(&self, extra: &IncludeFile) -> Result<Scan> {
         let abs = fs::canonicalize(&extra.path).map_err(|error| {
             EvenframeError::WorkspaceScan(format!(
                 "include_files: cannot read {:?}: {}",
@@ -378,7 +423,7 @@ impl WorkspaceScanner {
         &self,
         manifest_path: &Path,
         known_manifests: &HashSet<PathBuf>,
-    ) -> Result<Vec<ScannedItem>> {
+    ) -> Result<Scan> {
         let manifest_dir = manifest_path
             .parent()
             .ok_or_else(|| EvenframeError::InvalidPath {
@@ -389,7 +434,7 @@ impl WorkspaceScanner {
         let manifest: toml::Value = toml::from_str(&content)
             .map_err(|error| EvenframeError::parse_error(manifest_path, error.to_string()))?;
 
-        let mut out: Vec<ScannedItem> = Vec::new();
+        let mut out = Scan::default();
 
         // Check if this is a workspace manifest and scan its members.
         if let Some(workspace) = manifest.get("workspace").and_then(|w| w.as_table())
@@ -459,7 +504,7 @@ impl WorkspaceScanner {
     }
 
     /// The raw-source scan of one crate's `src` tree.
-    fn scan_crate_sources(&self, src_path: &Path, crate_name: &str) -> Result<Vec<ScannedItem>> {
+    fn scan_crate_sources(&self, src_path: &Path, crate_name: &str) -> Result<Scan> {
         let mut state = CrateScanState::default();
         self.scan_directory_into(src_path, &mut state, crate_name, 0)?;
         self.finish_crate(state, false)
@@ -469,11 +514,7 @@ impl WorkspaceScanner {
     /// resolves the crate's pending types. A file with no Evenframe marker
     /// can only matter by defining such a target, so it is parsed when its
     /// text names one.
-    fn finish_crate(
-        &self,
-        mut state: CrateScanState,
-        resolve_only: bool,
-    ) -> Result<Vec<ScannedItem>> {
+    fn finish_crate(&self, mut state: CrateScanState, resolve_only: bool) -> Result<Scan> {
         let deferred = std::mem::take(&mut state.deferred);
         if !state.manual_impls.is_empty() {
             for file in deferred {
@@ -497,15 +538,11 @@ impl WorkspaceScanner {
     /// the split, a fragment write error) is propagated as an `Err` so the
     /// caller sees the corruption rather than silently falling back to the
     /// raw-source scan. The one silent-skip case is "crate has no `src/`
-    /// directory", which we return as an empty vec.
-    fn scan_with_expansion_cache(
-        &self,
-        manifest_dir: &Path,
-        crate_name: &str,
-    ) -> Result<Vec<ScannedItem>> {
+    /// directory", which we return as an empty scan.
+    fn scan_with_expansion_cache(&self, manifest_dir: &Path, crate_name: &str) -> Result<Scan> {
         let src_path = manifest_dir.join("src");
         if !src_path.exists() {
-            return Ok(Vec::new());
+            return Ok(Scan::default());
         }
         let src_dir = std::path::absolute(&src_path).map_err(|error| {
             EvenframeError::WorkspaceScan(format!(
@@ -523,14 +560,14 @@ impl WorkspaceScanner {
         })?;
 
         if file_meta.is_empty() {
-            return Ok(Vec::new());
+            return Ok(Scan::default());
         }
 
         // 2. Hash files. Any hash failure is a hard error.
         let hashed: Vec<(SourceFile, String)> = file_meta
             .into_par_iter()
             .map(|meta| {
-                let hash = expansion_cache::hash_file(&meta.abs_path).map_err(|error| {
+                let hash = expansion::hash_file(&meta.abs_path).map_err(|error| {
                     EvenframeError::WorkspaceScan(format!(
                         "hash failed for {:?}: {}",
                         meta.abs_path, error
@@ -543,8 +580,8 @@ impl WorkspaceScanner {
         // 3. Load the existing manifest and bucket files by hit/miss. The
         //    recorded types hold only while `apply_aliases` is unchanged;
         //    otherwise a hit keeps its fragment and is re-extracted from it.
-        let target_dir = expansion_cache::find_target_dir(manifest_dir);
-        let cache_dir = expansion_cache::crate_cache_dir(&target_dir, crate_name);
+        let target_dir = expansion::find_target_dir(manifest_dir);
+        let cache_dir = expansion::crate_cache_dir(&target_dir, crate_name);
         let manifest = CacheManifest::load(&cache_dir, crate_name);
         let types_current = manifest
             .as_ref()
@@ -584,10 +621,10 @@ impl WorkspaceScanner {
         };
 
         // 5. Assemble the output: cache hits + freshly-expanded entries.
-        let mut scanned: Vec<ScannedItem> = Vec::new();
+        let mut scanned = Scan::default();
         let mut next_manifest = CacheManifest::empty(crate_name, &src_dir, &self.apply_aliases);
         for (meta, hash, entry) in hits {
-            let recorded = types_current.then(|| entry.recorded_items()).flatten();
+            let recorded = types_current.then(|| entry.recorded_scan()).flatten();
             let (items, entry) = match recorded {
                 Some(items) => (items, entry),
                 None => {
@@ -601,7 +638,7 @@ impl WorkspaceScanner {
                                 &fragment.to_string_lossy(),
                             )?
                         }
-                        None => Vec::new(),
+                        None => Scan::default(),
                     };
                     let entry = CacheEntry::new(
                         entry.input_hash,
@@ -647,12 +684,12 @@ impl WorkspaceScanner {
         cache_dir: &Path,
         misses: &[(SourceFile, String)],
         file_modules: &HashSet<String>,
-    ) -> Result<Vec<(String, CacheEntry, Vec<ScannedItem>)>> {
-        let expanded = expansion_cache::expand_crate(manifest_dir, crate_name)?;
+    ) -> Result<Vec<(String, CacheEntry, Scan)>> {
+        let expanded = expansion::expand_crate(manifest_dir, crate_name)?;
         let parsed = parse_file(&expanded).map_err(|error| {
             EvenframeError::parse_error(Path::new("<expanded>"), error.to_string())
         })?;
-        let mut by_file = expansion_cache::split_by_file(parsed.items, crate_name, file_modules);
+        let mut by_file = expansion::split_by_file(parsed.items, crate_name, file_modules);
         misses
             .iter()
             .map(|(meta, hash)| {
@@ -666,10 +703,10 @@ impl WorkspaceScanner {
                 let fragment_path = if items.is_empty() {
                     None
                 } else {
-                    Some(expansion_cache::write_fragment(
+                    Some(expansion::write_fragment(
                         cache_dir,
                         &meta.rel_path,
-                        &expansion_cache::fragment_source(&items),
+                        &expansion::fragment_source(&items),
                     )?)
                 };
                 let file_path = fragment_path
@@ -701,7 +738,7 @@ impl WorkspaceScanner {
         source: String,
         module_path: &str,
         file_path: &str,
-    ) -> Result<Vec<ScannedItem>> {
+    ) -> Result<Scan> {
         let syntax_tree = parse_file(&source).map_err(|error| {
             EvenframeError::parse_error(Path::new(file_path), error.to_string())
         })?;
@@ -726,6 +763,7 @@ impl WorkspaceScanner {
         self.scan_directory_into(dir, &mut state, base_module, depth)?;
         types.extend(
             self.finish_crate(state, false)?
+                .items
                 .into_iter()
                 .map(|item| item.evenframe_type),
         );
@@ -809,6 +847,7 @@ impl WorkspaceScanner {
         self.scan_rust_file_into(path, &mut state, module_path)?;
         types.extend(
             self.finish_crate(state, false)?
+                .items
                 .into_iter()
                 .map(|item| item.evenframe_type),
         );
@@ -828,6 +867,13 @@ impl WorkspaceScanner {
         trace!("Scanning file: {:?}, module: {}", path, module_path);
         let content = fs::read_to_string(path)?;
         if !self.has_marker(&content) {
+            // A file that only re-exports types still routes the paths that
+            // name them, so its scope is kept.
+            if reexports(&content) {
+                let syntax_tree = parse_file(&content)
+                    .map_err(|error| EvenframeError::parse_error(path, error.to_string()))?;
+                state.record_scopes(&syntax_tree.items, module_path);
+            }
             state.deferred.push(DeferredFile {
                 path: path.to_path_buf(),
                 module_path: module_path.to_string(),
@@ -879,6 +925,9 @@ impl WorkspaceScanner {
         module_path: &str,
         file_path: &str,
     ) {
+        state
+            .scopes
+            .insert(rust_path(module_path), ModuleScope::of(&items, module_path));
         for item in items {
             match item {
                 Item::Struct(item_struct) => {
@@ -1076,9 +1125,10 @@ fn detect_manual_impl(item: &ItemImpl) -> Option<(String, crate::types::Pipeline
     let (trait_path, _) = item.trait_.as_ref()?;
     let trait_name = trait_path.segments.last()?.ident.to_string();
     let pipeline = match trait_name.as_str() {
-        "EvenframePersistableStruct" | "EvenframeAppStruct" | "EvenframeTaggedUnion" => {
-            crate::types::Pipeline::Both
-        }
+        "EvenframeTable"
+        | "EvenframePersistableStruct"
+        | "EvenframeAppStruct"
+        | "EvenframeTaggedUnion" => crate::types::Pipeline::Both,
         _ => return None,
     };
 
@@ -1142,6 +1192,20 @@ fn detect_pipeline(attrs: &[Attribute]) -> Option<crate::types::Pipeline> {
     } else {
         None
     }
+}
+
+/// Whether `content` has a `pub use` declaration of any visibility, which can
+/// make a module re-export a type other modules name it through.
+fn reexports(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim_start();
+        let after_visibility = if let Some(rest) = line.strip_prefix("pub(") {
+            rest.split_once(')').map(|(_, rest)| rest)
+        } else {
+            line.strip_prefix("pub ")
+        };
+        after_visibility.is_some_and(|rest| rest.trim_start().starts_with("use "))
+    })
 }
 
 /// Checks if a struct has a field named `id`.
@@ -1940,7 +2004,8 @@ mod tests {
 
         let types = scanner
             .process_manifest(&temp_dir.path().join("Cargo.toml"), &HashSet::new())
-            .unwrap();
+            .unwrap()
+            .items;
 
         assert_eq!(types.len(), 1);
         assert_eq!(types[0].evenframe_type.name, "User");
@@ -2038,6 +2103,15 @@ mod tests {
         let result = detect_manual_impl(&item);
         assert_eq!(
             result,
+            Some(("User".to_string(), crate::types::Pipeline::Both))
+        );
+    }
+
+    #[test]
+    fn test_detect_manual_impl_table_marker() {
+        let item = parse_item_impl("impl EvenframeTable for User {}");
+        assert_eq!(
+            detect_manual_impl(&item),
             Some(("User".to_string(), crate::types::Pipeline::Both))
         );
     }

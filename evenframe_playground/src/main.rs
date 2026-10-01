@@ -22,22 +22,22 @@ async fn main() {
         .route("/health", get(health_check))
         // Auth routes
         .route("/api/users", get(handlers::auth::list_users))
-        .route("/api/users/:id", get(handlers::auth::get_user))
+        .route("/api/users/{id}", get(handlers::auth::get_user))
         // E-commerce routes
         .route("/api/products", get(handlers::ecommerce::list_products))
-        .route("/api/products/:id", get(handlers::ecommerce::get_product))
+        .route("/api/products/{id}", get(handlers::ecommerce::get_product))
         .route("/api/orders", get(handlers::ecommerce::list_orders))
-        .route("/api/orders/:id", get(handlers::ecommerce::get_order))
+        .route("/api/orders/{id}", get(handlers::ecommerce::get_order))
         // Billing routes
         .route("/api/billables", get(handlers::billing::list_billables))
         .route("/api/bookings", get(handlers::billing::list_bookings))
         .route("/api/shifts", get(handlers::billing::list_shifts))
         // Blog routes
         .route("/api/posts", get(handlers::blog::list_posts))
-        .route("/api/posts/:id", get(handlers::blog::get_post))
+        .route("/api/posts/{id}", get(handlers::blog::get_post))
         .route("/api/tags", get(handlers::blog::list_tags))
         .route(
-            "/api/posts/:post_id/comments",
+            "/api/posts/{post_id}/comments",
             get(handlers::blog::list_comments),
         );
 
@@ -47,18 +47,18 @@ async fn main() {
     tracing::info!("Available endpoints:");
     tracing::info!("  GET /health");
     tracing::info!("  GET /api/users");
-    tracing::info!("  GET /api/users/:id");
+    tracing::info!("  GET /api/users/{{id}}");
     tracing::info!("  GET /api/products");
-    tracing::info!("  GET /api/products/:id");
+    tracing::info!("  GET /api/products/{{id}}");
     tracing::info!("  GET /api/orders");
-    tracing::info!("  GET /api/orders/:id");
+    tracing::info!("  GET /api/orders/{{id}}");
     tracing::info!("  GET /api/billables");
     tracing::info!("  GET /api/bookings");
     tracing::info!("  GET /api/shifts");
     tracing::info!("  GET /api/posts");
-    tracing::info!("  GET /api/posts/:id");
+    tracing::info!("  GET /api/posts/{{id}}");
     tracing::info!("  GET /api/tags");
-    tracing::info!("  GET /api/posts/:post_id/comments");
+    tracing::info!("  GET /api/posts/{{post_id}}/comments");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

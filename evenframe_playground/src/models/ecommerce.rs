@@ -207,6 +207,7 @@ mod tests {
     use super::{
         Address, CartItem, Customer, Order, OrderStatus, Product, ProductCategory, RecordLink,
     };
+    use surrealdb_types::RecordId;
 
     #[test]
     fn test_order_status_serialization() {
@@ -323,7 +324,7 @@ mod tests {
     fn test_customer_serialization() {
         let customer = Customer {
             id: "customer:1".to_string(),
-            user: RecordLink::Id("user:1".to_string().into()),
+            user: RecordLink::Id(RecordId::new("user", 1_i64)),
             shipping_address: Some(Address {
                 street: "123 Main St".to_string(),
                 city: "Springfield".to_string(),
@@ -390,7 +391,7 @@ mod tests {
     fn test_order_serialization() {
         let order = Order {
             id: "order:1".to_string(),
-            customer: RecordLink::Id("customer:1".to_string().into()),
+            customer: RecordLink::Id(RecordId::new("customer", 1_i64)),
             items: vec![CartItem {
                 product_id: "product:1".to_string(),
                 product_name: "Laptop".to_string(),
@@ -456,7 +457,7 @@ mod tests {
     fn test_order_with_multiple_items() {
         let order = Order {
             id: "order:1".to_string(),
-            customer: RecordLink::Id("customer:1".to_string().into()),
+            customer: RecordLink::Id(RecordId::new("customer", 1_i64)),
             items: vec![
                 CartItem {
                     product_id: "product:1".to_string(),
@@ -496,7 +497,7 @@ mod tests {
     fn test_delivered_order() {
         let order = Order {
             id: "order:1".to_string(),
-            customer: RecordLink::Id("customer:1".to_string().into()),
+            customer: RecordLink::Id(RecordId::new("customer", 1_i64)),
             items: vec![],
             subtotal: 100.0,
             tax: 10.0,

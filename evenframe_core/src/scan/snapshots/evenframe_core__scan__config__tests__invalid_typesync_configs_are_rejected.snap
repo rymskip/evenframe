@@ -1,5 +1,5 @@
 ---
-source: evenframe_core/src/tooling/build_config.rs
+source: evenframe_core/src/scan/config.rs
 expression: "errors.join(\"\\n\\n\")"
 ---
 Configuration error: Failed to parse configuration file /nonexistent-evenframe-project/evenframe.toml: TOML parse error at line 2, column 1

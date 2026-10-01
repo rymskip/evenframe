@@ -11,7 +11,10 @@ use super::types::{
 };
 use crate::{
     EvenframeError, Result, evenframe_log,
-    schemasync::{config::AccessType, database::surql::access::access_definitions_surql},
+    schemasync::{
+        config::AccessType, database::surql::access::access_definitions_surql,
+        dump::analyzers_reference_functions,
+    },
 };
 use futures::StreamExt;
 use std::collections::BTreeMap;
@@ -322,12 +325,6 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     });
     parts.push(&s[start..]);
     parts
-}
-
-/// Whether any `DEFINE ANALYZER` in `surql` uses a `FUNCTION fn::...`
-/// preprocessor, which must exist before the analyzer is defined.
-pub fn analyzers_reference_functions(surql: &str) -> bool {
-    surql.to_uppercase().contains("FUNCTION FN::")
 }
 
 /// Parses SurrealQL schema exports into structured definitions.
@@ -1304,7 +1301,7 @@ impl SchemaImporter {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexDefinition, ObjectType, SchemaImporter, analyzers_reference_functions};
+    use super::{IndexDefinition, ObjectType, SchemaImporter};
 
     fn parse_index(stmt: &str) -> (String, IndexDefinition) {
         SchemaImporter::parse_index_definition(stmt)
@@ -1418,16 +1415,6 @@ mod tests {
             .unwrap();
         assert_eq!(bare.name, "bare");
         assert_eq!(bare.statement, "DEFINE ANALYZER bare");
-    }
-
-    #[test]
-    fn detects_function_preprocessors_in_analyzers() {
-        assert!(analyzers_reference_functions(
-            "DEFINE ANALYZER a FUNCTION fn::strip TOKENIZERS blank;"
-        ));
-        assert!(!analyzers_reference_functions(
-            "DEFINE ANALYZER a TOKENIZERS blank;"
-        ));
     }
 
     #[test]

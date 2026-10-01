@@ -77,6 +77,7 @@ impl<'a> SurrealdbTypeMapper<'a> {
             FieldType::Usize => "int".to_string(),
             FieldType::F32 | FieldType::F64 => "float".to_string(),
             FieldType::Unit => "null".to_string(),
+            FieldType::Duration => "duration".to_string(),
             FieldType::Option(inner) => {
                 format!("option<{}>", self.field_type_to_surql_inner(inner))
             }

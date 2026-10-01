@@ -3,6 +3,7 @@ use crate::types::{EnumRepresentation, FieldType, TaggedUnion, VariantData};
 use crate::types::{StructConfig, StructField};
 use convert_case::{Case, Casing};
 use std::collections::BTreeMap;
+use surrealdb_types::ToSql;
 use tracing::{debug, trace};
 
 /// The SurrealQL zero value for a field type, used as its `DEFAULT`. `None`
@@ -40,6 +41,7 @@ pub fn field_type_to_surql_default(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize => Some("0".to_string()),
+        FieldType::Duration => Some(surrealdb_types::Duration::default().to_sql()),
         FieldType::Tuple(inner_types) => inner_types
             .iter()
             .map(default_of)
@@ -240,6 +242,7 @@ pub fn field_type_to_surreal_type(
             trace!("Converting Unit to SurrealDB type");
             ("any".to_string(), false, None)
         }
+        FieldType::Duration => ("duration".to_string(), false, None),
         FieldType::HashMap(_key, value) => {
             trace!("Converting HashMap to SurrealDB type");
             let (value_type, _, _) = field_type_to_surreal_type(
@@ -505,12 +508,37 @@ pub fn field_type_to_surreal_type(
 
 #[cfg(test)]
 mod tests {
-    use super::{FieldType, VariantData, field_type_to_surql_default};
+    use super::{FieldType, VariantData, field_type_to_surql_default, field_type_to_surreal_type};
     use crate::schemasync::DefineConfig;
     use crate::types::{
         EnumRepresentation, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, Variant,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_duration_is_a_surreal_duration_defaulting_to_zero() {
+        let registry = ForeignTypeRegistry::default();
+        let (field, table) = ("limit".to_string(), "timer".to_string());
+        let default = field_type_to_surql_default(
+            &field,
+            &table,
+            &FieldType::Duration,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &registry,
+        );
+        assert_eq!(default.as_deref(), Some("0ns"));
+        let (surreal_type, _, _) = field_type_to_surreal_type(
+            &field,
+            &table,
+            &FieldType::Duration,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &registry,
+        );
+        assert_eq!(surreal_type, "duration");
+    }
 
     fn base_define_config(default: Option<&str>) -> DefineConfig {
         DefineConfig {

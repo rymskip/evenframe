@@ -1,23 +1,26 @@
 mod field_type;
 pub mod foreign_type_registry;
+#[cfg(feature = "surrealdb-types")]
+mod record_id;
+#[cfg(feature = "surrealdb-types")]
+mod record_link;
 
-pub use crate::types::field_type::FieldType;
-#[cfg(feature = "schemasync")]
+pub use crate::types::field_type::{FieldType, PathNames, STD_DURATION_PATHS};
+#[cfg(feature = "schemadump")]
 use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
 use crate::{
     schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig},
-    traits::EvenframePersistableStruct,
     validator::Validator,
-    wrappers::EvenframeRecordId,
 };
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 use convert_case::{Case, Casing};
 pub use foreign_type_registry::ForeignTypeRegistry;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+#[cfg(feature = "surrealdb-types")]
+pub use record_link::RecordLink;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 use std::collections::HashSet;
 
 /// Which pipeline(s) a type participates in.
@@ -89,72 +92,6 @@ pub struct TaggedUnion {
     pub resolve_only: bool,
     #[serde(default)]
     pub raw_attributes: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(untagged)]
-pub enum RecordLink<T: EvenframePersistableStruct> {
-    Id(EvenframeRecordId),
-    Object(T),
-}
-
-impl<'de, T: EvenframePersistableStruct> Deserialize<'de> for RecordLink<T>
-where
-    T: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-
-        if value.is_string() {
-            // If it's a string, it can only be an Id, and it must be a
-            // well-formed record id: `table:id` with a non-empty table and a
-            // non-empty key. An empty or partial string is not a valid link.
-            let raw = value.as_str().unwrap_or_default();
-            let (table, key) = raw.split_once(':').unwrap_or(("", ""));
-            if table.is_empty() || key.is_empty() {
-                return Err(serde::de::Error::custom(format!(
-                    "RecordLink<{}> expects a 'table:id' record link with a non-empty table and id, got {raw:?}",
-                    std::any::type_name::<T>()
-                )));
-            }
-            EvenframeRecordId::deserialize(value)
-                .map(RecordLink::Id)
-                .map_err(|e| {
-                    serde::de::Error::custom(format!(
-                        "Failed to deserialize RecordLink from string as Id: {}",
-                        e
-                    ))
-                })
-        } else if value.is_object() {
-            // If it's an object, it could be an Id or an Object
-            let id_attempt = EvenframeRecordId::deserialize(value.clone());
-            let obj_attempt = T::deserialize(value.clone());
-
-            match (id_attempt, obj_attempt) {
-                (Ok(id), Err(_)) => Ok(RecordLink::Id(id)),
-                (Err(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
-                // SurrealQL FETCH returns the full record with its `id` field
-                // intact, so both Id (via the embedded `id: "table:key"`) and
-                // Object (because every field is present) succeed. The caller
-                // asked for a fetch, so prefer the richer Object form. Bare-id
-                // responses still resolve via the (Ok, Err) arm above.
-                (Ok(_), Ok(obj)) => Ok(RecordLink::Object(obj)),
-                (Err(err_id), Err(err_obj)) => Err(serde::de::Error::custom(format!(
-                    "Failed to deserialize object as RecordLink: {:#?}. Tried Id variant: {}. Tried Object variant: {}.",
-                    value, err_id, err_obj
-                ))),
-            }
-        } else {
-            Err(serde::de::Error::custom(format!(
-                "RecordLink<{}> must be a string or an object, got {:#?}",
-                std::any::type_name::<T>(),
-                value
-            )))
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,7 +204,7 @@ impl StructField {
     /// The manual clause is preserved verbatim when it is the only part (so
     /// existing schemas don't churn); manual and validator parts are each
     /// parenthesized when combined to keep operator precedence intact.
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     pub fn merged_assert(&self, allow_scripting: bool) -> Option<String> {
         use crate::schemasync::database::surql::assert::generate_assert_from_validators;
 
@@ -305,7 +242,7 @@ impl StructField {
     /// default cannot conflict with validators: optionals default to `NULL`
     /// (guarded by [`Self::merged_assert`]) and the rest have no overlapping
     /// validator family.
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     fn auto_default_mock_value(&self) -> Option<crate::validator::MockValue<'static>> {
         use crate::validator::MockValue;
         match self.field_type {
@@ -324,6 +261,7 @@ impl StructField {
             | FieldType::U64
             | FieldType::U128
             | FieldType::Usize => Some(MockValue::Num(0.0)),
+            FieldType::Duration => Some(MockValue::DurationNanos(0)),
             FieldType::Vec(_) => Some(MockValue::ArrayLen(0)),
             _ => None,
         }
@@ -334,14 +272,14 @@ impl StructField {
     /// `0` under `Positive`, `[]` under `MinItems`) makes the field
     /// unsatisfiable (the default itself fails the `ASSERT`), so the caller
     /// omits the default and the field becomes required instead.
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     fn auto_default_satisfies_validators(&self) -> bool {
         self.auto_default_mock_value()
             .map(|mv| self.validators.iter().all(|v| v.matches(&mv)))
             .unwrap_or(true)
     }
 
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     pub fn generate_define_statement(
         &self,
         enums: &BTreeMap<String, TaggedUnion>,
@@ -413,6 +351,9 @@ impl StructField {
                                 }
                                 FieldType::Unit => {
                                     value_stack.push(("any".to_string(), false, None))
+                                }
+                                FieldType::Duration => {
+                                    value_stack.push(("duration".to_string(), false, None))
                                 }
                                 FieldType::Option(inner) => {
                                     work_stack.push(WorkItem::AssembleOption);
@@ -1016,7 +957,7 @@ impl Variant {
 /// at: the type's own table, the table a projection object's
 /// `output_override` stands for, or every table variant of a persistable
 /// union. Empty when `type_name` names none of those.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 pub fn link_target_tables(
     type_name: &str,
     tables: &BTreeMap<String, TableConfig>,
@@ -1051,7 +992,7 @@ pub fn link_target_tables(
 /// How a `RecordLink<type_name>` names its target in SurrealQL: every table
 /// it can point at, joined with ` | `, or else the table a projection
 /// object's `output_override` names. `None` when `type_name` is neither.
-#[cfg(feature = "schemasync")]
+#[cfg(feature = "schemadump")]
 pub fn record_link_target_surql(
     type_name: &str,
     tables: &BTreeMap<String, TableConfig>,
@@ -1077,7 +1018,7 @@ mod tests {
         BTreeMap, EnumRepresentation, FieldType, Pipeline, StructConfig, StructField, TaggedUnion,
         Variant, VariantData,
     };
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     use super::{ForeignTypeRegistry, TableConfig};
 
     // ==================== TaggedUnion Tests ====================
@@ -1744,7 +1685,7 @@ mod tests {
         assert_eq!(aliased.effective().name, "Real");
     }
 
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     #[test]
     fn test_generate_define_statement_resolves_record_link_override() {
         // Models a synthetic plugin that adds a projection:
@@ -1842,7 +1783,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "schemasync")]
+    #[cfg(feature = "schemadump")]
     #[test]
     fn test_generate_define_statement_no_override_emits_literal_name() {
         // Regression guard: without `output_override`, the historical
