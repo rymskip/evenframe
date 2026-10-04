@@ -1,0 +1,5 @@
+error: untagged variants `Count` and `Total` both read the `int` value kind; their database representation is ambiguous
+ --> tests/ui/fail/surreal_value_ambiguous_untagged.rs:7:5
+  |
+7 |     Total(u64),
+  |     ^^^^^

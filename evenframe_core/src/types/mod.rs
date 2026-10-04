@@ -261,7 +261,11 @@ impl StructField {
     /// existing schemas don't churn); manual and validator parts are each
     /// parenthesized when combined to keep operator precedence intact.
     #[cfg(feature = "schemadump")]
-    pub fn merged_assert(&self, allow_scripting: bool) -> Option<String> {
+    pub fn merged_assert(
+        &self,
+        options: impl Into<crate::schemasync::config::SurqlOptions>,
+    ) -> Option<String> {
+        let options = options.into();
         use crate::schemasync::database::surql::assert::generate_assert_from_validators;
 
         let manual = self
@@ -272,14 +276,16 @@ impl StructField {
             .filter(|a| !a.is_empty());
 
         let generated =
-            generate_assert_from_validators(&self.validators, "$value", allow_scripting);
+            generate_assert_from_validators(&self.validators, "$value", options.allow_scripting);
         let generated = if generated.is_empty() {
             None
         } else if matches!(self.field_type, FieldType::Option(_)) {
-            // Optional fields are emitted as `null | T` with `DEFAULT NULL`, so an
-            // unset value is NULL. The inner assertions (e.g. `string::len($value)`)
-            // error on NULL, so only apply them when the value is present.
-            Some(format!("$value = NULL OR ({generated})"))
+            // Inner assertions such as `string::len($value)` reject absence,
+            // so they apply only to a present value.
+            Some(format!(
+                "$value = {} OR ({generated})",
+                options.option_none.literal()
+            ))
         } else {
             Some(generated)
         };
@@ -295,9 +301,9 @@ impl StructField {
     /// The value SurrealDB's auto-generated fallback `DEFAULT` represents, as a
     /// [`crate::validator::MockValue`], for the field types that receive a
     /// zero/empty default (`''`, `0`, `[]`). Returns `None` for types whose
-    /// default cannot conflict with validators: optionals default to `NULL`
-    /// (guarded by [`Self::merged_assert`]) and the rest have no overlapping
-    /// validator family.
+    /// default cannot conflict with validators: optionals have no default
+    /// (absence is guarded by [`Self::merged_assert`]) and the rest
+    /// have no overlapping validator family.
     #[cfg(feature = "schemadump")]
     fn auto_default_mock_value(&self) -> Option<crate::validator::MockValue<'static>> {
         use crate::validator::MockValue;
@@ -343,8 +349,9 @@ impl StructField {
         persistable_structs: &BTreeMap<String, TableConfig>,
         table_name: &String,
         registry: &ForeignTypeRegistry,
-        allow_scripting: bool,
+        options: impl Into<crate::schemasync::config::SurqlOptions>,
     ) -> Result<String> {
+        let options = options.into();
         evenframe_log!(
             format!(
                 "Generating define statements for:\nEnums: {:#?}\nApp structs: {:#?}\nTables: {:#?}",
@@ -551,12 +558,22 @@ impl StructField {
                                                             // value (no wrapping)
                                                             work_stack.push(WorkItem::Process(ft));
                                                         }
-                                                        EnumRepresentation::InternallyTagged { .. } => {
-                                                            // serde does not support tuple variants with internal tagging;
-                                                            // fall back to externally tagged
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
-                                                            work_stack.push(WorkItem::Process(ft));
-                                                        }
+                                                         EnumRepresentation::InternallyTagged { tag } => {
+                                                             let struct_config = match ft {
+                                                                 FieldType::Other(name) => app_structs.get(name).map(StructConfig::effective),
+                                                                 _ => None,
+                                                             }.ok_or_else(|| EvenframeError::SchemaSync(format!(
+                                                                 "Internally tagged enum `{}` variant `{}` must reference a known struct payload; found `{ft:?}`",
+                                                                 enum_def.enum_name, variant.db_name(),
+                                                             )))?;
+                                                             let mut names = vec![tag.clone()];
+                                                             names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
+                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
+                                                             for field in struct_config.fields.iter().rev() {
+                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
+                                                             }
+                                                             work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
+                                                         }
                                                     }
                                                     }
                                                 }
@@ -675,7 +692,7 @@ impl StructField {
                                     visited_types: format!("{:#?}", visited_types),
                                 })?;
                             value_stack.push((
-                                format!("null | {}", inner_type),
+                                options.option_none.surql_type(&inner_type),
                                 needs_wildcard,
                                 wildcard_type,
                             ));
@@ -874,6 +891,8 @@ impl StructField {
             stmt.push_str(&format!(" TYPE {}", type_str));
         }
 
+        let nullable_option = matches!(self.field_type, FieldType::Option(_))
+            && options.option_none == crate::schemasync::config::OptionNone::Null;
         if let Some(ref def) = self.define_config {
             if let Some(ref def_val) = def.default {
                 let always = if def.default_always.is_some() {
@@ -882,20 +901,24 @@ impl StructField {
                     ""
                 };
                 stmt.push_str(&format!(" DEFAULT{} {}", always, def_val));
-            } else if self.auto_default_satisfies_validators()
+            } else if nullable_option {
+                stmt.push_str(" DEFAULT NULL");
+            } else if !matches!(self.field_type, FieldType::Option(_))
+                && self.auto_default_satisfies_validators()
                 && let Some(default) = crate::default::field_type_to_surql_default(
                     &self.field_name,
                     table_name,
                     &self.field_type,
                     enums,
                     app_structs,
-                    registry,
+                    crate::schemasync::config::SurqlContext { registry, options },
                 )
             {
                 stmt.push_str(&format!(" DEFAULT {default}"));
             }
-            // else: no zero value exists or it would violate the field's
-            // validators, so the field is required instead of unsatisfiable.
+            // Otherwise an optional field uses the configured absence value; no zero
+            // value exists or it would violate the field's validators, so the
+            // field is required instead of unsatisfiable.
 
             if def.readonly.unwrap_or(false) {
                 stmt.push_str(" READONLY");
@@ -905,9 +928,11 @@ impl StructField {
                 stmt.push_str(&format!(" VALUE {}", val));
             }
 
-            if let Some(assert_clause) = self.merged_assert(allow_scripting) {
+            if let Some(assert_clause) = self.merged_assert(options) {
                 stmt.push_str(&format!(" ASSERT {}", assert_clause));
             }
+        } else if nullable_option {
+            stmt.push_str(" DEFAULT NULL");
         }
 
         if let Some(ref def) = self.define_config {

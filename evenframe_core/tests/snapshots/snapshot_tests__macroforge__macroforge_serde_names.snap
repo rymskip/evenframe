@@ -2,18 +2,18 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Member {
   id: string;
-  /** @serde({ validate: ["minLength(2)"] }) */
+  /** @endec({ validate: ["minLength(2)"] }) */
   displayName: string;
   "zip-code": string;
   nickname?: string | null;
   status: Status;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Status =
 	| "active"
 	| "on-hold";

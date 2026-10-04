@@ -4,6 +4,7 @@ mod deserialization_impl;
 mod enum_impl;
 mod imports;
 mod struct_impl;
+mod surreal_value_impl;
 mod union_impl;
 mod validate_impl;
 
@@ -17,6 +18,11 @@ pub(crate) enum PipelineKind {
 }
 
 impl PipelineKind {
+    /// Whether the type is stored, and so converts to the database's value.
+    pub fn reaches_database(self) -> bool {
+        matches!(self, PipelineKind::Both | PipelineKind::Schemasync)
+    }
+
     pub fn to_tokens(self) -> proc_macro2::TokenStream {
         use quote::quote;
         match self {
@@ -48,7 +54,8 @@ impl PipelineKind {
         indexes,
         fulltext,
         hnsw,
-        diskann
+        diskann,
+        surreal
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {
@@ -83,6 +90,27 @@ pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
     }
 }
 
+/// `SurrealValue` alone, in the shape evenframe stores a type: for a value
+/// read from or written to the database that no output describes, such as a
+/// query's row projection. A key is its `#[surreal]` name, else its serde
+/// name, as serde read it from the database's JSON; defaults and
+/// representation come from its `#[serde(...)]` attributes.
+#[proc_macro_derive(SurrealValue, attributes(serde, surreal))]
+pub fn surreal_value_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let mode = surreal_value_impl::Mode::Row;
+    let tokens =
+        evenframe_core::derive::naming::resolve_row(&input).and_then(|wire| match input.data {
+            Data::Struct(_) => surreal_value_impl::struct_surreal_value(&input, &wire, mode, &[]),
+            Data::Enum(_) => surreal_value_impl::enum_surreal_value(&input, &wire, mode),
+            Data::Union(_) => Err(syn::Error::new(
+                input.ident.span(),
+                "SurrealValue can only be derived for structs and enums",
+            )),
+        });
+    tokens.unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
 /// Derive macro for types that only participate in TypeScript type generation.
 #[proc_macro_derive(
     Typesync,
@@ -103,7 +131,8 @@ pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
         indexes,
         fulltext,
         hnsw,
-        diskann
+        diskann,
+        surreal
     )
 )]
 pub fn typesync_derive(input: TokenStream) -> TokenStream {
@@ -141,7 +170,8 @@ pub fn typesync_derive(input: TokenStream) -> TokenStream {
         indexes,
         fulltext,
         hnsw,
-        diskann
+        diskann,
+        surreal
     )
 )]
 pub fn schemasync_derive(input: TokenStream) -> TokenStream {

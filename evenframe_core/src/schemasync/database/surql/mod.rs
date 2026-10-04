@@ -8,6 +8,8 @@ pub mod execute;
 #[cfg(feature = "mockmake")]
 pub mod mock_records;
 #[cfg(feature = "schemasync")]
+pub mod optional;
+#[cfg(feature = "schemasync")]
 pub mod remove;
 mod type_mapper;
 

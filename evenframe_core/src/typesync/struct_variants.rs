@@ -6,9 +6,10 @@ use convert_case::{Case, Casing};
 use std::collections::BTreeMap;
 
 /// Declares each struct variant's fields as a type named after the payload
-/// and points the variant at it, so the payload can be used on its own. Two
-/// payloads with one name and different fields, or a payload named like
-/// another type, stop typesync.
+/// and points the variant at it, so the payload can be used on its own. A
+/// payload that names no macroforge derives takes its enum's. Two payloads
+/// with one name and different fields, or a payload named like another type,
+/// stop typesync.
 pub fn declare_payloads(
     structs: &mut BTreeMap<String, StructConfig>,
     enums: &mut BTreeMap<String, TaggedUnion>,
@@ -29,6 +30,7 @@ pub fn declare_payloads(
     for tagged_union in enums.values_mut() {
         let tagged_union = effective_union_mut(tagged_union);
         let enum_name = tagged_union.enum_name.to_case(Case::Pascal);
+        let enum_derives = tagged_union.macroforge_derives.clone();
         for variant in &mut tagged_union.variants {
             let variant = effective_variant_mut(variant);
             let Some(VariantData::InlineStruct(inline)) = &variant.data else {
@@ -49,10 +51,13 @@ pub fn declare_payloads(
                         "{owner} writes its fields as the type `{name}`, which is also {other}"
                     )),
                     None => {
-                        let payload = StructConfig {
+                        let mut payload = StructConfig {
                             struct_name: name.clone(),
                             ..inline.effective().clone()
                         };
+                        if payload.macroforge_derives.is_empty() {
+                            payload.macroforge_derives = enum_derives.clone();
+                        }
                         payloads.insert(name.clone(), (owner, payload));
                     }
                 },
@@ -151,6 +156,25 @@ mod tests {
             Some(VariantData::DataStructureRef(FieldType::Other(
                 "TextValue".to_string()
             )))
+        );
+    }
+
+    #[test]
+    fn a_payload_takes_its_enums_macroforge_derives() {
+        let mut structs = BTreeMap::new();
+        let mut refusal = union(
+            "Refusal",
+            vec![(
+                "Denied",
+                payload("Denied", &[("reason", FieldType::String)]),
+            )],
+        );
+        refusal.macroforge_derives = vec!["Encode".to_string(), "Decode".to_string()];
+        let mut enums = BTreeMap::from([("Refusal".to_string(), refusal)]);
+        declare_payloads(&mut structs, &mut enums).unwrap();
+        assert_eq!(
+            structs["Denied"].macroforge_derives,
+            vec!["Encode".to_string(), "Decode".to_string()]
         );
     }
 

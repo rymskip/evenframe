@@ -75,6 +75,32 @@ built in code, and every value nested in it, the same way. Neither needs
 marker that `RecordLink` accepts, which is all a project using only a build
 script or the CLI needs.
 
+With the `surrealdb-types` feature, every derived type also implements the
+SurrealDB SDK's `SurrealValue` in the shape evenframe's schema defines: fields
+under their database names (`#[surreal(rename...)]`), enums in serde's
+representation, a missing field taking serde's default, and a read that runs
+the field's parse morphs and transforms before validating, as serde's read
+does. Rows read with `response.take::<Vec<T>>(n)` and bound with
+`into_value()` need no JSON round trip. A field whose type has no
+`SurrealValue` converts through serde. A Rust `Option` is stored as
+`option<T>` with NONE by default. Set `[schemasync] option_none = "null"` to
+generate `null | T`, NULL defaults, and NULL mock values. For typed SDK writes,
+`config.option_none.into_value(record)` applies that configuration without
+changing the SDK's canonical `into_value()`. Use
+`config.option_none.read_value::<Record>(value)` to read configured NULL
+absence through the SDK's declared type shape, including nested optional arrays.
+
+A query's row, which no output describes, takes the same impl from
+`#[derive(evenframe::SurrealValue)]`. Its keys are its serde names unless
+`#[surreal]` names them, as serde read it from the database's JSON: a
+`String` or `Vec<String>` field reads a record id or datetime as that JSON's
+text, and a `#[serde(flatten)]` field reads the keys its siblings leave.
+
+Untagged object variants are supported when required keys distinguish their
+serialized representations. Optional and defaulted fields are not discriminators.
+Field aliases and `deny_unknown_fields` are accounted for; indistinguishable
+shapes are rejected at compile time.
+
 `Typesync` and `Schemasync` are the same derive limited to one pipeline, and
 `EvenframeUnion` describes an enum whose variants are each a table.
 
@@ -116,6 +142,12 @@ FlatBuffers. ArkType and Effect are always available; enable `macroforge`,
 `protobuf` and `flatbuffers` (or `typesync-all`) for the others. A validator
 macroforge does not provide is written as a function in a helpers module beside
 the output, which the generated types name in `custom({ function, source })`.
+
+Macroforge output uses `Decode` by default. Configure additional derives with
+`#[macroforge_derive(Default, Encode, Decode)]`. Validation, enum tagging, and
+foreign-type format annotations use `@endec`; a foreign type's `endec_format`
+option supplies its format annotation. Rust field names and enum representations
+still follow their Rust `serde` attributes.
 
 The scan reads source text and finds types by their derive, so the types
 still derive `Evenframe` (or `Typesync`, or an `apply_aliases` attribute that
@@ -294,7 +326,9 @@ with `{0}` for the linked type.
 | --- | --- |
 | `metadata` | Each derived type's config functions and the registry that finds them by name. |
 | `surrealdb-types` | `RecordLink`, holding the SurrealDB SDK's `RecordId`, without the SDK's client. |
-| `typesync` | The ArkType and Effect generators. |
+| `typesync` | Shared type-generation infrastructure, with no output generator selected. |
+| `arktype` | The ArkType generator. Enables `typesync`. |
+| `effect` | The Effect generator. Enables `typesync`. |
 | `macroforge`, `protobuf`, `flatbuffers` | Those generators. `typesync-all` enables every generator. |
 | `build-typesync` | Workspace scanning and `build::typesync()` for build scripts. Implies `typesync`. |
 | `build-schemadump` | Workspace scanning and `build::schemadump()` for build scripts, with no database client. |

@@ -17,6 +17,7 @@ flatbuffers = "string"
 default_value_ts = "RecordIdCodec.empty"
 
 [schemasync]
+option_none = "null"
 should_generate_mocks = true
 
 [schemasync.database]

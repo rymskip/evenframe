@@ -1,0 +1,5 @@
+error: an untagged enum's unit variant is not supported: serde writes it as null, which evenframe's schema stores as the variant's name
+ --> tests/ui/fail/surreal_value_untagged_unit_variant.rs:8:5
+  |
+8 |     Unknown,
+  |     ^^^^^^^

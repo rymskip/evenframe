@@ -18,6 +18,11 @@ pub mod registry {}
 pub mod build;
 #[cfg(feature = "scan")]
 pub mod scan;
+/// The conversions behind the derive's `SurrealValue` impls.
+#[cfg(feature = "surrealdb-types")]
+pub mod surreal_value;
+#[cfg(not(feature = "surrealdb-types"))]
+pub mod surreal_value {}
 pub mod traits;
 pub mod types;
 pub mod validator;
@@ -48,6 +53,22 @@ macro_rules! __metadata {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __metadata {
+    ($($item:item)*) => {};
+}
+
+/// Expands the derive's `SurrealValue` impl when the `surrealdb-types`
+/// feature is on and drops it otherwise.
+#[cfg(feature = "surrealdb-types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __surreal_value {
+    ($($item:item)*) => { $($item)* };
+}
+
+#[cfg(not(feature = "surrealdb-types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __surreal_value {
     ($($item:item)*) => {};
 }
 

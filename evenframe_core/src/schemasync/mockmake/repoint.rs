@@ -49,8 +49,8 @@ fn parameter_suffix(type_name: &str) -> String {
 
 impl Mockmaker<'_> {
     /// Point stored links at records deleted as excess to kept records of
-    /// the same tables. Where nothing is kept, an optional link becomes
-    /// NULL and a list drops it. Relations whose ends were deleted are
+    /// the same tables. Where nothing is kept, an optional link is unset
+    /// and a list drops it. Relations whose ends were deleted are
     /// removed by the database. Each linked type's deleted and kept ids are
     /// bound as query parameters rather than written into every statement.
     pub(super) async fn repoint_links_to_excess(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -306,12 +306,11 @@ impl Mockmaker<'_> {
                             }
                             None
                         }
-                        (EnumRepresentation::InternallyTagged { tag }, Payload::Inline(fields)) => {
-                            self.fields_hold_excess(fields, place, depth, walk)?
-                                .map(|condition| {
-                                    format!("({place}.{tag} = '{variant}' AND {condition})")
-                                })
-                        }
+                        (EnumRepresentation::InternallyTagged { tag }, payload) => self
+                            .payload_holds_excess(payload, place, depth, walk)?
+                            .map(|condition| {
+                                format!("({place}.{tag} = '{variant}' AND {condition})")
+                            }),
                         (EnumRepresentation::AdjacentlyTagged { tag, content }, payload) => self
                             .payload_holds_excess(
                                 payload,
@@ -322,8 +321,6 @@ impl Mockmaker<'_> {
                             .map(|condition| {
                                 format!("({place}.{tag} = '{variant}' AND {condition})")
                             }),
-                        // Externally tagged, and internally tagged newtype
-                        // variants, which serialize externally tagged.
                         (_, payload) => {
                             let at = format!("{place}.{}", surql_ident(variant));
                             self.payload_holds_excess(payload, &at, depth, walk)?
@@ -435,7 +432,8 @@ impl Mockmaker<'_> {
                 Err(RepointError::Unfillable(_)) => {
                     let condition = self.required_holds(inner, place, depth, walk)?;
                     Ok(format!(
-                        "(IF {place} != NULL AND {place} != NONE AND {condition} THEN NULL ELSE {place} END)"
+                        "(IF {place} != NULL AND {place} != NONE AND {condition} THEN {} ELSE {place} END)",
+                        self.schemasync_config.option_none.literal()
                     ))
                 }
                 Err(union) => Err(union),
@@ -538,11 +536,11 @@ impl Mockmaker<'_> {
                 let mut branches = Vec::new();
                 for (variant, payload) in variants(union) {
                     let branch = match (&union.representation, payload) {
-                        (EnumRepresentation::InternallyTagged { tag }, Payload::Inline(fields)) => {
-                            match self.fields_hold_excess(fields, place, depth, walk)? {
+                        (EnumRepresentation::InternallyTagged { tag }, payload) => {
+                            match self.payload_holds_excess(payload, place, depth, walk)? {
                                 Some(condition) => Some((
                                     format!("{place}.{tag} = '{variant}' AND {condition}"),
-                                    self.fields_repointed(fields, place, depth, walk)?,
+                                    self.payload_repointed(payload, place, depth, walk)?,
                                 )),
                                 None => None,
                             }

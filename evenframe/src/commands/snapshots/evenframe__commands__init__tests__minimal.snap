@@ -32,6 +32,7 @@ EvenframeConfig {
                 },
             },
             should_generate_mocks: false,
+            option_none: None,
             mock_gen_config: SchemasyncMockGenConfig {
                 default_record_count: 10,
                 default_preservation_mode: Smart,

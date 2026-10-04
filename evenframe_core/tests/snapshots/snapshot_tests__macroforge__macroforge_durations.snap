@@ -2,12 +2,12 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Timer {
   id: string;
-  /** @serde({ validate: ["custom({ function: \"isLessThanOrEqualToDuration_8908b20c\", source: \"./helpers\" })"] }) */
+  /** @endec({ validate: ["custom({ function: \"isLessThanOrEqualToDuration_8908b20c\", source: \"./helpers\" })"] }) */
   limit: { secs: number; nanos: number };
-  /** @serde({ validate: ["custom({ function: \"isGreaterThanDuration_df9d5d93\", source: \"./helpers\" })"] }) */
+  /** @endec({ validate: ["custom({ function: \"isGreaterThanDuration_df9d5d93\", source: \"./helpers\" })"] }) */
   grace: { secs: number; nanos: number } | null;
   laps: { secs: number; nanos: number }[];
 }

@@ -2,21 +2,21 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Booking {
-  /** @serde({ validate: ["startsWith(\"bk`${x}\"\")", "trimmed", "uppercase"] }) */
+  /** @endec({ validate: ["startsWith(\"bk`${x}\"\")", "trimmed", "uppercase"] }) */
   code: string;
-  /** @serde({ validate: ["minLength(2)"] }) */
+  /** @endec({ validate: ["minLength(2)"] }) */
   nickname: string | null;
-  /** @serde({ validate: ["maxItems(8)"] }) */
+  /** @endec({ validate: ["maxItems(8)"] }) */
   guests: string[];
-  /** @serde({ validate: ["validDate", "betweenDate(\"2024-01-01\", \"2030-12-31\")"] }) */
+  /** @endec({ validate: ["validDate", "betweenDate(\"2024-01-01\", \"2030-12-31\")"] }) */
   starts_on: string;
-  /** @serde({ validate: ["custom({ function: \"isGreaterThanOrEqualToBigDecimal_105a3ef4\", source: \"./helpers\" })"] }) */
+  /** @endec({ validate: ["custom({ function: \"isGreaterThanOrEqualToBigDecimal_105a3ef4\", source: \"./helpers\" })"] }) */
   deposit: string;
-  /** @serde({ validate: ["lessThanBigInt(\"-5\")"] }) */
+  /** @endec({ validate: ["lessThanBigInt(\"-5\")"] }) */
   sequence: string;
-  /** @serde({ validate: ["custom({ function: \"isBetweenDuration_c22e6345\", source: \"./helpers\" })"] }) */
+  /** @endec({ validate: ["custom({ function: \"isBetweenDuration_c22e6345\", source: \"./helpers\" })"] }) */
   stay: bigint;
 }
 

@@ -32,6 +32,7 @@ fn load_typesync_fixture(
     (fixture.structs, fixture.enums, registry)
 }
 
+#[cfg(feature = "arktype")]
 mod arktype {
     pub fn run(
         spec_input_file: &str,
@@ -56,6 +57,7 @@ mod arktype {
     tests_macros::gen_tests! { "tests/specs/typesync/*.json", crate::arktype::run, "typesync" }
 }
 
+#[cfg(feature = "effect")]
 mod effect {
     pub fn run(
         spec_input_file: &str,

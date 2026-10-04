@@ -2,8 +2,8 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
-/** @serde({ untagged: true }) */
+/** @derive(Decode) */
+/** @endec({ untagged: true }) */
 export type Value =
 	| string
 	| number

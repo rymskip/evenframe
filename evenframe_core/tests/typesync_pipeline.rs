@@ -1,11 +1,7 @@
 //! Every TypeScript output of a small scanned project, through the same
 //! filtering, merging and rendering the CLI runs, so a change to how outputs
 //! look up, order or group types shows up as a snapshot diff.
-#![cfg(all(
-    feature = "macroforge",
-    feature = "schemasync",
-    feature = "build-typesync"
-))]
+#![cfg(all(feature = "macroforge", feature = "build-typesync"))]
 
 use evenframe_core::config::ForeignTypeConfig;
 use evenframe_core::scan::{

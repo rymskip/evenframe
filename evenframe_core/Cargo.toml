@@ -34,10 +34,12 @@ dev-mode = []
 # Type synchronization (TypeScript / schema generation)
 # ---------------------------------------------------------------------------
 
-# Enables the typesync generators: ArkType and Effect-TS, file grouping,
+# Enables shared typesync infrastructure: file grouping,
 # import resolution and doc comments. The typesync config types are always
 # compiled (EvenframeConfig uses them); the generators need this feature.
 typesync = ["dep:rayon"]
+arktype = ["typesync"]
+effect = ["typesync"]
 
 # Enables Protocol Buffers (.proto) schema generation from Rust types.
 # Implies: typesync
@@ -53,7 +55,7 @@ macroforge = ["typesync", "dep:blake3"]
 
 # Enables all typesync generators: ArkType, Effect-TS, Protocol Buffers,
 # FlatBuffers, and Macroforge.
-typesync-all = ["typesync", "protobuf", "flatbuffers", "macroforge"]
+typesync-all = ["arktype", "effect", "protobuf", "flatbuffers", "macroforge"]
 
 # ---------------------------------------------------------------------------
 # Schema synchronization (database operations)

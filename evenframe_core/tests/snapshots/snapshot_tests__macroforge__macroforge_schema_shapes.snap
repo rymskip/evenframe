@@ -2,18 +2,18 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Moved {
   from: Place;
   to: Place;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Place {
   name: string;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Shapes {
   maybe_tags: string[] | null;
   matrix: number[][];
@@ -35,8 +35,8 @@ export interface Shapes {
   events_by_name: Record<string, Event>;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Event =
 	| "Opened"
 	| { Moved: Moved }

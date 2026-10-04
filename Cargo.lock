@@ -1591,7 +1591,9 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "surrealdb",
  "syn 3.0.5",
+ "tokio",
  "trybuild",
 ]
 

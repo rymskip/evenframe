@@ -4,7 +4,7 @@ expression: output
 ---
 export type RecordLink<T> = { table: string; key: { String: string } | { Number: number } | { Uuid: string } } | T;
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Collection {
   id: string;
   tags: string[];
@@ -18,13 +18,13 @@ export interface Collection {
   owner_by_role: Partial<Record<Role, string>>;
   label_by_account: Record<string, string>;
   grid: Record<number, Record<number, boolean>>;
-  /** @serde({ validate: ["pattern(^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$)"] }) */
+  /** @endec({ validate: ["pattern(^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$)"] }) */
   initial: string;
   note_by_flag: Partial<Record<"true" | "false", string>>;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Role =
 	| "Admin"
 	| "Member";

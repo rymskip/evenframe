@@ -62,8 +62,8 @@ impl Mockmaker<'_> {
                         let name = surql_ident(name);
                         match value {
                             PlannedValue::Set(literal) => format!("{name} = {literal}"),
-                            PlannedValue::UnlessNull(literal) => {
-                                format!("{name} = (IF {name} != NULL THEN {literal} ELSE NULL END)")
+                            PlannedValue::UnlessAbsent(literal) => {
+                                format!("{name} = (IF {name} != NONE AND {name} != NULL THEN {literal} ELSE {} END)", self.schemasync_config.option_none.literal())
                             }
                         }
                     })
@@ -187,7 +187,7 @@ impl Mockmaker<'_> {
 
     /// The rewritten values of the existing record at `position` in the id
     /// pool. SET replaces a value whole, where MERGE would keep an object's
-    /// stale keys. An optional field that is NULL stays NULL, and a removed
+    /// stale keys. An optional field that is unset stays unset, and a removed
     /// field (typed `Unit`) is set to NONE, which unsets it.
     fn rewrite_values(
         &self,
@@ -205,7 +205,7 @@ impl Mockmaker<'_> {
                     // A present value is rewritten with a present one,
                     // unless no present value can be generated.
                     FieldType::Option(inner) if !self.has_unfillable_link(inner) => {
-                        PlannedValue::UnlessNull(self.generate_present(table, field, position)?)
+                        PlannedValue::UnlessAbsent(self.generate_present(table, field, position)?)
                     }
                     _ => PlannedValue::Set(self.generate_value(table, field, position)?),
                 };

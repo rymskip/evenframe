@@ -126,10 +126,10 @@ pub struct ForeignTypeConfig {
     #[serde(default)]
     pub mock_strategy: String,
 
-    // --- Serde format annotation ---
-    /// If set, generates `@serde({ format: "..." })` in macroforge output
+    // --- Endec format annotation ---
+    /// If set, generates `@endec({ format: "..." })` in macroforge output
     #[serde(default)]
-    pub serde_format: String,
+    pub endec_format: String,
 }
 
 fn deserialize_foreign_types<'de, D>(
@@ -223,13 +223,13 @@ pub fn validate_foreign_types(
             arktype: foreign.arktype.clone(),
             effect: foreign.effect.clone(),
             macroforge: foreign.macroforge.clone(),
-            serde_format: foreign.serde_format.clone(),
+            endec_format: foreign.endec_format.clone(),
             ..Default::default()
         };
         if record_link && &typescript_only != foreign {
             return Err(format!(
                 "foreign_types.{RECORD_LINK} can only set arktype, effect, macroforge, crate and \
-                 serde_format: the record link's Rust names, schema and mock data are \
+                 endec_format: the record link's Rust names, schema and mock data are \
                  evenframe's own"
             ));
         }

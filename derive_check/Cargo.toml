@@ -7,6 +7,7 @@ description = "The derive in a crate that only derives, built without features a
 
 [features]
 metadata = ["evenframe/metadata"]
+surrealdb-types = ["evenframe/surrealdb-types"]
 
 [dependencies]
 evenframe = { path = "../evenframe", default-features = false }

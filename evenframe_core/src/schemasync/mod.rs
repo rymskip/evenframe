@@ -42,12 +42,13 @@ use crate::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
     schemasync::compare::SchemaChanges,
-    schemasync::config::{ConnectionOverrides, MockOverrides},
+    schemasync::config::{ConnectionOverrides, MockOverrides, SchemasyncConfig},
     schemasync::database::surql::{
         define::generate_define_statements,
         execute::{
             Transaction, execute_and_validate, execute_transactions, split_surql_statements,
         },
+        optional::NamedTypes,
     },
 };
 #[cfg(feature = "schemasync")]
@@ -439,11 +440,12 @@ impl<'a> Schemasync<'a> {
         enums: &BTreeMap<String, TaggedUnion>,
         full_refresh_mode: bool,
         registry: &crate::types::ForeignTypeRegistry,
-        allow_scripting: bool,
+        options: impl Into<crate::schemasync::config::SurqlOptions>,
     ) -> Result<(BTreeMap<&'b String, String>, String)> {
+        let options = options.into();
         debug!(
             "Generating table and field definition statements (full_refresh_mode: {}, allow_scripting: {})",
-            full_refresh_mode, allow_scripting
+            full_refresh_mode, options.allow_scripting
         );
         let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
         for (table_name, table) in tables {
@@ -451,13 +453,7 @@ impl<'a> Schemasync<'a> {
             define_statements.insert(
                 table_name,
                 generate_define_statements(
-                    table_name,
-                    table,
-                    tables,
-                    objects,
-                    enums,
-                    registry,
-                    allow_scripting,
+                    table_name, table, tables, objects, enums, registry, options,
                 )?,
             );
         }
@@ -495,7 +491,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
-            config.mock_gen_config.scripting_asserts,
+            config.surql_options(),
         )?;
 
         let mut comparator = SurrealdbComparator::new(&db, &config);
@@ -557,7 +553,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
-            config.mock_gen_config.scripting_asserts,
+            config.surql_options(),
         )?;
 
         let mut mockmaker =
@@ -676,7 +672,7 @@ impl<'a> Schemasync<'a> {
             enums,
             config.mock_gen_config.full_refresh_mode,
             registry,
-            config.mock_gen_config.scripting_asserts,
+            config.surql_options(),
         )?;
 
         evenframe_log!("", "all_statements.surql");
@@ -752,7 +748,9 @@ impl<'a> Schemasync<'a> {
             &db,
             define_statements,
             schema_changes,
-            config.mock_gen_config.full_refresh_mode,
+            &config,
+            tables,
+            &NamedTypes { objects, enums },
         )
         .await
         .map_err(|e| EvenframeError::SchemaSync(format!("Failed to define tables: {e}")))?;
@@ -783,16 +781,21 @@ impl<'a> Schemasync<'a> {
         db: &Surreal<Client>,
         define_statements: BTreeMap<&String, String>,
         schema_changes: &SchemaChanges,
-        full_refresh_mode: bool,
+        config: &SchemasyncConfig,
+        tables: &BTreeMap<String, TableConfig>,
+        types: &NamedTypes<'_>,
     ) -> Result<()> {
-        info!("Defining tables based on schema changes (full_refresh_mode: {full_refresh_mode})");
+        info!(
+            full_refresh_mode = config.mock_gen_config.full_refresh_mode,
+            "Defining tables based on schema changes"
+        );
         debug!(
             "Schema changes before define statement execution: {:?}",
             schema_changes
         );
 
         let mut transactions = Vec::new();
-        if full_refresh_mode {
+        if config.mock_gen_config.full_refresh_mode {
             for (table_name, block) in &define_statements {
                 transactions.push(DefineParts::split(block).whole_table(table_name));
             }
@@ -804,7 +807,16 @@ impl<'a> Schemasync<'a> {
             }
             for table_change in &schema_changes.modified_tables {
                 if let Some(block) = define_statements.get(&table_change.table_name) {
-                    transactions.push(DefineParts::split(block).changes(table_change));
+                    let mut transaction = DefineParts::split(block).changes(table_change);
+                    if let Some(table) = tables.get(&table_change.table_name) {
+                        transaction.statements.extend(option_absence_changes(
+                            table_change,
+                            table,
+                            types,
+                            config.option_none,
+                        )?);
+                    }
+                    transactions.push(transaction);
                 }
             }
         }
@@ -901,17 +913,17 @@ impl<'a> Schemasync<'a> {
 
 /// One table's define block, split into its statements once.
 #[cfg(feature = "schemasync")]
-struct DefineParts<'a> {
-    table: Vec<&'a str>,
+struct DefineParts {
+    table: Vec<String>,
     /// Each `DEFINE FIELD` with the field it defines.
-    fields: Vec<(&'a str, &'a str)>,
-    indexes: Vec<&'a str>,
-    events: Vec<&'a str>,
+    fields: Vec<(String, String)>,
+    indexes: Vec<String>,
+    events: Vec<String>,
 }
 
 #[cfg(feature = "schemasync")]
-impl<'a> DefineParts<'a> {
-    fn split(block: &'a str) -> Self {
+impl DefineParts {
+    fn split(block: &str) -> Self {
         let mut parts = DefineParts {
             table: Vec::new(),
             fields: Vec::new(),
@@ -919,17 +931,16 @@ impl<'a> DefineParts<'a> {
             events: Vec::new(),
         };
         for statement in split_surql_statements(block) {
-            let trimmed = statement.trim();
-            if trimmed.starts_with("DEFINE TABLE") {
-                parts.table.push(trimmed);
-            } else if trimmed.starts_with("DEFINE FIELD") {
-                if let Some(name) = defined_field_name(trimmed) {
-                    parts.fields.push((name, trimmed));
+            if statement.starts_with("DEFINE TABLE") {
+                parts.table.push(statement);
+            } else if statement.starts_with("DEFINE FIELD") {
+                if let Some(name) = defined_field_name(&statement) {
+                    parts.fields.push((name.to_string(), statement));
                 }
-            } else if trimmed.starts_with("DEFINE INDEX") {
-                parts.indexes.push(trimmed);
-            } else if trimmed.starts_with("DEFINE EVENT") {
-                parts.events.push(trimmed);
+            } else if statement.starts_with("DEFINE INDEX") {
+                parts.indexes.push(statement);
+            } else if statement.starts_with("DEFINE EVENT") {
+                parts.events.push(statement);
             }
         }
         parts
@@ -943,7 +954,6 @@ impl<'a> DefineParts<'a> {
             .chain(self.fields.into_iter().map(|(_, statement)| statement))
             .chain(self.indexes)
             .chain(self.events)
-            .map(str::to_string)
             .collect();
         Transaction {
             label: table_name.to_string(),
@@ -972,11 +982,10 @@ impl<'a> DefineParts<'a> {
             .chain(
                 self.fields
                     .into_iter()
-                    .filter(|(name, _)| changed_fields.contains(name))
+                    .filter(|(name, _)| changed_fields.contains(name.as_str()))
                     .map(|(_, statement)| statement),
             )
             .chain(self.indexes)
-            .map(str::to_string)
             .chain(table_change.new_events.iter().cloned())
             .collect();
         Transaction {
@@ -984,6 +993,49 @@ impl<'a> DefineParts<'a> {
             statements,
         }
     }
+}
+
+/// The UPDATE translating changed fields to their configured absence
+/// representation, run once the fields are redefined. One statement sets
+/// every such field, since each write checks the whole record.
+#[cfg(feature = "schemasync")]
+fn option_absence_changes(
+    table_change: &crate::schemasync::compare::TableChanges,
+    table: &TableConfig,
+    types: &NamedTypes<'_>,
+    target: crate::schemasync::config::OptionNone,
+) -> Result<Option<String>> {
+    let mut assignments = Vec::new();
+    for change in &table_change.modified_fields {
+        if match target {
+            crate::schemasync::config::OptionNone::None => !change.old_type.contains("null"),
+            crate::schemasync::config::OptionNone::Null => {
+                !change.old_type.contains("option<") && !change.old_type.contains("none")
+            }
+        } {
+            continue;
+        }
+        let Some(field) = table
+            .struct_config
+            .fields
+            .iter()
+            .map(|field| field.effective())
+            .find(|field| field.db_name() == change.field_name)
+        else {
+            continue;
+        };
+        let place = crate::schemasync::table::surql_ident(field.db_name());
+        if let Some(rewritten) = types.option_absence(&field.field_type, &place, target)? {
+            assignments.push(format!("{place} = {rewritten}"));
+        }
+    }
+    Ok((!assignments.is_empty()).then(|| {
+        format!(
+            "UPDATE {} SET {};",
+            crate::schemasync::table::surql_ident(&table_change.table_name),
+            assignments.join(", ")
+        )
+    }))
 }
 
 /// The field a `DEFINE FIELD [OVERWRITE] <name> ON ...` statement defines,
@@ -997,6 +1049,32 @@ fn defined_field_name(statement: &str) -> Option<&str> {
     }
     let name = name.trim_matches('`');
     Some(name.strip_suffix(".*").unwrap_or(name))
+}
+
+#[cfg(all(test, feature = "schemasync"))]
+mod define_parts_tests {
+    use super::DefineParts;
+
+    #[test]
+    fn event_comments_do_not_change_definition_boundaries() {
+        let block = r#"
+            DEFINE TABLE sample SCHEMAFULL;
+            DEFINE FIELD value ON TABLE sample TYPE int;
+            DEFINE EVENT first ON TABLE sample WHEN $event = 'UPDATE' THEN {
+                -- The owner's value; an unmatched { must not affect splitting.
+                IF $after.value > 0 { RETURN true; };
+            };
+            DEFINE EVENT second ON TABLE sample WHEN $event = 'CREATE' THEN {
+                RETURN 'a literal with -- and ; and an escaped \' quote';
+            };
+        "#;
+        let transaction = DefineParts::split(block).whole_table("sample");
+        assert_eq!(transaction.statements.len(), 4);
+        assert!(transaction.statements[2].contains("IF $after.value > 0 { RETURN true; };"));
+        assert!(transaction.statements[2].trim_end().ends_with("};"));
+        assert!(transaction.statements[3].starts_with("DEFINE EVENT second"));
+        assert!(transaction.statements[3].contains("a literal with -- and ;"));
+    }
 }
 
 #[cfg(all(test, feature = "mockmake", feature = "wasm-plugins"))]

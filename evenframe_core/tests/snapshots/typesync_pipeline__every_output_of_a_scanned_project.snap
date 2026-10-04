@@ -313,26 +313,26 @@ import type { RecordIdEncoded } from '../record-id.ts';
 
 export type RecordLink<T> = RecordIdEncoded | T;
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Address {
   street: string;
   city: string | null;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Author {
   id: string;
   name: string;
   home: Address;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Comment {
   body: string;
   replies: Reply[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Post {
   id: string;
   title: string;
@@ -344,33 +344,33 @@ export interface Post {
   comments: Comment[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Reply {
   body: string;
   thread: Comment[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Scheduled {
   at: string;
   note: string | null;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Section {
   heading: string;
   children: Section[];
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Status =
 	| "Draft"
 	| { Scheduled: Scheduled }
 	| { Archived: string };
 
 === 4-macroforge/address.ts
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Address {
   street: string;
   city: string | null;
@@ -381,20 +381,20 @@ import type { RecordLink } from './record-link';
 import type { Address } from './address';
 import type { Section } from './section';
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Author {
   id: string;
   name: string;
   home: Address;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Comment {
   body: string;
   replies: Reply[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Post {
   id: string;
   title: string;
@@ -406,20 +406,20 @@ export interface Post {
   comments: Comment[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Reply {
   body: string;
   thread: Comment[];
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Scheduled {
   at: string;
   note: string | null;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Status =
 	| "Draft"
 	| { Scheduled: Scheduled }
@@ -431,7 +431,7 @@ import type { RecordIdEncoded } from '../record-id.ts';
 export type RecordLink<T> = RecordIdEncoded | T;
 
 === 4-macroforge/section.ts
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Section {
   heading: string;
   children: Section[];
