@@ -1,0 +1,5 @@
+error: #[serde(from = "...")] is not supported with field validators: serde would build the struct without reading its fields
+ --> tests/ui/fail/validators_serde_from.rs:5:9
+  |
+5 | #[serde(from = "String")]
+  |         ^^^^^^^^^^^^^^^

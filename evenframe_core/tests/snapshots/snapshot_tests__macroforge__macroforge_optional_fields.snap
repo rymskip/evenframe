@@ -4,7 +4,6 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Profile {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
   bio: string | null;
   age: number | null;

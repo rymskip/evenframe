@@ -65,11 +65,15 @@ assert_eq!(User::static_table_config().table_name, user.table_name);
 ```
 
 A struct whose fields carry `#[validators(...)]` also gets a generated
-`serde::Deserialize` that runs them, so invalid input fails to deserialize.
-Do not derive `Deserialize` on such a struct yourself. This does not need
-`metadata`: without it the derive emits only validated deserialization and
-the `EvenframeTable` marker that `RecordLink` accepts, which is all a project
-using only a build script or the CLI needs.
+`serde::Deserialize`: serde reads the input under the struct's own
+`#[serde(...)]` attributes, then every field's validators run, and every field
+that fails is reported in one error. Do not derive `Deserialize` on such a
+struct yourself. Every derived type also implements
+`evenframe::validator::validate::Validate`, whose `validate()` checks a value
+built in code, and every value nested in it, the same way. Neither needs
+`metadata`: without it the derive emits only these and the `EvenframeTable`
+marker that `RecordLink` accepts, which is all a project using only a build
+script or the CLI needs.
 
 `Typesync` and `Schemasync` are the same derive limited to one pipeline, and
 `EvenframeUnion` describes an enum whose variants are each a table.
@@ -109,7 +113,9 @@ code instead of the file, build a `ScanConfig` and call
 
 The outputs are ArkType, Effect, Macroforge, Protocol Buffers and
 FlatBuffers. ArkType and Effect are always available; enable `macroforge`,
-`protobuf` and `flatbuffers` (or `typesync-all`) for the others.
+`protobuf` and `flatbuffers` (or `typesync-all`) for the others. A validator
+macroforge does not provide is written as a function in a helpers module beside
+the output, which the generated types name in `custom({ function, source })`.
 
 The scan reads source text and finds types by their derive, so the types
 still derive `Evenframe` (or `Typesync`, or an `apply_aliases` attribute that
@@ -225,6 +231,16 @@ conventions = { path = "plugins/conventions.wasm" }
 [schemasync.plugins]
 people = { path = "plugins/people.wasm", params = { locale = "en" } }
 ```
+
+## Field names
+
+Each TypeScript output keys a field and tags a variant as serde writes it,
+honouring `rename`, `rename_all`, `rename_all_fields` and `skip`, and marks a
+key under `skip_serializing_if` optional. The schema and mock data name them as
+SurrealValue writes them, honouring `#[surreal(rename)]` and
+`#[surreal(rename_all)]`. A field serde or SurrealValue flattens, a field serde
+names or skips differently in each direction, and a SurrealValue
+representation that differs from serde's are compile errors.
 
 ## Foreign types
 

@@ -1,0 +1,5 @@
+error: a struct with field validators cannot borrow from its input: its fields are rewritten after reading, so they must own their data
+ --> tests/ui/fail/validators_borrowed.rs:5:17
+  |
+5 | pub struct Note<'text> {
+  |                 ^^^^^

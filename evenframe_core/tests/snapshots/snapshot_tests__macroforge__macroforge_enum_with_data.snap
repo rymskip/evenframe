@@ -10,7 +10,6 @@ export interface Coordinates {
 
 /** @derive(Deserialize) */
 export interface InlineData {
-  /** @serde({ validate: ["nonEmpty"] }) */
   label: string;
   value: number;
 }

@@ -4,7 +4,7 @@ expression: output
 ---
 export const bindings = scope({
 
-Location: [[[{ Address: 'string' }, '|', { Coords: 'Coordinates' }], '|', { Inline: 'InlineData' }], '|', ['===', 'Unknown']],
+Location: [[[{ Address: 'string' }, '|', { Coords: 'Coordinates' }], '|', { Inline: 'InlineData' }], '|', ['===', "Unknown"]],
 Coordinates: {
   lat: 'number',
   lng: 'number'

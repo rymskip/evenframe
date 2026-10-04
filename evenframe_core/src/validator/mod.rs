@@ -2,6 +2,7 @@ pub mod bounds;
 pub mod keywords;
 pub mod runtime;
 pub mod string_rules;
+pub mod validate;
 
 use crate::schemasync::mockmake::format::Format;
 use derive_more::From;
@@ -391,71 +392,92 @@ pub enum DurationValidator {
     BetweenDuration(String, String),
 }
 
+/// What a validator does at runtime to a field's value: each holds an
+/// expression of type `Result<(), runtime::Rejection>`.
+pub enum RuntimeStep {
+    /// Checks the value in `place`.
+    Check(TokenStream),
+    /// Rewrites the value in `place`, which must be a mutable place.
+    Transform(TokenStream),
+    /// Carries data for the schema and checks nothing.
+    Nothing,
+}
+
 impl Validator {
-    /// The deserializer statement that applies this validator to `place`, a
-    /// mutable place holding the field's value. Parse morphs change how the
-    /// field is read, so the derive applies them there instead.
-    pub fn validation_tokens(
-        &self,
-        place: &TokenStream,
-        field_name: &str,
-    ) -> Result<TokenStream, String> {
+    /// This validator's runtime step on `place`, a place holding the field's
+    /// value. Parse morphs change how the field is read, so the derive
+    /// applies them there instead.
+    pub fn runtime_step(&self, place: &TokenStream) -> Result<RuntimeStep, String> {
         self.check_bounds()?;
-        let (validator_type, validator_value, call) = match self {
-            Validator::StringValidator(validator) => {
-                let call = match validator.rule() {
-                    StringRule::Check => quote! { check_string(&#place, &VALIDATOR) },
-                    StringRule::Transform(_) => {
-                        quote! { transform_string(&mut #place, &VALIDATOR) }
-                    }
-                    StringRule::Carrier => return Ok(TokenStream::new()),
-                    StringRule::Parse(_) => {
-                        return Err(format!(
-                            "{validator:?} parses the field's input, so it must come first and only once"
-                        ));
-                    }
-                };
-                (quote! { StringValidator }, quote! { #validator }, call)
-            }
+        let (validator_type, validator_value, call, transform) = match self {
+            Validator::StringValidator(validator) => match validator.rule() {
+                StringRule::Check => (
+                    quote! { StringValidator },
+                    quote! { #validator },
+                    quote! { check_string(&#place, &VALIDATOR) },
+                    false,
+                ),
+                StringRule::Transform(_) => (
+                    quote! { StringValidator },
+                    quote! { #validator },
+                    quote! { transform_string(&mut #place, &VALIDATOR) },
+                    true,
+                ),
+                StringRule::Carrier => return Ok(RuntimeStep::Nothing),
+                StringRule::Parse(_) => {
+                    return Err(format!(
+                        "{validator:?} parses the field's input, so it must come first and only once"
+                    ));
+                }
+            },
             Validator::NumberValidator(validator) => (
                 quote! { NumberValidator },
                 quote! { #validator },
                 quote! { check_number(&#place, &VALIDATOR) },
+                false,
             ),
             Validator::ArrayValidator(validator) => (
                 quote! { ArrayValidator },
                 quote! { #validator },
                 quote! { check_items(&#place, &VALIDATOR) },
+                false,
             ),
             Validator::DateValidator(validator) => (
                 quote! { DateValidator },
                 quote! { #validator },
                 quote! { check_date(&#place, &VALIDATOR) },
+                false,
             ),
             Validator::BigIntValidator(validator) => (
                 quote! { BigIntValidator },
                 quote! { #validator },
                 quote! { check_big_int(&#place, &VALIDATOR) },
+                false,
             ),
             Validator::BigDecimalValidator(validator) => (
                 quote! { BigDecimalValidator },
                 quote! { #validator },
                 quote! { check_decimal(&#place, &VALIDATOR) },
+                false,
             ),
             Validator::DurationValidator(validator) => (
                 quote! { DurationValidator },
                 quote! { #validator },
                 quote! { check_duration(&#place, &VALIDATOR) },
+                false,
             ),
         };
-        Ok(quote! {
+        let expression = quote! {
             {
                 static VALIDATOR: ::std::sync::LazyLock<::evenframe::validator::#validator_type> =
                     ::std::sync::LazyLock::new(|| #validator_value);
-                ::evenframe::validator::runtime::#call.map_err(|rejection| {
-                    ::serde::de::Error::custom(::std::format!("{}: {}", #field_name, rejection))
-                })?;
+                ::evenframe::validator::runtime::#call
             }
+        };
+        Ok(if transform {
+            RuntimeStep::Transform(expression)
+        } else {
+            RuntimeStep::Check(expression)
         })
     }
 }
@@ -1125,7 +1147,7 @@ impl ToTokens for DurationValidator {
 mod tests {
     use super::{
         ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-        MockValue, NumberValidator, StringValidator, ToTokens, Validator, quote,
+        MockValue, NumberValidator, RuntimeStep, StringValidator, ToTokens, Validator, quote,
     };
     use ordered_float::OrderedFloat;
 
@@ -1512,39 +1534,41 @@ mod tests {
         assert!(token_string.contains("LessThanDuration"));
     }
 
-    // ==================== validation_tokens Tests ====================
+    // ==================== runtime_step Tests ====================
 
-    #[test]
-    fn validation_tokens_call_the_runtime_family() {
-        let place = quote! { value };
-        let check = Validator::StringValidator(StringValidator::Email)
-            .validation_tokens(&place, "email")
-            .unwrap()
-            .to_string();
-        assert!(check.contains("check_string"));
-        let transform = Validator::StringValidator(StringValidator::Lower)
-            .validation_tokens(&place, "name")
-            .unwrap()
-            .to_string();
-        assert!(transform.contains("transform_string"));
-        let count = Validator::ArrayValidator(ArrayValidator::MinItems(3))
-            .validation_tokens(&place, "tags")
-            .unwrap()
-            .to_string();
-        assert!(count.contains("check_items"));
+    fn step_tokens(validator: Validator) -> (bool, String) {
+        match validator
+            .runtime_step(&quote! { value })
+            .expect("a runtime step")
+        {
+            RuntimeStep::Check(tokens) => (false, tokens.to_string()),
+            RuntimeStep::Transform(tokens) => (true, tokens.to_string()),
+            RuntimeStep::Nothing => panic!("expected a check or a transform"),
+        }
     }
 
     #[test]
-    fn validation_tokens_reject_misplaced_parses_and_bad_bounds() {
+    fn runtime_steps_call_the_runtime_family() {
+        let (transform, check) = step_tokens(Validator::StringValidator(StringValidator::Email));
+        assert!(!transform && check.contains("check_string"));
+        let (transform, lower) = step_tokens(Validator::StringValidator(StringValidator::Lower));
+        assert!(transform && lower.contains("transform_string"));
+        let (transform, count) =
+            step_tokens(Validator::ArrayValidator(ArrayValidator::MinItems(3)));
+        assert!(!transform && count.contains("check_items"));
+    }
+
+    #[test]
+    fn runtime_steps_reject_misplaced_parses_and_bad_bounds() {
         let place = quote! { value };
         assert!(
             Validator::StringValidator(StringValidator::IntegerParse)
-                .validation_tokens(&place, "count")
+                .runtime_step(&place)
                 .is_err()
         );
         assert!(
             Validator::DateValidator(DateValidator::LessThanDate("soon".into()))
-                .validation_tokens(&place, "due")
+                .runtime_step(&place)
                 .is_err()
         );
     }

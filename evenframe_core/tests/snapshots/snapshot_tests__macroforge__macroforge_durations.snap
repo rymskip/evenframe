@@ -4,11 +4,21 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Timer {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["lessThanOrEqualToDuration("8h")"] }) */
+  /** @serde({ validate: ["custom({ function: \"isLessThanOrEqualToDuration_8908b20c\", source: \"./helpers\" })"] }) */
   limit: { secs: number; nanos: number };
-  /** @serde({ validate: ["greaterThanDuration("1m")"] }) */
+  /** @serde({ validate: ["custom({ function: \"isGreaterThanDuration_df9d5d93\", source: \"./helpers\" })"] }) */
   grace: { secs: number; nanos: number } | null;
   laps: { secs: number; nanos: number }[];
+}
+
+// helpers
+const durationNanos = (value: unknown): bigint | null => { if (typeof value === "bigint") return value; if (typeof value === "number") return Number.isInteger(value) ? BigInt(value) : null; if (typeof value === "object" && value !== null && "secs" in value && "nanos" in value) return typeof value.secs === "number" && typeof value.nanos === "number" ? BigInt(value.secs) * 1000000000n + BigInt(value.nanos) : null; const text = String(value); if (!/^(?:\d+(?:ns|us|µs|ms|s|m|h|d|w|y))+$/.test(text)) return null; const units: Record<string, bigint> = { ns: 1n, us: 1000n, "µs": 1000n, ms: 1000000n, s: 1000000000n, m: 60000000000n, h: 3600000000000n, d: 86400000000000n, w: 604800000000000n, y: 31536000000000000n }; let total = 0n; for (const [, amount, unit] of text.matchAll(/(\d+)(ns|us|µs|ms|s|m|h|d|w|y)/g)) total += BigInt(amount) * units[unit]; return total; };
+
+export function isGreaterThanDuration_df9d5d93(value: unknown): boolean {
+	return (((nanos) => nanos !== null && nanos > 60000000000n)(durationNanos(value)));
+}
+
+export function isLessThanOrEqualToDuration_8908b20c(value: unknown): boolean {
+	return (((nanos) => nanos !== null && nanos <= 28800000000000n)(durationNanos(value)));
 }

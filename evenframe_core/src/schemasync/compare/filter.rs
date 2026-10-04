@@ -89,8 +89,8 @@ fn rewritten_fields(
 
     let mut rewritten: BTreeMap<&str, StructField> = fields
         .iter()
-        .filter(|f| f.always_regenerate || changed.contains(f.field_name.as_str()))
-        .map(|f| (f.field_name.as_str(), f.clone()))
+        .filter(|field| field.always_regenerate || changed.contains(field.db_name()))
+        .map(|field| (field.db_name(), field.clone()))
         .collect();
     // A changed name the model no longer has was removed.
     for name in changed {

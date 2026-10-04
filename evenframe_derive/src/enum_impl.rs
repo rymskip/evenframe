@@ -1,8 +1,11 @@
 use crate::PipelineKind;
+use crate::validate_impl::enum_validate;
 use evenframe_core::{
-    derive::attributes::{
-        parse_annotation_attributes, parse_macroforge_derive_attribute, parse_rust_derives,
-        parse_serde_enum_representation,
+    derive::{
+        attributes::{
+            parse_annotation_attributes, parse_macroforge_derive_attribute, parse_rust_derives,
+        },
+        naming,
     },
     types::{EnumRepresentation, FieldType, PathNames},
 };
@@ -31,13 +34,12 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
         // Parse all Rust derives
         let rust_derives = parse_rust_derives(&input.attrs);
 
-        // Parse serde enum representation
-        let representation = match parse_serde_enum_representation(&input.attrs) {
-            Ok(repr) => repr,
+        let wire = match naming::resolve(&input) {
+            Ok(wire) => wire,
             Err(err) => return err.to_compile_error(),
         };
 
-        let representation_tokens = match &representation {
+        let representation_tokens = match &wire.representation {
             EnumRepresentation::ExternallyTagged => {
                 quote! { EnumRepresentation::ExternallyTagged }
             }
@@ -56,8 +58,9 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
 
         let mut variant_tokens = Vec::new();
 
-        for variant in &data_enum.variants {
-            let variant_name = variant.ident.to_string();
+        for (variant, variant_wire) in data_enum.variants.iter().zip(&wire.variants) {
+            let variant_name = naming::unraw(&variant.ident);
+            let variant_wire_tokens = &variant_wire.wire;
 
             // Parse variant-level annotation attributes
             let variant_annotations = match parse_annotation_attributes(&variant.attrs) {
@@ -84,13 +87,15 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     let struct_fields: Vec<_> = fields
                         .named
                         .iter()
-                        .map(|field| {
-                            let field_name = field.ident.as_ref().unwrap().to_string();
+                        .zip(&variant_wire.fields)
+                        .filter_map(|(field, field_wire)| {
+                            let field_name = naming::unraw(field.ident.as_ref()?);
                             let field_type = FieldType::parse_syn_ty(&field.ty);
-                            quote! {
+                            Some(quote! {
                                 StructField {
                                     field_name: #field_name.to_string(),
                                     field_type: #field_type,
+                                    wire: #field_wire,
                                     edge_config: None,
                                     define_config: None,
                                     format: None,
@@ -102,7 +107,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                     output_override: None,
                                     raw_attributes: std::collections::BTreeMap::new(),
                                 }
-                            }
+                            })
                         })
                         .collect();
 
@@ -135,6 +140,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                 Variant {
                     name: #variant_name.to_string(),
                     data: #variant_data,
+                    wire: #variant_wire_tokens,
                     doccom: None,
                     annotations: #variant_annotations_tokens,
                     output_override: None,
@@ -159,7 +165,14 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             };
         };
 
+        let validate_impl = match enum_validate(&input, &wire) {
+            Ok(tokens) => tokens,
+            Err(err) => return err.to_compile_error(),
+        };
+
         quote! {
+            #validate_impl
+
             ::evenframe::__metadata! {
                 const _: () = {
                     use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation, Pipeline};

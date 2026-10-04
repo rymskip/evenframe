@@ -3,7 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class Timer extends Schema.Class<Timer>("Timer")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
   limit: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } }).pipe(Schema.filter((value) => ((nanos: bigint) => nanos <= 28800000000000n)(BigInt(value.secs) * 1000000000n + BigInt(value.nanos)), { message: () => `'Limit' must be at most 8h long` }))).annotations({ missingMessage: () => `'Limit' is required` }),
   grace: Schema.OptionFromNullishOr(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } }).pipe(Schema.filter((value) => ((nanos: bigint) => nanos > 60000000000n)(BigInt(value.secs) * 1000000000n + BigInt(value.nanos)), { message: () => `'Grace' must be longer than 1m` })), null),
   laps: Schema.propertySignature(Schema.Array(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } }))).annotations({ missingMessage: () => `'Laps' is required` })

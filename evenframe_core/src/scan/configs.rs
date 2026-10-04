@@ -13,6 +13,7 @@ use crate::{
             parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
             parse_table_validators,
         },
+        naming,
         validator_parser::parse_field_validators,
     },
     schemasync::mockmake::MockGenerationConfig,
@@ -20,7 +21,7 @@ use crate::{
     schemasync::{DefineConfig, EdgeConfig, EventConfig, IndexConfig, PermissionsConfig},
     types::{
         FieldType, ForeignTypeRegistry, PathNames, STD_DURATION_PATHS, StructConfig, StructField,
-        TaggedUnion, Variant, VariantData,
+        TaggedUnion, Variant, VariantData, Wire,
     },
     typesync::config::{CollisionStrategy, StructVariants},
     typesync::struct_variants::declare_payloads,
@@ -29,7 +30,7 @@ use crate::{
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use syn::{Fields, FieldsNamed, ItemEnum, ItemStruct};
+use syn::{Fields, FieldsNamed, ItemEnum, ItemStruct, spanned::Spanned};
 use tracing::{debug, info, trace, warn};
 
 /// All configurations extracted from the workspace.
@@ -299,8 +300,8 @@ fn resolve_field_to_tables(
 pub enum ParsedType {
     Struct {
         config: StructConfig,
-        /// The table attributes of a struct with an `id` field that is not
-        /// `resolve_only`.
+        /// The table attributes of a struct with a database `id` field that is
+        /// not `resolve_only`.
         table: Option<Box<TableAttributes>>,
     },
     Enum(TaggedUnion),
@@ -336,7 +337,7 @@ pub(super) fn parse_scanned_item(
             // A `resolve_only` struct is registered for resolution, so
             // referencing fields inline its shape, but is never materialized
             // as a managed table: no `DEFINE TABLE`, mock, or diff.
-            let table = if evenframe_type.has_id_field && !evenframe_type.resolve_only {
+            let table = if has_database_id(&config) && !evenframe_type.resolve_only {
                 Some(Box::new(parse_table_attributes(
                     item_struct,
                     &config.struct_name,
@@ -359,6 +360,12 @@ pub(super) fn parse_scanned_item(
             Ok(ParsedType::Enum(tagged_union))
         }
     }
+}
+
+/// Whether the struct has a field the database stores as `id`, which makes
+/// it a table.
+pub(super) fn has_database_id(config: &StructConfig) -> bool {
+    config.fields.iter().any(|field| field.db_name() == "id")
 }
 
 fn parse_table_attributes(
@@ -682,6 +689,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
     let struct_name = item_struct.ident.to_string();
     trace!("Parsing struct config for: {}", struct_name);
     let mut fields = Vec::new();
+    let wire = naming::resolve(&syn::DeriveInput::from(item_struct.clone()))?;
 
     if let Fields::Named(ref fields_named) = item_struct.fields {
         debug!(
@@ -689,7 +697,7 @@ fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
             fields_named.named.len(),
             struct_name
         );
-        fields = process_struct_fields(fields_named)?;
+        fields = process_struct_fields(fields_named, wire.fields)?;
     }
 
     let table_validators = parse_table_validators(&item_struct.attrs)?;
@@ -726,11 +734,11 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
     let enum_doccom = parse_doccom_attribute(&item_enum.attrs)?;
     let enum_macroforge_derives = parse_macroforge_derive_attribute(&item_enum.attrs)?;
     let enum_annotations = parse_annotation_attributes(&item_enum.attrs)?;
-    let representation =
-        crate::derive::attributes::parse_serde_enum_representation(&item_enum.attrs)?;
+    let wire = naming::resolve(&syn::DeriveInput::from(item_enum.clone()))?;
+    let representation = wire.representation;
     let enum_rust_derives = parse_rust_derives(&item_enum.attrs);
 
-    for variant in &item_enum.variants {
+    for (variant, variant_wire) in item_enum.variants.iter().zip(wire.variants) {
         let variant_name = variant.ident.to_string();
         trace!("Processing variant: {} in enum {}", variant_name, enum_name);
 
@@ -749,7 +757,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
                     fields_named.named.len(),
                     variant_name
                 );
-                let struct_fields = process_struct_fields(fields_named)?;
+                let struct_fields = process_struct_fields(fields_named, variant_wire.fields)?;
 
                 Some(VariantData::InlineStruct(StructConfig {
                     struct_name: variant_name.clone(),
@@ -766,6 +774,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
         variants.push(Variant {
             name: variant_name,
             data,
+            wire: variant_wire.wire,
             doccom: variant_doccom,
             annotations: variant_annotations,
             output_override: None,
@@ -791,15 +800,18 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
     })
 }
 
-fn process_struct_fields(fields_named: &FieldsNamed) -> syn::Result<Vec<StructField>> {
+/// The named fields' configs, `wires` holding each field's wire form in order.
+fn process_struct_fields(
+    fields_named: &FieldsNamed,
+    wires: Vec<Wire>,
+) -> syn::Result<Vec<StructField>> {
     let mut struct_fields = Vec::new();
-    for field in &fields_named.named {
+    for (field, wire) in fields_named.named.iter().zip(wires) {
         let field_name = field
             .ident
             .as_ref()
-            .expect("Something went wrong getting the field name")
-            .to_string();
-        let field_name = field_name.trim_start_matches("r#").to_string();
+            .map(naming::unraw)
+            .ok_or_else(|| syn::Error::new(field.span(), "a named field has no identifier"))?;
 
         let field_type = FieldType::parse(&field.ty, PathNames::Written);
 
@@ -820,6 +832,7 @@ fn process_struct_fields(fields_named: &FieldsNamed) -> syn::Result<Vec<StructFi
         struct_fields.push(StructField {
             field_name,
             field_type,
+            wire,
             edge_config,
             define_config,
             format,
@@ -859,6 +872,7 @@ const KNOWN_ATTRS: &[&str] = &[
     "relation",
     "serde",
     "subquery",
+    "surreal",
     "unique",
     "validators",
     // These are handled by proc-macros but aren't plugin-relevant metadata.
@@ -918,10 +932,8 @@ pub fn merge_tables_and_objects(
     // by the rule-plugin table loop) accessible under the snake_case key.
     //
     // Drop the PascalCase duplicate before inserting the table entry so
-    // downstream consumers that dedup by PascalCase `struct_name` (e.g.
-    // `generate_macroforge_for_types` via its `seen_structs` set) see
-    // exactly one entry per table (the authoritative one from the table
-    // loop) rather than racing HashMap iteration order.
+    // consumers that look types up by name see exactly one entry per table,
+    // the authoritative one from the table loop.
     for (name, table_config) in tables {
         trace!("Merging table config for: {}", name);
         struct_configs.remove(&table_config.struct_config.struct_name);
@@ -936,7 +948,8 @@ pub fn merge_tables_and_objects(
 }
 
 /// The types that take part in the typesync pipeline, copied out of the
-/// scan, which stays whole for schemasync.
+/// scan, which stays whole for schemasync. Fields and variants serde skips
+/// are left out, since its JSON never carries them.
 pub fn filter_for_typesync(
     enums: &BTreeMap<String, TaggedUnion>,
     tables: &BTreeMap<String, TableConfig>,
@@ -950,19 +963,54 @@ pub fn filter_for_typesync(
         enums
             .iter()
             .filter(|(_, tagged_union)| tagged_union.pipeline.includes_typesync())
-            .map(|(name, tagged_union)| (name.clone(), tagged_union.clone()))
+            .map(|(name, tagged_union)| {
+                let mut tagged_union = tagged_union.clone();
+                drop_serde_skipped_variants(&mut tagged_union);
+                (name.clone(), tagged_union)
+            })
             .collect(),
         tables
             .iter()
             .filter(|(_, table)| table.struct_config.pipeline.includes_typesync())
-            .map(|(name, table)| (name.clone(), table.clone()))
+            .map(|(name, table)| {
+                let mut table = table.clone();
+                drop_serde_skipped_fields(&mut table.struct_config);
+                (name.clone(), table)
+            })
             .collect(),
         objects
             .iter()
             .filter(|(_, object)| object.pipeline.includes_typesync())
-            .map(|(name, object)| (name.clone(), object.clone()))
+            .map(|(name, object)| {
+                let mut object = object.clone();
+                drop_serde_skipped_fields(&mut object);
+                (name.clone(), object)
+            })
             .collect(),
     )
+}
+
+fn drop_serde_skipped_fields(struct_config: &mut StructConfig) {
+    struct_config
+        .fields
+        .retain(|field| !field.effective().wire.serde_skipped);
+    if let Some(replacement) = struct_config.output_override.as_deref_mut() {
+        drop_serde_skipped_fields(replacement);
+    }
+}
+
+fn drop_serde_skipped_variants(tagged_union: &mut TaggedUnion) {
+    tagged_union
+        .variants
+        .retain(|variant| !variant.effective().wire.serde_skipped);
+    for variant in &mut tagged_union.variants {
+        if let Some(VariantData::InlineStruct(inline)) = &mut variant.data {
+            drop_serde_skipped_fields(inline);
+        }
+    }
+    if let Some(replacement) = tagged_union.output_override.as_deref_mut() {
+        drop_serde_skipped_variants(replacement);
+    }
 }
 
 /// Filter configs to only types that participate in the schemasync pipeline.

@@ -35,6 +35,7 @@ fn create_plugin_manager() -> OutputRulePluginManager {
 fn field(name: &str, ty: &str) -> StructField {
     StructField {
         field_name: name.to_string(),
+        wire: Default::default(),
         field_type: FieldType::Other(ty.to_string()),
         ..Default::default()
     }

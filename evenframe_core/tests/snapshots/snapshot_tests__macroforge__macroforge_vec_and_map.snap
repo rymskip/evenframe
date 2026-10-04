@@ -6,22 +6,21 @@ export type RecordLink<T> = { table: string; key: { String: string } | { Number:
 
 /** @derive(Deserialize) */
 export interface Collection {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
   tags: string[];
   scores: number[];
   metadata: Record<string, string>;
-  sortedData: Record<string, number>;
-  notesByRank: Record<number, string | null>;
-  relatedByName: Record<string, RecordLink<Collection>>;
-  balanceByOffset: Record<number, number>;
-  countByLetter: Record<string, number>;
-  ownerByRole: Partial<Record<Role, string>>;
-  labelByAccount: Record<string, string>;
+  sorted_data: Record<string, number>;
+  notes_by_rank: Record<number, string | null>;
+  related_by_name: Record<string, RecordLink<Collection>>;
+  balance_by_offset: Record<number, number>;
+  count_by_letter: Record<string, number>;
+  owner_by_role: Partial<Record<Role, string>>;
+  label_by_account: Record<string, string>;
   grid: Record<number, Record<number, boolean>>;
   /** @serde({ validate: ["pattern(^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$)"] }) */
   initial: string;
-  noteByFlag: Partial<Record<"true" | "false", string>>;
+  note_by_flag: Partial<Record<"true" | "false", string>>;
 }
 
 /** @derive(Deserialize) */

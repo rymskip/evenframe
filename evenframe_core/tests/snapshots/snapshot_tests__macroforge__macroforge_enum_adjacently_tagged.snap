@@ -11,6 +11,6 @@ export interface ClickData {
 /** @derive(Deserialize) */
 /** @serde({ tag: "t", content: "c" }) */
 export type Event =
-	| { t: 'Click'; c: ClickData }
-	| { t: 'KeyPress'; c: string }
-	| { t: 'Scroll' };
+	| { t: "Click"; c: ClickData }
+	| { t: "KeyPress"; c: string }
+	| { t: "Scroll" };

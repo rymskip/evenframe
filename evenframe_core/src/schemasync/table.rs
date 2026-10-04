@@ -1,6 +1,8 @@
 use crate::schemasync::mockmake::MockGenerationConfig;
 use crate::schemasync::{edge::EdgeConfig, event::EventConfig, permissions::PermissionsConfig};
-use crate::types::StructConfig;
+use crate::types::{FieldType, StructConfig, StructField};
+use convert_case::{Case, Casing};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TableConfig {
@@ -34,29 +36,123 @@ impl TableConfig {
     /// resolving to the same index name are de-duplicated, with `indexes`
     /// taking precedence.
     /// `table_name` is the name the table is defined under (index names are
-    /// derived from it).
-    pub fn all_indexes(&self, table_name: &str) -> Vec<IndexConfig> {
+    /// derived from it). Each path names fields by their database names,
+    /// reaching through `objects` into the structs the table embeds, while a
+    /// derived index name keeps the Rust names, so renaming a field for the
+    /// database does not rename its indexes.
+    pub fn all_indexes(
+        &self,
+        table_name: &str,
+        objects: &BTreeMap<String, StructConfig>,
+    ) -> Vec<IndexConfig> {
         let mut out: Vec<IndexConfig> = self
             .struct_config
             .fields
             .iter()
-            .filter(|f| f.unique)
+            .filter(|field| field.unique)
             // A `#[unique(name = ...)]` entry already describes this field's
             // unique index under its own name.
-            .filter(|f| {
+            .filter(|field| {
                 !self.indexes.iter().any(|index| {
-                    index.is_unique() && index.fields == std::slice::from_ref(&f.field_name)
+                    index.is_unique() && index.fields == std::slice::from_ref(&field.field_name)
                 })
             })
-            .map(|f| IndexConfig::unique([f.field_name.clone()]))
+            .map(|field| IndexConfig::unique([field.field_name.clone()]))
             .collect();
         for index in &self.indexes {
             let name = index.index_name(table_name);
             out.retain(|existing| existing.index_name(table_name) != name);
             out.push(index.clone());
         }
-        out
+        out.into_iter()
+            .map(|mut index| {
+                let fields: Vec<String> = index
+                    .fields
+                    .iter()
+                    .map(|path| database_path(&self.struct_config.fields, path, objects))
+                    .collect();
+                if fields != index.fields {
+                    index.name = Some(index.index_name(table_name));
+                    index.fields = fields;
+                }
+                index
+            })
+            .collect()
     }
+}
+
+/// A path segment's field name and what follows it in the segment, such as
+/// `[*]`.
+fn split_segment(segment: &str) -> (&str, &str) {
+    segment.split_at(segment.find('[').unwrap_or(segment.len()))
+}
+
+/// Whether a path segment stands for an element rather than naming a field.
+fn is_element(name: &str) -> bool {
+    name == "*" || name.chars().all(|character| character.is_ascii_digit())
+}
+
+/// `path`, written in Rust field names over `fields`, in the database's
+/// names: each segment that names a field becomes its database name, and the
+/// path follows that field's type into the struct it embeds. A segment that
+/// names no field, such as `*`, is kept as written.
+fn database_path(
+    fields: &[StructField],
+    path: &str,
+    objects: &BTreeMap<String, StructConfig>,
+) -> String {
+    let mut current = Some(fields);
+    path.split('.')
+        .map(|segment| {
+            let (name, rest) = split_segment(segment);
+            if is_element(name) {
+                return segment.to_owned();
+            }
+            let Some(field) = current.and_then(|fields| {
+                fields
+                    .iter()
+                    .map(StructField::effective)
+                    .find(|field| field.field_name == name)
+            }) else {
+                current = None;
+                return segment.to_owned();
+            };
+            current = embedded_fields(&field.field_type, objects);
+            format!("{}{rest}", field.db_name())
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The fields of the struct a value of `field_type` holds, through options
+/// and lists, when it holds one.
+fn embedded_fields<'a>(
+    field_type: &FieldType,
+    objects: &'a BTreeMap<String, StructConfig>,
+) -> Option<&'a [StructField]> {
+    match field_type {
+        FieldType::Option(inner) | FieldType::Vec(inner) => embedded_fields(inner, objects),
+        FieldType::Other(name) => objects
+            .get(name)
+            .or_else(|| objects.get(&name.to_case(Case::Snake)))
+            .map(|object| object.effective().fields.as_slice()),
+        _ => None,
+    }
+}
+
+/// A field path with each field it names written as a SurrealQL identifier.
+pub(crate) fn surql_path(path: &str) -> String {
+    path.split('.')
+        .map(|segment| {
+            let (name, rest) = split_segment(segment);
+            if is_element(name) {
+                segment.to_owned()
+            } else {
+                format!("{}{rest}", surql_ident(name))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// An index on a `#[derive(Evenframe)]` struct: either a struct-level
@@ -479,7 +575,14 @@ impl IndexConfig {
         );
         if !self.fields.is_empty() {
             stmt.push_str(" FIELDS ");
-            stmt.push_str(&self.fields.join(", "));
+            stmt.push_str(
+                &self
+                    .fields
+                    .iter()
+                    .map(|path| surql_path(path))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
         }
         let clause = self.definition_clause();
         if !clause.is_empty() {
@@ -506,6 +609,24 @@ fn sanitize_index_name_part(field: &str) -> String {
 /// Single-quoted SurrealQL string literal with `\` and `'` escaped.
 pub(crate) fn surql_string_literal(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// `name` as a SurrealQL identifier: bare when it is one, backtick-quoted
+/// otherwise.
+pub fn surql_ident(name: &str) -> std::borrow::Cow<'_, str> {
+    let mut characters = name.chars();
+    let is_identifier = characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|rest| rest.is_ascii_alphanumeric() || rest == '_');
+    if is_identifier {
+        std::borrow::Cow::Borrowed(name)
+    } else {
+        std::borrow::Cow::Owned(format!(
+            "`{}`",
+            name.replace('\\', "\\\\").replace('`', "\\`")
+        ))
+    }
 }
 
 #[cfg(test)]

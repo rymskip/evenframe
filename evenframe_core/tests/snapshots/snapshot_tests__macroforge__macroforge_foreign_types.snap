@@ -4,11 +4,9 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Appointment {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
-  scheduledAt: string;
+  scheduled_at: string;
   duration: number;
-  cancelledAt: string | null;
+  cancelled_at: string | null;
 }

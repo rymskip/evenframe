@@ -1,0 +1,26 @@
+{
+  "description": "Fields and variants named as serde writes them: renamed, a name that is no identifier, and an optional key",
+  "structs": {
+    "Member": {
+      "struct_name": "Member",
+      "fields": [
+        { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "display_name", "field_type": "String", "wire": { "serde": "displayName" }, "validators": [{ "StringValidator": { "MinLength": 2 } }], "always_regenerate": false },
+        { "field_name": "zip_code", "field_type": "String", "wire": { "serde": "zip-code" }, "validators": [], "always_regenerate": false },
+        { "field_name": "nickname", "field_type": { "Option": "String" }, "wire": { "serde_optional": true }, "validators": [], "always_regenerate": false },
+        { "field_name": "status", "field_type": { "Other": "Status" }, "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Status": {
+      "enum_name": "Status",
+      "variants": [
+        { "name": "Active", "wire": { "serde": "active" } },
+        { "name": "OnHold", "wire": { "serde": "on-hold" } }
+      ],
+      "representation": "ExternallyTagged"
+    }
+  }
+}

@@ -6,10 +6,10 @@ export const bindings = scope({
 
 Signup: {
   username: [[[[['string', '&', 'string.alphanumeric'], '&', 'string.lower.preformatted'], '&', 'string >= 1'], '&', 'string >= 3'], '&', 'string <= 20'],
-  code: [[[['string', '&', 'string.hex'], '&', 'string.digits'], ':', (v) => v.startsWith("0")], ':', (v) => v.startsWith("00")],
-  token: [[['string', '&', 'string.uuid.v4'], ':', (v) => v.toLowerCase() === v], '&', 'string.json'],
-  banner: [[[['string', '&', 'string.capitalize.preformatted'], ':', (v) => v.includes("!")], '|', 'undefined'], '|', 'null'],
-  ratio: [[[[['number', '&', 'number > 0'], '&', 'number >= 0.001'], '&', 'number < 1000'], '&', 'number <= 999.999'], ':', (v) => Number.isFinite(v)],
+  code: [[[['string', '&', 'string.hex'], '&', 'string.digits'], ':', (value) => value.startsWith("0")], ':', (value) => value.startsWith("00")],
+  token: [[['string', '&', 'string.uuid.v4'], ':', (value) => value.toLowerCase() === value], '&', 'string.json'],
+  banner: [[[['string', '&', 'string.capitalize.preformatted'], ':', (value) => value.includes("!")], '|', 'undefined'], '|', 'null'],
+  ratio: [[[[['number', '&', 'number > 0'], '&', 'number >= 0.001'], '&', 'number < 1000'], '&', 'number <= 999.999'], ':', (value) => Number.isFinite(value)],
   level: [[[['number', '&', 'number > 0.5'], '&', 'number.integer'], '&', '0 <= number <= 255'], '&', 'number < 9.5'],
   tags: [[[[['string', '[]'], '&', 'unknown[] >= 1'], '&', 'unknown[] <= 5'], '|', 'undefined'], '|', 'null'],
   address: ['string', '&', 'string.ip']

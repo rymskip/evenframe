@@ -3,6 +3,7 @@
 
 use crate::traits::EvenframeTable;
 use crate::types::record_id::parse_record_id;
+use crate::validator::validate::{Validate, ValidationErrors};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned, de::Error};
 use serde_json::Value;
 use surrealdb_types::{Kind, RecordId, SurrealValue};
@@ -14,6 +15,16 @@ use surrealdb_types::{Kind, RecordId, SurrealValue};
 pub enum RecordLink<T: EvenframeTable> {
     Id(RecordId),
     Object(T),
+}
+
+/// A fetched record is checked as the record; an id has nothing to check.
+impl<T: EvenframeTable + Validate> Validate for RecordLink<T> {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        match self {
+            RecordLink::Id(_) => Ok(()),
+            RecordLink::Object(record) => record.validate(),
+        }
+    }
 }
 
 impl<'de, T> Deserialize<'de> for RecordLink<T>

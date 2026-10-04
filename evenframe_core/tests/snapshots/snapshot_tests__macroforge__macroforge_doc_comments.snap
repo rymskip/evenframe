@@ -6,10 +6,9 @@ expression: output
 /** @derive(Deserialize) */
 export interface Config {
   /** The API key used for authentication */
-  /** @serde({ validate: ["nonEmpty"] }) */
-  apiKey: string;
+  api_key: string;
   /** Request timeout in milliseconds */
-  timeoutMs: number;
+  timeout_ms: number;
 }
 
 /** Severity levels for log output */

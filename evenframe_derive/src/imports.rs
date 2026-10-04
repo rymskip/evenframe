@@ -35,13 +35,6 @@ pub fn generate_struct_parsing_imports() -> proc_macro2::TokenStream {
     }
 }
 
-/// Generate imports needed for deserialization
-pub fn generate_deserialize_imports() -> proc_macro2::TokenStream {
-    quote! {
-        use evenframe::traits::EvenframeDeserialize;
-    }
-}
-
 /// Generate registry imports for table registration
 pub fn generate_registry_imports() -> proc_macro2::TokenStream {
     quote! {

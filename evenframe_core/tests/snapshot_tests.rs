@@ -90,12 +90,20 @@ mod macroforge {
         _file_type: &str,
     ) {
         let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
-        let output = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
+        let mut helpers =
+            evenframe_core::typesync::macroforge::HelperModule::new("./helpers".to_owned());
+        let interfaces = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
             Default::default(),
             &registry,
+            &mut helpers,
         )
         .unwrap();
+        let output = if helpers.is_empty() {
+            interfaces
+        } else {
+            format!("{interfaces}\n// helpers\n{}", helpers.content())
+        };
         let name = std::path::Path::new(spec_input_file)
             .file_stem()
             .unwrap()

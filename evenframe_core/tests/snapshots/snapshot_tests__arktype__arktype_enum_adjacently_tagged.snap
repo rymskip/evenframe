@@ -4,7 +4,7 @@ expression: output
 ---
 export const bindings = scope({
 
-Event: [[{ t: ['===', 'Click'], c: 'ClickData' }, '|', { t: ['===', 'KeyPress'], c: 'string' }], '|', { t: ['===', 'Scroll'] }],
+Event: [[{ t: ['===', "Click"], c: 'ClickData' }, '|', { t: ['===', "KeyPress"], c: 'string' }], '|', { t: ['===', "Scroll"] }],
 ClickData: {
   x: 'number',
   y: 'number'

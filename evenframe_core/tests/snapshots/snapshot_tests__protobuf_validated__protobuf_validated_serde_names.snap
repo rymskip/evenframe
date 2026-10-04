@@ -1,0 +1,24 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_ACTIVE = 1;
+    STATUS_ON_HOLD = 2;
+}
+
+message Member {
+    string id = 1;
+    string display_name = 2 [(validate.rules).string = {min_len: 2}];
+    string zip_code = 3;
+    optional string nickname = 4;
+    .Status status = 5;
+}

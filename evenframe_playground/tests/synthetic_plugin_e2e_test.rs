@@ -54,6 +54,7 @@ fn make_struct(name: &str, fields: Vec<StructField>) -> StructConfig {
 fn make_field(name: &str, ft: FieldType) -> StructField {
     StructField {
         field_name: name.to_string(),
+        wire: Default::default(),
         field_type: ft,
         ..Default::default()
     }
@@ -74,6 +75,7 @@ fn seed_with_struct(name: &str) -> Seed {
             variants: vec![
                 Variant {
                     name: "Active".to_string(),
+                    wire: Default::default(),
                     data: None,
                     doccom: None,
                     annotations: vec![],
@@ -83,6 +85,7 @@ fn seed_with_struct(name: &str) -> Seed {
                 },
                 Variant {
                     name: "Inactive".to_string(),
+                    wire: Default::default(),
                     data: None,
                     doccom: None,
                     annotations: vec![],

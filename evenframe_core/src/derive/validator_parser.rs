@@ -1,19 +1,9 @@
 use crate::validator::Validator;
 use crate::validator::string_rules::{StringParse, StringRule};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Error, Result};
-
-/// Whether `ty` is an `Option<T>`.
-fn is_option_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-    {
-        return segment.ident == "Option";
-    }
-    false
-}
 
 /// A hint for a validator expression that failed to parse.
 fn suggest_validator_correction(expression: &str) -> String {
@@ -74,85 +64,13 @@ impl FieldValidators {
             .collect()
     }
 
-    /// Statements that read the field from `map` into `temp` and validate
-    /// it. A parse morph reads a string and parses it into the field's type;
-    /// on an `Option` field every validator applies to the present value.
-    pub fn read_tokens(
-        &self,
-        temp: &syn::Ident,
-        field_type: &syn::Type,
-        field_name: &str,
-    ) -> Result<TokenStream> {
-        let optional = is_option_type(field_type);
-        let rejection = quote! {
-            |rejection| ::serde::de::Error::custom(::std::format!("{}: {}", #field_name, rejection))
-        };
-        let read = match self.parse {
-            None => quote! { map.next_value()? },
-            Some(parse) => {
-                let function = format_ident!("{}", parse.runtime_function());
-                if optional {
-                    quote! {
-                        map.next_value::<::std::option::Option<::std::string::String>>()?
-                            .as_deref()
-                            .map(::evenframe::validator::runtime::#function)
-                            .transpose()
-                            .map_err(#rejection)?
-                    }
-                } else {
-                    quote! {
-                        ::evenframe::validator::runtime::#function(
-                            &map.next_value::<::std::string::String>()?,
-                        )
-                        .map_err(#rejection)?
-                    }
-                }
-            }
-        };
-
-        let checked = if self.parse.is_some() {
-            &self.validators[1..]
-        } else {
-            &self.validators[..]
-        };
-        let transforms = checked.iter().any(|validator| {
-            matches!(
-                validator,
-                Validator::StringValidator(string_validator)
-                    if matches!(string_validator.rule(), StringRule::Transform(_))
-            )
-        });
-        let inner = format_ident!("{}_inner", temp);
-        let place = if optional {
-            quote! { (*#inner) }
-        } else {
-            quote! { #temp }
-        };
-        let checks = checked
-            .iter()
-            .map(|validator| {
-                validator
-                    .validation_tokens(&place, field_name)
-                    .map_err(|message| Error::new_spanned(field_type, message))
-            })
-            .collect::<Result<Vec<TokenStream>>>()?;
-
-        let binding = if transforms {
-            quote! { let mut #temp: #field_type = #read; }
-        } else {
-            quote! { let #temp: #field_type = #read; }
-        };
-        let validation = match (optional, checks.is_empty(), transforms) {
-            (_, true, _) => TokenStream::new(),
-            (false, false, _) => quote! { #(#checks)* },
-            (true, false, true) => quote! {
-                if let ::std::option::Option::Some(#inner) = &mut #temp { #(#checks)* }
-            },
-            (true, false, false) => quote! {
-                if let ::std::option::Option::Some(#inner) = &#temp { #(#checks)* }
-            },
-        };
-        Ok(quote! { #binding #validation })
+    /// The validators the field's value goes through after any parse morph,
+    /// in declared order.
+    pub fn steps(&self) -> &[Validator] {
+        match (self.parse, self.validators.split_first()) {
+            (Some(_), Some((_, rest))) => rest,
+            _ => &self.validators,
+        }
     }
 }
 

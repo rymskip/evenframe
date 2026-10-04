@@ -7,7 +7,10 @@ mod record_link;
 
 pub use crate::types::field_type::{FieldType, PathNames, STD_DURATION_PATHS};
 #[cfg(feature = "schemadump")]
-use crate::{EvenframeError, Result, evenframe_log, schemasync::TableConfig};
+use crate::{
+    EvenframeError, Result, evenframe_log,
+    schemasync::{TableConfig, table::surql_ident},
+};
 use crate::{
     schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig},
@@ -67,6 +70,43 @@ pub enum EnumRepresentation {
     Untagged,
 }
 
+/// How a field or variant appears outside Rust: serde names it in JSON and
+/// TypeScript, SurrealValue in the database. A `None` name is the Rust name.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Wire {
+    #[serde(default)]
+    pub serde: Option<String>,
+    #[serde(default)]
+    pub surreal: Option<String>,
+    /// Serde neither writes nor reads it, so JSON never carries it.
+    #[serde(default)]
+    pub serde_skipped: bool,
+    /// Serde leaves the key out under `skip_serializing_if`.
+    #[serde(default)]
+    pub serde_optional: bool,
+}
+
+impl quote::ToTokens for Wire {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let optional = |name: &Option<String>| match name {
+            Some(name) => quote::quote! { Some(#name.to_string()) },
+            None => quote::quote! { None },
+        };
+        let serde = optional(&self.serde);
+        let surreal = optional(&self.surreal);
+        let serde_skipped = self.serde_skipped;
+        let serde_optional = self.serde_optional;
+        tokens.extend(quote::quote! {
+            ::evenframe::types::Wire {
+                serde: #serde,
+                surreal: #surreal,
+                serde_skipped: #serde_skipped,
+                serde_optional: #serde_optional,
+            }
+        });
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaggedUnion {
     pub enum_name: String,
@@ -98,6 +138,8 @@ pub struct TaggedUnion {
 pub struct Variant {
     pub name: String,
     pub data: Option<VariantData>,
+    #[serde(default)]
+    pub wire: Wire,
     #[serde(default)]
     pub doccom: Option<String>,
     #[serde(default)]
@@ -143,6 +185,8 @@ impl VariantData {
 pub struct StructField {
     pub field_name: String,
     pub field_type: FieldType,
+    #[serde(default)]
+    pub wire: Wire,
     pub edge_config: Option<EdgeConfig>,
     pub define_config: Option<DefineConfig>,
     pub format: Option<Format>,
@@ -186,14 +230,26 @@ impl StructField {
             .map_or(self, Self::effective)
     }
 
+    /// The field's key in serde's JSON and the generated TypeScript.
+    pub fn serde_name(&self) -> &str {
+        self.wire.serde.as_deref().unwrap_or(&self.field_name)
+    }
+
+    /// The field's key in the database, as SurrealValue writes it.
+    pub fn db_name(&self) -> &str {
+        self.wire.surreal.as_deref().unwrap_or(&self.field_name)
+    }
+
     /// Whether mock data writes a value for this field. The record id is set
     /// separately, edges live in their relation tables, and skipped, readonly
     /// and computed fields are not stored from input.
     pub fn is_mock_written(&self) -> bool {
-        self.field_name != "id"
+        self.db_name() != "id"
             && self.edge_config.is_none()
-            && self.define_config.as_ref().is_none_or(|d| {
-                !d.should_skip && !d.readonly.unwrap_or(false) && d.computed.is_none()
+            && self.define_config.as_ref().is_none_or(|define| {
+                !define.should_skip
+                    && !define.readonly.unwrap_or(false)
+                    && define.computed.is_none()
             })
     }
 
@@ -405,7 +461,7 @@ impl StructField {
                                 FieldType::Other(name) => {
                                     // Check foreign type registry first
                                     if let Some(ftc) = registry.lookup(name) {
-                                        let type_str = if self.field_name == "id" {
+                                        let type_str = if self.db_name() == "id" {
                                             ftc.surrealdb_id_format
                                                 .as_ref()
                                                 .map(|fmt| fmt.replace("{table_name}", table_name))
@@ -433,8 +489,8 @@ impl StructField {
                                                         match &enum_def.representation {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: { fields } }
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
-                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
+                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
@@ -443,16 +499,16 @@ impl StructField {
                                                         EnumRepresentation::InternallyTagged { tag } => {
                                                             // { tag: "VariantName", field1: type1, ... }
                                                             let mut names = vec![tag.clone()];
-                                                            names.extend(struct_config.fields.iter().map(|f| f.effective().field_name.clone()));
+                                                            names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
                                                             for field in struct_config.fields.iter().rev() {
                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
                                                         }
                                                         EnumRepresentation::AdjacentlyTagged { tag, content } => {
                                                             // { tag: "VariantName", content: { fields } }
-                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
+                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct {
                                                                 count: 2,
                                                                 names: vec![tag.clone(), content.clone()],
@@ -463,11 +519,11 @@ impl StructField {
                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
                                                             }
                                                             // tag value
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
                                                         }
                                                         EnumRepresentation::Untagged => {
                                                             // { fields } (no wrapping)
-                                                            let names = struct_config.fields.iter().map(|f| f.effective().field_name.clone()).collect();
+                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
@@ -479,7 +535,7 @@ impl StructField {
                                                         match &enum_def.representation {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: value }
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
                                                             work_stack.push(WorkItem::Process(ft));
                                                         }
                                                         EnumRepresentation::AdjacentlyTagged { tag, content } => {
@@ -489,7 +545,7 @@ impl StructField {
                                                                 names: vec![tag.clone(), content.clone()],
                                                             });
                                                             work_stack.push(WorkItem::Process(ft));
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.name)));
+                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
                                                         }
                                                         EnumRepresentation::Untagged => {
                                                             // value (no wrapping)
@@ -498,7 +554,7 @@ impl StructField {
                                                         EnumRepresentation::InternallyTagged { .. } => {
                                                             // serde does not support tuple variants with internal tagging;
                                                             // fall back to externally tagged
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.name.clone() });
+                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
                                                             work_stack.push(WorkItem::Process(ft));
                                                         }
                                                     }
@@ -516,7 +572,7 @@ impl StructField {
                                                             names: vec![tag.clone()],
                                                         });
                                                         work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.name),
+                                                            format!("\"{}\"", variant.db_name()),
                                                         ));
                                                     }
                                                     EnumRepresentation::AdjacentlyTagged {
@@ -529,13 +585,13 @@ impl StructField {
                                                             names: vec![tag.clone()],
                                                         });
                                                         work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.name),
+                                                            format!("\"{}\"", variant.db_name()),
                                                         ));
                                                     }
                                                     _ => {
                                                         // ExternallyTagged / Untagged: "VariantName"
                                                         work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.name),
+                                                            format!("\"{}\"", variant.db_name()),
                                                         ));
                                                     }
                                                 }
@@ -575,7 +631,7 @@ impl StructField {
                                             let names = app_struct
                                                 .fields
                                                 .iter()
-                                                .map(|f| f.effective().field_name.clone())
+                                                .map(|field| field.effective().db_name().to_owned())
                                                 .collect();
                                             work_stack.push(WorkItem::AssembleStruct {
                                                 count: app_struct.fields.len(),
@@ -679,7 +735,11 @@ impl StructField {
                                         visited_types: format!("{:#?}", visited_types),
                                     }
                                 })?;
-                                items.push(format!("{}: {}", names[count - 1 - i], field_type));
+                                items.push(format!(
+                                    "{}: {}",
+                                    surql_ident(&names[count - 1 - i]),
+                                    field_type
+                                ));
                             }
                             items.reverse();
                             value_stack.push((format!("{{ {} }}", items.join(", ")), false, None));
@@ -714,7 +774,7 @@ impl StructField {
                                 }
                             })?;
                             value_stack.push((
-                                format!("{{ {}: {} }}", variant_name, inner),
+                                format!("{{ {}: {} }}", surql_ident(&variant_name), inner),
                                 false,
                                 None,
                             ));
@@ -740,7 +800,8 @@ impl StructField {
 
         let mut stmt = format!(
             "DEFINE FIELD OVERWRITE {} ON TABLE {}",
-            self.field_name, table_name
+            surql_ident(self.db_name()),
+            table_name
         );
 
         // Handle computed fields (SurrealDB 3.0 COMPUTED syntax)
@@ -881,7 +942,9 @@ impl StructField {
         {
             stmt.push_str(&format!(
                 "DEFINE FIELD OVERWRITE {}.* ON TABLE {} TYPE {};\n",
-                self.field_name, table_name, wildcard_value_type
+                surql_ident(self.db_name()),
+                table_name,
+                wildcard_value_type
             ));
         }
 
@@ -950,6 +1013,16 @@ impl Variant {
         self.output_override
             .as_deref()
             .map_or(self, Self::effective)
+    }
+
+    /// The variant's name in serde's JSON and the generated TypeScript.
+    pub fn serde_name(&self) -> &str {
+        self.wire.serde.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The variant's name in the database, as SurrealValue writes it.
+    pub fn db_name(&self) -> &str {
+        self.wire.surreal.as_deref().unwrap_or(&self.name)
     }
 }
 
@@ -1062,6 +1135,7 @@ mod tests {
             variants: vec![
                 Variant {
                     name: "Active".to_string(),
+                    wire: Default::default(),
                     data: None,
                     doccom: None,
                     annotations: vec![],
@@ -1071,6 +1145,7 @@ mod tests {
                 },
                 Variant {
                     name: "Inactive".to_string(),
+                    wire: Default::default(),
                     data: None,
                     doccom: None,
                     annotations: vec![],
@@ -1099,6 +1174,7 @@ mod tests {
             enum_name: "Color".to_string(),
             variants: vec![Variant {
                 name: "Red".to_string(),
+                wire: Default::default(),
                 data: None,
                 doccom: None,
                 annotations: vec![],
@@ -1160,6 +1236,7 @@ mod tests {
     fn test_variant_unit() {
         let v = Variant {
             name: "None".to_string(),
+            wire: Default::default(),
             data: None,
             doccom: None,
             annotations: vec![],
@@ -1174,6 +1251,7 @@ mod tests {
     fn test_variant_with_data_structure_ref() {
         let v = Variant {
             name: "Some".to_string(),
+            wire: Default::default(),
             data: Some(VariantData::DataStructureRef(FieldType::String)),
             doccom: None,
             annotations: vec![],
@@ -1204,6 +1282,7 @@ mod tests {
         };
         let v = Variant {
             name: "Complex".to_string(),
+            wire: Default::default(),
             data: Some(VariantData::InlineStruct(struct_config)),
             doccom: None,
             annotations: vec![],
@@ -1310,6 +1389,7 @@ mod tests {
     fn test_struct_field_equality() {
         let f1 = StructField {
             field_name: "id".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: None,
@@ -1354,6 +1434,7 @@ mod tests {
             fields: vec![
                 StructField {
                     field_name: "id".to_string(),
+                    wire: Default::default(),
                     field_type: FieldType::String,
                     edge_config: None,
                     define_config: None,
@@ -1368,6 +1449,7 @@ mod tests {
                 },
                 StructField {
                     field_name: "age".to_string(),
+                    wire: Default::default(),
                     field_type: FieldType::I32,
                     edge_config: None,
                     define_config: None,
@@ -1555,6 +1637,7 @@ mod tests {
         use crate::validator::{StringValidator, Validator};
         let field = StructField {
             field_name: "email".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: None,
@@ -1666,6 +1749,7 @@ mod tests {
     fn test_variant_effective_returns_override() {
         let real_variant = Variant {
             name: "Real".to_string(),
+            wire: Default::default(),
             data: None,
             doccom: None,
             annotations: vec![],
@@ -1675,6 +1759,7 @@ mod tests {
         };
         let aliased = Variant {
             name: "Aliased".to_string(),
+            wire: Default::default(),
             data: None,
             doccom: None,
             annotations: vec![],
@@ -1694,6 +1779,7 @@ mod tests {
         // points back to the underlying `User` table.
         let field = StructField {
             field_name: "dm_participants".to_string(),
+            wire: Default::default(),
             field_type: FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(
                 FieldType::Other("PartialUser".to_string()),
             )))),
@@ -1792,6 +1878,7 @@ mod tests {
         // every record link.
         let field = StructField {
             field_name: "dm_participants".to_string(),
+            wire: Default::default(),
             field_type: FieldType::Vec(Box::new(FieldType::RecordLink(Box::new(
                 FieldType::Other("PartialUser".to_string()),
             )))),

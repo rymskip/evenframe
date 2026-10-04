@@ -3,7 +3,7 @@ use crate::{
     schemasync::database::surql::execute::RPC_SIZE_LIMIT,
     schemasync::mockmake::unique::{PlannedRecord, PlannedValue},
     schemasync::mockmake::{Mockmaker, TableMocks, field_value::FieldValueGenerator},
-    schemasync::table::TableConfig,
+    schemasync::table::{TableConfig, surql_ident},
     types::{FieldType, StructField},
 };
 use std::fmt::Write;
@@ -58,10 +58,13 @@ impl Mockmaker<'_> {
                 let assignments = record
                     .values
                     .iter()
-                    .map(|(name, value)| match value {
-                        PlannedValue::Set(literal) => format!("{name} = {literal}"),
-                        PlannedValue::UnlessNull(literal) => {
-                            format!("{name} = (IF {name} != NULL THEN {literal} ELSE NULL END)")
+                    .map(|(name, value)| {
+                        let name = surql_ident(name);
+                        match value {
+                            PlannedValue::Set(literal) => format!("{name} = {literal}"),
+                            PlannedValue::UnlessNull(literal) => {
+                                format!("{name} = (IF {name} != NULL THEN {literal} ELSE NULL END)")
+                            }
                         }
                     })
                     .collect::<Vec<_>>()
@@ -72,7 +75,7 @@ impl Mockmaker<'_> {
                 let fields = record
                     .values
                     .iter()
-                    .map(|(name, value)| format!("{name}: {}", value.literal()))
+                    .map(|(name, value)| format!("{}: {}", surql_ident(name), value.literal()))
                     .collect::<Vec<_>>()
                     .join(", ");
                 inserted.push(format!("{{ id: {}, {fields} }}", record.id));
@@ -133,7 +136,7 @@ impl Mockmaker<'_> {
                 .filter(|field| field.is_mock_written())
                 .map(|field| {
                     Ok((
-                        field.field_name.clone(),
+                        field.db_name().to_owned(),
                         PlannedValue::Set(self.generate_value(table, field, position)?),
                     ))
                 })
@@ -196,9 +199,7 @@ impl Mockmaker<'_> {
             .iter()
             .filter(|field| field.is_mock_written())
             // A relation's endpoints are fixed once it exists.
-            .filter(|field| {
-                table.relation.is_none() || !matches!(field.field_name.as_str(), "in" | "out")
-            })
+            .filter(|field| table.relation.is_none() || !matches!(field.db_name(), "in" | "out"))
             .map(|field| {
                 let value = match &field.field_type {
                     // A present value is rewritten with a present one,
@@ -208,7 +209,7 @@ impl Mockmaker<'_> {
                     }
                     _ => PlannedValue::Set(self.generate_value(table, field, position)?),
                 };
-                Ok((field.field_name.clone(), value))
+                Ok((field.db_name().to_owned(), value))
             })
             .collect()
     }

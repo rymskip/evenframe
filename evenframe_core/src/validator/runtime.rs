@@ -271,18 +271,22 @@ pub fn check_number<N: NumberValue + ?Sized>(
     require(passes, || expectation)
 }
 
+/// The digits after the point in `number`'s shortest decimal form, which is
+/// how Rust and SurrealDB both write a float, never with an exponent.
+pub fn decimal_places(number: f64) -> usize {
+    number
+        .to_string()
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
+}
+
 /// Effect's `multipleOf`: the remainder after scaling both operands to
 /// integers by the larger number of decimal places is zero.
 pub fn is_multiple_of(value: f64, divisor: f64) -> bool {
     if divisor == 0.0 || !value.is_finite() || !divisor.is_finite() {
         return false;
     }
-    let decimals = |number: f64| {
-        let text = number.to_string();
-        text.split_once('.')
-            .map_or(0, |(_, fraction)| fraction.len())
-    };
-    let places = decimals(value).max(decimals(divisor));
+    let places = decimal_places(value).max(decimal_places(divisor));
     let Ok(exponent) = i32::try_from(places) else {
         return false;
     };
@@ -671,7 +675,7 @@ mod tests {
     use super::{
         BigDecimalValidator, DateTime, DateValidator, DurationValidator, NumberValidator,
         StringValidator, TimeZone, Utc, check_date, check_decimal, check_duration, check_number,
-        parse_date_epoch, parse_date_iso, parse_integer, parse_json, parse_numeric,
+        decimal_places, parse_date_epoch, parse_date_iso, parse_integer, parse_json, parse_numeric,
         transform_string,
     };
     use ordered_float::OrderedFloat;
@@ -705,6 +709,15 @@ mod tests {
         assert!(check_number(&5.5_f64, &NumberValidator::Int).is_err());
         assert!(check_number(&10_i64, &NumberValidator::MultipleOf(OrderedFloat(2.5))).is_ok());
         assert!(check_number(&0.3_f64, &NumberValidator::MultipleOf(OrderedFloat(0.1))).is_ok());
+        assert!(
+            check_number(
+                &0.30000000000000004_f64,
+                &NumberValidator::MultipleOf(OrderedFloat(0.1))
+            )
+            .is_err()
+        );
+        assert_eq!(decimal_places(1.5e-7), 8);
+        assert_eq!(decimal_places(1e21), 0);
         assert!(check_number(&300_u16, &NumberValidator::Uint8).is_err());
     }
 

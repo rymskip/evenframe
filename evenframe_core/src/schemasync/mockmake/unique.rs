@@ -4,7 +4,8 @@
 use super::Mockmaker;
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::database::surql::execute::RPC_SIZE_LIMIT;
-use crate::schemasync::table::{IndexKind, TableConfig};
+use crate::schemasync::table::{IndexKind, TableConfig, surql_path};
+use crate::types::StructConfig;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use surrealdb::types::Value;
 
@@ -104,9 +105,13 @@ fn reach(fields: &BTreeMap<String, Value>, segments: &[String]) -> Vec<Value> {
     reached
 }
 
-fn unique_indexes(table: &TableConfig, table_name: &str) -> Vec<UniqueIndex> {
+fn unique_indexes(
+    table: &TableConfig,
+    table_name: &str,
+    objects: &BTreeMap<String, StructConfig>,
+) -> Vec<UniqueIndex> {
     table
-        .all_indexes(table_name)
+        .all_indexes(table_name, objects)
         .into_iter()
         .filter(|index| matches!(index.kind, IndexKind::Unique))
         .map(|index| UniqueIndex {
@@ -130,7 +135,7 @@ impl Mockmaker<'_> {
         table: &TableConfig,
         records: &mut [PlannedRecord],
     ) -> Result<()> {
-        let indexes = unique_indexes(table, table_name);
+        let indexes = unique_indexes(table, table_name, self.objects);
         if indexes.is_empty() || records.is_empty() {
             return Ok(());
         }
@@ -188,7 +193,11 @@ impl Mockmaker<'_> {
         if !has_records {
             return Ok(BTreeMap::new());
         }
-        let selected = fields.iter().copied().collect::<Vec<_>>().join(", ");
+        let selected = fields
+            .iter()
+            .map(|path| surql_path(path))
+            .collect::<Vec<_>>()
+            .join(", ");
         let query = format!("SELECT <string> id AS __id, {selected} FROM {table_name};");
         let rows: Vec<Value> = self
             .db
@@ -323,7 +332,7 @@ impl Mockmaker<'_> {
                 .struct_config
                 .fields
                 .iter()
-                .find(|field| field.field_name == *name)
+                .find(|field| field.db_name() == *name)
                 .ok_or_else(|| EvenframeError::mock_generation(format!("no field `{name}`")))?;
             *value =
                 match value {

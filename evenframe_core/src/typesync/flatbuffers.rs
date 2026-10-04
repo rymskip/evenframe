@@ -971,6 +971,7 @@ mod tests {
                 variants: vec![
                     Variant {
                         name: "Active".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -980,6 +981,7 @@ mod tests {
                     },
                     Variant {
                         name: "Inactive".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -989,6 +991,7 @@ mod tests {
                     },
                     Variant {
                         name: "Pending".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -1090,6 +1093,7 @@ mod tests {
                 variants: vec![
                     Variant {
                         name: "Admin".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -1099,6 +1103,7 @@ mod tests {
                     },
                     Variant {
                         name: "User".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],

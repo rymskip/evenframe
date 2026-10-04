@@ -6,18 +6,14 @@ export type RecordLink<T> = { table: string; key: { String: string } | { Number:
 
 /** @derive(Deserialize) */
 export interface Author {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   name: string;
 }
 
 /** @derive(Deserialize) */
 export interface Post {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
   author: RecordLink<Author>;
-  relatedPosts: RecordLink<Post>[];
+  related_posts: RecordLink<Post>[];
 }

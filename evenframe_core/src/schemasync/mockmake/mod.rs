@@ -183,7 +183,7 @@ impl<'a> Mockmaker<'a> {
                     return Err(crate::error::EvenframeError::config(format!(
                         "`{table_name}.{}` must link to {}, which has no records; \
                          give it records or make the link optional",
-                        field.field_name,
+                        field.db_name(),
                         targets.join(" or ")
                     )));
                 }

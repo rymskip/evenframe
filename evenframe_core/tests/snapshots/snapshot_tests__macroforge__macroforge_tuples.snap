@@ -4,7 +4,7 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Geometry {
-  point2D: [number, number];
-  point3D: [number, number, number];
+  point_2d: [number, number];
+  point_3d: [number, number, number];
   labeled: [string, number];
 }

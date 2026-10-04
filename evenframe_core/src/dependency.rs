@@ -609,6 +609,7 @@ mod tests {
         StructField {
             field_name: name.to_string(),
             field_type,
+            wire: Default::default(),
             edge_config: None,
             define_config: None,
             format: None,
@@ -1014,6 +1015,7 @@ mod tests {
                 variants: vec![
                     Variant {
                         name: "Active".to_string(),
+                        wire: Default::default(),
                         data: Some(VariantData::DataStructureRef(FieldType::Other(
                             "UserData".to_string(),
                         ))),
@@ -1025,6 +1027,7 @@ mod tests {
                     },
                     Variant {
                         name: "Inactive".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -1439,6 +1442,7 @@ mod tests {
                 enum_name: "Status".to_string(),
                 variants: vec![Variant {
                     name: "WithData".to_string(),
+                    wire: Default::default(),
                     data: Some(VariantData::DataStructureRef(FieldType::Other(
                         "data_table".to_string(),
                     ))),

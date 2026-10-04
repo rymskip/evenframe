@@ -1,0 +1,27 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Status = Schema.Union(Schema.Literal("active"), Schema.Literal("on-hold")).annotations({ identifier: `Status` });
+export class Member extends Schema.Class<Member>("Member")( { 
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  displayName: Schema.propertySignature(Schema.String.pipe(Schema.minLength(2, { message: () => `'Display Name' must be at least 2 characters long` }))).annotations({ missingMessage: () => `'Display Name' is required` }),
+  "zip-code": Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Zip Code' is required` }),
+  nickname: Schema.OptionFromNullishOr(Schema.String, null),
+  status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` })
+}) {[key: string]: unknown}
+
+
+export type StatusEncoded = "active" | "on-hold";
+
+export interface MemberEncoded {
+  readonly id: string;
+  readonly displayName: string;
+  readonly "zip-code": string;
+  readonly nickname?: string | null | undefined;
+  readonly status: StatusEncoded;
+}
+
+
+export type StatusType = typeof Status.Type;
+export type MemberType = typeof Member.Type;

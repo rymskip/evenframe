@@ -4,6 +4,7 @@ use crate::{
     schemasync::mockmake::Mockmaker,
     schemasync::mockmake::format::Format,
     schemasync::mockmake::validator_gen,
+    schemasync::table::surql_ident,
     types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructField, VariantData},
     validator::{MockValue, Validator},
 };
@@ -323,11 +324,10 @@ impl<'a> FieldValueGenerator<'a> {
                                 // For relation tables, in/out fields must use relation.from/to
                                 // to stay in sync with the DEFINE TABLE ... FROM ... TO ... clause.
                                 if ctx.table_config.relation.is_some()
-                                    && (ctx.field.field_name == "in"
-                                        || ctx.field.field_name == "out")
+                                    && matches!(ctx.field.db_name(), "in" | "out")
                                 {
                                     value_stack.push(self.handle_record_id(
-                                        &ctx.field.field_name,
+                                        ctx.field,
                                         &ctx.table_config.table_name,
                                         ctx.table_config,
                                         &mut rng,
@@ -418,7 +418,7 @@ impl<'a> FieldValueGenerator<'a> {
                                         }
                                         "record_id" => {
                                             value_stack.push(self.handle_record_id(
-                                                &ctx.field.field_name,
+                                                ctx.field,
                                                 &ctx.table_config.table_name,
                                                 ctx.table_config,
                                                 &mut rng,
@@ -472,10 +472,11 @@ impl<'a> FieldValueGenerator<'a> {
                                     .get(type_name)
                                     .or_else(|| self.mockmaker.objects.get(&snake_case_name))
                                 {
+                                    let struct_config = struct_config.effective();
                                     let field_names: Vec<String> = struct_config
                                         .fields
                                         .iter()
-                                        .map(|field| field.field_name.clone())
+                                        .map(|field| field.effective().db_name().to_owned())
                                         .collect();
                                     work_stack.push(WorkItem::AssembleStruct { field_names });
 
@@ -510,14 +511,18 @@ impl<'a> FieldValueGenerator<'a> {
                                                 let field_names: Vec<String> = struct_config
                                                     .fields
                                                     .iter()
-                                                    .map(|field| field.field_name.clone())
+                                                    .map(|field| {
+                                                        field.effective().db_name().to_owned()
+                                                    })
                                                     .collect();
 
                                                 match repr {
                                                     EnumRepresentation::ExternallyTagged => {
                                                         work_stack.push(
                                                             WorkItem::WrapInVariantKey {
-                                                                variant_name: variant.name.clone(),
+                                                                variant_name: variant
+                                                                    .db_name()
+                                                                    .to_owned(),
                                                             },
                                                         );
                                                         work_stack.push(WorkItem::AssembleStruct {
@@ -532,7 +537,9 @@ impl<'a> FieldValueGenerator<'a> {
                                                         work_stack.push(
                                                             WorkItem::AssembleTaggedStruct {
                                                                 tag_key: tag.clone(),
-                                                                tag_value: variant.name.clone(),
+                                                                tag_value: variant
+                                                                    .db_name()
+                                                                    .to_owned(),
                                                                 field_names: names_with_tag,
                                                             },
                                                         );
@@ -580,7 +587,8 @@ impl<'a> FieldValueGenerator<'a> {
                                                     ..
                                                 } = repr
                                                 {
-                                                    value_stack.push(format!("'{}'", variant.name));
+                                                    value_stack
+                                                        .push(format!("'{}'", variant.db_name()));
                                                 }
                                             }
                                             VariantData::DataStructureRef(field_type) => {
@@ -591,7 +599,9 @@ impl<'a> FieldValueGenerator<'a> {
                                                     } => {
                                                         work_stack.push(
                                                             WorkItem::WrapInVariantKey {
-                                                                variant_name: variant.name.clone(),
+                                                                variant_name: variant
+                                                                    .db_name()
+                                                                    .to_owned(),
                                                             },
                                                         );
                                                     }
@@ -606,8 +616,10 @@ impl<'a> FieldValueGenerator<'a> {
                                                             ],
                                                         });
                                                         // Push the tag value directly; inner value comes from Generate
-                                                        value_stack
-                                                            .push(format!("'{}'", variant.name));
+                                                        value_stack.push(format!(
+                                                            "'{}'",
+                                                            variant.db_name()
+                                                        ));
                                                     }
                                                     EnumRepresentation::Untagged => {
                                                         work_stack.push(WorkItem::AssembleEnum);
@@ -628,11 +640,13 @@ impl<'a> FieldValueGenerator<'a> {
                                             } => {
                                                 value_stack.push(format!(
                                                     "{{ {}: '{}' }}",
-                                                    tag, variant.name
+                                                    surql_ident(tag),
+                                                    variant.db_name()
                                                 ));
                                             }
                                             _ => {
-                                                value_stack.push(format!("'{}'", variant.name));
+                                                value_stack
+                                                    .push(format!("'{}'", variant.db_name()));
                                             }
                                         }
                                     }
@@ -655,7 +669,7 @@ impl<'a> FieldValueGenerator<'a> {
                     let assignments: Vec<String> = field_names
                         .into_iter()
                         .zip(values)
-                        .map(|(name, value)| format!("{}: {}", name, value))
+                        .map(|(name, value)| format!("{}: {}", surql_ident(&name), value))
                         .collect();
                     value_stack.push(format!("{{ {} }}", assignments.join(", ")));
                 }
@@ -671,7 +685,7 @@ impl<'a> FieldValueGenerator<'a> {
                 }
                 WorkItem::WrapInVariantKey { variant_name } => {
                     let inner = take_last(&mut value_stack, 1)?.join("");
-                    value_stack.push(format!("{{ {}: {} }}", variant_name, inner));
+                    value_stack.push(format!("{{ {}: {} }}", surql_ident(&variant_name), inner));
                 }
                 WorkItem::AssembleTaggedStruct {
                     tag_key,
@@ -682,9 +696,9 @@ impl<'a> FieldValueGenerator<'a> {
                     let data_values =
                         take_last(&mut value_stack, field_names.len().saturating_sub(1))?;
                     let mut assignments: Vec<String> =
-                        vec![format!("{}: '{}'", tag_key, tag_value)];
+                        vec![format!("{}: '{}'", surql_ident(&tag_key), tag_value)];
                     for (name, value) in field_names.into_iter().skip(1).zip(data_values) {
-                        assignments.push(format!("{}: {}", name, value));
+                        assignments.push(format!("{}: {}", surql_ident(&name), value));
                     }
                     value_stack.push(format!("{{ {} }}", assignments.join(", ")));
                 }
@@ -792,15 +806,19 @@ impl<'a> FieldValueGenerator<'a> {
         Ok(format!("r'{id}'"))
     }
 
+    /// A link for `field`. A relation's `in` and `out` are SurrealDB's keys,
+    /// so its database name decides them; coordination rules name the Rust
+    /// field.
     fn handle_record_id(
         &self,
-        field_name: &str,
+        field: &StructField,
         table_name: &str,
         table_config: &TableConfig,
         rng: &mut ThreadRng,
     ) -> Result<String, EvenframeError> {
+        let field_name = field.field_name.as_str();
         if let Some(relation) = &table_config.relation
-            && matches!(field_name, "in" | "out")
+            && matches!(field.db_name(), "in" | "out")
         {
             // A OneToOne coordination maps record `i` to target record `i`.
             let one_to_one = table_config
@@ -811,7 +829,7 @@ impl<'a> FieldValueGenerator<'a> {
                         matches!(rule, crate::schemasync::mockmake::coordinate::Coordination::OneToOne(coordinated) if coordinated == field_name)
                     })
                 });
-            let tables = if field_name == "in" {
+            let tables = if field.db_name() == "in" {
                 &relation.from
             } else {
                 &relation.to

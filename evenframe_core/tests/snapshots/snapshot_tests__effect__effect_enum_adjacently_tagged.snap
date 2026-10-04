@@ -7,7 +7,7 @@ export class ClickData extends Schema.Class<ClickData>("ClickData")( {
   y: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Y' is required` })
 }) {[key: string]: unknown}
 
-export const Event = Schema.Union(Schema.Struct({ t: Schema.Literal("Click"), c: ClickData }), Schema.Struct({ t: Schema.Literal("KeyPress"), c: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }), Schema.Struct({ t: Schema.Literal("Scroll") })).annotations({ identifier: `Event` });
+export const Event = Schema.Union(Schema.Struct({ t: Schema.Literal("Click"), c: ClickData }), Schema.Struct({ t: Schema.Literal("KeyPress"), c: Schema.String }), Schema.Struct({ t: Schema.Literal("Scroll") })).annotations({ identifier: `Event` });
 
 export interface ClickDataEncoded {
   readonly x: number;

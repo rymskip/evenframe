@@ -8,7 +8,7 @@ use crate::typesync::config::OutputKind;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::typesync::foreign_ts::{RecordLinkMapping, record_link_mapping};
 use crate::typesync::js_checks::{
-    self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal, template_literal,
+    self, JsCheck, LengthCheck, ONE_CHARACTER, object_key, string_literal, template_literal,
 };
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
@@ -245,9 +245,10 @@ fn encoded_field_entry(
         (_, true) => "string".to_owned(),
         (field_type, false) => field_type_to_ts_encoded(field_type, registry)?,
     };
+    let optional = if field.wire.serde_optional { "?" } else { "" };
     Ok(format!(
-        "readonly {}: {encoded};",
-        field.field_name.to_case(Case::Camel)
+        "readonly {}{optional}: {encoded};",
+        object_key(field.serde_name())?
     ))
 }
 
@@ -295,8 +296,11 @@ fn field_schema_entry(
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
     let schema = validated_field_schema(field, schema_of)?;
+    // An absent key decodes to `None`, so only a non-Option key needs marking.
     let entry = if matches!(field.field_type, FieldType::Option(_)) {
         schema
+    } else if field.wire.serde_optional {
+        format!("Schema.optional({schema})")
     } else {
         format!(
             "Schema.propertySignature({schema}).annotations({{ missingMessage: () => {} }})",
@@ -306,10 +310,7 @@ fn field_schema_entry(
             ))
         )
     };
-    Ok(format!(
-        "{}: {entry}",
-        field.field_name.to_case(Case::Camel)
-    ))
+    Ok(format!("{}: {entry}", object_key(field.serde_name())?))
 }
 
 /// Converts a single enum variant into its Effect Schema representation,
@@ -327,20 +328,23 @@ fn enum_variant_to_schema<F>(
 where
     F: Fn(&FieldType, &str, &Defined) -> Result<String>,
 {
-    let tag_entry = |tag: &str| format!("{tag}: Schema.Literal(\"{}\")", v.name);
+    let name = string_literal(v.serde_name())?;
+    let tag_entry = |tag: &str| -> Result<String> {
+        Ok(format!("{}: Schema.Literal({name})", object_key(tag)?))
+    };
     let Some(data) = &v.data else {
         return Ok(match repr {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                format!("Schema.Struct({{ {} }})", tag_entry(tag))
+                format!("Schema.Struct({{ {} }})", tag_entry(tag)?)
             }
             EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-                format!("Schema.Literal(\"{}\")", v.name)
+                format!("Schema.Literal({name})")
             }
         });
     };
     let fields_schema = |fields: &[StructField], tag: Option<&str>| -> Result<String> {
-        let mut entries: Vec<String> = tag.map(tag_entry).into_iter().collect();
+        let mut entries: Vec<String> = tag.map(tag_entry).transpose()?.into_iter().collect();
         for field in fields {
             entries.push(field_schema_entry(field, |field_type| {
                 to_schema(field_type, enum_name, defined)
@@ -364,12 +368,16 @@ where
     };
     Ok(match repr {
         EnumRepresentation::ExternallyTagged | EnumRepresentation::InternallyTagged { .. } => {
-            format!("Schema.Struct({{ {}: {payload} }})", v.name)
+            format!(
+                "Schema.Struct({{ {}: {payload} }})",
+                object_key(v.serde_name())?
+            )
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
             format!(
-                "Schema.Struct({{ {}, {content}: {payload} }})",
-                tag_entry(tag)
+                "Schema.Struct({{ {}, {}: {payload} }})",
+                tag_entry(tag)?,
+                object_key(content)?
             )
         }
         EnumRepresentation::Untagged => payload,
@@ -383,16 +391,16 @@ fn enum_variant_to_encoded(
     repr: &EnumRepresentation,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
-    let tag_entry = |tag: &str| format!("readonly {tag}: \"{}\";", v.name);
+    let name = string_literal(v.serde_name())?;
+    let tag_entry =
+        |tag: &str| -> Result<String> { Ok(format!("readonly {}: {name};", object_key(tag)?)) };
     let Some(data) = &v.data else {
         return Ok(match repr {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                format!("{{ {} }}", tag_entry(tag))
+                format!("{{ {} }}", tag_entry(tag)?)
             }
-            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-                format!("\"{}\"", v.name)
-            }
+            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => name,
         });
     };
     let payload = match data {
@@ -403,7 +411,7 @@ fn enum_variant_to_encoded(
                 .map(|field| encoded_field_entry(field, registry))
                 .collect::<Result<Vec<String>>>()?;
             if let EnumRepresentation::InternallyTagged { tag } = repr {
-                return Ok(format!("{{ {} {} }}", tag_entry(tag), entries.join(" ")));
+                return Ok(format!("{{ {} {} }}", tag_entry(tag)?, entries.join(" ")));
             }
             format!("{{ {} }}", entries.join(" "))
         }
@@ -411,17 +419,21 @@ fn enum_variant_to_encoded(
             let payload = field_type_to_ts_encoded(field_type, registry)?;
             // serde writes the tag into the struct the variant holds.
             if let EnumRepresentation::InternallyTagged { tag } = repr {
-                return Ok(format!("({{ {} }} & {payload})", tag_entry(tag)));
+                return Ok(format!("({{ {} }} & {payload})", tag_entry(tag)?));
             }
             payload
         }
     };
     Ok(match repr {
         EnumRepresentation::ExternallyTagged | EnumRepresentation::InternallyTagged { .. } => {
-            format!("{{ readonly {}: {payload} }}", v.name)
+            format!("{{ readonly {}: {payload} }}", object_key(v.serde_name())?)
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            format!("{{ {} readonly {content}: {payload}; }}", tag_entry(tag))
+            format!(
+                "{{ {} readonly {}: {payload}; }}",
+                tag_entry(tag)?,
+                object_key(content)?
+            )
         }
         EnumRepresentation::Untagged => payload,
     })
@@ -535,10 +547,7 @@ fn field_type_to_effect_schema(
     while let Some(work_item) = work_stack.pop() {
         match work_item {
             WorkItem::Generate(field_type) => match field_type {
-                FieldType::String => value_stack.push(
-                    "Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))"
-                        .to_string(),
-                ),
+                FieldType::String => value_stack.push("Schema.String".to_string()),
                 FieldType::Char => value_stack.push(char_schema()?),
                 FieldType::Bool => value_stack.push("Schema.Boolean".to_string()),
                 FieldType::Unit => value_stack.push("Schema.Null".to_string()),
@@ -926,7 +935,7 @@ fn apply_validators_to_schema(
                                 ));
                             };
                             format!(
-                                "Schema.String.pipe(Schema.filter((v) => {predicate}, {input})).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber))"
+                                "Schema.String.pipe(Schema.filter((value) => {predicate}, {input})).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber))"
                             )
                         }
                         StringParse::Json => format!("Schema.parseJson({result})"),
@@ -954,7 +963,7 @@ fn apply_validators_to_schema(
                         expected(&sv.expectation())
                     )],
                     Some(JsCheck::Predicate(predicate)) => vec![format!(
-                        "Schema.filter((v) => {predicate}, {})",
+                        "Schema.filter((value) => {predicate}, {})",
                         expected(&sv.expectation())
                     )],
                     Some(JsCheck::Length(LengthCheck::Exactly(length))) => vec![format!(
@@ -1298,6 +1307,74 @@ mod tests {
         BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator, FieldType,
         Validator, apply_validators_to_schema,
     };
+
+    /// A struct whose fields serde names four ways: as written, renamed, by a
+    /// name that is no identifier, and as a key it may leave out.
+    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
+        use crate::types::{StructConfig, StructField, Wire};
+        let field = |name: &str, wire: Wire| StructField {
+            field_name: name.to_owned(),
+            field_type: FieldType::String,
+            wire,
+            ..Default::default()
+        };
+        let renamed = |name: &str| Wire {
+            serde: Some(name.to_owned()),
+            ..Wire::default()
+        };
+        let fields = vec![
+            field("first_name", Wire::default()),
+            field("last_name", renamed("lastName")),
+            field("zip_code", renamed("zip-code")),
+            field(
+                "nickname",
+                Wire {
+                    serde_optional: true,
+                    ..Wire::default()
+                },
+            ),
+        ];
+        std::collections::BTreeMap::from([(
+            "Person".to_owned(),
+            StructConfig {
+                struct_name: "Person".to_owned(),
+                fields,
+                ..Default::default()
+            },
+        )])
+    }
+
+    #[test]
+    fn fields_are_keyed_as_serde_writes_them() {
+        let structs = wire_named_structs();
+        let output = super::generate_effect_schema_string(
+            &crate::typesync::type_index::TypeIndex::new(
+                &structs,
+                &std::collections::BTreeMap::new(),
+            )
+            .unwrap(),
+            false,
+            &crate::types::ForeignTypeRegistry::default(),
+        )
+        .unwrap();
+        assert!(
+            output.contains("first_name: Schema.propertySignature"),
+            "{output}"
+        );
+        assert!(
+            output.contains("lastName: Schema.propertySignature"),
+            "{output}"
+        );
+        assert!(
+            output.contains("\"zip-code\": Schema.propertySignature"),
+            "{output}"
+        );
+        assert!(
+            output.contains("nickname: Schema.optional(Schema.String)"),
+            "{output}"
+        );
+        assert!(output.contains("readonly nickname?: string;"), "{output}");
+    }
 
     #[test]
     fn rejects_unparsable_validator_bounds() {

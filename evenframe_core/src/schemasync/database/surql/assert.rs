@@ -1,9 +1,9 @@
-use crate::validator::bounds;
 use crate::validator::keywords::{self, NormalForm};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
 };
+use crate::validator::{bounds, runtime};
 use tracing::{debug, error, trace};
 
 // ---------------------------------------------------------------------------
@@ -281,8 +281,8 @@ pub fn generate_assert_from_validators(
                 NumberValidator::NonNegative => assertions.push(format!("{value_var} >= 0")),
                 NumberValidator::Negative => assertions.push(format!("{value_var} < 0")),
                 NumberValidator::NonPositive => assertions.push(format!("{value_var} <= 0")),
-                NumberValidator::MultipleOf(value) => {
-                    assertions.push(format!("{value_var} % {} = 0", value.0))
+                NumberValidator::MultipleOf(divisor) => {
+                    assertions.push(multiple_of_assertion(value_var, divisor.0))
                 }
                 NumberValidator::Uint8 => assertions.push(format!(
                     "type::is_int({value_var}) AND {value_var} >= 0 AND {value_var} <= 255"
@@ -490,6 +490,20 @@ fn push_duration(assertions: &mut Vec<String>, value_var: &str, op: &str, bound:
     }
 }
 
+/// `runtime::is_multiple_of` in SurrealQL: both operands scaled to integers
+/// by the larger count of decimal places, read from the value's text as Rust
+/// reads it, since plain float `%` rejects `0.3` as a multiple of `0.1`.
+fn multiple_of_assertion(value_var: &str, divisor: f64) -> String {
+    let value_places = format!(
+        "string::len(string::split(string::replace(<string> {value_var}, 'f', ''), '.')[1] ?? '')"
+    );
+    let scale = format!(
+        "math::pow(10, math::max([{value_places}, {}]))",
+        runtime::decimal_places(divisor)
+    );
+    format!("math::round({value_var} * {scale}) % math::round({divisor} * {scale}) = 0")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -501,6 +515,23 @@ mod tests {
 
     fn gen_assert(v: Validator) -> String {
         generate_assert_from_validators(&[v], "$value", true)
+    }
+
+    #[test]
+    fn multiple_of_scales_by_the_values_written_places() {
+        let assertion = gen_assert(Validator::NumberValidator(NumberValidator::MultipleOf(
+            OrderedFloat(0.1),
+        )));
+        assert!(
+            assertion.contains("string::replace(<string> $value, 'f', '')"),
+            "{assertion}"
+        );
+        assert!(assertion.contains(", 1]))"), "{assertion}");
+        assert!(
+            assertion.contains("math::round(0.1 * math::pow(10,"),
+            "{assertion}"
+        );
+        assert!(!assertion.contains("$value % 0.1"), "{assertion}");
     }
 
     fn gen_assert_no_js(v: Validator) -> String {

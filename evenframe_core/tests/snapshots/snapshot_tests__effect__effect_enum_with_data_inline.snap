@@ -7,7 +7,7 @@ export class Coordinates extends Schema.Class<Coordinates>("Coordinates")( {
   lng: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lng' is required` })
 }) {[key: string]: unknown}
 
-export const Location = Schema.Union(Schema.Struct({ Address: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }), Schema.Struct({ Coords: Coordinates }), Schema.Struct({ Inline: Schema.Struct({ label: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Label' is required` }), value: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Value' is required` }) }) }), Schema.Literal("Unknown")).annotations({ identifier: `Location` });
+export const Location = Schema.Union(Schema.Struct({ Address: Schema.String }), Schema.Struct({ Coords: Coordinates }), Schema.Struct({ Inline: Schema.Struct({ label: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Label' is required` }), value: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Value' is required` }) }) }), Schema.Literal("Unknown")).annotations({ identifier: `Location` });
 
 export interface CoordinatesEncoded {
   readonly lat: number;

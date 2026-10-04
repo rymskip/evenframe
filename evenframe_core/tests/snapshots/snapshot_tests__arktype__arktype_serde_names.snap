@@ -1,0 +1,29 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Status: [['===', "active"], '|', ['===', "on-hold"]],
+Member: {
+  id: 'string',
+  displayName: ['string', '&', 'string >= 2'],
+  "zip-code": 'string',
+  "nickname?": [['string', '|', 'undefined'], '|', 'null'],
+  status: 'Status'
+},
+
+});
+
+const exported = bindings.export();
+
+export const defaultMember: Member = {
+id: "",
+displayName: "",
+"zip-code": "",
+nickname: null,
+status: "active"
+};
+
+export type Status = typeof exported.Status.infer;
+export type Member = typeof exported.Member.infer;

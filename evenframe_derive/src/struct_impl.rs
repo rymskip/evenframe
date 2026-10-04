@@ -1,6 +1,8 @@
 use crate::{
-    PipelineKind, deserialization_impl::generate_custom_deserialize,
+    PipelineKind,
+    deserialization_impl::generate_custom_deserialize,
     imports::generate_struct_imports,
+    validate_impl::{CheckedField, struct_validate},
 };
 use convert_case::{Case, Casing};
 use evenframe_core::{
@@ -11,6 +13,7 @@ use evenframe_core::{
             parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
             parse_relation_attribute, parse_rust_derives, parse_table_validators,
         },
+        naming,
         validator_parser::parse_field_validators,
     },
     schemasync::{
@@ -143,21 +146,35 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 Err(err) => return err.to_compile_error(),
             };
 
-        // Check if an "id" field exists.
-        // Structs with an "id" field are treated as persistable entities (database tables).
-        // Structs without an "id" field are treated as application-level data structures.
-        let has_id = fields_named.named.iter().any(|field| {
-            // Check if field name is "id" - unwrap_or(false) handles unnamed fields gracefully
-            field.ident.as_ref().map(|id| id == "id").unwrap_or(false)
-        });
+        let wire = match naming::resolve(&input) {
+            Ok(wire) => wire,
+            Err(err) => return err.to_compile_error(),
+        };
+
+        // A struct with a database `id` field is a table; one without is an
+        // application-level data structure.
+        let has_id = fields_named
+            .named
+            .iter()
+            .zip(&wire.fields)
+            .any(|(field, field_wire)| {
+                field_wire.surreal.as_deref().map_or_else(
+                    || {
+                        field
+                            .ident
+                            .as_ref()
+                            .is_some_and(|ident| naming::unraw(ident) == "id")
+                    },
+                    |name| name == "id",
+                )
+            });
 
         // Single pass over all fields.
         let mut table_field_tokens = Vec::new();
-        let mut json_assignments = Vec::new();
         // Each field's validators in field order, for the custom deserialize.
         let mut fields_validators = Vec::new();
 
-        for field in fields_named.named.iter() {
+        for (field, field_wire) in fields_named.named.iter().zip(&wire.fields) {
             let field_ident = match field.ident.as_ref() {
                 Some(ident) => ident,
                 None => {
@@ -168,9 +185,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     .to_compile_error();
                 }
             };
-            let field_name = field_ident.to_string();
-            // Remove the r# prefix from raw identifiers (e.g., r#type -> type)
-            let field_name_trim = field_name.trim_start_matches("r#");
+            let field_name = naming::unraw(field_ident);
 
             // Build the field type token.
             let ty = &field.ty;
@@ -265,7 +280,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 .any(|attr| attr.path().is_ident("unique"));
 
             // Parse field-level #[fulltext]/#[hnsw]/#[diskann] index attributes
-            match parse_field_index_attributes(field_name_trim, &field.attrs) {
+            match parse_field_index_attributes(&field_name, &field.attrs) {
                 Ok(field_indexes) => {
                     for (index, span) in field_indexes {
                         indexes.push(index);
@@ -292,8 +307,9 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
             table_field_tokens.push(quote! {
                 StructField {
-                    field_name: #field_name_trim.to_string(),
+                    field_name: #field_name.to_string(),
                     field_type: #field_type,
+                    wire: #field_wire,
                     edge_config: #edge_config_tokens,
                     define_config: #define_config_tokens,
                     format: #format_tokens,
@@ -306,17 +322,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     raw_attributes: std::collections::BTreeMap::new(),
                 }
             });
-
-            // For the JSON payload, skip the "id" field and any field with an edge attribute.
-            if field_name != "id" && edge_config.is_none() {
-                json_assignments.push(quote! {
-                    #field_name: payload.#field_ident,
-                });
-            }
         }
-
-        // Build the JSON payload block.
-        // let json_payload = quote! { { #(#json_assignments)* } };
 
         // Generate tokens for parsed attributes (shared between implementations)
         let struct_name = ident.to_string();
@@ -463,9 +469,29 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 .any(|attr| attr.path().is_ident("validators"))
         });
 
-        // Generate custom deserialization if there are field validators
+        let checked_fields: Vec<CheckedField> = fields_named
+            .named
+            .iter()
+            .zip(&wire.fields)
+            .zip(&fields_validators)
+            .map(|((field, field_wire), validators)| CheckedField {
+                field,
+                path: field_wire
+                    .serde
+                    .clone()
+                    .unwrap_or_else(|| field.ident.as_ref().map(naming::unraw).unwrap_or_default()),
+                validators,
+            })
+            .collect();
+        let validate_impl = match struct_validate(&input, &checked_fields) {
+            Ok(tokens) => tokens,
+            Err(err) => return err.to_compile_error(),
+        };
         let deserialize_impl = if has_field_validators {
-            generate_custom_deserialize(&input, &fields_validators)
+            match generate_custom_deserialize(&input, &checked_fields) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            }
         } else {
             quote! {}
         };
@@ -498,6 +524,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                         #registry_submission
                     };
                 }
+
+                #validate_impl
 
                 #deserialize_impl
             }
@@ -556,6 +584,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                         #registry_submission
                     };
                 }
+
+                #validate_impl
 
                 #deserialize_impl
             }

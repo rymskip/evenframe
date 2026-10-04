@@ -3,8 +3,8 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class Profile extends Schema.Class<Profile>("Profile")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  bio: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  bio: Schema.OptionFromNullishOr(Schema.String, null),
   age: Schema.OptionFromNullishOr(Schema.Number, null),
   rating: Schema.OptionFromNullishOr(Schema.Number, null),
   verified: Schema.OptionFromNullishOr(Schema.Boolean, null)
