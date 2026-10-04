@@ -3,7 +3,7 @@
 //! These types represent database schemas in a provider-agnostic way,
 //! allowing comparison between code-defined schemas and database schemas.
 
-use crate::{Result, schemasync::TableConfig, schemasync::config::AccessType};
+use crate::{Result, schemasync::TableConfig, schemasync::config::AccessType, types::StructConfig};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -140,9 +140,12 @@ pub struct SchemaDefinition {
 }
 
 impl SchemaDefinition {
-    /// Create from TableConfig HashMap (for code-based schema generation)
+    /// Create from TableConfig HashMap (for code-based schema generation).
+    /// `objects` holds the structs the tables embed, which index paths reach
+    /// into.
     pub fn from_table_configs(
         tables: &BTreeMap<String, TableConfig>,
+        objects: &BTreeMap<String, StructConfig>,
         allow_scripting: bool,
     ) -> Result<Self> {
         tracing::debug!(
@@ -160,7 +163,7 @@ impl SchemaDefinition {
                 array_wildcard_fields: BTreeMap::new(),
                 permissions: Self::extract_permissions_from_config(config),
                 indexes: config
-                    .all_indexes(name)
+                    .all_indexes(name, objects)
                     .iter()
                     .map(|idx| IndexDefinition {
                         name: idx.index_name(name),
@@ -221,7 +224,7 @@ impl SchemaDefinition {
                     .unwrap_or(false);
 
             let field_def = FieldDefinition {
-                name: field.field_name.clone(),
+                name: field.db_name().to_owned(),
                 field_type: ObjectType::Simple(field.field_type.to_string()),
                 required: is_required,
                 default_value,
@@ -239,7 +242,7 @@ impl SchemaDefinition {
                     .as_ref()
                     .and_then(|dc| dc.comment.clone()),
             };
-            fields.insert(field.field_name.clone(), field_def);
+            fields.insert(field.db_name().to_owned(), field_def);
         }
 
         Ok(fields)

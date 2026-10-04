@@ -5,6 +5,7 @@ mod enum_impl;
 mod imports;
 mod struct_impl;
 mod union_impl;
+mod validate_impl;
 
 /// Which pipeline(s) the derived type participates in.
 /// This is a local mirror used to generate the correct `::evenframe::types::Pipeline` tokens.

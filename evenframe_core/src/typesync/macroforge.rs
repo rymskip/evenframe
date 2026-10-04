@@ -11,6 +11,7 @@ use crate::typesync::doc_comment::format_jsdoc;
 use crate::typesync::foreign_ts::{
     Reading, RecordLinkMapping, foreign_types_used, import_lines, record_link_mapping,
 };
+use crate::typesync::js_checks::{self, JsCheck, object_key, string_literal};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
 use crate::validator::{
@@ -56,6 +57,7 @@ pub fn generate_macroforge_type_string(
     index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
+    helpers: &mut HelperModule,
 ) -> Result<String> {
     tracing::info!(
         struct_count = index.structs().len(),
@@ -100,10 +102,20 @@ pub fn generate_macroforge_type_string(
 
     let mut parts: Vec<String> = Vec::new();
     for (_, struct_config) in &unique_structs {
-        parts.push(generate_struct_block(struct_config, array_style, registry));
+        parts.push(generate_struct_block(
+            struct_config,
+            array_style,
+            registry,
+            helpers,
+        )?);
     }
     for (_, enum_def) in &unique_enums {
-        parts.push(generate_enum_block(enum_def, array_style, registry));
+        parts.push(generate_enum_block(
+            enum_def,
+            array_style,
+            registry,
+            helpers,
+        )?);
     }
 
     result.push_str(&parts.join("\n"));
@@ -159,7 +171,8 @@ pub fn generate_macroforge_for_types(
     index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     let type_set: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
 
     // Filter to requested types by the entry's own name. See the full-output
@@ -179,12 +192,22 @@ pub fn generate_macroforge_for_types(
 
     let mut parts: Vec<String> = Vec::new();
     for (_, struct_config) in &filtered_structs {
-        parts.push(generate_struct_block(struct_config, array_style, registry));
+        parts.push(generate_struct_block(
+            struct_config,
+            array_style,
+            registry,
+            helpers,
+        )?);
     }
     for (_, enum_def) in &filtered_enums {
-        parts.push(generate_enum_block(enum_def, array_style, registry));
+        parts.push(generate_enum_block(
+            enum_def,
+            array_style,
+            registry,
+            helpers,
+        )?);
     }
-    parts.join("\n")
+    Ok(parts.join("\n"))
 }
 
 /// Generate a single struct's TypeScript interface block.
@@ -192,7 +215,8 @@ fn generate_struct_block(
     struct_config: &StructConfig,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     // Always emit the interface under the entry's own struct_name; pull
     // body content (fields, derives, annotations) from `struct_view` so a
     // same-name override (rule plugin) is honored while a redirect
@@ -211,11 +235,11 @@ fn generate_struct_block(
     }
     lines.push(format!("export interface {} {{", name));
     for field in &view.fields {
-        lines.push(render_field_block(field, array_style, registry));
+        lines.push(render_field_block(field, array_style, registry, helpers)?);
     }
     lines.push("}".to_string());
     lines.push(String::new());
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 /// Generate a single enum's TypeScript type block.
@@ -223,7 +247,8 @@ fn generate_enum_block(
     enum_def: &TaggedUnion,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     // Same approach as [`generate_struct_block`]: emit under the entry's own
     // enum_name, pull body from `enum_view` so same-name overrides are
     // applied while redirect overrides leave the entry's own body intact.
@@ -244,12 +269,16 @@ fn generate_enum_block(
     // type registry knows how to parse/stringify these unions at runtime.
     match &view.representation {
         EnumRepresentation::InternallyTagged { tag } => {
-            lines.push(format!("/** @serde({{ tag: \"{}\" }}) */", tag));
+            lines.push(format!(
+                "/** @serde({{ tag: \"{}\" }}) */",
+                escape_for_jsdoc(tag)
+            ));
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
             lines.push(format!(
                 "/** @serde({{ tag: \"{}\", content: \"{}\" }}) */",
-                tag, content
+                escape_for_jsdoc(tag),
+                escape_for_jsdoc(content)
             ));
         }
         EnumRepresentation::ExternallyTagged => {
@@ -263,8 +292,16 @@ fn generate_enum_block(
     let variant_parts: Vec<String> = view
         .variants
         .iter()
-        .map(|variant| render_variant(variant, &view.representation, array_style, registry))
-        .collect();
+        .map(|variant| {
+            render_variant(
+                variant,
+                &view.representation,
+                array_style,
+                registry,
+                helpers,
+            )
+        })
+        .collect::<Result<_>>()?;
 
     lines.push(format!(
         "export type {} =\n\t{};",
@@ -276,7 +313,7 @@ fn generate_enum_block(
             .join("\n\t")
     ));
     lines.push(String::new());
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 /// Render a single enum variant according to the serde enum representation.
@@ -285,7 +322,8 @@ fn render_variant(
     representation: &EnumRepresentation,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     // Resolve `output_override` literally, as [`generate_struct_block`] does.
     let variant = variant.effective();
     let mut all_annotations: Vec<String> = Vec::new();
@@ -304,18 +342,20 @@ fn render_variant(
 
     let type_str = match representation {
         EnumRepresentation::ExternallyTagged => {
-            render_variant_externally_tagged(variant, array_style, registry)
+            render_variant_externally_tagged(variant, array_style, registry, helpers)?
         }
         EnumRepresentation::InternallyTagged { tag } => {
-            render_variant_internally_tagged(variant, tag, array_style, registry)
+            render_variant_internally_tagged(variant, tag, array_style, registry, helpers)?
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            render_variant_adjacently_tagged(variant, tag, content, array_style, registry)
+            render_variant_adjacently_tagged(variant, tag, content, array_style, registry, helpers)?
         }
-        EnumRepresentation::Untagged => render_variant_untagged(variant, array_style, registry),
+        EnumRepresentation::Untagged => {
+            render_variant_untagged(variant, array_style, registry, helpers)?
+        }
     };
 
-    format!("{}{}", ann_prefix, type_str)
+    Ok(format!("{}{}", ann_prefix, type_str))
 }
 
 /// ExternallyTagged: `{ VariantName: Type }` for data variants, `"VariantName"` for unit.
@@ -323,24 +363,20 @@ fn render_variant_externally_tagged(
     variant: &crate::types::Variant,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            format!(
-                "{{ {}: {} }}",
-                variant.name,
-                inline_struct_type(s, array_style, registry)
-            )
-        }
-        Some(VariantData::DataStructureRef(ft)) => {
-            format!(
-                "{{ {}: {} }}",
-                variant.name,
-                field_type_to_typescript(ft, array_style, registry)
-            )
-        }
-        None => format!("\"{}\"", variant.name),
-    }
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    let key = object_key(variant.serde_name())?;
+    Ok(match &variant.data {
+        Some(VariantData::InlineStruct(inline)) => format!(
+            "{{ {key}: {} }}",
+            inline_struct_type(inline, array_style, registry, helpers)?
+        ),
+        Some(VariantData::DataStructureRef(field_type)) => format!(
+            "{{ {key}: {} }}",
+            field_type_to_typescript(field_type, array_style, registry)
+        ),
+        None => string_literal(variant.serde_name())?,
+    })
 }
 
 /// InternallyTagged: all variants become objects with the tag field as a literal discriminator.
@@ -352,26 +388,25 @@ fn render_variant_internally_tagged(
     tag: &str,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => format!(
-            "{{ {}: '{}' }} & {}",
-            tag,
-            variant.name,
-            inline_struct_type(s, array_style, registry)
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    let tag_entry = format!(
+        "{{ {}: {} }}",
+        object_key(tag)?,
+        string_literal(variant.serde_name())?
+    );
+    Ok(match &variant.data {
+        Some(VariantData::InlineStruct(inline)) => format!(
+            "{tag_entry} & {}",
+            inline_struct_type(inline, array_style, registry, helpers)?
         ),
-        Some(VariantData::DataStructureRef(ft)) => {
-            // Serde flattens newtype variants wrapping structs when internally tagged.
-            // Use an intersection type: `{ tag: 'VariantName' } & TypeRef`
-            format!(
-                "{{ {}: '{}' }} & {}",
-                tag,
-                variant.name,
-                field_type_to_typescript(ft, array_style, registry)
-            )
-        }
-        None => format!("{{ {}: '{}' }}", tag, variant.name),
-    }
+        // serde writes the tag into the struct a newtype variant holds.
+        Some(VariantData::DataStructureRef(field_type)) => format!(
+            "{tag_entry} & {}",
+            field_type_to_typescript(field_type, array_style, registry)
+        ),
+        None => tag_entry,
+    })
 }
 
 /// AdjacentlyTagged: `{ tag: 'VariantName'; content: Type }` for data variants,
@@ -382,28 +417,25 @@ fn render_variant_adjacently_tagged(
     content: &str,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => {
-            format!(
-                "{{ {}: '{}'; {}: {} }}",
-                tag,
-                variant.name,
-                content,
-                inline_struct_type(s, array_style, registry)
-            )
-        }
-        Some(VariantData::DataStructureRef(ft)) => {
-            format!(
-                "{{ {}: '{}'; {}: {} }}",
-                tag,
-                variant.name,
-                content,
-                field_type_to_typescript(ft, array_style, registry)
-            )
-        }
-        None => format!("{{ {}: '{}' }}", tag, variant.name),
-    }
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    let tag_entry = format!(
+        "{}: {}",
+        object_key(tag)?,
+        string_literal(variant.serde_name())?
+    );
+    let content = object_key(content)?;
+    Ok(match &variant.data {
+        Some(VariantData::InlineStruct(inline)) => format!(
+            "{{ {tag_entry}; {content}: {} }}",
+            inline_struct_type(inline, array_style, registry, helpers)?
+        ),
+        Some(VariantData::DataStructureRef(field_type)) => format!(
+            "{{ {tag_entry}; {content}: {} }}",
+            field_type_to_typescript(field_type, array_style, registry)
+        ),
+        None => format!("{{ {tag_entry} }}"),
+    })
 }
 
 /// Untagged: bare type reference, no wrapping.
@@ -411,36 +443,57 @@ fn render_variant_untagged(
     variant: &crate::types::Variant,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match &variant.data {
-        Some(VariantData::InlineStruct(s)) => inline_struct_type(s, array_style, registry),
-        Some(VariantData::DataStructureRef(ft)) => {
-            field_type_to_typescript(ft, array_style, registry)
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    Ok(match &variant.data {
+        Some(VariantData::InlineStruct(inline)) => {
+            inline_struct_type(inline, array_style, registry, helpers)?
         }
-        None => format!("\"{}\"", variant.name),
-    }
+        Some(VariantData::DataStructureRef(field_type)) => {
+            field_type_to_typescript(field_type, array_style, registry)
+        }
+        None => string_literal(variant.serde_name())?,
+    })
 }
 
 /// A struct variant's fields as a TypeScript object type, as serde writes
-/// them inline.
+/// them inline, each with its validators.
 fn inline_struct_type(
     inline: &StructConfig,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     let members = inline
         .fields
         .iter()
         .map(|field| {
             let field = field.effective();
-            format!(
-                "{}: {};",
-                field.field_name.to_case(Case::Camel),
+            let validators = collect_validators_for_field(
+                &field.validators,
+                &field.field_type,
+                &field.field_name,
+                helpers,
+            )?;
+            let annotation = if validators.is_empty() {
+                String::new()
+            } else {
+                format!("/** @serde({{ validate: [{validators}] }}) */ ")
+            };
+            Ok(format!(
+                "{annotation}{}: {};",
+                field_key(field)?,
                 field_type_to_typescript(&field.field_type, array_style, registry)
-            )
+            ))
         })
-        .collect::<Vec<_>>();
-    format!("{{ {} }}", members.join(" "))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(format!("{{ {} }}", members.join(" ")))
+}
+
+/// A field's key as serde writes it, optional when serde may leave it out.
+fn field_key(field: &crate::types::StructField) -> Result<String> {
+    let optional = if field.wire.serde_optional { "?" } else { "" };
+    Ok(format!("{}{optional}", object_key(field.serde_name())?))
 }
 
 /// Render a complete field block including annotations, @serde, and the field declaration.
@@ -449,7 +502,8 @@ fn render_field_block(
     field: &crate::types::StructField,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
-) -> String {
+    helpers: &mut HelperModule,
+) -> Result<String> {
     // Resolve `output_override` literally, as [`generate_struct_block`] does.
     let field = field.effective();
     let mut lines: Vec<String> = Vec::new();
@@ -460,7 +514,12 @@ fn render_field_block(
     }
 
     // 2. Compute validators and serde annotation
-    let validators_str = collect_validators_for_field(&field.validators, &field.field_type);
+    let validators_str = collect_validators_for_field(
+        &field.validators,
+        &field.field_type,
+        &field.field_name,
+        helpers,
+    )?;
     let (serde_annotation, is_inline) =
         build_serde_annotation(&validators_str, &field.field_type, registry);
 
@@ -483,7 +542,6 @@ fn render_field_block(
     }
 
     // 5. Field declaration line
-    let field_name = field.field_name.to_case(Case::Camel);
     let type_str = if is_inline && !serde_annotation.is_empty() {
         render_field_type(
             &field.field_type,
@@ -496,9 +554,9 @@ fn render_field_block(
         field_type_to_typescript(&field.field_type, array_style, registry)
     };
 
-    lines.push(format!("  {}: {};", field_name, type_str));
+    lines.push(format!("  {}: {};", field_key(field)?, type_str));
 
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }
 
 /// Format the `@derive(...)` JSDoc line from a list of macro names.
@@ -626,36 +684,6 @@ fn wrap_union_type(
     } else {
         rendered
     }
-}
-
-/// Collect validators and format them as a comma-separated string for JSDoc.
-/// For String and bare RecordLink fields, automatically adds "nonEmpty" unless already present;
-/// a char field is held to exactly one character.
-fn collect_validators_for_field(validators: &[Validator], field_type: &FieldType) -> String {
-    let mut result: Vec<String> = validators
-        .iter()
-        .filter_map(validator_to_macroforge_string)
-        .collect();
-
-    // Add nonEmpty for String fields by default (RecordLink handles this in its own type definition)
-    if matches!(field_type, FieldType::String) && !result.iter().any(|v| v == "nonEmpty") {
-        result.insert(0, "nonEmpty".to_string());
-    }
-    if matches!(field_type, FieldType::Char) {
-        result.insert(
-            0,
-            format!(
-                "pattern({})",
-                escape_for_jsdoc(crate::typesync::js_checks::ONE_CHARACTER)
-            ),
-        );
-    }
-
-    result
-        .iter()
-        .map(|v| format!("\"{}\"", v))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Compute `@serde({ format: "..." })` annotation for field types that need it.
@@ -854,88 +882,357 @@ pub fn compute_extra_imports<'a>(
     })
 }
 
-/// Convert a Validator to its Macroforge string representation.
-/// Returns None for transformation validators that should be skipped.
-fn validator_to_macroforge_string(validator: &Validator) -> Option<String> {
-    match validator {
-        Validator::StringValidator(sv) => string_validator_to_macroforge(sv),
-        Validator::NumberValidator(nv) => number_validator_to_macroforge(nv),
-        Validator::ArrayValidator(av) => array_validator_to_macroforge(av),
-        Validator::DateValidator(dv) => date_validator_to_macroforge(dv),
-        Validator::BigIntValidator(biv) => bigint_validator_to_macroforge(biv),
-        Validator::BigDecimalValidator(bdv) => bigdecimal_validator_to_macroforge(bdv),
-        Validator::DurationValidator(dv) => duration_validator_to_macroforge(dv),
+/// One validator as the macroforge output writes it: a validator macroforge
+/// provides, or a function in the output's helpers module.
+enum MacroforgeValidator {
+    Native(String),
+    Helper(HelperFunction),
+}
+
+/// What a helper function accepts before its check applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelperInput {
+    Text,
+    Decimal,
+    Duration,
+}
+
+/// A validator macroforge does not provide, as a function over `value`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HelperFunction {
+    /// The function's name before any bound suffix, such as `isAlpha`.
+    kind: &'static str,
+    /// Whether the check bakes in a bound, so each bound needs its own function.
+    bounded: bool,
+    input: HelperInput,
+    /// A boolean expression over `value`, valid once `input` holds.
+    predicate: String,
+}
+
+impl HelperFunction {
+    fn text(kind: &'static str, bounded: bool, check: Option<JsCheck>) -> Result<Self> {
+        let predicate = match check {
+            Some(JsCheck::Pattern(source)) => {
+                format!("new RegExp({}).test(value)", string_literal(&source)?)
+            }
+            Some(JsCheck::Predicate(predicate)) => predicate,
+            Some(JsCheck::Length(_)) | None => {
+                return Err(EvenframeError::type_sync(format!(
+                    "the macroforge helper `{kind}` has no string check"
+                )));
+            }
+        };
+        Ok(Self {
+            kind,
+            bounded,
+            input: HelperInput::Text,
+            predicate,
+        })
+    }
+
+    /// The exported name: the kind, with a bounded check's hash appended so
+    /// each bound keeps one stable function.
+    fn name(&self) -> String {
+        if self.bounded {
+            let hash = blake3::hash(self.predicate.as_bytes()).to_hex();
+            format!("{}_{}", self.kind, &hash.as_str()[..8])
+        } else {
+            self.kind.to_owned()
+        }
+    }
+
+    fn declaration(&self, name: &str) -> String {
+        let guard = match self.input {
+            HelperInput::Text => "typeof value === \"string\" && ",
+            HelperInput::Decimal => {
+                "(typeof value === \"string\" || typeof value === \"number\" || typeof value === \"bigint\") && "
+            }
+            HelperInput::Duration => "",
+        };
+        format!(
+            "export function {name}(value: unknown): boolean {{\n\treturn {guard}({});\n}}\n",
+            self.predicate
+        )
     }
 }
 
-fn string_validator_to_macroforge(sv: &StringValidator) -> Option<String> {
-    match sv {
-        // Length validators
-        StringValidator::MinLength(n) => Some(format!("minLength({})", n)),
-        StringValidator::MaxLength(n) => Some(format!("maxLength({})", n)),
-        StringValidator::Length(n) => Some(format!("length({})", n)),
-        StringValidator::NonEmpty => Some("nonEmpty".to_string()),
+/// The helpers module of one macroforge output: the functions its types'
+/// validators name, and the import specifier those types reach it by.
+#[derive(Debug, Clone)]
+pub struct HelperModule {
+    source: String,
+    functions: BTreeMap<String, HelperFunction>,
+}
 
-        // Format validators
-        StringValidator::Email => Some("email".to_string()),
-        StringValidator::Url => Some("url".to_string()),
-        StringValidator::Uuid
-        | StringValidator::UuidV1
-        | StringValidator::UuidV2
-        | StringValidator::UuidV3
-        | StringValidator::UuidV4
-        | StringValidator::UuidV5
-        | StringValidator::UuidV6
-        | StringValidator::UuidV7
-        | StringValidator::UuidV8 => Some("uuid".to_string()),
-        StringValidator::Ip => Some("ip".to_string()),
-        StringValidator::IpV4 => Some("ipv4".to_string()),
-        StringValidator::IpV6 => Some("ipv6".to_string()),
-        StringValidator::CreditCard => Some("creditCard".to_string()),
-        StringValidator::Semver => Some("semver".to_string()),
-        StringValidator::Json => Some("json".to_string()),
-        StringValidator::Base64 => Some("base64".to_string()),
-        StringValidator::Base64Url => Some("base64Url".to_string()),
-
-        // Character type validators
-        StringValidator::Alpha => Some("alpha".to_string()),
-        StringValidator::Alphanumeric => Some("alphanumeric".to_string()),
-        StringValidator::Digits => Some("digits".to_string()),
-        StringValidator::Hex => Some("hex".to_string()),
-        StringValidator::Integer => Some("integer".to_string()),
-        StringValidator::Numeric => Some("numeric".to_string()),
-
-        // Case/state validators (validation-only, not transformations)
-        StringValidator::Lowercased | StringValidator::LowerPreformatted => {
-            Some("lowercase".to_string())
+impl HelperModule {
+    /// A module the generated types import as `source`, such as `./helpers`.
+    pub fn new(source: String) -> Self {
+        Self {
+            source,
+            functions: BTreeMap::new(),
         }
-        StringValidator::Uppercased | StringValidator::UpperPreformatted => {
-            Some("uppercase".to_string())
-        }
-        StringValidator::Trimmed | StringValidator::TrimPreformatted => Some("trimmed".to_string()),
-        StringValidator::Capitalized | StringValidator::CapitalizePreformatted => {
-            Some("capitalized".to_string())
-        }
-        StringValidator::Uncapitalized => Some("uncapitalized".to_string()),
+    }
 
-        // Substring validators
-        StringValidator::StartsWith(s) => Some(format!("startsWith(\"{}\")", escape_for_jsdoc(s))),
-        StringValidator::EndsWith(s) => Some(format!("endsWith(\"{}\")", escape_for_jsdoc(s))),
-        StringValidator::Includes(s) => Some(format!("includes(\"{}\")", escape_for_jsdoc(s))),
+    pub fn is_empty(&self) -> bool {
+        self.functions.is_empty()
+    }
 
-        // Pattern validators
+    /// Takes in the functions another part of the same output named.
+    pub fn merge(&mut self, other: HelperModule) {
+        self.functions.extend(other.functions);
+    }
+
+    /// Adds `function` and returns the validator naming it.
+    fn reference(&mut self, function: HelperFunction) -> String {
+        let name = function.name();
+        let reference = format!(
+            "custom({{ function: \\\"{name}\\\", source: \\\"{}\\\" }})",
+            escape_for_jsdoc(&self.source)
+        );
+        self.functions.insert(name, function);
+        reference
+    }
+
+    /// The module's source, with the shared functions its helpers call.
+    pub fn content(&self) -> String {
+        let mut content = String::new();
+        if self
+            .functions
+            .values()
+            .any(|function| function.input == HelperInput::Decimal)
+        {
+            content.push_str(js_checks::COMPARE_DECIMAL);
+        }
+        if self
+            .functions
+            .values()
+            .any(|function| function.input == HelperInput::Duration)
+        {
+            content.push_str(js_checks::DURATION_NANOS);
+        }
+        for (name, function) in &self.functions {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&function.declaration(name));
+        }
+        content
+    }
+}
+
+/// A field's validators as the items of a `@serde({ validate: [...] })`
+/// array, each a quoted string. A char field is held to exactly one
+/// character.
+fn collect_validators_for_field(
+    validators: &[Validator],
+    field_type: &FieldType,
+    field_name: &str,
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    crate::validator::bounds::check_validators(validators)
+        .map_err(|problem| EvenframeError::config(format!("field '{field_name}': {problem}")))?;
+    let mut result = Vec::new();
+    if matches!(field_type, FieldType::Char) {
+        result.push(format!(
+            "pattern({})",
+            escape_for_jsdoc(js_checks::ONE_CHARACTER)
+        ));
+    }
+    for validator in validators {
+        match macroforge_validator(validator)? {
+            Some(MacroforgeValidator::Native(native)) => result.push(native),
+            Some(MacroforgeValidator::Helper(function)) => {
+                result.push(helpers.reference(function));
+            }
+            None => {}
+        }
+    }
+    Ok(result
+        .iter()
+        .map(|item| format!("\"{item}\""))
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
+/// A validator as the macroforge output writes it, or `None` for one that
+/// checks nothing: a transform, a parse morph or a carrier, which a
+/// macroforge type reads as already applied.
+fn macroforge_validator(validator: &Validator) -> Result<Option<MacroforgeValidator>> {
+    let native = |text: String| Ok(Some(MacroforgeValidator::Native(text)));
+    let quoted = |text: &str| format!("\\\"{}\\\"", escape_for_jsdoc(text));
+    match validator {
+        Validator::StringValidator(string_validator) => {
+            string_validator_to_macroforge(string_validator)
+        }
+        Validator::NumberValidator(number_validator) => native(match number_validator {
+            NumberValidator::Int => "int".to_owned(),
+            NumberValidator::Finite => "finite".to_owned(),
+            NumberValidator::NonNaN => "nonNaN".to_owned(),
+            NumberValidator::Positive => "positive".to_owned(),
+            NumberValidator::Negative => "negative".to_owned(),
+            NumberValidator::NonPositive => "nonPositive".to_owned(),
+            NumberValidator::NonNegative => "nonNegative".to_owned(),
+            NumberValidator::GreaterThan(bound) => format!("greaterThan({})", bound.0),
+            NumberValidator::GreaterThanOrEqualTo(bound) => {
+                format!("greaterThanOrEqualTo({})", bound.0)
+            }
+            NumberValidator::LessThan(bound) => format!("lessThan({})", bound.0),
+            NumberValidator::LessThanOrEqualTo(bound) => format!("lessThanOrEqualTo({})", bound.0),
+            NumberValidator::Between(start, end) => format!("between({}, {})", start.0, end.0),
+            NumberValidator::MultipleOf(divisor) => format!("multipleOf({})", divisor.0),
+            NumberValidator::Uint8 => "uint8".to_owned(),
+        }),
+        Validator::ArrayValidator(array_validator) => native(match array_validator {
+            ArrayValidator::MinItems(count) => format!("minItems({count})"),
+            ArrayValidator::MaxItems(count) => format!("maxItems({count})"),
+            ArrayValidator::ItemsCount(count) => format!("itemsCount({count})"),
+        }),
+        Validator::DateValidator(date_validator) => native(match date_validator {
+            DateValidator::ValidDate => "validDate".to_owned(),
+            DateValidator::GreaterThanDate(bound) => format!("greaterThanDate({})", quoted(bound)),
+            DateValidator::GreaterThanOrEqualToDate(bound) => {
+                format!("greaterThanOrEqualToDate({})", quoted(bound))
+            }
+            DateValidator::LessThanDate(bound) => format!("lessThanDate({})", quoted(bound)),
+            DateValidator::LessThanOrEqualToDate(bound) => {
+                format!("lessThanOrEqualToDate({})", quoted(bound))
+            }
+            DateValidator::BetweenDate(start, end) => {
+                format!("betweenDate({}, {})", quoted(start), quoted(end))
+            }
+        }),
+        Validator::BigIntValidator(big_int_validator) => native(match big_int_validator {
+            BigIntValidator::PositiveBigInt => "positiveBigInt".to_owned(),
+            BigIntValidator::NegativeBigInt => "negativeBigInt".to_owned(),
+            BigIntValidator::NonPositiveBigInt => "nonPositiveBigInt".to_owned(),
+            BigIntValidator::NonNegativeBigInt => "nonNegativeBigInt".to_owned(),
+            BigIntValidator::GreaterThanBigInt(bound) => {
+                format!("greaterThanBigInt({})", quoted(bound))
+            }
+            BigIntValidator::GreaterThanOrEqualToBigInt(bound) => {
+                format!("greaterThanOrEqualToBigInt({})", quoted(bound))
+            }
+            BigIntValidator::LessThanBigInt(bound) => format!("lessThanBigInt({})", quoted(bound)),
+            BigIntValidator::LessThanOrEqualToBigInt(bound) => {
+                format!("lessThanOrEqualToBigInt({})", quoted(bound))
+            }
+            BigIntValidator::BetweenBigInt(start, end) => {
+                format!("betweenBigInt({}, {})", quoted(start), quoted(end))
+            }
+        }),
+        Validator::BigDecimalValidator(decimal_validator) => {
+            let (kind, bounded) = match decimal_validator {
+                BigDecimalValidator::GreaterThanBigDecimal(_) => ("isGreaterThanBigDecimal", true),
+                BigDecimalValidator::GreaterThanOrEqualToBigDecimal(_) => {
+                    ("isGreaterThanOrEqualToBigDecimal", true)
+                }
+                BigDecimalValidator::LessThanBigDecimal(_) => ("isLessThanBigDecimal", true),
+                BigDecimalValidator::LessThanOrEqualToBigDecimal(_) => {
+                    ("isLessThanOrEqualToBigDecimal", true)
+                }
+                BigDecimalValidator::BetweenBigDecimal(_, _) => ("isBetweenBigDecimal", true),
+                BigDecimalValidator::PositiveBigDecimal => ("isPositiveBigDecimal", false),
+                BigDecimalValidator::NonNegativeBigDecimal => ("isNonNegativeBigDecimal", false),
+                BigDecimalValidator::NegativeBigDecimal => ("isNegativeBigDecimal", false),
+                BigDecimalValidator::NonPositiveBigDecimal => ("isNonPositiveBigDecimal", false),
+            };
+            Ok(Some(MacroforgeValidator::Helper(HelperFunction {
+                kind,
+                bounded,
+                input: HelperInput::Decimal,
+                predicate: js_checks::decimal_check(decimal_validator)?,
+            })))
+        }
+        Validator::DurationValidator(duration_validator) => {
+            let kind = match duration_validator {
+                DurationValidator::GreaterThanDuration(_) => "isGreaterThanDuration",
+                DurationValidator::GreaterThanOrEqualToDuration(_) => {
+                    "isGreaterThanOrEqualToDuration"
+                }
+                DurationValidator::LessThanDuration(_) => "isLessThanDuration",
+                DurationValidator::LessThanOrEqualToDuration(_) => "isLessThanOrEqualToDuration",
+                DurationValidator::BetweenDuration(_, _) => "isBetweenDuration",
+            };
+            Ok(Some(MacroforgeValidator::Helper(HelperFunction {
+                kind,
+                bounded: true,
+                input: HelperInput::Duration,
+                predicate: js_checks::duration_check(duration_validator)?,
+            })))
+        }
+    }
+}
+
+fn string_validator_to_macroforge(
+    validator: &StringValidator,
+) -> Result<Option<MacroforgeValidator>> {
+    let native = |text: String| Ok(Some(MacroforgeValidator::Native(text)));
+    let quoted = |text: &str| format!("\\\"{}\\\"", escape_for_jsdoc(text));
+    let helper = |kind: &'static str, bounded: bool| -> Result<Option<MacroforgeValidator>> {
+        Ok(Some(MacroforgeValidator::Helper(HelperFunction::text(
+            kind,
+            bounded,
+            js_checks::string_check(validator)?,
+        )?)))
+    };
+    match validator {
+        StringValidator::MinLength(length) => native(format!("minLength({length})")),
+        StringValidator::MaxLength(length) => native(format!("maxLength({length})")),
+        StringValidator::Length(length) => native(format!("length({length})")),
+        StringValidator::NonEmpty => native("nonEmpty".to_owned()),
+        StringValidator::Email => native("email".to_owned()),
+        StringValidator::Url => native("url".to_owned()),
+        StringValidator::Uuid => native("uuid".to_owned()),
+        StringValidator::Lowercased => native("lowercase".to_owned()),
+        StringValidator::Uppercased => native("uppercase".to_owned()),
+        StringValidator::Trimmed => native("trimmed".to_owned()),
+        StringValidator::Capitalized => native("capitalized".to_owned()),
+        StringValidator::Uncapitalized => native("uncapitalized".to_owned()),
+        StringValidator::StartsWith(prefix) => native(format!("startsWith({})", quoted(prefix))),
+        StringValidator::EndsWith(suffix) => native(format!("endsWith({})", quoted(suffix))),
+        StringValidator::Includes(substring) => native(format!("includes({})", quoted(substring))),
         StringValidator::RegexLiteral(format) => {
-            Some(format!("pattern({})", escape_for_jsdoc(&format.pattern())))
+            native(format!("pattern({})", escape_for_jsdoc(&format.pattern())))
         }
-        StringValidator::Literal(s) => Some(format!("literal(\"{}\")", escape_for_jsdoc(s))),
 
-        // Date validators
-        StringValidator::Date => Some("date".to_string()),
-        StringValidator::DateIso => Some("dateIso".to_string()),
-        StringValidator::DateEpoch => Some("dateEpoch".to_string()),
+        StringValidator::Alpha => helper("isAlpha", false),
+        StringValidator::Alphanumeric => helper("isAlphanumeric", false),
+        StringValidator::Base64 => helper("isBase64", false),
+        StringValidator::Base64Url => helper("isBase64Url", false),
+        StringValidator::CreditCard => helper("isCreditCard", false),
+        StringValidator::Date => helper("isDate", false),
+        StringValidator::DateIso => helper("isDateIso", false),
+        StringValidator::DateEpoch => helper("isDateEpoch", false),
+        StringValidator::Digits => helper("isDigits", false),
+        StringValidator::Hex => helper("isHex", false),
+        StringValidator::Integer => helper("isInteger", false),
+        StringValidator::Numeric => helper("isNumeric", false),
+        StringValidator::Ip => helper("isIp", false),
+        StringValidator::IpV4 => helper("isIpV4", false),
+        StringValidator::IpV6 => helper("isIpV6", false),
+        StringValidator::Json => helper("isJson", false),
+        StringValidator::Semver => helper("isSemver", false),
+        StringValidator::Regex => helper("isRegex", false),
+        StringValidator::UuidV1 => helper("isUuidV1", false),
+        StringValidator::UuidV2 => helper("isUuidV2", false),
+        StringValidator::UuidV3 => helper("isUuidV3", false),
+        StringValidator::UuidV4 => helper("isUuidV4", false),
+        StringValidator::UuidV5 => helper("isUuidV5", false),
+        StringValidator::UuidV6 => helper("isUuidV6", false),
+        StringValidator::UuidV7 => helper("isUuidV7", false),
+        StringValidator::UuidV8 => helper("isUuidV8", false),
+        StringValidator::LowerPreformatted => helper("isLowerPreformatted", false),
+        StringValidator::UpperPreformatted => helper("isUpperPreformatted", false),
+        StringValidator::TrimPreformatted => helper("isTrimPreformatted", false),
+        StringValidator::CapitalizePreformatted => helper("isCapitalizePreformatted", false),
+        StringValidator::NormalizeNFCPreformatted => helper("isNormalizedNfc", false),
+        StringValidator::NormalizeNFDPreformatted => helper("isNormalizedNfd", false),
+        StringValidator::NormalizeNFKCPreformatted => helper("isNormalizedNfkc", false),
+        StringValidator::NormalizeNFKDPreformatted => helper("isNormalizedNfkd", false),
+        StringValidator::Literal(_) => helper("isLiteral", true),
 
-        // Skip transformation validators - these modify data rather than validate
         StringValidator::String
+        | StringValidator::StringEmbedded(_)
         | StringValidator::Capitalize
         | StringValidator::Lower
         | StringValidator::Upper
@@ -945,200 +1242,188 @@ fn string_validator_to_macroforge(sv: &StringValidator) -> Option<String> {
         | StringValidator::NormalizeNFD
         | StringValidator::NormalizeNFKC
         | StringValidator::NormalizeNFKD
-        | StringValidator::NormalizeNFCPreformatted
-        | StringValidator::NormalizeNFDPreformatted
-        | StringValidator::NormalizeNFKCPreformatted
-        | StringValidator::NormalizeNFKDPreformatted
         | StringValidator::DateParse
         | StringValidator::DateEpochParse
         | StringValidator::DateIsoParse
         | StringValidator::IntegerParse
         | StringValidator::NumericParse
         | StringValidator::JsonParse
-        | StringValidator::UrlParse
-        | StringValidator::Regex
-        | StringValidator::StringEmbedded(_) => None,
+        | StringValidator::UrlParse => Ok(None),
     }
 }
 
-fn number_validator_to_macroforge(nv: &NumberValidator) -> Option<String> {
-    match nv {
-        NumberValidator::Int => Some("int".to_string()),
-        NumberValidator::Finite => Some("finite".to_string()),
-        NumberValidator::NonNaN => Some("nonNaN".to_string()),
-        NumberValidator::Positive => Some("positive".to_string()),
-        NumberValidator::Negative => Some("negative".to_string()),
-        NumberValidator::NonPositive => Some("nonPositive".to_string()),
-        NumberValidator::NonNegative => Some("nonNegative".to_string()),
-        NumberValidator::GreaterThan(n) => Some(format!("greaterThan({})", n.0)),
-        NumberValidator::GreaterThanOrEqualTo(n) => Some(format!("greaterThanOrEqualTo({})", n.0)),
-        NumberValidator::LessThan(n) => Some(format!("lessThan({})", n.0)),
-        NumberValidator::LessThanOrEqualTo(n) => Some(format!("lessThanOrEqualTo({})", n.0)),
-        NumberValidator::Between(start, end) => Some(format!("between({}, {})", start.0, end.0)),
-        NumberValidator::MultipleOf(n) => Some(format!("multipleOf({})", n.0)),
-        NumberValidator::Uint8 => Some("uint8".to_string()),
-    }
+/// Escapes text for a string inside a JSDoc `@serde(...)` annotation: its
+/// quotes and backslashes, and a `*/` that would end the comment.
+fn escape_for_jsdoc(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace("*/", "*\\/")
 }
 
-fn array_validator_to_macroforge(av: &ArrayValidator) -> Option<String> {
-    match av {
-        ArrayValidator::MinItems(n) => Some(format!("minItems({})", n)),
-        ArrayValidator::MaxItems(n) => Some(format!("maxItems({})", n)),
-        ArrayValidator::ItemsCount(n) => Some(format!("itemsCount({})", n)),
-    }
-}
-
-fn date_validator_to_macroforge(dv: &DateValidator) -> Option<String> {
-    match dv {
-        DateValidator::ValidDate => Some("validDate".to_string()),
-        DateValidator::GreaterThanDate(d) => {
-            Some(format!("greaterThanDate(\"{}\")", escape_for_jsdoc(d)))
-        }
-        DateValidator::GreaterThanOrEqualToDate(d) => Some(format!(
-            "greaterThanOrEqualToDate(\"{}\")",
-            escape_for_jsdoc(d)
-        )),
-        DateValidator::LessThanDate(d) => {
-            Some(format!("lessThanDate(\"{}\")", escape_for_jsdoc(d)))
-        }
-        DateValidator::LessThanOrEqualToDate(d) => Some(format!(
-            "lessThanOrEqualToDate(\"{}\")",
-            escape_for_jsdoc(d)
-        )),
-        DateValidator::BetweenDate(start, end) => Some(format!(
-            "betweenDate(\"{}\", \"{}\")",
-            escape_for_jsdoc(start),
-            escape_for_jsdoc(end)
-        )),
-    }
-}
-
-fn bigint_validator_to_macroforge(biv: &BigIntValidator) -> Option<String> {
-    match biv {
-        BigIntValidator::PositiveBigInt => Some("positiveBigInt".to_string()),
-        BigIntValidator::NegativeBigInt => Some("negativeBigInt".to_string()),
-        BigIntValidator::NonPositiveBigInt => Some("nonPositiveBigInt".to_string()),
-        BigIntValidator::NonNegativeBigInt => Some("nonNegativeBigInt".to_string()),
-        BigIntValidator::GreaterThanBigInt(n) => {
-            Some(format!("greaterThanBigInt(\"{}\")", escape_for_jsdoc(n)))
-        }
-        BigIntValidator::GreaterThanOrEqualToBigInt(n) => Some(format!(
-            "greaterThanOrEqualToBigInt(\"{}\")",
-            escape_for_jsdoc(n)
-        )),
-        BigIntValidator::LessThanBigInt(n) => {
-            Some(format!("lessThanBigInt(\"{}\")", escape_for_jsdoc(n)))
-        }
-        BigIntValidator::LessThanOrEqualToBigInt(n) => Some(format!(
-            "lessThanOrEqualToBigInt(\"{}\")",
-            escape_for_jsdoc(n)
-        )),
-        BigIntValidator::BetweenBigInt(start, end) => Some(format!(
-            "betweenBigInt(\"{}\", \"{}\")",
-            escape_for_jsdoc(start),
-            escape_for_jsdoc(end)
-        )),
-    }
-}
-
-fn bigdecimal_validator_to_macroforge(bdv: &BigDecimalValidator) -> Option<String> {
-    match bdv {
-        BigDecimalValidator::PositiveBigDecimal => Some("positiveBigDecimal".to_string()),
-        BigDecimalValidator::NegativeBigDecimal => Some("negativeBigDecimal".to_string()),
-        BigDecimalValidator::NonPositiveBigDecimal => Some("nonPositiveBigDecimal".to_string()),
-        BigDecimalValidator::NonNegativeBigDecimal => Some("nonNegativeBigDecimal".to_string()),
-        BigDecimalValidator::GreaterThanBigDecimal(n) => Some(format!(
-            "greaterThanBigDecimal(\"{}\")",
-            escape_for_jsdoc(n)
-        )),
-        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(n) => Some(format!(
-            "greaterThanOrEqualToBigDecimal(\"{}\")",
-            escape_for_jsdoc(n)
-        )),
-        BigDecimalValidator::LessThanBigDecimal(n) => {
-            Some(format!("lessThanBigDecimal(\"{}\")", escape_for_jsdoc(n)))
-        }
-        BigDecimalValidator::LessThanOrEqualToBigDecimal(n) => Some(format!(
-            "lessThanOrEqualToBigDecimal(\"{}\")",
-            escape_for_jsdoc(n)
-        )),
-        BigDecimalValidator::BetweenBigDecimal(start, end) => Some(format!(
-            "betweenBigDecimal(\"{}\", \"{}\")",
-            escape_for_jsdoc(start),
-            escape_for_jsdoc(end)
-        )),
-    }
-}
-
-fn duration_validator_to_macroforge(dv: &DurationValidator) -> Option<String> {
-    match dv {
-        DurationValidator::GreaterThanDuration(d) => {
-            Some(format!("greaterThanDuration(\"{}\")", escape_for_jsdoc(d)))
-        }
-        DurationValidator::GreaterThanOrEqualToDuration(d) => Some(format!(
-            "greaterThanOrEqualToDuration(\"{}\")",
-            escape_for_jsdoc(d)
-        )),
-        DurationValidator::LessThanDuration(d) => {
-            Some(format!("lessThanDuration(\"{}\")", escape_for_jsdoc(d)))
-        }
-        DurationValidator::LessThanOrEqualToDuration(d) => Some(format!(
-            "lessThanOrEqualToDuration(\"{}\")",
-            escape_for_jsdoc(d)
-        )),
-        DurationValidator::BetweenDuration(start, end) => Some(format!(
-            "betweenDuration(\"{}\", \"{}\")",
-            escape_for_jsdoc(start),
-            escape_for_jsdoc(end)
-        )),
-    }
-}
-
-/// Escape special characters for JSDoc strings.
-fn escape_for_jsdoc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Extract derive names from a typesync override string.
-/// Parses `/** @derive(Default, Serialize, Deserialize, Gigaform, Overview) */`
-/// and returns `["Default", "Serialize", "Deserialize", "Gigaform", "Overview"]`.
 #[cfg(test)]
 mod tests {
     use super::{
-        ArrayStyle, ArrayValidator, BTreeMap, FieldType, NumberValidator, StringValidator,
-        StructConfig, TaggedUnion, TypeIndex, Validator, collect_validators_for_field,
-        compute_extra_imports, field_type_to_typescript, generate_macroforge_for_types,
-        generate_macroforge_type_string, macro_import_lines, validator_to_macroforge_string,
+        ArrayStyle, ArrayValidator, BTreeMap, BigDecimalValidator, DurationValidator, FieldType,
+        HelperModule, MacroforgeValidator, NumberValidator, StringValidator, StructConfig,
+        TaggedUnion, TypeIndex, Validator, collect_validators_for_field, compute_extra_imports,
+        field_type_to_typescript, generate_macroforge_for_types, generate_macroforge_type_string,
+        macro_import_lines, macroforge_validator,
     };
     use crate::types::{EnumRepresentation, Pipeline, StructField, Variant};
     use ordered_float::OrderedFloat;
 
+    /// A struct whose fields serde names four ways: as written, renamed, by a
+    /// name that is no identifier, and as a key it may leave out.
+    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
+        use crate::types::{StructConfig, StructField, Wire};
+        let field = |name: &str, wire: Wire| StructField {
+            field_name: name.to_owned(),
+            field_type: FieldType::String,
+            wire,
+            ..Default::default()
+        };
+        let renamed = |name: &str| Wire {
+            serde: Some(name.to_owned()),
+            ..Wire::default()
+        };
+        let fields = vec![
+            field("first_name", Wire::default()),
+            field("last_name", renamed("lastName")),
+            field("zip_code", renamed("zip-code")),
+            field(
+                "nickname",
+                Wire {
+                    serde_optional: true,
+                    ..Wire::default()
+                },
+            ),
+        ];
+        std::collections::BTreeMap::from([(
+            "Person".to_owned(),
+            StructConfig {
+                struct_name: "Person".to_owned(),
+                fields,
+                ..Default::default()
+            },
+        )])
+    }
+
+    #[test]
+    fn fields_are_keyed_as_serde_writes_them() {
+        let structs = wire_named_structs();
+        let output = generate_macroforge_type_string(
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+            ArrayStyle::default(),
+            &crate::types::ForeignTypeRegistry::default(),
+            &mut helpers(),
+        )
+        .unwrap();
+        assert!(output.contains("  first_name: string;"), "{output}");
+        assert!(output.contains("  lastName: string;"), "{output}");
+        assert!(output.contains("  \"zip-code\": string;"), "{output}");
+        assert!(output.contains("  nickname?: string;"), "{output}");
+    }
+
+    /// The validator macroforge provides for `validator`, if it checks anything.
+    fn native(validator: &Validator) -> Option<String> {
+        match macroforge_validator(validator).expect("the validator maps") {
+            Some(MacroforgeValidator::Native(text)) => Some(text),
+            Some(MacroforgeValidator::Helper(_)) => panic!("{validator:?} should be native"),
+            None => None,
+        }
+    }
+
+    fn helpers() -> HelperModule {
+        HelperModule::new("./helpers".to_owned())
+    }
+
+    fn collected(validators: &[Validator], field_type: &FieldType) -> String {
+        collect_validators_for_field(validators, field_type, "field", &mut helpers())
+            .expect("the validators collect")
+    }
+
+    #[test]
+    fn validators_macroforge_lacks_become_helper_functions() {
+        let mut module = helpers();
+        let validators = vec![
+            Validator::StringValidator(StringValidator::Alpha),
+            Validator::StringValidator(StringValidator::Literal("a,\"b\"".to_owned())),
+            Validator::BigDecimalValidator(BigDecimalValidator::GreaterThanBigDecimal(
+                "1.5".to_owned(),
+            )),
+            Validator::DurationValidator(DurationValidator::LessThanDuration("1h".to_owned())),
+            Validator::StringValidator(StringValidator::Alpha),
+        ];
+        let items =
+            collect_validators_for_field(&validators, &FieldType::String, "field", &mut module)
+                .expect("the validators collect");
+        assert!(
+            items.starts_with(
+                "\"custom({ function: \\\"isAlpha\\\", source: \\\"./helpers\\\" })\""
+            )
+        );
+        let content = module.content();
+        assert_eq!(content.matches("export function isAlpha(").count(), 1);
+        assert!(content.contains("const compareDecimal"));
+        assert!(content.contains("const durationNanos"));
+        assert!(content.contains("export function isLiteral_"));
+        assert!(content.contains("value === \"a,\\\"b\\\"\""));
+        assert!(content.contains("export function isGreaterThanBigDecimal_"));
+        assert!(content.contains("export function isLessThanDuration_"));
+    }
+
+    #[test]
+    fn a_bounded_helper_is_named_by_its_bound() {
+        let mut module = helpers();
+        let mut name_for = |bound: &str| {
+            collect_validators_for_field(
+                &[Validator::DurationValidator(
+                    DurationValidator::GreaterThanDuration(bound.to_owned()),
+                )],
+                &FieldType::Duration,
+                "field",
+                &mut module,
+            )
+            .expect("the validators collect")
+        };
+        let one_hour = name_for("1h");
+        assert_eq!(one_hour, name_for("1h"));
+        assert_ne!(one_hour, name_for("2h"));
+    }
+
+    #[test]
+    fn a_bad_bound_is_rejected() {
+        let result = collect_validators_for_field(
+            &[Validator::DurationValidator(
+                DurationValidator::GreaterThanDuration("soon".to_owned()),
+            )],
+            &FieldType::Duration,
+            "timeout",
+            &mut helpers(),
+        );
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_string_validators_to_macroforge() {
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(StringValidator::Email)),
+            native(&Validator::StringValidator(StringValidator::Email)),
             Some("email".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(
-                StringValidator::MinLength(8)
-            )),
+            native(&Validator::StringValidator(StringValidator::MinLength(8))),
             Some("minLength(8)".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(
-                StringValidator::MaxLength(50)
-            )),
+            native(&Validator::StringValidator(StringValidator::MaxLength(50))),
             Some("maxLength(50)".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(StringValidator::Uuid)),
+            native(&Validator::StringValidator(StringValidator::Uuid)),
             Some("uuid".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(
-                StringValidator::Lowercased
-            )),
+            native(&Validator::StringValidator(StringValidator::Lowercased)),
             Some("lowercase".to_string())
         );
     }
@@ -1146,18 +1431,18 @@ mod tests {
     #[test]
     fn test_number_validators_to_macroforge() {
         assert_eq!(
-            validator_to_macroforge_string(&Validator::NumberValidator(NumberValidator::Int)),
+            native(&Validator::NumberValidator(NumberValidator::Int)),
             Some("int".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::NumberValidator(NumberValidator::Between(
+            native(&Validator::NumberValidator(NumberValidator::Between(
                 OrderedFloat(18.0),
                 OrderedFloat(120.0)
             ))),
             Some("between(18, 120)".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::NumberValidator(NumberValidator::Positive)),
+            native(&Validator::NumberValidator(NumberValidator::Positive)),
             Some("positive".to_string())
         );
     }
@@ -1165,11 +1450,11 @@ mod tests {
     #[test]
     fn test_array_validators_to_macroforge() {
         assert_eq!(
-            validator_to_macroforge_string(&Validator::ArrayValidator(ArrayValidator::MinItems(1))),
+            native(&Validator::ArrayValidator(ArrayValidator::MinItems(1))),
             Some("minItems(1)".to_string())
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::ArrayValidator(ArrayValidator::MaxItems(5))),
+            native(&Validator::ArrayValidator(ArrayValidator::MaxItems(5))),
             Some("maxItems(5)".to_string())
         );
     }
@@ -1178,21 +1463,19 @@ mod tests {
     fn test_transformation_validators_skipped() {
         // These should return None as they're transformations, not validations
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(StringValidator::Lower)),
+            native(&Validator::StringValidator(StringValidator::Lower)),
             None
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(StringValidator::Upper)),
+            native(&Validator::StringValidator(StringValidator::Upper)),
             None
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(StringValidator::Trim)),
+            native(&Validator::StringValidator(StringValidator::Trim)),
             None
         );
         assert_eq!(
-            validator_to_macroforge_string(&Validator::StringValidator(
-                StringValidator::IntegerParse
-            )),
+            native(&Validator::StringValidator(StringValidator::IntegerParse)),
             None
         );
     }
@@ -1361,26 +1644,22 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_validators_for_string_adds_nonempty() {
+    fn a_string_field_carries_only_its_declared_validators() {
         let validators = vec![
             Validator::StringValidator(StringValidator::Email),
             Validator::StringValidator(StringValidator::MinLength(5)),
         ];
-        // String fields get nonEmpty added by default
         assert_eq!(
-            collect_validators_for_field(&validators, &FieldType::String),
-            "\"nonEmpty\", \"email\", \"minLength(5)\""
+            collected(&validators, &FieldType::String),
+            "\"email\", \"minLength(5)\""
         );
+        assert_eq!(collected(&[], &FieldType::String), "");
     }
 
     #[test]
-    fn test_collect_validators_for_number_no_nonempty() {
+    fn a_number_field_carries_its_declared_validators() {
         let validators = vec![Validator::NumberValidator(NumberValidator::Int)];
-        // Number fields don't get nonEmpty
-        assert_eq!(
-            collect_validators_for_field(&validators, &FieldType::I32),
-            "\"int\""
-        );
+        assert_eq!(collected(&validators, &FieldType::I32), "\"int\"");
     }
 
     #[test]
@@ -1390,22 +1669,20 @@ mod tests {
             Validator::StringValidator(StringValidator::Lower), // Should be skipped
             Validator::StringValidator(StringValidator::MinLength(5)),
         ];
-        // nonEmpty is added first for strings
         assert_eq!(
-            collect_validators_for_field(&validators, &FieldType::String),
-            "\"nonEmpty\", \"email\", \"minLength(5)\""
+            collected(&validators, &FieldType::String),
+            "\"email\", \"minLength(5)\""
         );
     }
 
     #[test]
-    fn test_collect_validators_doesnt_duplicate_nonempty() {
+    fn an_explicit_non_empty_is_written() {
         let validators = vec![
             Validator::StringValidator(StringValidator::NonEmpty),
             Validator::StringValidator(StringValidator::Email),
         ];
-        // NonEmpty already present, shouldn't be duplicated
         assert_eq!(
-            collect_validators_for_field(&validators, &FieldType::String),
+            collected(&validators, &FieldType::String),
             "\"nonEmpty\", \"email\""
         );
     }
@@ -1463,19 +1740,14 @@ mod tests {
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
+            &mut helpers(),
         )
         .unwrap();
 
         assert!(output.contains("/** @derive(Deserialize) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
-        // String fields now get nonEmpty by default
-        assert!(output.contains("@serde({ validate: [\"nonEmpty\", \"email\"] })"));
-        assert!(
-            output.contains(
-                "@serde({ validate: [\"nonEmpty\", \"minLength(8)\", \"maxLength(50)\"] })"
-            )
-        );
-        // Number fields don't get nonEmpty
+        assert!(output.contains("@serde({ validate: [\"email\"] })"));
+        assert!(output.contains("@serde({ validate: [\"minLength(8)\", \"maxLength(50)\"] })"));
         assert!(output.contains("@serde({ validate: [\"int\", \"between(18, 120)\"] })"));
         assert!(output.contains("email: string"));
         assert!(output.contains("password: string"));
@@ -1534,6 +1806,7 @@ mod tests {
                 variants: vec![
                     Variant {
                         name: "Scheduled".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec!["@default".to_string()],
@@ -1543,6 +1816,7 @@ mod tests {
                     },
                     Variant {
                         name: "OnDeck".to_string(),
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: vec![],
@@ -1571,6 +1845,7 @@ mod tests {
             &TypeIndex::new(&structs, &enums).unwrap(),
             ArrayStyle::default(),
             &registry,
+            &mut helpers(),
         )
         .unwrap();
 
@@ -1638,6 +1913,7 @@ mod tests {
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
+            &mut helpers(),
         )
         .unwrap();
         assert!(
@@ -2135,7 +2411,9 @@ mod tests {
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             ArrayStyle::default(),
             &registry,
-        );
+            &mut helpers(),
+        )
+        .expect("the types render");
 
         assert!(
             output.contains("/** @derive(Serialize, Deserialize) */"),

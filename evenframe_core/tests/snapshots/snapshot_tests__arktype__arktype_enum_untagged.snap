@@ -4,7 +4,7 @@ expression: output
 ---
 export const bindings = scope({
 
-Value: [[['string', '|', 'number'], '|', 'boolean'], '|', ['===', 'Nothing']],
+Value: [[['string', '|', 'number'], '|', 'boolean'], '|', ['===', "Nothing"]],
 
 });
 

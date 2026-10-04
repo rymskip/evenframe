@@ -4,11 +4,9 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface User {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   email: string;
   age: number;
   score: number;
-  isActive: boolean;
+  is_active: boolean;
 }

@@ -1,0 +1,18 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+enum Status : ubyte {
+    Active = 0,
+    OnHold = 1
+}
+
+table Member {
+    id: string;
+    display_name: string (validate: "minLength(2)");
+    zip_code: string;
+    nickname: string;
+    status: Status;
+}

@@ -149,11 +149,12 @@ pub fn lint_discarded_field_annotations(
         }
         // Table-ness is a property of the source (`id` field presence), so the
         // raw scanned fields decide what the owning project's scanner would see.
-        let context = if object.resolve_only && object.fields.iter().any(|f| f.field_name == "id") {
-            DiscardedContext::ResolveOnlyTable
-        } else {
-            DiscardedContext::EmbeddedObject
-        };
+        let context =
+            if object.resolve_only && object.fields.iter().any(|field| field.db_name() == "id") {
+                DiscardedContext::ResolveOnlyTable
+            } else {
+                DiscardedContext::EmbeddedObject
+            };
         for field in &effective.fields {
             let field = field.effective();
             if let Some(dc) = &field.define_config {
@@ -286,6 +287,7 @@ mod tests {
         Variant {
             name: name.to_string(),
             data,
+            wire: Default::default(),
             doccom: None,
             annotations: vec![],
             output_override: None,

@@ -1,6 +1,6 @@
 use crate::{
     error::{EvenframeError, Result},
-    schemasync::table::TableConfig,
+    schemasync::table::{TableConfig, surql_ident},
     types::{StructConfig, TaggedUnion},
 };
 use std::collections::BTreeMap;
@@ -82,9 +82,7 @@ pub fn generate_define_statements(
     for table_field in &table_config.struct_config.fields {
         // if struct field is an edge it should not be defined in the table itself
         if table_field.edge_config.is_none()
-            && (table_field.field_name != "in"
-                && table_field.field_name != "out"
-                && table_field.field_name != "id")
+            && !matches!(table_field.db_name(), "in" | "out" | "id")
         {
             if table_field.define_config.is_some() {
                 let statement = table_field
@@ -106,7 +104,8 @@ pub fn generate_define_statements(
             } else {
                 output.push_str(&format!(
                     "DEFINE FIELD OVERWRITE {} ON TABLE {} TYPE any PERMISSIONS FULL;\n",
-                    table_field.field_name, table_name
+                    surql_ident(table_field.db_name()),
+                    table_name
                 ))
             }
         }
@@ -114,7 +113,7 @@ pub fn generate_define_statements(
 
     // Generate DEFINE INDEX statements for field-level #[unique] and
     // struct-level #[indexes(...)] entries.
-    for index in table_config.all_indexes(table_name) {
+    for index in table_config.all_indexes(table_name, server_only) {
         debug!(
             table_name = %table_name,
             fields = ?index.fields,
@@ -206,6 +205,7 @@ mod tests {
         dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "upper_name".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -257,6 +257,7 @@ mod tests {
         dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "upper_name".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -304,6 +305,7 @@ mod tests {
         dotenvy::dotenv().ok();
         let field = StructField {
             field_name: "email".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -359,6 +361,7 @@ mod tests {
                 fields: vec![
                     StructField {
                         field_name: "email".to_string(),
+                        wire: Default::default(),
                         field_type: FieldType::String,
                         edge_config: None,
                         define_config: Some(DefineConfig {
@@ -387,6 +390,7 @@ mod tests {
                     },
                     StructField {
                         field_name: "name".to_string(),
+                        wire: Default::default(),
                         field_type: FieldType::String,
                         edge_config: None,
                         define_config: Some(DefineConfig {
@@ -462,6 +466,7 @@ mod tests {
 
         let make_field = |name: &str| StructField {
             field_name: name.to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -586,6 +591,7 @@ mod tests {
 
         let make = |validators: Vec<Validator>, assert: Option<String>| StructField {
             field_name: "email".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -686,6 +692,7 @@ mod tests {
         // "string::len() ... found NULL".
         let field = StructField {
             field_name: "bio".to_string(),
+            wire: Default::default(),
             field_type: FieldType::Option(Box::new(FieldType::String)),
             edge_config: None,
             define_config: Some(DefineConfig {
@@ -733,6 +740,7 @@ mod tests {
 
         let make = |validators: Vec<Validator>| StructField {
             field_name: "name".to_string(),
+            wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
             define_config: Some(DefineConfig {

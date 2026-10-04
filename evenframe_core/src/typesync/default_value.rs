@@ -4,8 +4,8 @@
 use crate::config::RECORD_ID;
 use crate::error::{EvenframeError, Result};
 use crate::types::{EnumRepresentation, FieldType, TaggedUnion, VariantData};
+use crate::typesync::js_checks::{object_key, string_literal};
 use crate::typesync::type_index::TypeIndex;
-use convert_case::{Case, Casing};
 use tracing::{debug, trace};
 
 pub fn field_type_to_default_value(
@@ -66,7 +66,7 @@ pub fn field_type_to_default_value(
                 .map(|(name, ftype)| {
                     Ok(format!(
                         "{}: {}",
-                        name.to_case(Case::Camel),
+                        object_key(name)?,
                         field_type_to_default_value(ftype, index, registry)?
                     ))
                 })
@@ -169,14 +169,14 @@ fn enum_default(
                 enum_schema.enum_name
             ))
         })?;
-    let name = serde_json::to_string(&variant.name).map_err(|error| {
-        EvenframeError::config(format!("cannot encode variant {:?}: {error}", variant.name))
-    })?;
+    let name = string_literal(variant.serde_name())?;
     let representation = &enum_schema.representation;
     let Some(data) = &variant.data else {
         return Ok(match representation {
             EnumRepresentation::InternallyTagged { tag }
-            | EnumRepresentation::AdjacentlyTagged { tag, .. } => format!("{{ {tag}: {name} }}"),
+            | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
+                format!("{{ {}: {name} }}", object_key(tag)?)
+            }
             EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => name,
         });
     };
@@ -184,7 +184,7 @@ fn enum_default(
         VariantData::InlineStruct(inline) => {
             let entries = struct_default_entries(&inline.fields, index, registry)?;
             if let EnumRepresentation::InternallyTagged { tag } = representation {
-                let mut merged = vec![format!("{tag}: {name}")];
+                let mut merged = vec![format!("{}: {name}", object_key(tag)?)];
                 merged.extend(entries);
                 return Ok(format!("{{ {} }}", merged.join(", ")));
             }
@@ -195,14 +195,18 @@ fn enum_default(
         }
     };
     Ok(match representation {
-        EnumRepresentation::ExternallyTagged => format!("{{ {}: {payload} }}", variant.name),
+        EnumRepresentation::ExternallyTagged => {
+            format!("{{ {}: {payload} }}", object_key(variant.serde_name())?)
+        }
         // serde writes the tag into the struct or map the variant holds.
         EnumRepresentation::InternallyTagged { tag } => {
-            format!("{{ {tag}: {name}, ...{payload} }}")
+            format!("{{ {}: {name}, ...{payload} }}", object_key(tag)?)
         }
-        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            format!("{{ {tag}: {name}, {content}: {payload} }}")
-        }
+        EnumRepresentation::AdjacentlyTagged { tag, content } => format!(
+            "{{ {}: {name}, {}: {payload} }}",
+            object_key(tag)?,
+            object_key(content)?
+        ),
         EnumRepresentation::Untagged => payload,
     })
 }
@@ -218,7 +222,7 @@ fn struct_default_entries(
         .map(|field| {
             Ok(format!(
                 "{}: {}",
-                field.field_name.to_case(Case::Camel),
+                object_key(field.serde_name())?,
                 field_type_to_default_value(&field.field_type, index, registry)?
             ))
         })

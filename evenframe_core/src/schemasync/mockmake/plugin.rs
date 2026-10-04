@@ -26,9 +26,6 @@ struct WithParams<'a, T: serde::Serialize> {
     params: &'a BTreeMap<String, String>,
 }
 
-/// The error a plugin returns to leave a field to the default generator.
-const SKIP: &str = "skip";
-
 /// How much a run has used its mock plugins: the field values asked of
 /// them and the time those requests took, serialization included.
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,8 +83,8 @@ impl PluginManager {
         self.usage
     }
 
-    /// A field value from a named plugin, or `None` when the plugin skips
-    /// the field and leaves it to the default generator.
+    /// A field value from a named plugin, or `None` when the plugin
+    /// declines the field and leaves it to the default generator.
     pub fn generate_field_value(
         &mut self,
         plugin_name: &str,
@@ -113,20 +110,6 @@ impl PluginManager {
         })?;
         self.usage.calls += 1;
         self.usage.time += started.elapsed();
-
-        match output.error.as_deref() {
-            Some(SKIP) => return Ok(None),
-            Some(error) => {
-                return Err(EvenframeError::plugin(format!(
-                    "Plugin '{plugin_name}' error: {error}"
-                )));
-            }
-            None => {}
-        }
-        output.value.map(Some).ok_or_else(|| {
-            EvenframeError::plugin(format!(
-                "Plugin '{plugin_name}' returned neither value nor error"
-            ))
-        })
+        output.into_value(plugin_name)
     }
 }

@@ -49,7 +49,7 @@ flatbuffers = ["typesync"]
 
 # Enables Macroforge TypeScript interface generation with JSDoc annotations.
 # Implies: typesync
-macroforge = ["typesync"]
+macroforge = ["typesync", "dep:blake3"]
 
 # Enables all typesync generators: ArkType, Effect-TS, Protocol Buffers,
 # FlatBuffers, and Macroforge.
@@ -153,6 +153,11 @@ linkme = { version = "0.3.37", optional = true }
 # ArkType string keyword checks shared by derive, mockmake and typesync
 unicode-normalization = "0.1.25"
 fancy-regex = "0.19.2"
+# Field and variant names as serde and SurrealValue write them. heck stays on
+# 0.4 because surrealdb-types-derive cases names with it, and 0.5 splits words
+# differently.
+serde_derive_internals = "0.30.0"
+heck = "0.4.1"
 
 # Always compiled (used in type definitions throughout)
 bon = "3.10.1"

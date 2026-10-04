@@ -40,6 +40,7 @@ pub struct FieldContext {
 pub struct __FieldOutput {
     pub value: Option<String>,
     pub error: Option<String>,
+    pub declined: bool,
 }
 
 /// Define a mock data WASM plugin for field-level value generation.
@@ -74,19 +75,22 @@ macro_rules! define_mock_data_plugin {
                     let $ctx = &$ctx;
                     let result: Option<&str> = (|| $body)();
                     match result {
-                        Some(val) => $crate::__FieldOutput {
-                            value: Some(val.to_string()),
+                        Some(value) => $crate::__FieldOutput {
+                            value: Some(value.to_string()),
                             error: None,
+                            declined: false,
                         },
                         None => $crate::__FieldOutput {
                             value: None,
-                            error: Some("skip".into()),
+                            error: None,
+                            declined: true,
                         },
                     }
                 }
-                Err(e) => $crate::__FieldOutput {
+                Err(error) => $crate::__FieldOutput {
                     value: None,
-                    error: Some(format!("parse error: {}", e)),
+                    error: Some(format!("parse error: {error}")),
+                    declined: false,
                 },
             };
 
@@ -271,7 +275,7 @@ impl TypeContext {
             .unwrap_or_default()
     }
 
-    /// Type-level raw attribute stubs — attributes that evenframe doesn't
+    /// Type-level raw attribute stubs: attributes that evenframe doesn't
     /// parse natively, keyed by attribute name with each value being the
     /// parenthesized body (or `""` for bare path attributes like
     /// `#[overview]`). Multi-occurrence attributes preserve order.
@@ -301,7 +305,7 @@ impl TypeContext {
     }
 
     /// Iterate the struct's fields (or enum's variants). Each entry is
-    /// the raw JSON node so callers can introspect anything — use the
+    /// the raw JSON node so callers can introspect anything; use the
     /// [`TypeFieldInfo`] accessors for the common fields.
     pub fn fields(&self) -> Vec<TypeFieldInfo> {
         let arr = match self {
@@ -431,7 +435,7 @@ pub struct OutputRulePluginOutput {
     /// Per-field overrides: field_name -> FieldOverride.
     #[serde(default)]
     pub field_overrides: HashMap<String, FieldOverride>,
-    /// Error message — if set, this plugin's output is skipped.
+    /// Error message. When set, this plugin's output is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -795,18 +799,18 @@ pub fn test_plugin(
 
     let bytes = serde_json::to_vec(&json).expect("Failed to serialize TypeContext test JSON");
     let ctx: TypeContext = serde_json::from_slice(&bytes)
-        .expect("Failed to deserialize TypeContext — roundtrip failed");
+        .expect("Failed to deserialize TypeContext: roundtrip failed");
 
     let output = plugin_fn(&ctx);
 
     let bytes = serde_json::to_vec(&output).expect("Failed to serialize OutputRulePluginOutput");
     let output: OutputRulePluginOutput = serde_json::from_slice(&bytes)
-        .expect("Failed to deserialize OutputRulePluginOutput — roundtrip failed");
+        .expect("Failed to deserialize OutputRulePluginOutput: roundtrip failed");
 
     for (field_name, ov) in &output.field_overrides {
         assert!(
             !ov.annotations.is_empty(),
-            "field_overrides[\"{}\"].annotations is empty — don't add an override with no annotations",
+            "field_overrides[\"{}\"].annotations is empty; don't add an override with no annotations",
             field_name
         );
     }
@@ -994,7 +998,7 @@ pub struct SyntheticPluginOutput {
 /// Build a minimal `StructConfig`-shaped JSON value.
 ///
 /// `fields` is a slice of `(field_name, field_type_json)` pairs. The
-/// `field_type_json` is an already-built `FieldType` JSON value — use
+/// `field_type_json` is an already-built `FieldType` JSON value; use
 /// [`string_type`], [`bool_type`], etc. for primitives.
 pub fn struct_item(name: &str, fields: &[(&str, serde_json::Value)]) -> serde_json::Value {
     let field_objs: Vec<serde_json::Value> = fields
@@ -1055,7 +1059,7 @@ pub fn table_item(
     })
 }
 
-// Convenience field-type constructors — match the `FieldType` serde tags.
+// Convenience field-type constructors, matching the `FieldType` serde tags.
 
 pub fn string_type() -> serde_json::Value {
     serde_json::json!("String")

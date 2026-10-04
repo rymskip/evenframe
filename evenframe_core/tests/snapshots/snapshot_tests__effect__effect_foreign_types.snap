@@ -3,20 +3,20 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class Appointment extends Schema.Class<Appointment>("Appointment")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
-  scheduledAt: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Scheduled At' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
+  scheduled_at: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Scheduled At' is required` }),
   duration: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Duration' is required` }),
-  cancelledAt: Schema.OptionFromNullishOr(Schema.String, null)
+  cancelled_at: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
 
 export interface AppointmentEncoded {
   readonly id: string;
   readonly title: string;
-  readonly scheduledAt: string;
+  readonly scheduled_at: string;
   readonly duration: number;
-  readonly cancelledAt: string | null | undefined;
+  readonly cancelled_at: string | null | undefined;
 }
 
 

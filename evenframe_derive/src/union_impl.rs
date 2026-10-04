@@ -1,3 +1,5 @@
+use crate::validate_impl::enum_validate;
+use evenframe_core::derive::naming;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Type, TypePath, spanned::Spanned};
@@ -98,8 +100,16 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
             };
         };
 
+        let validate_impl =
+            match naming::resolve(&input).and_then(|wire| enum_validate(&input, &wire)) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            };
+
         quote! {
             impl ::evenframe::traits::EvenframeTable for #ident {}
+
+            #validate_impl
 
             ::evenframe::__metadata! {
                 const _: () = {

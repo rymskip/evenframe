@@ -77,6 +77,7 @@ pub fn generate_struct_with_override(
         &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
+        &mut crate::typesync::macroforge::HelperModule::new("./helpers".to_owned()),
     )
     .expect("the macroforge output generates");
     GeneratedOutput {
@@ -112,6 +113,7 @@ pub fn generate_enum_with_override(
         &TypeIndex::new(&structs, &enums).unwrap(),
         crate::typesync::config::ArrayStyle::default(),
         &registry,
+        &mut crate::typesync::macroforge::HelperModule::new("./helpers".to_owned()),
     )
     .expect("the macroforge output generates");
     GeneratedOutput {
@@ -124,6 +126,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
     StructField {
         field_name: name.to_string(),
         field_type,
+        wire: Default::default(),
         edge_config: None,
         define_config: None,
         format: None,

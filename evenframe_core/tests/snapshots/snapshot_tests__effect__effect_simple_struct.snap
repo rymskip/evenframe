@@ -3,11 +3,11 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class User extends Schema.Class<User>("User")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  email: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Email' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  email: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Email' is required` }),
   age: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Age' is required` }),
   score: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Score' is required` }),
-  isActive: Schema.propertySignature(Schema.Boolean).annotations({ missingMessage: () => `'Is Active' is required` })
+  is_active: Schema.propertySignature(Schema.Boolean).annotations({ missingMessage: () => `'Is Active' is required` })
 }) {[key: string]: unknown}
 
 
@@ -16,7 +16,7 @@ export interface UserEncoded {
   readonly email: string;
   readonly age: number;
   readonly score: number;
-  readonly isActive: boolean;
+  readonly is_active: boolean;
 }
 
 

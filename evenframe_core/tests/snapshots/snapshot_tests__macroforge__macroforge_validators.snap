@@ -4,12 +4,17 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Registration {
-  /** @serde({ validate: ["nonEmpty", "email", "maxLength(255)", "minLength(5)"] }) */
+  /** @serde({ validate: ["email", "maxLength(255)", "minLength(5)"] }) */
   email: string;
-  /** @serde({ validate: ["nonEmpty", "alphanumeric", "minLength(3)", "maxLength(50)"] }) */
+  /** @serde({ validate: ["custom({ function: \"isAlphanumeric\", source: \"./helpers\" })", "minLength(3)", "maxLength(50)"] }) */
   username: string;
   /** @serde({ validate: ["greaterThanOrEqualTo(13)", "lessThanOrEqualTo(150)"] }) */
   age: number;
   /** @serde({ validate: ["url"] }) */
   website: string | null;
+}
+
+// helpers
+export function isAlphanumeric(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[0-9A-Za-z]*$").test(value));
 }

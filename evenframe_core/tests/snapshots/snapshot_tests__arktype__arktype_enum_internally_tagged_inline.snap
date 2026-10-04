@@ -4,7 +4,7 @@ expression: output
 ---
 export const bindings = scope({
 
-Shape: [[{ type: ['===', 'Circle'], radius: 'number' }, '|', { type: ['===', 'Rectangle'], width: 'number', height: 'number' }], '|', { type: ['===', 'Point'] }],
+Shape: [[{ type: ['===', "Circle"], radius: 'number' }, '|', { type: ['===', "Rectangle"], width: 'number', height: 'number' }], '|', { type: ['===', "Point"] }],
 
 });
 

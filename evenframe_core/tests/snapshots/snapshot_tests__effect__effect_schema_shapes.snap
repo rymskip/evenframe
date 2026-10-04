@@ -3,7 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class Place extends Schema.Class<Place>("Place")( { 
-  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` })
+  name: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Name' is required` })
 }) {[key: string]: unknown}
 
 export class Moved extends Schema.Class<Moved>("Moved")( { 
@@ -11,26 +11,26 @@ export class Moved extends Schema.Class<Moved>("Moved")( {
   to: Schema.propertySignature(Place).annotations({ missingMessage: () => `'To' is required` })
 }) {[key: string]: unknown}
 
-export const Event = Schema.Union(Schema.Literal("Opened"), Schema.Struct({ Moved: Moved }), Schema.Struct({ Tagged: Schema.Array(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))) }), Schema.Struct({ Visited: Place }), Schema.Struct({ Scored: Schema.Number }), Schema.Struct({ Pinned: Schema.Tuple(Schema.Number, Schema.Number) }), Schema.Struct({ Cleared: Schema.Tuple() })).annotations({ identifier: `Event` });
+export const Event = Schema.Union(Schema.Literal("Opened"), Schema.Struct({ Moved: Moved }), Schema.Struct({ Tagged: Schema.Array(Schema.String) }), Schema.Struct({ Visited: Place }), Schema.Struct({ Scored: Schema.Number }), Schema.Struct({ Pinned: Schema.Tuple(Schema.Number, Schema.Number) }), Schema.Struct({ Cleared: Schema.Tuple() })).annotations({ identifier: `Event` });
 export class Shapes extends Schema.Class<Shapes>("Shapes")( { 
-  maybeTags: Schema.OptionFromNullishOr(Schema.Array(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))), null),
+  maybe_tags: Schema.OptionFromNullishOr(Schema.Array(Schema.String), null),
   matrix: Schema.propertySignature(Schema.Array(Schema.Array(Schema.Number))).annotations({ missingMessage: () => `'Matrix' is required` }),
   gaps: Schema.propertySignature(Schema.Array(Schema.OptionFromNullishOr(Schema.Number, null))).annotations({ missingMessage: () => `'Gaps' is required` }),
-  triState: Schema.OptionFromNullishOr(Schema.OptionFromNullishOr(Schema.Boolean, null), null),
-  maybeCount: Schema.OptionFromNullishOr(Schema.Number, null),
-  listsByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Array(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Lists By Name' is required` }),
-  optionalByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.OptionFromNullishOr(Schema.Number, null) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Optional By Name' is required` }),
-  mapsByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Boolean }).annotations({ parseOptions: { onExcessProperty: "error" } }) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Maps By Name' is required` }),
-  pair: Schema.propertySignature(Schema.Tuple(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), Schema.Number)).annotations({ missingMessage: () => `'Pair' is required` }),
+  tri_state: Schema.OptionFromNullishOr(Schema.OptionFromNullishOr(Schema.Boolean, null), null),
+  maybe_count: Schema.OptionFromNullishOr(Schema.Number, null),
+  lists_by_name: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Array(Schema.String) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Lists By Name' is required` }),
+  optional_by_name: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.OptionFromNullishOr(Schema.Number, null) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Optional By Name' is required` }),
+  maps_by_name: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Boolean }).annotations({ parseOptions: { onExcessProperty: "error" } }) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Maps By Name' is required` }),
+  pair: Schema.propertySignature(Schema.Tuple(Schema.String, Schema.Number)).annotations({ missingMessage: () => `'Pair' is required` }),
   pairs: Schema.propertySignature(Schema.Array(Schema.Tuple(Schema.Number, Schema.Number))).annotations({ missingMessage: () => `'Pairs' is required` }),
   corner: Schema.propertySignature(Schema.Struct({ x: Schema.Number, y: Schema.Number })).annotations({ missingMessage: () => `'Corner' is required` }),
   nothing: Schema.propertySignature(Schema.Null).annotations({ missingMessage: () => `'Nothing' is required` }),
   huge: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Huge' is required` }),
-  hugeById: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Huge By Id' is required` }),
+  huge_by_id: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.String }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Huge By Id' is required` }),
   event: Schema.propertySignature(Event).annotations({ missingMessage: () => `'Event' is required` }),
   events: Schema.propertySignature(Schema.Array(Event)).annotations({ missingMessage: () => `'Events' is required` }),
-  lastEvent: Schema.OptionFromNullishOr(Event, null),
-  eventsByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Event }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Events By Name' is required` })
+  last_event: Schema.OptionFromNullishOr(Event, null),
+  events_by_name: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Event }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Events By Name' is required` })
 }) {[key: string]: unknown}
 
 
@@ -46,14 +46,14 @@ export interface MovedEncoded {
 export type EventEncoded = "Opened" | { readonly Moved: MovedEncoded } | { readonly Tagged: ReadonlyArray<string> } | { readonly Visited: PlaceEncoded } | { readonly Scored: number } | { readonly Pinned: readonly [number, number] } | { readonly Cleared: readonly [] };
 
 export interface ShapesEncoded {
-  readonly maybeTags: ReadonlyArray<string> | null | undefined;
+  readonly maybe_tags: ReadonlyArray<string> | null | undefined;
   readonly matrix: ReadonlyArray<ReadonlyArray<number>>;
   readonly gaps: ReadonlyArray<number | null | undefined>;
-  readonly triState: boolean | null | undefined | null | undefined;
-  readonly maybeCount: number | null | undefined;
-  readonly listsByName: Record<string, ReadonlyArray<string>>;
-  readonly optionalByName: Record<string, number | null | undefined>;
-  readonly mapsByName: Record<string, Record<string, boolean>>;
+  readonly tri_state: boolean | null | undefined | null | undefined;
+  readonly maybe_count: number | null | undefined;
+  readonly lists_by_name: Record<string, ReadonlyArray<string>>;
+  readonly optional_by_name: Record<string, number | null | undefined>;
+  readonly maps_by_name: Record<string, Record<string, boolean>>;
   readonly pair: readonly [string, number];
   readonly pairs: ReadonlyArray<readonly [number, number]>;
   readonly corner: {
@@ -62,11 +62,11 @@ export interface ShapesEncoded {
 };
   readonly nothing: null;
   readonly huge: number;
-  readonly hugeById: Record<string, string>;
+  readonly huge_by_id: Record<string, string>;
   readonly event: EventEncoded;
   readonly events: ReadonlyArray<EventEncoded>;
-  readonly lastEvent: EventEncoded | null | undefined;
-  readonly eventsByName: Record<string, EventEncoded>;
+  readonly last_event: EventEncoded | null | undefined;
+  readonly events_by_name: Record<string, EventEncoded>;
 }
 
 

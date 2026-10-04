@@ -139,3 +139,110 @@ fn durations_are_read_as_serde_writes_them_and_checked() {
         "{error}"
     );
 }
+
+#[test]
+fn every_failing_field_is_reported_together() {
+    let error =
+        signup(serde_json::json!({ "email": "nope", "age": "12", "tags": [] })).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.starts_with("email: must be an email address; age: must be at least 13"),
+        "{message}"
+    );
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    #[validators(StringValidator::MinLength(2))]
+    #[serde(alias = "name")]
+    pub display_name: String,
+    #[validators(StringValidator::Email)]
+    pub contact_email: Option<String>,
+    #[serde(default)]
+    pub follower_count: u32,
+}
+
+#[test]
+fn fields_are_read_by_serde_names_and_aliases() {
+    let profile: Profile = serde_json::from_value(serde_json::json!({
+        "displayName": "Ada",
+        "contactEmail": "ada@example.com",
+        "followerCount": 3,
+        "unknown": true,
+    }))
+    .unwrap();
+    assert_eq!(profile.display_name, "Ada");
+    assert_eq!(profile.follower_count, 3);
+
+    let profile: Profile = serde_json::from_value(serde_json::json!({ "name": "Ada" })).unwrap();
+    assert_eq!(profile.contact_email, None);
+    assert_eq!(profile.follower_count, 0);
+
+    let error =
+        serde_json::from_value::<Profile>(serde_json::json!({ "displayName": "A" })).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("displayName: must be at least 2 characters"),
+        "{error}"
+    );
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[serde(deny_unknown_fields)]
+pub struct Strict {
+    #[validators(StringValidator::NonEmpty)]
+    pub name: String,
+}
+
+#[test]
+fn unknown_keys_are_rejected_only_under_deny_unknown_fields() {
+    let error = serde_json::from_value::<Strict>(serde_json::json!({ "name": "a", "extra": 1 }))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unknown field `extra`"),
+        "{error}"
+    );
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Team {
+    #[validators(StringValidator::NonEmpty)]
+    pub name: String,
+    pub lead: Profile,
+    pub members: Vec<Profile>,
+}
+
+#[test]
+fn validate_checks_a_built_value_and_everything_it_holds() {
+    use evenframe::validator::validate::Validate;
+
+    let profile = |name: &str| Profile {
+        display_name: name.to_owned(),
+        contact_email: None,
+        follower_count: 0,
+    };
+    let team = Team {
+        name: String::new(),
+        lead: profile("A"),
+        members: vec![profile("Bea"), profile("C")],
+    };
+    let error = team.validate().unwrap_err();
+    let paths: Vec<&str> = error
+        .errors()
+        .iter()
+        .map(|failure| failure.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        ["name", "lead.displayName", "members[1].displayName"]
+    );
+
+    let valid = Team {
+        name: "Core".to_owned(),
+        lead: profile("Ada"),
+        members: vec![],
+    };
+    assert!(valid.validate().is_ok());
+}

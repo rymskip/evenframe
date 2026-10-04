@@ -5,6 +5,6 @@ expression: output
 /** @derive(Deserialize) */
 /** @serde({ tag: "type" }) */
 export type Shape =
-	| { type: 'Circle' } & { radius: number; }
-	| { type: 'Rectangle' } & { width: number; height: number; }
-	| { type: 'Point' };
+	| { type: "Circle" } & { radius: number; }
+	| { type: "Rectangle" } & { width: number; height: number; }
+	| { type: "Point" };

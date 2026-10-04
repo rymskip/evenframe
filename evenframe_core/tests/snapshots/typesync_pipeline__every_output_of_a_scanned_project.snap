@@ -8,7 +8,7 @@ import { RecordIdCodec } from '../record-id.ts';
 
 export const bindings = scope({
 
-Status: [[['===', 'Draft'], '|', { Scheduled: 'Scheduled' }], '|', { Archived: 'string' }],
+Status: [[['===', "Draft"], '|', { Scheduled: 'Scheduled' }], '|', { Archived: 'string' }],
 Address: {
   street: 'string',
   city: [['string', '|', 'undefined'], '|', 'null']
@@ -38,7 +38,7 @@ Post: {
   id: 'string',
   title: 'string',
   author: ['Author', "|", RecordIdCodec.ark],
-  readTime: { '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' },
+  read_time: { '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' },
   status: 'Status',
   location: 'Address',
   outline: [['Section', '|', 'undefined'], '|', 'null'],
@@ -78,7 +78,7 @@ export const defaultPost: Post = {
 id: "",
 title: "",
 author: RecordIdCodec.empty,
-readTime: { secs: 0, nanos: 0 },
+read_time: { secs: 0, nanos: 0 },
 status: "Draft",
 location: { street: "", city: null },
 outline: null,
@@ -101,42 +101,42 @@ import { Schema } from "effect";
 import { RecordIdCodec } from '../record-id.ts';
 
 export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
-  at: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'At' is required` }),
-  note: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+  at: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'At' is required` }),
+  note: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
-export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) })).annotations({ identifier: `Status` });
+export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String })).annotations({ identifier: `Status` });
 export class Section extends Schema.Class<Section>("Section")( { 
-  heading: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Heading' is required` }),
+  heading: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Heading' is required` }),
   children: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Section, SectionEncoded> => Section).annotations({ identifier: `SectionRef` }))).annotations({ missingMessage: () => `'Children' is required` })
 }) {[key: string]: unknown}
 
 export class Comment extends Schema.Class<Comment>("Comment")( { 
-  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
   replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
 }) {[key: string]: unknown}
 
 export class Reply extends Schema.Class<Reply>("Reply")( { 
-  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
   thread: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Thread' is required` })
 }) {[key: string]: unknown}
 
 export class Address extends Schema.Class<Address>("Address")( { 
-  street: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Street' is required` }),
-  city: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+  street: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
 export class Author extends Schema.Class<Author>("Author")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  name: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Name' is required` }),
   home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
 }) {[key: string]: unknown}
 
 export class Post extends Schema.Class<Post>("Post")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
   author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
-  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
+  read_time: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -181,7 +181,7 @@ export interface PostEncoded {
   readonly id: string;
   readonly title: string;
   readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
-  readonly readTime: {
+  readonly read_time: {
   readonly secs: number;
   readonly nanos: number;
 };
@@ -196,8 +196,8 @@ export interface PostEncoded {
 import { Schema } from "effect";
 
 export class Address extends Schema.Class<Address>("Address")( { 
-  street: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Street' is required` }),
-  city: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+  street: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
 export type AddressType = typeof Address.Type;
@@ -215,37 +215,37 @@ import { Address, type AddressEncoded } from './address';
 import { Section, type SectionEncoded } from './section';
 
 export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
-  at: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'At' is required` }),
-  note: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), null)
+  at: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'At' is required` }),
+  note: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
 export type ScheduledType = typeof Scheduled.Type;
-export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) })).annotations({ identifier: `Status` });
+export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Scheduled: Scheduled }), Schema.Struct({ Archived: Schema.String })).annotations({ identifier: `Status` });
 export type StatusType = typeof Status.Type;
 export class Comment extends Schema.Class<Comment>("Comment")( { 
-  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
   replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
 }) {[key: string]: unknown}
 
 export type CommentType = typeof Comment.Type;
 export class Reply extends Schema.Class<Reply>("Reply")( { 
-  body: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Body' is required` }),
+  body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
   thread: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Thread' is required` })
 }) {[key: string]: unknown}
 
 export type ReplyType = typeof Reply.Type;
 export class Author extends Schema.Class<Author>("Author")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  name: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  name: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Name' is required` }),
   home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
 }) {[key: string]: unknown}
 
 export type AuthorType = typeof Author.Type;
 export class Post extends Schema.Class<Post>("Post")( { 
-  id: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Id' is required` }),
-  title: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Title' is required` }),
+  id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
+  title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
   author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
-  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
+  read_time: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -281,7 +281,7 @@ export interface PostEncoded {
   readonly id: string;
   readonly title: string;
   readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
-  readonly readTime: {
+  readonly read_time: {
   readonly secs: number;
   readonly nanos: number;
 };
@@ -296,7 +296,7 @@ export interface PostEncoded {
 import { Schema } from "effect";
 
 export class Section extends Schema.Class<Section>("Section")( { 
-  heading: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Heading' is required` }),
+  heading: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Heading' is required` }),
   children: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Section, SectionEncoded> => Section).annotations({ identifier: `SectionRef` }))).annotations({ missingMessage: () => `'Children' is required` })
 }) {[key: string]: unknown}
 
@@ -315,35 +315,29 @@ export type RecordLink<T> = RecordIdEncoded | T;
 
 /** @derive(Deserialize) */
 export interface Address {
-  /** @serde({ validate: ["nonEmpty"] }) */
   street: string;
   city: string | null;
 }
 
 /** @derive(Deserialize) */
 export interface Author {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   name: string;
   home: Address;
 }
 
 /** @derive(Deserialize) */
 export interface Comment {
-  /** @serde({ validate: ["nonEmpty"] }) */
   body: string;
   replies: Reply[];
 }
 
 /** @derive(Deserialize) */
 export interface Post {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
   author: RecordLink<Author>;
-  readTime: { secs: number; nanos: number };
+  read_time: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;
@@ -352,21 +346,18 @@ export interface Post {
 
 /** @derive(Deserialize) */
 export interface Reply {
-  /** @serde({ validate: ["nonEmpty"] }) */
   body: string;
   thread: Comment[];
 }
 
 /** @derive(Deserialize) */
 export interface Scheduled {
-  /** @serde({ validate: ["nonEmpty"] }) */
   at: string;
   note: string | null;
 }
 
 /** @derive(Deserialize) */
 export interface Section {
-  /** @serde({ validate: ["nonEmpty"] }) */
   heading: string;
   children: Section[];
 }
@@ -381,7 +372,6 @@ export type Status =
 === 4-macroforge/address.ts
 /** @derive(Deserialize) */
 export interface Address {
-  /** @serde({ validate: ["nonEmpty"] }) */
   street: string;
   city: string | null;
 }
@@ -393,28 +383,23 @@ import type { Section } from './section';
 
 /** @derive(Deserialize) */
 export interface Author {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   name: string;
   home: Address;
 }
 
 /** @derive(Deserialize) */
 export interface Comment {
-  /** @serde({ validate: ["nonEmpty"] }) */
   body: string;
   replies: Reply[];
 }
 
 /** @derive(Deserialize) */
 export interface Post {
-  /** @serde({ validate: ["nonEmpty"] }) */
   id: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   title: string;
   author: RecordLink<Author>;
-  readTime: { secs: number; nanos: number };
+  read_time: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;
@@ -423,14 +408,12 @@ export interface Post {
 
 /** @derive(Deserialize) */
 export interface Reply {
-  /** @serde({ validate: ["nonEmpty"] }) */
   body: string;
   thread: Comment[];
 }
 
 /** @derive(Deserialize) */
 export interface Scheduled {
-  /** @serde({ validate: ["nonEmpty"] }) */
   at: string;
   note: string | null;
 }
@@ -450,7 +433,6 @@ export type RecordLink<T> = RecordIdEncoded | T;
 === 4-macroforge/section.ts
 /** @derive(Deserialize) */
 export interface Section {
-  /** @serde({ validate: ["nonEmpty"] }) */
   heading: string;
   children: Section[];
 }

@@ -1,10 +1,10 @@
-use crate::schemasync::TableConfig;
+use crate::schemasync::table::surql_ident;
 use crate::types::{EnumRepresentation, FieldType, TaggedUnion, VariantData};
 use crate::types::{StructConfig, StructField};
 use convert_case::{Case, Casing};
 use std::collections::BTreeMap;
 use surrealdb_types::ToSql;
-use tracing::{debug, trace};
+use tracing::trace;
 
 /// The SurrealQL zero value for a field type, used as its `DEFAULT`. `None`
 /// when the type has no valid zero value: a required record link cannot
@@ -50,7 +50,7 @@ pub fn field_type_to_surql_default(
         FieldType::Struct(fields) => fields
             .iter()
             .map(|(name, ftype)| {
-                default_of(ftype).map(|value| format!("{}: {}", name.to_case(Case::Snake), value))
+                default_of(ftype).map(|value| format!("{}: {}", surql_ident(name), value))
             })
             .collect::<Option<Vec<_>>>()
             .map(|fields| format!("{{ {} }}", fields.join(", "))),
@@ -107,9 +107,9 @@ fn enum_surql_default(
         return Some(match &enum_schema.representation {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+                format!("{{ {}: '{}' }}", surql_ident(tag), chosen_variant.db_name())
             }
-            _ => format!("'{}'", chosen_variant.name),
+            _ => format!("'{}'", chosen_variant.db_name()),
         });
     };
     let inner_default = match variant_data {
@@ -133,25 +133,41 @@ fn enum_surql_default(
     };
     Some(match &enum_schema.representation {
         EnumRepresentation::ExternallyTagged => {
-            format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+            format!(
+                "{{ {}: {} }}",
+                surql_ident(chosen_variant.db_name()),
+                inner_default
+            )
         }
         EnumRepresentation::InternallyTagged { tag } => {
             if let VariantData::InlineStruct(_) = variant_data {
                 let trimmed = inner_default.trim();
                 if trimmed.starts_with('{') && trimmed.ends_with('}') {
                     let inner = &trimmed[1..trimmed.len() - 1];
-                    format!("{{ {}: '{}', {} }}", tag, chosen_variant.name, inner.trim())
+                    format!(
+                        "{{ {}: '{}', {} }}",
+                        surql_ident(tag),
+                        chosen_variant.db_name(),
+                        inner.trim()
+                    )
                 } else {
-                    format!("{{ {}: '{}' }}", tag, chosen_variant.name)
+                    format!("{{ {}: '{}' }}", surql_ident(tag), chosen_variant.db_name())
                 }
             } else {
-                format!("{{ {}: {} }}", chosen_variant.name, inner_default)
+                format!(
+                    "{{ {}: {} }}",
+                    surql_ident(chosen_variant.db_name()),
+                    inner_default
+                )
             }
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
             format!(
                 "{{ {}: '{}', {}: {} }}",
-                tag, chosen_variant.name, content, inner_default
+                surql_ident(tag),
+                chosen_variant.db_name(),
+                surql_ident(content),
+                inner_default
             )
         }
         EnumRepresentation::Untagged => inner_default,
@@ -172,6 +188,7 @@ fn struct_fields_to_surql_default_object(
     fields
         .iter()
         .map(|table_field| {
+            let table_field = table_field.effective();
             let value = match table_field
                 .define_config
                 .as_ref()
@@ -187,328 +204,15 @@ fn struct_fields_to_surql_default_object(
                     registry,
                 )?,
             };
-            Some(format!(
-                "{}: {}",
-                table_field.field_name.to_case(Case::Snake),
-                value
-            ))
+            Some(format!("{}: {}", surql_ident(table_field.db_name()), value))
         })
         .collect::<Option<Vec<_>>>()
         .map(|fields| format!("{{ {} }}", fields.join(", ")))
 }
 
-pub fn field_type_to_surreal_type(
-    field_name: &String,
-    table_name: &String,
-    field_type: &FieldType,
-    enums: &BTreeMap<String, TaggedUnion>,
-    app_structs: &BTreeMap<String, StructConfig>,
-    persistable_structs: &BTreeMap<String, TableConfig>,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> (String, bool, Option<String>) {
-    trace!(
-        "Converting field '{}' in table '{}' to SurrealDB type, field_type: {:?}",
-        field_name, table_name, field_type
-    );
-    let result = match field_type {
-        FieldType::String | FieldType::Char => {
-            trace!("Converting String/Char to SurrealDB type");
-            ("string".to_string(), false, None)
-        }
-        FieldType::Bool => {
-            trace!("Converting Bool to SurrealDB type");
-            ("bool".to_string(), false, None)
-        }
-        FieldType::F32 | FieldType::F64 => {
-            trace!("Converting float to SurrealDB type");
-            ("float".to_string(), false, None)
-        }
-        FieldType::I8
-        | FieldType::I16
-        | FieldType::I32
-        | FieldType::I64
-        | FieldType::I128
-        | FieldType::Isize
-        | FieldType::U8
-        | FieldType::U16
-        | FieldType::U32
-        | FieldType::U64
-        | FieldType::U128
-        | FieldType::Usize => {
-            trace!("Converting integer to SurrealDB type");
-            ("int".to_string(), false, None)
-        }
-        FieldType::Unit => {
-            trace!("Converting Unit to SurrealDB type");
-            ("any".to_string(), false, None)
-        }
-        FieldType::Duration => ("duration".to_string(), false, None),
-        FieldType::HashMap(_key, value) => {
-            trace!("Converting HashMap to SurrealDB type");
-            let (value_type, _, _) = field_type_to_surreal_type(
-                field_name,
-                table_name,
-                value,
-                enums,
-                app_structs,
-                persistable_structs,
-                registry,
-            );
-            ("object".to_string(), true, Some(value_type))
-        }
-        FieldType::BTreeMap(_key, value) => {
-            trace!("Converting BTreeMap to SurrealDB type");
-            let (value_type, _, _) = field_type_to_surreal_type(
-                field_name,
-                table_name,
-                value,
-                enums,
-                app_structs,
-                persistable_structs,
-                registry,
-            );
-            ("object".to_string(), true, Some(value_type))
-        }
-        FieldType::RecordLink(inner) => {
-            trace!(
-                "Converting RecordLink to SurrealDB type with inner: {:?}",
-                inner
-            );
-            let (inner_type, needs_wildcard, wildcard_type) = field_type_to_surreal_type(
-                field_name,
-                table_name,
-                inner,
-                enums,
-                app_structs,
-                persistable_structs,
-                registry,
-            );
-            (inner_type, needs_wildcard, wildcard_type)
-        }
-        FieldType::Other(name) => {
-            debug!(
-                "Processing Other type '{}' for SurrealDB type conversion",
-                name
-            );
-
-            // Check if it's a configured foreign type
-            if let Some(ftc) = registry.lookup(name) {
-                let type_str = if field_name == "id" {
-                    if let Some(ref id_fmt) = ftc.surrealdb_id_format {
-                        id_fmt.replace("{table_name}", table_name)
-                    } else {
-                        ftc.surrealdb.clone()
-                    }
-                } else if let Some(ref non_id_fmt) = ftc.surrealdb_non_id_format {
-                    non_id_fmt.clone()
-                } else {
-                    ftc.surrealdb.clone()
-                };
-                return (type_str, false, None);
-            }
-
-            // If this type name is defined as an enum, output its union literal.
-            if let Some(enum_def) = enums.get(name) {
-                debug!(
-                    "Found enum '{}' with {} variants",
-                    name,
-                    enum_def.variants.len()
-                );
-                let variants: Vec<String> = enum_def
-                    .variants
-                    .iter()
-                    .map(|v| {
-                        if let Some(variant_data) = &v.data {
-                            let inner_type = match variant_data {
-                                VariantData::InlineStruct(enum_struct) => {
-                                    let (t, _, _) = field_type_to_surreal_type(
-                                        field_name,
-                                        table_name,
-                                        &FieldType::Other(enum_struct.struct_name.clone()),
-                                        enums,
-                                        app_structs,
-                                        persistable_structs,
-                                        registry,
-                                    );
-                                    t
-                                }
-                                VariantData::DataStructureRef(field_type) => {
-                                    let (t, _, _) = field_type_to_surreal_type(
-                                        field_name,
-                                        table_name,
-                                        field_type,
-                                        enums,
-                                        app_structs,
-                                        persistable_structs,
-                                        registry,
-                                    );
-                                    t
-                                }
-                            };
-                            match &enum_def.representation {
-                                EnumRepresentation::ExternallyTagged => {
-                                    format!("{{ {}: {} }}", v.name, inner_type)
-                                }
-                                EnumRepresentation::InternallyTagged { tag } => {
-                                    if let VariantData::InlineStruct(_) = variant_data {
-                                        let trimmed = inner_type.trim();
-                                        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                                            let inner = &trimmed[1..trimmed.len() - 1];
-                                            format!(
-                                                "{{ {}: \"{}\", {} }}",
-                                                tag,
-                                                v.name,
-                                                inner.trim()
-                                            )
-                                        } else {
-                                            format!("{{ {}: \"{}\" }}", tag, v.name)
-                                        }
-                                    } else {
-                                        format!("{{ {}: {} }}", v.name, inner_type)
-                                    }
-                                }
-                                EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                                    format!(
-                                        "{{ {}: \"{}\", {}: {} }}",
-                                        tag, v.name, content, inner_type
-                                    )
-                                }
-                                EnumRepresentation::Untagged => inner_type,
-                            }
-                        } else {
-                            match &enum_def.representation {
-                                EnumRepresentation::InternallyTagged { tag }
-                                | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                                    format!("{{ {}: \"{}\" }}", tag, v.name)
-                                }
-                                _ => format!("\"{}\"", v.name),
-                            }
-                        }
-                    })
-                    .collect();
-                (variants.join(" | "), false, None)
-            } else if let Some(app_struct) = app_structs.get(name) {
-                debug!(
-                    "Found app struct '{}' with {} fields for type conversion",
-                    name,
-                    app_struct.fields.len()
-                );
-                let field_defs: Vec<String> = app_struct
-                    .fields
-                    .iter()
-                    .map(|f: &StructField| {
-                        let (field_type, _, _) = field_type_to_surreal_type(
-                            &f.field_name,
-                            table_name,
-                            &f.field_type,
-                            enums,
-                            app_structs,
-                            persistable_structs,
-                            registry,
-                        );
-                        format!("{}: {}", f.field_name, field_type)
-                    })
-                    .collect();
-
-                (format!("{{ {} }}", field_defs.join(", ")), false, None)
-            } else if persistable_structs.get(name).is_some() {
-                debug!("Creating record type for persistable struct '{}'", name);
-                (
-                    format!("record<{}>", name.to_case(Case::Snake)),
-                    false,
-                    None,
-                )
-            } else {
-                trace!("Type '{}' not found in any category, using as-is", name);
-                (name.clone(), false, None)
-            }
-        }
-        FieldType::Option(inner) => {
-            trace!(
-                "Converting Option to SurrealDB type with inner: {:?}",
-                inner
-            );
-            let (inner_type, needs_wildcard, wildcard_type) = field_type_to_surreal_type(
-                field_name,
-                table_name,
-                inner,
-                enums,
-                app_structs,
-                persistable_structs,
-                registry,
-            );
-            (
-                format!("null | {}", inner_type),
-                needs_wildcard,
-                wildcard_type,
-            )
-        }
-        FieldType::Vec(inner) => {
-            trace!("Converting Vec to SurrealDB type with inner: {:?}", inner);
-            let (inner_type, _, _) = field_type_to_surreal_type(
-                field_name,
-                table_name,
-                inner,
-                enums,
-                app_structs,
-                persistable_structs,
-                registry,
-            );
-            (format!("array<{}>", inner_type), false, None)
-        }
-        FieldType::Tuple(inner_types) => {
-            trace!(
-                "Converting Tuple to SurrealDB type with {} types",
-                inner_types.len()
-            );
-            let inner: Vec<String> = inner_types
-                .iter()
-                .map(|t| {
-                    let (inner_type, _, _) = field_type_to_surreal_type(
-                        field_name,
-                        table_name,
-                        t,
-                        enums,
-                        app_structs,
-                        persistable_structs,
-                        registry,
-                    );
-                    inner_type
-                })
-                .collect();
-            // (SurrealDB does not have a dedicated tuple type so we wrap it as an array)
-            (format!("array<{}>", inner.join(", ")), false, None)
-        }
-        FieldType::Struct(fields) => {
-            trace!(
-                "Converting Struct to SurrealDB type with {} fields",
-                fields.len()
-            );
-            let field_defs: Vec<String> = fields
-                .iter()
-                .map(|(name, t)| {
-                    let (field_type, _, _) = field_type_to_surreal_type(
-                        field_name,
-                        table_name,
-                        t,
-                        enums,
-                        app_structs,
-                        persistable_structs,
-                        registry,
-                    );
-                    format!("{}: {}", name, field_type)
-                })
-                .collect();
-            (format!("{{ {} }}", field_defs.join(", ")), false, None)
-        }
-    };
-    trace!("Generated SurrealDB type: {:?}", result);
-    result
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{FieldType, VariantData, field_type_to_surql_default, field_type_to_surreal_type};
+    use super::{FieldType, VariantData, field_type_to_surql_default};
     use crate::schemasync::DefineConfig;
     use crate::types::{
         EnumRepresentation, ForeignTypeRegistry, StructConfig, StructField, TaggedUnion, Variant,
@@ -516,7 +220,35 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn a_duration_is_a_surreal_duration_defaulting_to_zero() {
+    fn an_embedded_struct_defaults_under_its_database_keys() {
+        let registry = ForeignTypeRegistry::default();
+        let field = |name: &str, surreal: Option<&str>| StructField {
+            field_name: name.to_owned(),
+            field_type: FieldType::String,
+            wire: crate::types::Wire {
+                surreal: surreal.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let address = StructConfig {
+            struct_name: "Address".to_owned(),
+            fields: vec![field("zipCode", None), field("city_name", Some("cityName"))],
+            ..Default::default()
+        };
+        let default = field_type_to_surql_default(
+            &"address".to_owned(),
+            &"person".to_owned(),
+            &FieldType::Other("Address".to_owned()),
+            &BTreeMap::new(),
+            &BTreeMap::from([("Address".to_owned(), address)]),
+            &registry,
+        );
+        assert_eq!(default.as_deref(), Some("{ zipCode: '', cityName: '' }"));
+    }
+
+    #[test]
+    fn a_duration_defaults_to_zero() {
         let registry = ForeignTypeRegistry::default();
         let (field, table) = ("limit".to_string(), "timer".to_string());
         let default = field_type_to_surql_default(
@@ -528,16 +260,6 @@ mod tests {
             &registry,
         );
         assert_eq!(default.as_deref(), Some("0ns"));
-        let (surreal_type, _, _) = field_type_to_surreal_type(
-            &field,
-            &table,
-            &FieldType::Duration,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &registry,
-        );
-        assert_eq!(surreal_type, "duration");
     }
 
     fn base_define_config(default: Option<&str>) -> DefineConfig {
@@ -561,6 +283,7 @@ mod tests {
     fn variant(name: &str, is_default: bool) -> Variant {
         Variant {
             name: name.to_string(),
+            wire: Default::default(),
             data: None,
             doccom: None,
             annotations: vec![],
@@ -572,6 +295,7 @@ mod tests {
 
     fn inline_struct_variant(name: &str, is_default: bool, payload: StructConfig) -> Variant {
         Variant {
+            wire: Default::default(),
             data: Some(VariantData::InlineStruct(payload)),
             ..variant(name, is_default)
         }

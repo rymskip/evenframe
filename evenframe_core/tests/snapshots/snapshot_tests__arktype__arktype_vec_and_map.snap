@@ -4,22 +4,22 @@ expression: output
 ---
 export const bindings = scope({
 
-Role: [['===', 'Admin'], '|', ['===', 'Member']],
+Role: [['===', "Admin"], '|', ['===', "Member"]],
 Collection: {
   id: 'string',
   tags: ['string', '[]'],
   scores: ['number', '[]'],
   metadata: { '+': 'reject', "[string]": 'string' },
-  sortedData: { '+': 'reject', "[string]": 'number' },
-  notesByRank: { '+': 'reject', "[string.integer]": [['string', '|', 'undefined'], '|', 'null'] },
-  relatedByName: { '+': 'reject', "[string]": ['Collection', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }] },
-  balanceByOffset: { '+': 'reject', "[string.integer]": 'number' },
-  countByLetter: { '+': 'reject', "[/^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$/]": 'number' },
-  ownerByRole: { '+': 'reject', "Admin?": 'string', "Member?": 'string' },
-  labelByAccount: { '+': 'reject', "[string]": 'string' },
+  sorted_data: { '+': 'reject', "[string]": 'number' },
+  notes_by_rank: { '+': 'reject', "[string.integer]": [['string', '|', 'undefined'], '|', 'null'] },
+  related_by_name: { '+': 'reject', "[string]": ['Collection', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }] },
+  balance_by_offset: { '+': 'reject', "[string.integer]": 'number' },
+  count_by_letter: { '+': 'reject', "[/^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$/]": 'number' },
+  owner_by_role: { '+': 'reject', "Admin?": 'string', "Member?": 'string' },
+  label_by_account: { '+': 'reject', "[string]": 'string' },
   grid: { '+': 'reject', "[string.integer]": { '+': 'reject', "[string.integer]": 'boolean' } },
   initial: new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$"),
-  noteByFlag: { '+': 'reject', "true?": 'string', "false?": 'string' }
+  note_by_flag: { '+': 'reject', "true?": 'string', "false?": 'string' }
 },
 
 });
@@ -31,16 +31,16 @@ id: "",
 tags: [],
 scores: [],
 metadata: {},
-sortedData: {},
-notesByRank: {},
-relatedByName: {},
-balanceByOffset: {},
-countByLetter: {},
-ownerByRole: {},
-labelByAccount: {},
+sorted_data: {},
+notes_by_rank: {},
+related_by_name: {},
+balance_by_offset: {},
+count_by_letter: {},
+owner_by_role: {},
+label_by_account: {},
 grid: {},
 initial: "",
-noteByFlag: {}
+note_by_flag: {}
 };
 
 export type Role = typeof exported.Role.infer;

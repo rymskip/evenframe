@@ -8,7 +8,7 @@ use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
     types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
-    typesync::type_index::TypeIndex,
+    typesync::{macroforge::HelperModule, type_index::TypeIndex},
 };
 use std::collections::BTreeMap;
 use tracing::info;
@@ -53,12 +53,17 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         let mut single = BTreeMap::new();
         single.insert(name.clone(), sc.clone());
         let empty_enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
+        let mut helpers = HelperModule::new("./helpers".to_owned());
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &TypeIndex::new(&single, &empty_enums)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
+            &mut helpers,
         )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
+        if !helpers.is_empty() {
+            entry["generated_helpers"] = serde_json::Value::String(helpers.content());
+        }
 
         let mut field_entries: Vec<serde_json::Value> = Vec::new();
         for field in &sc.fields {
@@ -102,12 +107,17 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
         let empty_structs: BTreeMap<String, StructConfig> = BTreeMap::new();
         let mut single_enum = BTreeMap::new();
         single_enum.insert(name.clone(), eu.clone());
+        let mut helpers = HelperModule::new("./helpers".to_owned());
         let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
             &TypeIndex::new(&empty_structs, &single_enum)?,
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
+            &mut helpers,
         )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
+        if !helpers.is_empty() {
+            entry["generated_helpers"] = serde_json::Value::String(helpers.content());
+        }
 
         results.push(entry);
     }

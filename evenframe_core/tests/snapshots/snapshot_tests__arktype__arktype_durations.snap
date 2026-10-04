@@ -7,8 +7,8 @@ export const bindings = scope({
 
 Timer: {
   id: 'string',
-  limit: [{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }, ':', (v) => ((nanos) => nanos !== null && nanos <= 28800000000000n)(durationNanos(v))],
-  grace: [[[{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }, ':', (v) => ((nanos) => nanos !== null && nanos > 60000000000n)(durationNanos(v))], '|', 'undefined'], '|', 'null'],
+  limit: [{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }, ':', (value) => ((nanos) => nanos !== null && nanos <= 28800000000000n)(durationNanos(value))],
+  grace: [[[{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }, ':', (value) => ((nanos) => nanos !== null && nanos > 60000000000n)(durationNanos(value))], '|', 'undefined'], '|', 'null'],
   laps: [{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }, '[]']
 },
 

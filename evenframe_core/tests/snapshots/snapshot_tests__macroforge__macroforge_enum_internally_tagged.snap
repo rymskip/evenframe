@@ -16,6 +16,6 @@ export interface RectangleData {
 /** @derive(Deserialize) */
 /** @serde({ tag: "type" }) */
 export type Shape =
-	| { type: 'Circle' } & CircleData
-	| { type: 'Rectangle' } & RectangleData
-	| { type: 'Point' };
+	| { type: "Circle" } & CircleData
+	| { type: "Rectangle" } & RectangleData
+	| { type: "Point" };

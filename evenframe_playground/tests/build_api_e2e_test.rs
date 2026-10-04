@@ -168,12 +168,39 @@ fn test_type_generator_generate_effect() {
 #[test]
 fn test_type_generator_generate_macroforge() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let dir = temp_dir.path();
 
-    let generated = generate_one(output(OutputKind::Macroforge, temp_dir.path()));
-
-    assert_eq!(generated.kind, OutputKind::Macroforge);
-    assert!(generated.bytes > 0);
-    assert!(generated.path.exists());
+    // The playground has validators macroforge does not provide, so the
+    // output writes their helpers module beside it.
+    let report = TypeGenerator::new(config_with(vec![output(OutputKind::Macroforge, dir)]))
+        .generate_all()
+        .expect("Generation should succeed");
+    let names: Vec<_> = report
+        .files
+        .iter()
+        .map(|file| {
+            file.path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            Some("macroforge.ts".to_owned()),
+            Some("macroforge-helpers.ts".to_owned())
+        ]
+    );
+    for file in &report.files {
+        assert_eq!(file.kind, OutputKind::Macroforge);
+        assert!(file.bytes > 0);
+        assert!(file.path.exists());
+    }
+    let interfaces = fs::read_to_string(dir.join("macroforge.ts")).expect("the output reads");
+    assert!(
+        interfaces.contains("source: \\\"./macroforge-helpers\\\""),
+        "{interfaces}"
+    );
 }
 
 #[test]
@@ -246,11 +273,11 @@ fn test_type_generator_generate_all() {
         .generate_all()
         .expect("generate_all should succeed");
 
-    // One file for each output
+    // One file for each output, and macroforge's helpers module
     assert_eq!(
         report.files.len(),
-        5,
-        "Should generate 5 files when every kind is configured"
+        6,
+        "Should generate 6 files when every kind is configured"
     );
 
     // Verify counts
@@ -269,6 +296,7 @@ fn test_type_generator_generate_all() {
         "arktype.ts",
         "bindings.ts",
         "macroforge.ts",
+        "macroforge-helpers.ts",
         "schema.fbs",
         "schema.proto",
     ] {

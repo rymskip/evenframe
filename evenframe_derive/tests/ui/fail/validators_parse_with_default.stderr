@@ -1,0 +1,5 @@
+error: this field is read through a parse morph, which reads the input as text, so serde cannot also default or deserialize it another way
+ --> tests/ui/fail/validators_parse_with_default.rs:7:13
+  |
+7 |     #[serde(default)]
+  |             ^^^^^^^

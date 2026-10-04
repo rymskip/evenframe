@@ -3,7 +3,6 @@ use crate::{
     schemasync::TableConfig,
     types::{StructConfig, TaggedUnion},
 };
-use serde::Deserializer;
 
 /// A database table: a struct with an `id` field, or a union of tables. What
 /// a `RecordLink` can point at.
@@ -31,10 +30,4 @@ pub trait EvenframeAppStruct {
 #[cfg(feature = "metadata")]
 pub trait EvenframeTaggedUnion {
     fn variants() -> TaggedUnion;
-}
-
-pub trait EvenframeDeserialize<'de>: Sized {
-    fn evenframe_deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>;
 }

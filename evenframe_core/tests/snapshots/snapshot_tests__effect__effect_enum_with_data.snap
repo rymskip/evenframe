@@ -3,7 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class InlineData extends Schema.Class<InlineData>("InlineData")( { 
-  label: Schema.propertySignature(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` }))).annotations({ missingMessage: () => `'Label' is required` }),
+  label: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Label' is required` }),
   value: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Value' is required` })
 }) {[key: string]: unknown}
 
@@ -12,7 +12,7 @@ export class Coordinates extends Schema.Class<Coordinates>("Coordinates")( {
   lng: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lng' is required` })
 }) {[key: string]: unknown}
 
-export const Location = Schema.Union(Schema.Struct({ Address: Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })) }), Schema.Struct({ Coords: Coordinates }), Schema.Struct({ Inline: InlineData }), Schema.Literal("Unknown")).annotations({ identifier: `Location` });
+export const Location = Schema.Union(Schema.Struct({ Address: Schema.String }), Schema.Struct({ Coords: Coordinates }), Schema.Struct({ Inline: InlineData }), Schema.Literal("Unknown")).annotations({ identifier: `Location` });
 
 export interface InlineDataEncoded {
   readonly label: string;

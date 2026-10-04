@@ -4,13 +4,13 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Signup {
-  /** @serde({ validate: ["alphanumeric", "lowercase", "nonEmpty", "minLength(3)", "maxLength(20)"] }) */
+  /** @serde({ validate: ["custom({ function: \"isAlphanumeric\", source: \"./helpers\" })", "custom({ function: \"isLowerPreformatted\", source: \"./helpers\" })", "nonEmpty", "minLength(3)", "maxLength(20)"] }) */
   username: string;
-  /** @serde({ validate: ["nonEmpty", "hex", "digits", "startsWith("0")", "startsWith("00")"] }) */
+  /** @serde({ validate: ["custom({ function: \"isHex\", source: \"./helpers\" })", "custom({ function: \"isDigits\", source: \"./helpers\" })", "startsWith(\"0\")", "startsWith(\"00\")"] }) */
   code: string;
-  /** @serde({ validate: ["nonEmpty", "uuid", "lowercase", "json"] }) */
+  /** @serde({ validate: ["custom({ function: \"isUuidV4\", source: \"./helpers\" })", "lowercase", "custom({ function: \"isJson\", source: \"./helpers\" })"] }) */
   token: string;
-  /** @serde({ validate: ["capitalized", "includes("!")"] }) */
+  /** @serde({ validate: ["custom({ function: \"isCapitalizePreformatted\", source: \"./helpers\" })", "includes(\"!\")"] }) */
   banner: string | null;
   /** @serde({ validate: ["positive", "greaterThanOrEqualTo(0.001)", "lessThan(1000)", "lessThanOrEqualTo(999.999)", "finite"] }) */
   ratio: number;
@@ -18,6 +18,39 @@ export interface Signup {
   level: number;
   /** @serde({ validate: ["minItems(1)", "maxItems(5)"] }) */
   tags: string[] | null;
-  /** @serde({ validate: ["nonEmpty", "ip"] }) */
+  /** @serde({ validate: ["custom({ function: \"isIp\", source: \"./helpers\" })"] }) */
   address: string;
+}
+
+// helpers
+export function isAlphanumeric(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[0-9A-Za-z]*$").test(value));
+}
+
+export function isCapitalizePreformatted(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[A-Z][^\\n\\r\\u2028\\u2029]*$").test(value));
+}
+
+export function isDigits(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[0-9]*$").test(value));
+}
+
+export function isHex(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[0-9A-Fa-f]+$").test(value));
+}
+
+export function isIp(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$").test(value) || new RegExp("^((?:[0-9a-fA-F]{1,4}:){7}(?:[0-9a-fA-F]{1,4}|:)|(?:[0-9a-fA-F]{1,4}:){6}(?:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|:[0-9a-fA-F]{1,4}|:)|(?:[0-9a-fA-F]{1,4}:){5}(?::(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(:[0-9a-fA-F]{1,4}){1,2}|:)|(?:[0-9a-fA-F]{1,4}:){4}(?:(:[0-9a-fA-F]{1,4}){0,1}:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(:[0-9a-fA-F]{1,4}){1,3}|:)|(?:[0-9a-fA-F]{1,4}:){3}(?:(:[0-9a-fA-F]{1,4}){0,2}:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(:[0-9a-fA-F]{1,4}){1,4}|:)|(?:[0-9a-fA-F]{1,4}:){2}(?:(:[0-9a-fA-F]{1,4}){0,3}:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(:[0-9a-fA-F]{1,4}){1,5}|:)|(?:[0-9a-fA-F]{1,4}:){1}(?:(:[0-9a-fA-F]{1,4}){0,4}:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(:[0-9a-fA-F]{1,4}){1,6}|:)|(?::((?::[0-9a-fA-F]{1,4}){0,5}:(?:(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])[.]){3}(?:[0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])|(?::[0-9a-fA-F]{1,4}){1,7}|:)))(%[0-9a-zA-Z.]{1,})?$").test(value));
+}
+
+export function isJson(value: unknown): boolean {
+	return typeof value === "string" && ((() => { try { JSON.parse(value); return true; } catch { return false; } })());
+}
+
+export function isLowerPreformatted(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[a-z]*$").test(value));
+}
+
+export function isUuidV4(value: unknown): boolean {
+	return typeof value === "string" && (new RegExp("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$").test(value));
 }

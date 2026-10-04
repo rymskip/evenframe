@@ -40,6 +40,7 @@ fn stress_manager() -> OutputRulePluginManager {
 fn field(name: &str, ty: &str) -> StructField {
     StructField {
         field_name: name.to_string(),
+        wire: Default::default(),
         field_type: FieldType::Other(ty.to_string()),
         ..Default::default()
     }
@@ -134,6 +135,7 @@ impl InputBuilder {
                     .into_iter()
                     .map(|field| Variant {
                         name: field.field_name,
+                        wire: Default::default(),
                         data: None,
                         doccom: None,
                         annotations: field.annotations,

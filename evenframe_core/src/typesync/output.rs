@@ -57,6 +57,8 @@ pub struct RenderedOutput {
     kind: OutputKind,
     files: Vec<(PathBuf, String)>,
     per_file: Option<PerFileDir>,
+    /// Files this output owns but no longer produces, removed when present.
+    removed: Vec<PathBuf>,
 }
 
 /// The directory a per-file output owns, and the files it keeps there.
@@ -73,6 +75,9 @@ impl RenderedOutput {
         if let Some(per_file) = &self.per_file {
             create_dir(&per_file.dir)?;
             remove_obsolete_files(per_file)?;
+        }
+        for path in &self.removed {
+            remove_owned_file(path)?;
         }
         self.files
             .iter()
@@ -130,10 +135,61 @@ pub fn render_output(
 
     let path = file.unwrap_or_else(|| dir.join(output.kind.default_filename()));
     info!("Generating {} output to {}", output.kind, path.display());
+    single_file(output, types, path)
+}
+
+/// A single-file macroforge output, and beside it the helpers module its
+/// validators name, `<file>-helpers`, which is removed when nothing uses it.
+#[cfg(feature = "macroforge")]
+fn macroforge_single_file(
+    output: &TypesyncOutput,
+    types: &OutputTypes,
+    path: PathBuf,
+) -> Result<RenderedOutput> {
+    use crate::typesync::macroforge::{
+        HelperModule, generate_macroforge_type_string, macro_import_lines,
+    };
+    let settings = &output.files;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = file_name
+        .strip_suffix(settings.file_extension.as_str())
+        .map(str::to_owned)
+        .or_else(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let helpers_name = format!("{stem}-helpers");
+    let helpers_path = path.with_file_name(format!("{helpers_name}{}", settings.file_extension));
+    let suffix = import_specifier_suffix(&settings.file_extension, settings.import_extension);
+    let mut helpers = HelperModule::new(format!("./{helpers_name}{suffix}"));
+
+    let all_types: Vec<String> = types.index.names().cloned().collect();
+    let mut content: String = macro_import_lines(&all_types, &types.index, &output.macros)?
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect();
+    content.push_str(&generate_macroforge_type_string(
+        &types.index,
+        settings.array_style,
+        types.registry,
+        &mut helpers,
+    )?);
+    let mut files = vec![(path, content)];
+    let mut removed = Vec::new();
+    if helpers.is_empty() {
+        removed.push(helpers_path);
+    } else {
+        files.push((helpers_path, helpers.content()));
+    }
     Ok(RenderedOutput {
         kind: output.kind,
-        files: vec![(path, single_file_content(output, types)?)],
+        files,
         per_file: None,
+        removed,
     })
 }
 
@@ -200,10 +256,15 @@ fn foreign_imports<M: TsOutputMapping>(
         .collect())
 }
 
-fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<String> {
+/// A single-file output's file at `path`, with any module it writes beside it.
+fn single_file(
+    output: &TypesyncOutput,
+    types: &OutputTypes,
+    path: PathBuf,
+) -> Result<RenderedOutput> {
     let OutputTypes { index, registry } = types;
     let all_types: Vec<String> = index.names().cloned().collect();
-    match output.kind {
+    let content = match output.kind {
         OutputKind::Arktype => Ok(format!(
             "import {{ scope }} from 'arktype';\n{}\n{}\nexport const validator = exported;\n",
             foreign_imports(&all_types, types, OutputKind::Arktype, |foreign| foreign
@@ -220,26 +281,9 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
         )),
         OutputKind::Macroforge => {
             #[cfg(feature = "macroforge")]
-            let content =
-                crate::typesync::macroforge::macro_import_lines(&all_types, index, &output.macros)
-                    .and_then(|import_lines| {
-                        let interfaces =
-                            crate::typesync::macroforge::generate_macroforge_type_string(
-                                index,
-                                output.files.array_style,
-                                registry,
-                            )?;
-                        Ok(format!(
-                            "{}{interfaces}",
-                            import_lines
-                                .iter()
-                                .map(|line| format!("{line}\n"))
-                                .collect::<String>(),
-                        ))
-                    });
+            return macroforge_single_file(output, types, path);
             #[cfg(not(feature = "macroforge"))]
-            let content = Err(not_built(OutputKind::Macroforge));
-            content
+            return Err(not_built(OutputKind::Macroforge));
         }
         OutputKind::Flatbuffers => {
             #[cfg(feature = "flatbuffers")]
@@ -266,7 +310,13 @@ fn single_file_content(output: &TypesyncOutput, types: &OutputTypes) -> Result<S
             let content = Err(not_built(OutputKind::Protobuf));
             content
         }
-    }
+    }?;
+    Ok(RenderedOutput {
+        kind: output.kind,
+        files: vec![(path, content)],
+        per_file: None,
+        removed: Vec::new(),
+    })
 }
 
 #[cfg(not(all(feature = "macroforge", feature = "flatbuffers", feature = "protobuf")))]
@@ -312,7 +362,25 @@ fn render_per_file(
         plan.groups.len()
     );
 
-    let render_group = |group: &TypeFileGroup| -> Result<(PathBuf, String)> {
+    #[cfg(feature = "macroforge")]
+    let helpers_name = type_name_to_filename("Helpers", settings.file_naming);
+    #[cfg(feature = "macroforge")]
+    if plan.groups.iter().any(|group| {
+        type_name_to_filename(&group.primary_type, settings.file_naming) == helpers_name
+    }) {
+        return Err(EvenframeError::config(format!(
+            "a generated type's file `{helpers_name}{}` collides with the helpers module the \
+             macroforge output writes",
+            settings.file_extension
+        )));
+    }
+    #[cfg(feature = "macroforge")]
+    let helpers_source = format!(
+        "./{helpers_name}{}",
+        import_specifier_suffix(&settings.file_extension, settings.import_extension)
+    );
+
+    let render_group = |group: &TypeFileGroup| -> Result<RenderedGroup> {
         let imports = resolve_imports(
             group,
             plan,
@@ -323,6 +391,8 @@ fn render_per_file(
         );
         let type_names = group.all_types();
         let mut content = String::new();
+        #[cfg(feature = "macroforge")]
+        let mut helpers = crate::typesync::macroforge::HelperModule::new(helpers_source.clone());
         match output.kind {
             OutputKind::Effect => {
                 content.push_str("import { Schema } from \"effect\";\n");
@@ -349,6 +419,7 @@ fn render_per_file(
                     output,
                     types,
                     record_link.as_ref().map(|module| module.name.as_str()),
+                    &mut helpers,
                 )?;
                 #[cfg(not(feature = "macroforge"))]
                 return Err(not_built(OutputKind::Macroforge));
@@ -360,16 +431,34 @@ fn render_per_file(
             }
         }
         let filename = type_name_to_filename(&group.primary_type, settings.file_naming);
-        Ok((
-            dir.join(format!("{filename}{}", settings.file_extension)),
-            content,
-        ))
+        Ok(RenderedGroup {
+            file: (
+                dir.join(format!("{filename}{}", settings.file_extension)),
+                content,
+            ),
+            #[cfg(feature = "macroforge")]
+            helpers,
+        })
     };
-    let mut files = plan
+    let groups = plan
         .groups
         .par_iter()
         .map(render_group)
         .collect::<Result<Vec<_>>>()?;
+    #[cfg(feature = "macroforge")]
+    let mut all_helpers = crate::typesync::macroforge::HelperModule::new(helpers_source);
+    let mut files = Vec::with_capacity(groups.len());
+    for group in groups {
+        files.push(group.file);
+        #[cfg(feature = "macroforge")]
+        all_helpers.merge(group.helpers);
+    }
+    #[cfg(feature = "macroforge")]
+    if !all_helpers.is_empty() {
+        let helpers_file = format!("{helpers_name}{}", settings.file_extension);
+        keep.insert(helpers_file.clone());
+        files.push((dir.join(helpers_file), all_helpers.content()));
+    }
 
     if let Some(module) = record_link.as_ref() {
         files.push((
@@ -400,7 +489,15 @@ fn render_per_file(
             extension: settings.file_extension.clone(),
             keep,
         }),
+        removed: Vec::new(),
     })
+}
+
+/// One per-file group's file, and the helpers its macroforge types name.
+struct RenderedGroup {
+    file: (PathBuf, String),
+    #[cfg(feature = "macroforge")]
+    helpers: crate::typesync::macroforge::HelperModule,
 }
 
 /// The module a per-file macroforge output declares evenframe's own
@@ -454,6 +551,7 @@ fn macroforge_per_file_content(
     output: &TypesyncOutput,
     types: &OutputTypes,
     record_link: Option<&str>,
+    helpers: &mut crate::typesync::macroforge::HelperModule,
 ) -> Result<()> {
     use crate::typesync::import_resolver::format_imports;
     use crate::typesync::macroforge::{
@@ -487,7 +585,8 @@ fn macroforge_per_file_content(
         &types.index,
         output.files.array_style,
         types.registry,
-    ));
+        helpers,
+    )?);
     Ok(())
 }
 
@@ -523,6 +622,21 @@ fn remove_obsolete_files(per_file: &PerFileDir) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Removes a file this output owns and no longer writes, if it exists.
+fn remove_owned_file(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            info!("Removing obsolete file: {}", path.display());
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(EvenframeError::config(format!(
+            "Failed to remove {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 fn create_dir(dir: &Path) -> Result<()> {

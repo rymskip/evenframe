@@ -3,15 +3,15 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 export class Geometry extends Schema.Class<Geometry>("Geometry")( { 
-  point2D: Schema.propertySignature(Schema.Tuple(Schema.Number, Schema.Number)).annotations({ missingMessage: () => `'Point 2 D' is required` }),
-  point3D: Schema.propertySignature(Schema.Tuple(Schema.Number, Schema.Number, Schema.Number)).annotations({ missingMessage: () => `'Point 3 D' is required` }),
-  labeled: Schema.propertySignature(Schema.Tuple(Schema.String.pipe(Schema.nonEmptyString({ message: () => `Please enter a value` })), Schema.Number)).annotations({ missingMessage: () => `'Labeled' is required` })
+  point_2d: Schema.propertySignature(Schema.Tuple(Schema.Number, Schema.Number)).annotations({ missingMessage: () => `'Point 2 D' is required` }),
+  point_3d: Schema.propertySignature(Schema.Tuple(Schema.Number, Schema.Number, Schema.Number)).annotations({ missingMessage: () => `'Point 3 D' is required` }),
+  labeled: Schema.propertySignature(Schema.Tuple(Schema.String, Schema.Number)).annotations({ missingMessage: () => `'Labeled' is required` })
 }) {[key: string]: unknown}
 
 
 export interface GeometryEncoded {
-  readonly point2D: readonly [number, number];
-  readonly point3D: readonly [number, number, number];
+  readonly point_2d: readonly [number, number];
+  readonly point_3d: readonly [number, number, number];
   readonly labeled: readonly [string, number];
 }
 

@@ -5,13 +5,15 @@ use crate::typesync::config::OutputKind;
 use crate::typesync::default_value::field_type_to_default_value;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::typesync::foreign_ts::{RecordLinkMapping, record_link_mapping};
-use crate::typesync::js_checks::{self, JsCheck, LengthCheck, ONE_CHARACTER, string_literal};
+use crate::typesync::js_checks::{
+    self, JsCheck, LengthCheck, ONE_CHARACTER, object_key, string_literal,
+};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
 use crate::validator::string_rules::StringRule;
 use crate::validator::{
-    ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-    NumberValidator, StringValidator, Validator, bounds,
+    ArrayValidator, BigIntValidator, DateValidator, NumberValidator, StringValidator, Validator,
+    bounds,
 };
 use convert_case::{Case, Casing};
 use tracing;
@@ -26,15 +28,17 @@ fn variant_to_arktype(
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
-    let tag_entry = |tag: &str| format!("{tag}: ['===', '{}']", variant.name);
+    let name = string_literal(variant.serde_name())?;
+    let tag_entry =
+        |tag: &str| -> Result<String> { Ok(format!("{}: ['===', {name}]", object_key(tag)?)) };
     let Some(variant_data) = &variant.data else {
         return Ok(match representation {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
-                format!("{{ {} }}", tag_entry(tag))
+                format!("{{ {} }}", tag_entry(tag)?)
             }
             EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-                format!("['===', '{}']", variant.name)
+                format!("['===', {name}]")
             }
         });
     };
@@ -43,7 +47,7 @@ fn variant_to_arktype(
             let entries = struct_field_entries(&inline.fields, index, registry, helpers)?;
             if let EnumRepresentation::InternallyTagged { tag } = representation {
                 // The tag is a field of the variant's own object.
-                let mut merged = vec![tag_entry(tag)];
+                let mut merged = vec![tag_entry(tag)?];
                 merged.extend(entries);
                 return Ok(format!("{{ {} }}", merged.join(", ")));
             }
@@ -54,13 +58,19 @@ fn variant_to_arktype(
         }
     };
     Ok(match representation {
-        EnumRepresentation::ExternallyTagged => format!("{{ {}: {payload} }}", variant.name),
+        EnumRepresentation::ExternallyTagged => {
+            format!("{{ {}: {payload} }}", object_key(variant.serde_name())?)
+        }
         // serde writes the tag into the struct or map the variant holds.
         EnumRepresentation::InternallyTagged { tag } => {
-            format!("[{{ {} }}, '&', {payload}]", tag_entry(tag))
+            format!("[{{ {} }}, '&', {payload}]", tag_entry(tag)?)
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            format!("{{ {}, {content}: {payload} }}", tag_entry(tag))
+            format!(
+                "{{ {}, {}: {payload} }}",
+                tag_entry(tag)?,
+                object_key(content)?
+            )
         }
         EnumRepresentation::Untagged => payload,
     })
@@ -78,11 +88,20 @@ fn struct_field_entries(
         .map(|field| {
             Ok(format!(
                 "{}: {}",
-                field.field_name.to_case(Case::Camel),
+                field_key(field)?,
                 field_arktype(field, index, registry, helpers)?
             ))
         })
         .collect()
+}
+
+/// A field's key as serde writes it; ArkType marks an optional key with `?`.
+fn field_key(field: &StructField) -> Result<String> {
+    if field.wire.serde_optional {
+        string_literal(&format!("{}?", field.serde_name()))
+    } else {
+        object_key(field.serde_name())
+    }
 }
 
 fn field_type_to_arktype(
@@ -233,7 +252,7 @@ fn map_to_arktype(
                     &mut tagged_union
                         .variants
                         .iter()
-                        .map(|variant| variant.effective().name.as_str()),
+                        .map(|variant| variant.effective().serde_name()),
                 )?
             }
         },
@@ -343,8 +362,6 @@ pub fn generate_arktype_type_string(
         ));
 
         for (position, field) in struct_config.fields.iter().enumerate() {
-            let field_name = field.field_name.to_case(Case::Camel);
-
             // Write field doc comment if present
             if let Some(ref doc) = field.doccom {
                 scope_output.push_str(&format_jsdoc(doc, "  "));
@@ -352,12 +369,12 @@ pub fn generate_arktype_type_string(
 
             scope_output.push_str(&format!(
                 "  {}: {}",
-                field_name,
+                field_key(field)?,
                 field_arktype(field, index, registry, &mut helpers)?
             ));
             defaults_output.push_str(&format!(
                 "{}: {}",
-                field_name,
+                object_key(field.serde_name())?,
                 field_type_to_default_value(&field.field_type, index, registry)?
             ));
             // Add a comma if it's not the last field
@@ -482,11 +499,11 @@ fn validated_arktype(
             }
             Validator::BigDecimalValidator(decimal_validator) => {
                 helpers.compare_decimal = true;
-                vec![decimal_step(decimal_validator)?]
+                vec![Step::Narrow(js_checks::decimal_check(decimal_validator)?)]
             }
             Validator::DurationValidator(duration_validator) => {
                 helpers.duration_nanos = true;
-                vec![duration_step(duration_validator)?]
+                vec![Step::Narrow(js_checks::duration_check(duration_validator)?)]
             }
         };
         for step in steps {
@@ -495,7 +512,7 @@ fn validated_arktype(
                     let operator = if piped { "|>" } else { "&" };
                     format!("[{definition}, '{operator}', {constraint}]")
                 }
-                Step::Narrow(predicate) => format!("[{definition}, ':', (v) => {predicate}]"),
+                Step::Narrow(predicate) => format!("[{definition}, ':', (value) => {predicate}]"),
             };
         }
     }
@@ -545,16 +562,15 @@ fn number_steps(validator: &NumberValidator) -> Vec<Step> {
             range(format!("{} <= number <= {}", start.0, end.0))
         }
         NumberValidator::Int => range("number.integer".to_owned()),
-        NumberValidator::NonNaN => vec![Step::Narrow("!Number.isNaN(v)".to_owned())],
-        NumberValidator::Finite => vec![Step::Narrow("Number.isFinite(v)".to_owned())],
+        NumberValidator::NonNaN => vec![Step::Narrow("!Number.isNaN(value)".to_owned())],
+        NumberValidator::Finite => vec![Step::Narrow("Number.isFinite(value)".to_owned())],
         NumberValidator::Positive => range("number > 0".to_owned()),
         NumberValidator::NonNegative => range("number >= 0".to_owned()),
         NumberValidator::Negative => range("number < 0".to_owned()),
         NumberValidator::NonPositive => range("number <= 0".to_owned()),
-        NumberValidator::MultipleOf(divisor) => vec![Step::Narrow(format!(
-            "((value: number, divisor: number) => {{ const places = Math.max(...[value, divisor].map((n) => (String(n).split(\".\")[1] ?? \"\").length)); const scale = 10 ** places; return Math.round(value * scale) % Math.round(divisor * scale) === 0; }})(v, {})",
-            divisor.0
-        ))],
+        NumberValidator::MultipleOf(divisor) => {
+            vec![Step::Narrow(js_checks::multiple_of_check(divisor.0))]
+        }
         NumberValidator::Uint8 => vec![
             Step::Type("'number.integer'".to_owned()),
             Step::Type("'0 <= number <= 255'".to_owned()),
@@ -570,7 +586,7 @@ fn date_millis(bound: &str) -> Result<i64> {
 }
 
 fn date_step(validator: &DateValidator) -> Result<Step> {
-    let instant = "new Date(v).valueOf()";
+    let instant = "new Date(value).valueOf()";
     Ok(Step::Narrow(match validator {
         DateValidator::ValidDate => format!("!Number.isNaN({instant})"),
         DateValidator::GreaterThanDate(bound) => format!("{instant} > {}", date_millis(bound)?),
@@ -598,96 +614,31 @@ fn big_int_literal(bound: &str) -> Result<String> {
 fn big_int_step(validator: &BigIntValidator) -> Result<Step> {
     let compare = |condition: String| {
         format!(
-            "(() => {{ try {{ const n = BigInt(v); return {condition}; }} catch {{ return false; }} }})()"
+            "(() => {{ try {{ const big = BigInt(value); return {condition}; }} catch {{ return false; }} }})()"
         )
     };
     Ok(Step::Narrow(match validator {
         BigIntValidator::GreaterThanBigInt(bound) => {
-            compare(format!("n > {}", big_int_literal(bound)?))
+            compare(format!("big > {}", big_int_literal(bound)?))
         }
         BigIntValidator::GreaterThanOrEqualToBigInt(bound) => {
-            compare(format!("n >= {}", big_int_literal(bound)?))
+            compare(format!("big >= {}", big_int_literal(bound)?))
         }
         BigIntValidator::LessThanBigInt(bound) => {
-            compare(format!("n < {}", big_int_literal(bound)?))
+            compare(format!("big < {}", big_int_literal(bound)?))
         }
         BigIntValidator::LessThanOrEqualToBigInt(bound) => {
-            compare(format!("n <= {}", big_int_literal(bound)?))
+            compare(format!("big <= {}", big_int_literal(bound)?))
         }
         BigIntValidator::BetweenBigInt(start, end) => compare(format!(
-            "n >= {} && n <= {}",
+            "big >= {} && big <= {}",
             big_int_literal(start)?,
             big_int_literal(end)?
         )),
-        BigIntValidator::PositiveBigInt => compare("n > 0n".to_owned()),
-        BigIntValidator::NonNegativeBigInt => compare("n >= 0n".to_owned()),
-        BigIntValidator::NegativeBigInt => compare("n < 0n".to_owned()),
-        BigIntValidator::NonPositiveBigInt => compare("n <= 0n".to_owned()),
-    }))
-}
-
-fn decimal_literal(bound: &str) -> Result<String> {
-    bounds::decimal(bound).map_err(EvenframeError::config)?;
-    js_checks::string_literal(bound)
-}
-
-fn decimal_step(validator: &BigDecimalValidator) -> Result<Step> {
-    let compare = |bound: &str, condition: &str| -> Result<String> {
-        Ok(format!(
-            "compareDecimal(String(v), {}) {condition}",
-            decimal_literal(bound)?
-        ))
-    };
-    Ok(Step::Narrow(match validator {
-        BigDecimalValidator::GreaterThanBigDecimal(bound) => compare(bound, "> 0")?,
-        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(bound) => compare(bound, ">= 0")?,
-        BigDecimalValidator::LessThanBigDecimal(bound) => compare(bound, "< 0")?,
-        BigDecimalValidator::LessThanOrEqualToBigDecimal(bound) => compare(bound, "<= 0")?,
-        BigDecimalValidator::BetweenBigDecimal(start, end) => {
-            format!("{} && {}", compare(start, ">= 0")?, compare(end, "<= 0")?)
-        }
-        BigDecimalValidator::PositiveBigDecimal => {
-            "compareDecimal(String(v), \"0\") > 0".to_owned()
-        }
-        BigDecimalValidator::NonNegativeBigDecimal => {
-            "compareDecimal(String(v), \"0\") >= 0".to_owned()
-        }
-        BigDecimalValidator::NegativeBigDecimal => {
-            "compareDecimal(String(v), \"0\") < 0".to_owned()
-        }
-        BigDecimalValidator::NonPositiveBigDecimal => {
-            "compareDecimal(String(v), \"0\") <= 0".to_owned()
-        }
-    }))
-}
-
-fn duration_literal(bound: &str) -> Result<String> {
-    bounds::duration(bound)
-        .map(|nanos| format!("{nanos}n"))
-        .map_err(EvenframeError::config)
-}
-
-fn duration_step(validator: &DurationValidator) -> Result<Step> {
-    let compare =
-        |condition: String| format!("((nanos) => nanos !== null && {condition})(durationNanos(v))");
-    Ok(Step::Narrow(match validator {
-        DurationValidator::GreaterThanDuration(bound) => {
-            compare(format!("nanos > {}", duration_literal(bound)?))
-        }
-        DurationValidator::GreaterThanOrEqualToDuration(bound) => {
-            compare(format!("nanos >= {}", duration_literal(bound)?))
-        }
-        DurationValidator::LessThanDuration(bound) => {
-            compare(format!("nanos < {}", duration_literal(bound)?))
-        }
-        DurationValidator::LessThanOrEqualToDuration(bound) => {
-            compare(format!("nanos <= {}", duration_literal(bound)?))
-        }
-        DurationValidator::BetweenDuration(start, end) => compare(format!(
-            "nanos >= {} && nanos <= {}",
-            duration_literal(start)?,
-            duration_literal(end)?
-        )),
+        BigIntValidator::PositiveBigInt => compare("big > 0n".to_owned()),
+        BigIntValidator::NonNegativeBigInt => compare("big >= 0n".to_owned()),
+        BigIntValidator::NegativeBigInt => compare("big < 0n".to_owned()),
+        BigIntValidator::NonPositiveBigInt => compare("big <= 0n".to_owned()),
     }))
 }
 
@@ -696,6 +647,56 @@ mod tests {
     use super::{FieldType, TypeIndex, field_type_to_arktype};
     use crate::types::ForeignTypeRegistry;
     use std::collections::BTreeMap;
+
+    /// A struct whose fields serde names four ways: as written, renamed, by a
+    /// name that is no identifier, and as a key it may leave out.
+    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
+        use crate::types::{StructConfig, StructField, Wire};
+        let field = |name: &str, wire: Wire| StructField {
+            field_name: name.to_owned(),
+            field_type: FieldType::String,
+            wire,
+            ..Default::default()
+        };
+        let renamed = |name: &str| Wire {
+            serde: Some(name.to_owned()),
+            ..Wire::default()
+        };
+        let fields = vec![
+            field("first_name", Wire::default()),
+            field("last_name", renamed("lastName")),
+            field("zip_code", renamed("zip-code")),
+            field(
+                "nickname",
+                Wire {
+                    serde_optional: true,
+                    ..Wire::default()
+                },
+            ),
+        ];
+        std::collections::BTreeMap::from([(
+            "Person".to_owned(),
+            StructConfig {
+                struct_name: "Person".to_owned(),
+                fields,
+                ..Default::default()
+            },
+        )])
+    }
+
+    #[test]
+    fn fields_are_keyed_as_serde_writes_them() {
+        let structs = wire_named_structs();
+        let output = super::generate_arktype_type_string(
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+            &ForeignTypeRegistry::default(),
+        )
+        .unwrap();
+        assert!(output.contains("  first_name: 'string'"), "{output}");
+        assert!(output.contains("  lastName: 'string'"), "{output}");
+        assert!(output.contains("  \"zip-code\": 'string'"), "{output}");
+        assert!(output.contains("  \"nickname?\": 'string'"), "{output}");
+    }
 
     #[test]
     fn maps_become_index_signatures_keyed_as_json_writes_them() {

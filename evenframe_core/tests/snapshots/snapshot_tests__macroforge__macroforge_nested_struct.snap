@@ -4,16 +4,13 @@ expression: output
 ---
 /** @derive(Deserialize) */
 export interface Address {
-  /** @serde({ validate: ["nonEmpty"] }) */
   street: string;
-  /** @serde({ validate: ["nonEmpty"] }) */
   city: string;
 }
 
 /** @derive(Deserialize) */
 export interface Person {
-  /** @serde({ validate: ["nonEmpty"] }) */
   name: string;
-  homeAddress: Address;
-  workAddress: Address | null;
+  home_address: Address;
+  work_address: Address | null;
 }

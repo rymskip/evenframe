@@ -1,6 +1,7 @@
 use super::Mockmaker;
 use crate::evenframe_log;
 use crate::schemasync::database::surql::execute::execute_bound;
+use crate::schemasync::table::surql_ident;
 use crate::types::{EnumRepresentation, FieldType, StructField, TaggedUnion, VariantData};
 use std::collections::BTreeSet;
 use surrealdb::types::Variables;
@@ -64,12 +65,11 @@ impl Mockmaker<'_> {
         {
             let table = table.effective();
             for field in &table.struct_config.fields {
-                let endpoint =
-                    table.relation.is_some() && matches!(field.field_name.as_str(), "in" | "out");
+                let endpoint = table.relation.is_some() && matches!(field.db_name(), "in" | "out");
                 if endpoint || field.edge_config.is_some() {
                     continue;
                 }
-                let name = &field.field_name;
+                let name = surql_ident(field.db_name());
                 let describe = |error: RepointError| match error {
                     RepointError::Unfillable(targets) => format!(
                         "`{table_name}.{name}` must link to {targets}, which keeps no records; \
@@ -81,7 +81,7 @@ impl Mockmaker<'_> {
                 };
                 let mut walk = Walk::default();
                 let Some(found) = self
-                    .holds_excess(&field.field_type, name, 0, &mut walk)
+                    .holds_excess(&field.field_type, &name, 0, &mut walk)
                     .map_err(describe)?
                 else {
                     continue;
@@ -92,7 +92,7 @@ impl Mockmaker<'_> {
                     ))
                     .into());
                 }
-                let value = match self.repointed(&field.field_type, name, 0, &mut walk) {
+                let value = match self.repointed(&field.field_type, &name, 0, &mut walk) {
                     Ok(value) => value,
                     // Only an error when a record holds such a link.
                     Err(RepointError::Unfillable(targets)) => {
@@ -325,7 +325,7 @@ impl Mockmaker<'_> {
                         // Externally tagged, and internally tagged newtype
                         // variants, which serialize externally tagged.
                         (_, payload) => {
-                            let at = format!("{place}.{variant}");
+                            let at = format!("{place}.{}", surql_ident(variant));
                             self.payload_holds_excess(payload, &at, depth, walk)?
                                 .map(|condition| format!("({at} != NONE AND {condition})"))
                         }
@@ -382,7 +382,7 @@ impl Mockmaker<'_> {
                 .map(|field| {
                     self.holds_excess(
                         &field.field_type,
-                        &format!("{place}.{}", field.field_name),
+                        &format!("{place}.{}", surql_ident(field.db_name())),
                         depth,
                         walk,
                     )
@@ -561,12 +561,13 @@ impl Mockmaker<'_> {
                             }
                         }
                         (_, payload) => {
-                            let at = format!("{place}.{variant}");
+                            let at = format!("{place}.{}", surql_ident(variant));
                             match self.payload_holds_excess(payload, &at, depth, walk)? {
                                 Some(condition) => Some((
                                     format!("{at} != NONE AND {condition}"),
                                     format!(
-                                        "{{ {variant}: {} }}",
+                                        "{{ {}: {} }}",
+                                        surql_ident(variant),
                                         self.payload_repointed(payload, &at, depth, walk)?
                                     ),
                                 )),
@@ -597,14 +598,14 @@ impl Mockmaker<'_> {
     ) -> Result<String, RepointError> {
         let mut assignments = Vec::new();
         for field in fields {
-            let at = format!("{place}.{}", field.field_name);
+            let at = format!("{place}.{}", surql_ident(field.db_name()));
             if self
                 .holds_excess(&field.field_type, &at, depth, walk)?
                 .is_some()
             {
                 assignments.push(format!(
                     "{}: {}",
-                    field.field_name,
+                    surql_ident(field.db_name()),
                     self.repointed(&field.field_type, &at, depth, walk)?
                 ));
             }
@@ -644,6 +645,6 @@ fn variants(union: &TaggedUnion) -> impl Iterator<Item = (&str, Payload<'_>)> {
             VariantData::InlineStruct(config) => Payload::Inline(&config.effective().fields),
             VariantData::DataStructureRef(ty) => Payload::Type(ty),
         };
-        Some((variant.name.as_str(), payload))
+        Some((variant.db_name(), payload))
     })
 }

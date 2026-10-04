@@ -1,6 +1,6 @@
 //! Workspace scanning for finding Rust types with Evenframe derives.
 
-use super::configs::{ParsedType, parse_scanned_item};
+use super::configs::{ParsedType, has_database_id, parse_scanned_item};
 use super::paths::{ModuleScope, rust_path};
 use crate::config::IncludeFile;
 use crate::error::{EvenframeError, Result};
@@ -75,7 +75,8 @@ pub struct EvenframeType {
     pub file_path: String,
     /// Whether this is a struct or enum.
     pub kind: TypeKind,
-    /// Whether this struct has an `id` field (makes it a table).
+    /// Whether this struct has a field the database stores as `id` (makes it
+    /// a table).
     pub has_id_field: bool,
     /// Which pipeline(s) this type participates in.
     pub pipeline: crate::types::Pipeline,
@@ -154,7 +155,6 @@ struct PendingType {
     ident: String,
     file_path: String,
     module_path: String,
-    has_id_field: bool,
     /// Pipeline determined by a local `#[derive(...)]` or `#[apply(...)]`.
     /// `None` means the type only qualifies if a manual impl is found
     /// elsewhere in the crate.
@@ -198,7 +198,7 @@ impl CrateScanState {
                 let pipeline = pending_type
                     .local_pipeline
                     .or_else(|| manual_impls.get(&pending_type.ident).copied())?;
-                let evenframe_type = EvenframeType {
+                let mut evenframe_type = EvenframeType {
                     name: pending_type.ident,
                     module_path: pending_type.module_path,
                     file_path: pending_type.file_path,
@@ -206,7 +206,7 @@ impl CrateScanState {
                         ScannedAst::Struct(_) => TypeKind::Struct,
                         ScannedAst::Enum(_) => TypeKind::Enum,
                     },
-                    has_id_field: pending_type.has_id_field,
+                    has_id_field: false,
                     pipeline,
                     resolve_only,
                 };
@@ -214,6 +214,10 @@ impl CrateScanState {
                     &pending_type.ast,
                     &evenframe_type,
                     &evenframe_type.file_path,
+                );
+                evenframe_type.has_id_field = matches!(
+                    &parsed,
+                    Ok(ParsedType::Struct { config, .. }) if has_database_id(config)
                 );
                 Some(ScannedItem {
                     evenframe_type,
@@ -943,7 +947,6 @@ impl WorkspaceScanner {
                         ident: item_struct.ident.to_string(),
                         file_path: file_path.to_string(),
                         module_path: module_path.to_string(),
-                        has_id_field: has_id_field(&item_struct.fields),
                         local_pipeline,
                         ast: ScannedAst::Struct(item_struct),
                     });
@@ -961,7 +964,6 @@ impl WorkspaceScanner {
                         ident: item_enum.ident.to_string(),
                         file_path: file_path.to_string(),
                         module_path: module_path.to_string(),
-                        has_id_field: false,
                         local_pipeline,
                         ast: ScannedAst::Enum(item_enum),
                     });
@@ -1111,8 +1113,7 @@ fn walk_src(
 ///   `other_crate::T`, no generics like `Wrapper<T>`);
 /// - impls of traits other than
 ///   `EvenframePersistableStruct` / `EvenframeAppStruct` / `EvenframeTaggedUnion`
-///   (`EvenframeDeserialize` is supplementary and does not opt a type in on
-///   its own).
+///   (`Validate` checks values and does not opt a type in on its own).
 fn detect_manual_impl(item: &ItemImpl) -> Option<(String, crate::types::Pipeline)> {
     if item
         .attrs
@@ -1208,24 +1209,12 @@ fn reexports(content: &str) -> bool {
     })
 }
 
-/// Checks if a struct has a field named `id`.
-fn has_id_field(fields: &syn::Fields) -> bool {
-    if let syn::Fields::Named(fields_named) = fields {
-        fields_named
-            .named
-            .iter()
-            .any(|field| field.ident.as_ref().is_some_and(|id| id == "id"))
-    } else {
-        false
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         EvenframeError, EvenframeType, HashMap, HashSet, IncludeFile, MAX_SCAN_DEPTH, Path,
         PathBuf, TypeKind, WorkspaceScanner, collect_source_files, detect_manual_impl,
-        detect_pipeline, has_id_field,
+        detect_pipeline,
     };
     use std::fs::{self, File};
     use std::io::Write;
@@ -1495,77 +1484,6 @@ mod tests {
                 detect_pipeline(&s.attrs),
                 Some(crate::types::Pipeline::Both)
             );
-        }
-    }
-
-    // ==================== has_id_field Tests ====================
-
-    #[test]
-    fn test_has_id_field_with_id() {
-        let code = r#"
-            struct TestStruct {
-                id: String,
-                name: String,
-            }
-        "#;
-
-        let file = syn::parse_file(code).unwrap();
-        if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(has_id_field(&s.fields));
-        }
-    }
-
-    #[test]
-    fn test_has_id_field_without_id() {
-        let code = r#"
-            struct TestStruct {
-                name: String,
-                age: i32,
-            }
-        "#;
-
-        let file = syn::parse_file(code).unwrap();
-        if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(!has_id_field(&s.fields));
-        }
-    }
-
-    #[test]
-    fn test_has_id_field_tuple_struct() {
-        let code = r#"
-            struct TestStruct(String, i32);
-        "#;
-
-        let file = syn::parse_file(code).unwrap();
-        if let syn::Item::Struct(s) = &file.items[0] {
-            // Tuple structs have unnamed fields, should return false
-            assert!(!has_id_field(&s.fields));
-        }
-    }
-
-    #[test]
-    fn test_has_id_field_unit_struct() {
-        let code = r#"
-            struct TestStruct;
-        "#;
-
-        let file = syn::parse_file(code).unwrap();
-        if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(!has_id_field(&s.fields));
-        }
-    }
-
-    #[test]
-    fn test_has_id_field_only_id() {
-        let code = r#"
-            struct TestStruct {
-                id: i64,
-            }
-        "#;
-
-        let file = syn::parse_file(code).unwrap();
-        if let syn::Item::Struct(s) = &file.items[0] {
-            assert!(has_id_field(&s.fields));
         }
     }
 
@@ -2149,14 +2067,11 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_manual_impl_ignores_deserialize_trait() {
-        // EvenframeDeserialize is supplementary and should not opt a type in
-        // on its own.
+    fn test_detect_manual_impl_ignores_validate() {
         let item = parse_item_impl(
             r#"
-            impl<'de> EvenframeDeserialize<'de> for Foo {
-                fn evenframe_deserialize<D>(d: D) -> Result<Self, D::Error>
-                where D: Deserializer<'de> { unimplemented!() }
+            impl Validate for Foo {
+                fn validate(&self) -> Result<(), ValidationErrors> { Ok(()) }
             }
             "#,
         );

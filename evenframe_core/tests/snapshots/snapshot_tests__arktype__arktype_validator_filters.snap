@@ -7,13 +7,13 @@ const durationNanos = (value: unknown): bigint | null => { if (typeof value === 
 export const bindings = scope({
 
 Booking: {
-  code: [[['string', ':', (v) => v.startsWith("bk`${x}\"")], ':', (v) => v.trim() === v], ':', (v) => v.toUpperCase() === v],
+  code: [[['string', ':', (value) => value.startsWith("bk`${x}\"")], ':', (value) => value.trim() === value], ':', (value) => value.toUpperCase() === value],
   nickname: [[['string', '&', 'string >= 2'], '|', 'undefined'], '|', 'null'],
   guests: [['string', '[]'], '&', 'unknown[] <= 8'],
-  startsOn: [['string', ':', (v) => !Number.isNaN(new Date(v).valueOf())], ':', (v) => ((millis) => millis >= 1704067200000 && millis <= 1924905600000)(new Date(v).valueOf())],
-  deposit: ['string', ':', (v) => compareDecimal(String(v), "10.50") >= 0],
-  sequence: ['string', ':', (v) => (() => { try { const n = BigInt(v); return n < -5n; } catch { return false; } })()],
-  stay: ['string', ':', (v) => ((nanos) => nanos !== null && nanos >= 5400000000000n && nanos <= 172800000000000n)(durationNanos(v))]
+  starts_on: [['string', ':', (value) => !Number.isNaN(new Date(value).valueOf())], ':', (value) => ((millis) => millis >= 1704067200000 && millis <= 1924905600000)(new Date(value).valueOf())],
+  deposit: ['string', ':', (value) => compareDecimal(String(value), "10.50") >= 0],
+  sequence: ['string', ':', (value) => (() => { try { const big = BigInt(value); return big < -5n; } catch { return false; } })()],
+  stay: ['string', ':', (value) => ((nanos) => nanos !== null && nanos >= 5400000000000n && nanos <= 172800000000000n)(durationNanos(value))]
 },
 
 });
@@ -24,7 +24,7 @@ export const defaultBooking: Booking = {
 code: "",
 nickname: null,
 guests: [],
-startsOn: "",
+starts_on: "",
 deposit: "0",
 sequence: "0",
 stay: "0s"

@@ -3,16 +3,16 @@
 //! keyword patterns in [`crate::validator::keywords`].
 
 use crate::error::{EvenframeError, Result};
-use crate::validator::StringValidator;
-use crate::validator::bounds;
 use crate::validator::keywords::{self, NormalForm};
+use crate::validator::{BigDecimalValidator, DurationValidator, StringValidator};
+use crate::validator::{bounds, runtime};
 
 /// How a string check is written in JavaScript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsCheck {
     /// A regex the value must match, as its source.
     Pattern(String),
-    /// A boolean expression over the value `v`.
+    /// A boolean expression over `value`.
     Predicate(String),
     /// A length constraint both libraries express natively.
     Length(LengthCheck),
@@ -39,6 +39,20 @@ pub fn string_literal(text: &str) -> Result<String> {
     })
 }
 
+/// `name` as an object key: bare when it is an identifier, quoted otherwise.
+pub fn object_key(name: &str) -> Result<String> {
+    let mut characters = name.chars();
+    let is_identifier = characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && characters.all(|rest| rest.is_ascii_alphanumeric() || rest == '_' || rest == '$');
+    if is_identifier {
+        Ok(name.to_owned())
+    } else {
+        string_literal(name)
+    }
+}
+
 /// `text` as a JavaScript template literal.
 pub fn template_literal(text: &str) -> String {
     let escaped = text
@@ -53,17 +67,20 @@ fn pattern(source: &str) -> JsCheck {
 }
 
 fn test(source: &str) -> Result<String> {
-    Ok(format!("new RegExp({}).test(v)", string_literal(source)?))
+    Ok(format!(
+        "new RegExp({}).test(value)",
+        string_literal(source)?
+    ))
 }
 
 /// validator.js's `isLuhnNumber`, which ArkType's credit card keyword uses.
 const LUHN: &str = "((digits) => { let sum = 0; let double = false; \
 for (let index = digits.length - 1; index >= 0; index--) { let digit = Number.parseInt(digits.charAt(index), 10); \
 if (double) { digit *= 2; sum += digit >= 10 ? (digit % 10) + 1 : digit; } else { sum += digit; } double = !double; } \
-return sum % 10 === 0; })(v.replace(/[ -]+/g, \"\"))";
+return sum % 10 === 0; })(value.replace(/[ -]+/g, \"\"))";
 
 fn normalized(form: NormalForm) -> JsCheck {
-    JsCheck::Predicate(format!("v.normalize(\"{}\") === v", form.name()))
+    JsCheck::Predicate(format!("value.normalize(\"{}\") === value", form.name()))
 }
 
 /// The JavaScript form of a string check, or `None` for a validator that is
@@ -79,10 +96,10 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
             JsCheck::Predicate(format!("{} && {LUHN}", test(keywords::CREDIT_CARD)?))
         }
         StringValidator::Date => {
-            JsCheck::Predicate("!Number.isNaN(new Date(v).valueOf())".to_owned())
+            JsCheck::Predicate("!Number.isNaN(new Date(value).valueOf())".to_owned())
         }
         StringValidator::DateEpoch => JsCheck::Predicate(format!(
-            "{} && Math.abs(Number.parseInt(v, 10)) <= {}",
+            "{} && Math.abs(Number.parseInt(value, 10)) <= {}",
             test(keywords::INTEGER)?,
             keywords::MAX_EPOCH_MILLIS
         )),
@@ -99,7 +116,8 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::IpV4 => pattern(keywords::IPV4),
         StringValidator::IpV6 => pattern(keywords::IPV6),
         StringValidator::Json => JsCheck::Predicate(
-            "(() => { try { JSON.parse(v); return true; } catch { return false; } })()".to_owned(),
+            "(() => { try { JSON.parse(value); return true; } catch { return false; } })()"
+                .to_owned(),
         ),
         StringValidator::LowerPreformatted => pattern(keywords::LOWER),
         StringValidator::NormalizeNFCPreformatted => normalized(NormalForm::Nfc),
@@ -108,12 +126,13 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::NormalizeNFKDPreformatted => normalized(NormalForm::Nfkd),
         StringValidator::Numeric => pattern(keywords::NUMERIC),
         StringValidator::Regex => JsCheck::Predicate(
-            "(() => { try { new RegExp(v); return true; } catch { return false; } })()".to_owned(),
+            "(() => { try { new RegExp(value); return true; } catch { return false; } })()"
+                .to_owned(),
         ),
         StringValidator::Semver => pattern(keywords::SEMVER),
         StringValidator::TrimPreformatted => pattern(&keywords::trimmed_pattern()),
         StringValidator::UpperPreformatted => pattern(keywords::UPPER),
-        StringValidator::Url => JsCheck::Predicate("URL.canParse(v)".to_owned()),
+        StringValidator::Url => JsCheck::Predicate("URL.canParse(value)".to_owned()),
         StringValidator::Uuid => pattern(keywords::UUID),
         StringValidator::UuidV1 => pattern(&keywords::uuid_version('1')),
         StringValidator::UuidV2 => pattern(&keywords::uuid_version('2')),
@@ -124,7 +143,7 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::UuidV7 => pattern(&keywords::uuid_version('7')),
         StringValidator::UuidV8 => pattern(&keywords::uuid_version('8')),
         StringValidator::Literal(literal) => {
-            JsCheck::Predicate(format!("v === {}", string_literal(literal)?))
+            JsCheck::Predicate(format!("value === {}", string_literal(literal)?))
         }
         StringValidator::RegexLiteral(format) => pattern(&format.pattern()),
         StringValidator::Length(bound) => JsCheck::Length(LengthCheck::Exactly(
@@ -134,22 +153,26 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::MaxLength(length) => JsCheck::Length(LengthCheck::AtMost(*length)),
         StringValidator::NonEmpty => JsCheck::Length(LengthCheck::AtLeast(1)),
         StringValidator::StartsWith(prefix) => {
-            JsCheck::Predicate(format!("v.startsWith({})", string_literal(prefix)?))
+            JsCheck::Predicate(format!("value.startsWith({})", string_literal(prefix)?))
         }
         StringValidator::EndsWith(suffix) => {
-            JsCheck::Predicate(format!("v.endsWith({})", string_literal(suffix)?))
+            JsCheck::Predicate(format!("value.endsWith({})", string_literal(suffix)?))
         }
         StringValidator::Includes(substring) => {
-            JsCheck::Predicate(format!("v.includes({})", string_literal(substring)?))
+            JsCheck::Predicate(format!("value.includes({})", string_literal(substring)?))
         }
-        StringValidator::Trimmed => JsCheck::Predicate("v.trim() === v".to_owned()),
-        StringValidator::Lowercased => JsCheck::Predicate("v.toLowerCase() === v".to_owned()),
-        StringValidator::Uppercased => JsCheck::Predicate("v.toUpperCase() === v".to_owned()),
+        StringValidator::Trimmed => JsCheck::Predicate("value.trim() === value".to_owned()),
+        StringValidator::Lowercased => {
+            JsCheck::Predicate("value.toLowerCase() === value".to_owned())
+        }
+        StringValidator::Uppercased => {
+            JsCheck::Predicate("value.toUpperCase() === value".to_owned())
+        }
         StringValidator::Capitalized => {
-            JsCheck::Predicate("v[0]?.toUpperCase() === v[0]".to_owned())
+            JsCheck::Predicate("value[0]?.toUpperCase() === value[0]".to_owned())
         }
         StringValidator::Uncapitalized => {
-            JsCheck::Predicate("v[0]?.toLowerCase() === v[0]".to_owned())
+            JsCheck::Predicate("value[0]?.toLowerCase() === value[0]".to_owned())
         }
         StringValidator::String
         | StringValidator::StringEmbedded(_)
@@ -173,6 +196,78 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
     Ok(Some(check))
 }
 
+/// `runtime::is_multiple_of` as a boolean expression over the number
+/// `value`. JavaScript writes a small or large number with an exponent, which
+/// the place count corrects for, so it counts the places Rust does.
+pub fn multiple_of_check(divisor: f64) -> String {
+    format!(
+        "((places) => {{ const scale = 10 ** places; return Math.round(value * scale) % Math.round({divisor} * scale) === 0; }})(Math.max(((text) => {{ const [mantissa, exponent = \"0\"] = text.split(\"e\"); return Math.max(0, (mantissa.split(\".\")[1] ?? \"\").length - Number(exponent)); }})(String(value)), {}))",
+        runtime::decimal_places(divisor)
+    )
+}
+
+fn decimal_literal(bound: &str) -> Result<String> {
+    bounds::decimal(bound).map_err(EvenframeError::config)?;
+    string_literal(bound)
+}
+
+/// A decimal check as a boolean expression over `value`, which needs
+/// [`COMPARE_DECIMAL`] in scope.
+pub fn decimal_check(validator: &BigDecimalValidator) -> Result<String> {
+    let compare = |bound: &str, condition: &str| -> Result<String> {
+        Ok(format!(
+            "compareDecimal(String(value), {}) {condition}",
+            decimal_literal(bound)?
+        ))
+    };
+    Ok(match validator {
+        BigDecimalValidator::GreaterThanBigDecimal(bound) => compare(bound, "> 0")?,
+        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(bound) => compare(bound, ">= 0")?,
+        BigDecimalValidator::LessThanBigDecimal(bound) => compare(bound, "< 0")?,
+        BigDecimalValidator::LessThanOrEqualToBigDecimal(bound) => compare(bound, "<= 0")?,
+        BigDecimalValidator::BetweenBigDecimal(start, end) => {
+            format!("{} && {}", compare(start, ">= 0")?, compare(end, "<= 0")?)
+        }
+        BigDecimalValidator::PositiveBigDecimal => compare("0", "> 0")?,
+        BigDecimalValidator::NonNegativeBigDecimal => compare("0", ">= 0")?,
+        BigDecimalValidator::NegativeBigDecimal => compare("0", "< 0")?,
+        BigDecimalValidator::NonPositiveBigDecimal => compare("0", "<= 0")?,
+    })
+}
+
+fn duration_literal(bound: &str) -> Result<String> {
+    bounds::duration(bound)
+        .map(|nanos| format!("{nanos}n"))
+        .map_err(EvenframeError::config)
+}
+
+/// A duration check as a boolean expression over `value`, which needs
+/// [`DURATION_NANOS`] in scope.
+pub fn duration_check(validator: &DurationValidator) -> Result<String> {
+    let compare = |condition: String| {
+        format!("((nanos) => nanos !== null && {condition})(durationNanos(value))")
+    };
+    Ok(match validator {
+        DurationValidator::GreaterThanDuration(bound) => {
+            compare(format!("nanos > {}", duration_literal(bound)?))
+        }
+        DurationValidator::GreaterThanOrEqualToDuration(bound) => {
+            compare(format!("nanos >= {}", duration_literal(bound)?))
+        }
+        DurationValidator::LessThanDuration(bound) => {
+            compare(format!("nanos < {}", duration_literal(bound)?))
+        }
+        DurationValidator::LessThanOrEqualToDuration(bound) => {
+            compare(format!("nanos <= {}", duration_literal(bound)?))
+        }
+        DurationValidator::BetweenDuration(start, end) => compare(format!(
+            "nanos >= {} && nanos <= {}",
+            duration_literal(start)?,
+            duration_literal(end)?
+        )),
+    })
+}
+
 /// An exact decimal comparison, `compareDecimal(a, b)` returning -1, 0 or 1,
 /// for generated code that bounds decimals held as strings.
 pub const COMPARE_DECIMAL: &str = "const compareDecimal = (left: string, right: string): number => { \
@@ -188,7 +283,7 @@ const a = parse(String(left)); const b = parse(String(right)); \
 if (a.negative !== b.negative) return a.negative ? -1 : 1; \
 return a.negative ? magnitude(b, a) : magnitude(a, b); };\n";
 
-/// A duration in nanoseconds, `durationNanos(v)`, for generated code that
+/// A duration in nanoseconds, `durationNanos(value)`, for generated code that
 /// bounds durations held as serde's `{ secs, nanos }`, as numbers, or as
 /// SurrealDB-style text (`1h30m`). Anything else gives `null`.
 pub const DURATION_NANOS: &str = "const durationNanos = (value: unknown): bigint | null => { \

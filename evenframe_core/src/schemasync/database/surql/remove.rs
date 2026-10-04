@@ -1,4 +1,5 @@
 use crate::schemasync::compare::SchemaChanges;
+use crate::schemasync::table::surql_path;
 use convert_case::{Case, Casing};
 use tracing::{debug, info};
 
@@ -151,7 +152,8 @@ pub fn generate_remove_statements(schema_changes: &SchemaChanges) -> String {
             for field_name in &table_change.removed_fields {
                 output.push_str(&format!(
                     "REMOVE FIELD IF EXISTS {} ON TABLE {};\n",
-                    field_name, table_name
+                    surql_path(field_name),
+                    table_name
                 ));
             }
             output.push('\n');
