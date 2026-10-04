@@ -46,6 +46,11 @@ impl TypeGenerator {
     }
 
     fn generate(&self, outputs: &[TypesyncOutput]) -> Result<GenerationReport, EvenframeError> {
+        if outputs.is_empty() {
+            return Err(EvenframeError::config(
+                "No typesync output configured; specify `output` or `outputs` under [typesync], or set ScanConfig outputs",
+            ));
+        }
         info!("Starting type generation");
         let (enums, tables, objects) = build_all_configs(&self.config)?;
         let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
@@ -79,5 +84,23 @@ impl TypeGenerator {
             structs_processed,
             tables_processed,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TypeGenerator;
+    use crate::scan::config::ScanConfig;
+
+    #[test]
+    fn generation_requires_an_explicit_output_before_scanning() {
+        let failure = TypeGenerator::new(ScanConfig::default())
+            .generate_all()
+            .expect_err("an implicit generator must not run");
+        assert!(
+            failure
+                .to_string()
+                .contains("No typesync output configured")
+        );
     }
 }

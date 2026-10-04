@@ -1,0 +1,5 @@
+error: untagged variants `Left` and `Right` both read the `object` value kind; their database representation is ambiguous
+  --> tests/ui/fail/surreal_value_untagged_alias_overlap.rs:10:5
+   |
+10 |     Right {
+   |     ^^^^^

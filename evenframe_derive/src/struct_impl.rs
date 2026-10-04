@@ -2,6 +2,7 @@ use crate::{
     PipelineKind,
     deserialization_impl::generate_custom_deserialize,
     imports::generate_struct_imports,
+    surreal_value_impl::{Mode, struct_surreal_value},
     validate_impl::{CheckedField, struct_validate},
 };
 use convert_case::{Case, Casing};
@@ -305,6 +306,11 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 quote! { vec![#(#field_annotations.to_string()),*] }
             };
 
+            // serde never writes a skipped field, so no output describes it,
+            // as the scanner drops it too.
+            if field_wire.serde_skipped {
+                continue;
+            }
             table_field_tokens.push(quote! {
                 StructField {
                     field_name: #field_name.to_string(),
@@ -487,6 +493,14 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             Ok(tokens) => tokens,
             Err(err) => return err.to_compile_error(),
         };
+        let surreal_value_impl = if pipeline.reaches_database() {
+            match struct_surreal_value(&input, &wire, Mode::Stored, &checked_fields) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            }
+        } else {
+            TokenStream::new()
+        };
         let deserialize_impl = if has_field_validators {
             match generate_custom_deserialize(&input, &checked_fields) {
                 Ok(tokens) => tokens,
@@ -528,6 +542,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 #validate_impl
 
                 #deserialize_impl
+
+                #surreal_value_impl
             }
         } else {
             // An embedded object's metadata is a `static_struct_config()`
@@ -588,6 +604,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 #validate_impl
 
                 #deserialize_impl
+
+                #surreal_value_impl
             }
         }
     } else {

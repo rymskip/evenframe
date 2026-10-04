@@ -161,8 +161,8 @@ mod tests {
             doccom: None,
             macroforge_derives: vec![
                 "Default".into(),
-                "Serialize".into(),
-                "Deserialize".into(),
+                "Encode".into(),
+                "Decode".into(),
                 "Gigaform".into(),
                 "Overview".into(),
             ],
@@ -219,7 +219,7 @@ mod tests {
             vec![test_field("bar", crate::types::FieldType::String)],
         );
 
-        output.assert_contains("@derive(Deserialize)");
+        output.assert_contains("@derive(Decode)");
         output.assert_contains("export interface Foo {");
     }
 }

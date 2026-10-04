@@ -4,13 +4,13 @@ expression: output
 ---
 export type RecordLink<T> = { table: string; key: { String: string } | { Number: number } | { Uuid: string } } | T;
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Author {
   id: string;
   name: string;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Post {
   id: string;
   title: string;

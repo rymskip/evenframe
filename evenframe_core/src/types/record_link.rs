@@ -103,6 +103,17 @@ where
     fn from_value(value: surrealdb_types::Value) -> Result<Self, surrealdb_types::Error> {
         match value {
             surrealdb_types::Value::RecordId(id) => Ok(RecordLink::Id(id)),
+            surrealdb_types::Value::Object(object) => {
+                match T::from_value(surrealdb_types::Value::Object(object.clone())) {
+                    Ok(record) => Ok(RecordLink::Object(record)),
+                    Err(record_error) => match object.get("id") {
+                        Some(surrealdb_types::Value::RecordId(id)) => {
+                            Ok(RecordLink::Id(id.clone()))
+                        }
+                        _ => Err(record_error),
+                    },
+                }
+            }
             record => T::from_value(record).map(RecordLink::Object),
         }
     }
@@ -199,6 +210,22 @@ mod tests {
         assert_eq!(
             RecordLink::<Author>::from_value(record).expect("reads"),
             RecordLink::Object(author)
+        );
+
+        let partial = Value::Object(
+            [
+                (
+                    "id".to_owned(),
+                    Value::RecordId(RecordId::new("author", "ada")),
+                ),
+                ("bio".to_owned(), Value::String("Mathematician".to_owned())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(
+            RecordLink::<Author>::from_value(partial).expect("a partial record reads by its id"),
+            RecordLink::Id(RecordId::new("author", "ada"))
         );
     }
 }

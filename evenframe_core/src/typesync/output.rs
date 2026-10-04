@@ -1,18 +1,26 @@
 //! Rendering and writing one configured output's files.
 
-use crate::config::{ForeignTypeConfig, RECORD_LINK, TsOutputMapping};
+use crate::config::RECORD_LINK;
+#[cfg(any(feature = "arktype", feature = "effect"))]
+use crate::config::{ForeignTypeConfig, TsOutputMapping};
 use crate::error::{EvenframeError, Result};
 use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
+#[cfg(feature = "arktype")]
 use crate::typesync::arktype::generate_arktype_type_string;
 use crate::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
+#[cfg(feature = "effect")]
 use crate::typesync::effect::{generate_effect_schema_for_types, generate_effect_schema_string};
 use crate::typesync::file_grouping::TypeFileGroup;
+#[cfg(any(feature = "arktype", feature = "effect"))]
 use crate::typesync::foreign_ts::{
     Reading, RecordLinkMapping, foreign_types_used, import_lines, record_link_mapping,
 };
+#[cfg(feature = "effect")]
+use crate::typesync::import_resolver::format_effect_imports;
+#[cfg(any(feature = "effect", feature = "macroforge"))]
+use crate::typesync::import_resolver::resolve_imports;
 use crate::typesync::import_resolver::{
-    barrel_filename, format_effect_imports, generate_barrel_file, import_specifier_suffix,
-    resolve_imports, type_name_to_filename,
+    barrel_filename, generate_barrel_file, import_specifier_suffix, type_name_to_filename,
 };
 use crate::typesync::type_index::TypeIndex;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -218,6 +226,7 @@ fn check_foreign_mappings(kind: OutputKind, registry: &ForeignTypeRegistry) -> R
 /// The import lines, each ending in a newline, for the foreign types
 /// `type_names` use in `output`, whose mapping of a foreign type `mapping`
 /// reads, including what their record links need.
+#[cfg(any(feature = "arktype", feature = "effect"))]
 fn foreign_imports<M: TsOutputMapping>(
     type_names: &[String],
     types: &OutputTypes,
@@ -262,52 +271,66 @@ fn single_file(
     types: &OutputTypes,
     path: PathBuf,
 ) -> Result<RenderedOutput> {
-    let OutputTypes { index, registry } = types;
-    let all_types: Vec<String> = index.names().cloned().collect();
+    #[cfg(any(feature = "arktype", feature = "effect"))]
+    let all_types: Vec<String> = types.index.names().cloned().collect();
     let content = match output.kind {
-        OutputKind::Arktype => Ok(format!(
-            "import {{ scope }} from 'arktype';\n{}\n{}\nexport const validator = exported;\n",
-            foreign_imports(&all_types, types, OutputKind::Arktype, |foreign| foreign
-                .arktype
-                .as_ref())?,
-            generate_arktype_type_string(index, registry)?
-        )),
-        OutputKind::Effect => Ok(format!(
-            "import {{ Schema }} from \"effect\";\n{}\n{}",
-            foreign_imports(&all_types, types, OutputKind::Effect, |foreign| foreign
-                .effect
-                .as_ref())?,
-            generate_effect_schema_string(index, false, registry)?
-        )),
+        OutputKind::Arktype => {
+            #[cfg(not(feature = "arktype"))]
+            return Err(not_built(OutputKind::Arktype, types));
+            #[cfg(feature = "arktype")]
+            {
+                Ok(format!(
+                    "import {{ scope }} from 'arktype';\n{}\n{}\nexport const validator = exported;\n",
+                    foreign_imports(&all_types, types, OutputKind::Arktype, |foreign| foreign
+                        .arktype
+                        .as_ref())?,
+                    generate_arktype_type_string(&types.index, types.registry)?
+                ))
+            }
+        }
+        OutputKind::Effect => {
+            #[cfg(not(feature = "effect"))]
+            return Err(not_built(OutputKind::Effect, types));
+            #[cfg(feature = "effect")]
+            {
+                Ok(format!(
+                    "import {{ Schema }} from \"effect\";\n{}\n{}",
+                    foreign_imports(&all_types, types, OutputKind::Effect, |foreign| foreign
+                        .effect
+                        .as_ref())?,
+                    generate_effect_schema_string(&types.index, false, types.registry)?
+                ))
+            }
+        }
         OutputKind::Macroforge => {
             #[cfg(feature = "macroforge")]
             return macroforge_single_file(output, types, path);
             #[cfg(not(feature = "macroforge"))]
-            return Err(not_built(OutputKind::Macroforge));
+            return Err(not_built(OutputKind::Macroforge, types));
         }
         OutputKind::Flatbuffers => {
             #[cfg(feature = "flatbuffers")]
             let content = crate::typesync::flatbuffers::generate_flatbuffers_schema_string(
-                index.structs(),
-                index.enums(),
+                types.index.structs(),
+                types.index.enums(),
                 output.namespace.as_deref(),
-                registry,
+                types.registry,
             );
             #[cfg(not(feature = "flatbuffers"))]
-            let content = Err(not_built(OutputKind::Flatbuffers));
+            let content = Err(not_built(OutputKind::Flatbuffers, types));
             content
         }
         OutputKind::Protobuf => {
             #[cfg(feature = "protobuf")]
             let content = crate::typesync::protobuf::generate_protobuf_schema_string(
-                index.structs(),
-                index.enums(),
+                types.index.structs(),
+                types.index.enums(),
                 output.package.as_deref(),
                 output.import_validate,
-                registry,
+                types.registry,
             );
             #[cfg(not(feature = "protobuf"))]
-            let content = Err(not_built(OutputKind::Protobuf));
+            let content = Err(not_built(OutputKind::Protobuf, types));
             content
         }
     }?;
@@ -319,10 +342,17 @@ fn single_file(
     })
 }
 
-#[cfg(not(all(feature = "macroforge", feature = "flatbuffers", feature = "protobuf")))]
-fn not_built(kind: OutputKind) -> EvenframeError {
+#[cfg(not(all(
+    feature = "arktype",
+    feature = "effect",
+    feature = "macroforge",
+    feature = "flatbuffers",
+    feature = "protobuf"
+)))]
+fn not_built(kind: OutputKind, types: &OutputTypes) -> EvenframeError {
     EvenframeError::config(format!(
-        "this evenframe was built without the `{kind}` feature, so it cannot write `{kind}` outputs"
+        "this evenframe was built without the `{kind}` feature, so it cannot write `{kind}` outputs for {} types",
+        types.index.names().count()
     ))
 }
 
@@ -333,7 +363,7 @@ fn render_per_file(
     dir: &Path,
     types: &OutputTypes,
 ) -> Result<RenderedOutput> {
-    let OutputTypes { index, registry } = types;
+    let index = &types.index;
     let settings = &output.files;
     let plan = index.file_plan();
     #[cfg(feature = "macroforge")]
@@ -381,6 +411,7 @@ fn render_per_file(
     );
 
     let render_group = |group: &TypeFileGroup| -> Result<RenderedGroup> {
+        #[cfg(any(feature = "effect", feature = "macroforge"))]
         let imports = resolve_imports(
             group,
             plan,
@@ -389,26 +420,35 @@ fn render_per_file(
             &settings.file_extension,
             settings.import_extension,
         );
+        #[cfg(any(feature = "effect", feature = "macroforge"))]
         let type_names = group.all_types();
+        #[cfg(any(feature = "effect", feature = "macroforge"))]
         let mut content = String::new();
+        #[cfg(not(any(feature = "effect", feature = "macroforge")))]
+        let content = String::new();
         #[cfg(feature = "macroforge")]
         let mut helpers = crate::typesync::macroforge::HelperModule::new(helpers_source.clone());
         match output.kind {
             OutputKind::Effect => {
-                content.push_str("import { Schema } from \"effect\";\n");
-                content.push_str(&foreign_imports(
-                    &type_names,
-                    types,
-                    OutputKind::Effect,
-                    |foreign| foreign.effect.as_ref(),
-                )?);
-                push_imports(&mut content, &format_effect_imports(&imports));
-                content.push('\n');
-                content.push_str(&generate_effect_schema_for_types(
-                    &type_names,
-                    index,
-                    registry,
-                )?);
+                #[cfg(not(feature = "effect"))]
+                Err::<(), _>(not_built(OutputKind::Effect, types))?;
+                #[cfg(feature = "effect")]
+                {
+                    content.push_str("import { Schema } from \"effect\";\n");
+                    content.push_str(&foreign_imports(
+                        &type_names,
+                        types,
+                        OutputKind::Effect,
+                        |foreign| foreign.effect.as_ref(),
+                    )?);
+                    push_imports(&mut content, &format_effect_imports(&imports));
+                    content.push('\n');
+                    content.push_str(&generate_effect_schema_for_types(
+                        &type_names,
+                        index,
+                        types.registry,
+                    )?);
+                }
             }
             OutputKind::Macroforge => {
                 #[cfg(feature = "macroforge")]
@@ -422,7 +462,7 @@ fn render_per_file(
                     &mut helpers,
                 )?;
                 #[cfg(not(feature = "macroforge"))]
-                return Err(not_built(OutputKind::Macroforge));
+                Err::<(), _>(not_built(OutputKind::Macroforge, types))?;
             }
             kind => {
                 return Err(EvenframeError::config(format!(
@@ -590,6 +630,7 @@ fn macroforge_per_file_content(
     Ok(())
 }
 
+#[cfg(any(feature = "effect", feature = "macroforge"))]
 fn push_imports(content: &mut String, import_lines: &str) {
     if !import_lines.is_empty() {
         content.push_str(import_lines);

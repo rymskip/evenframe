@@ -1078,14 +1078,14 @@ fn parse_index_entry(
                     return Err(edge_index_error(span, &root));
                 }
                 // On a SCHEMAFULL table, SurrealDB 3 only indexes sub-fields of a
-                // field whose type allows them; a `null` variant doesn't ("The
+                // field whose type allows them; a `none` variant doesn't ("The
                 // field '...' does not exist"). evenframe tables are SCHEMAFULL.
                 if field.is_optional && path != root {
                     return Err(syn::Error::new(
                         span,
                         format!(
                             "SurrealDB can't index a path inside an optional field: `{root}` \
-                             is an `Option`, stored as `null | ...`; make `{root}` \
+                             is an `Option`, stored as `option<...>`; make `{root}` \
                              non-optional to index `{path}`"
                         ),
                     ));
@@ -1334,14 +1334,14 @@ pub fn parse_macroforge_derive_attribute(attrs: &[Attribute]) -> Result<Vec<Stri
                                 } else {
                                     return Err(syn::Error::new(
                                         path.span(),
-                                        "Expected a simple identifier in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                                        "Expected a simple identifier in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
                                     ));
                                 }
                             }
                             _ => {
                                 return Err(syn::Error::new(
                                     meta.span(),
-                                    "Expected bare identifiers in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                                    "Expected bare identifiers in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
                                 ));
                             }
                         }
@@ -1352,7 +1352,7 @@ pub fn parse_macroforge_derive_attribute(attrs: &[Attribute]) -> Result<Vec<Stri
                     return Err(syn::Error::new(
                         attr.span(),
                         format!(
-                            "Failed to parse macroforge_derive attribute: {}\n\nExample: #[macroforge_derive(Default, Serialize, Deserialize)]",
+                            "Failed to parse macroforge_derive attribute: {}\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
                             err
                         ),
                     ));

@@ -2,14 +2,14 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Coordinates {
   lat: number;
   lng: number;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type Location =
 	| { Address: string }
 	| { Coords: Coordinates }

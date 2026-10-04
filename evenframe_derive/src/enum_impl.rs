@@ -1,4 +1,5 @@
 use crate::PipelineKind;
+use crate::surreal_value_impl::{Mode, enum_surreal_value};
 use crate::validate_impl::enum_validate;
 use evenframe_core::{
     derive::{
@@ -59,6 +60,11 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
         let mut variant_tokens = Vec::new();
 
         for (variant, variant_wire) in data_enum.variants.iter().zip(&wire.variants) {
+            // serde never writes a skipped variant or field, as the scanner
+            // drops them too.
+            if variant_wire.wire.serde_skipped {
+                continue;
+            }
             let variant_name = naming::unraw(&variant.ident);
             let variant_wire_tokens = &variant_wire.wire;
 
@@ -88,6 +94,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                         .named
                         .iter()
                         .zip(&variant_wire.fields)
+                        .filter(|(_, field_wire)| !field_wire.serde_skipped)
                         .filter_map(|(field, field_wire)| {
                             let field_name = naming::unraw(field.ident.as_ref()?);
                             let field_type = FieldType::parse_syn_ty(&field.ty);
@@ -170,8 +177,19 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             Err(err) => return err.to_compile_error(),
         };
 
+        let surreal_value_impl = if pipeline.reaches_database() {
+            match enum_surreal_value(&input, &wire, Mode::Stored) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            }
+        } else {
+            TokenStream::new()
+        };
+
         quote! {
             #validate_impl
+
+            #surreal_value_impl
 
             ::evenframe::__metadata! {
                 const _: () = {

@@ -1,0 +1,5 @@
+error: an internally tagged enum's tuple variant is not supported: serde merges its value into the tag's object, which evenframe's schema does not describe
+ --> tests/ui/fail/surreal_value_internal_tuple_variant.rs:7:5
+  |
+7 |     Circle(f64),
+  |     ^^^^^^

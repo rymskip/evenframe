@@ -555,6 +555,7 @@ impl SchemaImporter {
         enum WorkItem {
             Parse(String),
             WrapArray,
+            WrapOptional,
             BuildUnion { count: usize },
         }
 
@@ -601,6 +602,17 @@ impl SchemaImporter {
                         }
                     }
 
+                    // option<...>
+                    if let Some(inner) = t
+                        .strip_prefix("option<")
+                        .and_then(|rest| rest.strip_suffix('>'))
+                        .filter(|inner| Self::brackets_balance(inner))
+                    {
+                        work_stack.push(WorkItem::WrapOptional);
+                        work_stack.push(WorkItem::Parse(inner.to_string()));
+                        continue;
+                    }
+
                     // array<...>
                     if t.starts_with("array<") && t.ends_with('>') {
                         let inner = &t[6..t.len() - 1];
@@ -631,6 +643,13 @@ impl SchemaImporter {
                         value_stack.push(ObjectType::Simple("array<unknown>".to_string()));
                     }
                 }
+                WorkItem::WrapOptional => {
+                    if let Some(inner) = value_stack.pop() {
+                        value_stack.push(ObjectType::Optional(Box::new(inner)));
+                    } else {
+                        value_stack.push(ObjectType::Simple("option<unknown>".to_string()));
+                    }
+                }
                 WorkItem::BuildUnion { count } => {
                     let mut items = Vec::with_capacity(count);
                     for _ in 0..count {
@@ -640,23 +659,19 @@ impl SchemaImporter {
                     }
                     items.reverse();
 
-                    // Nullable special-case
-                    if items.len() == 2
-                        && items
-                            .iter()
-                            .any(|t| matches!(t, ObjectType::Simple(s) if s == "null"))
-                    {
-                        if let Some(non_null) = items
-                            .into_iter()
-                            .find(|t| !matches!(t, ObjectType::Simple(s) if s == "null"))
-                        {
-                            value_stack.push(ObjectType::Nullable(Box::new(non_null)));
-                        } else {
-                            value_stack.push(ObjectType::Union(vec![
-                                ObjectType::Simple("null".to_string()),
-                                ObjectType::Simple("null".to_string()),
-                            ]));
-                        }
+                    // `none | T` is an optional `T`.
+                    let is_none = |item: &ObjectType| matches!(item, ObjectType::Simple(name) if name == "none");
+                    let present: Vec<ObjectType> = items
+                        .iter()
+                        .filter(|item| !is_none(item))
+                        .cloned()
+                        .collect();
+                    if items.iter().any(is_none) && !present.is_empty() {
+                        let inner = match <[ObjectType; 1]>::try_from(present) {
+                            Ok([single]) => single,
+                            Err(several) => ObjectType::Union(several),
+                        };
+                        value_stack.push(ObjectType::Optional(Box::new(inner)));
                     } else {
                         value_stack.push(ObjectType::Union(items));
                     }
@@ -667,6 +682,23 @@ impl SchemaImporter {
         value_stack
             .pop()
             .unwrap_or_else(|| ObjectType::Simple("unknown".to_string()))
+    }
+
+    /// Whether every `<` in `text` closes within it, so a `option<...>` around
+    /// it is one type rather than the start of a union.
+    fn brackets_balance(text: &str) -> bool {
+        let mut depth = 0_usize;
+        for character in text.chars() {
+            match character {
+                '<' => depth += 1,
+                '>' => match depth.checked_sub(1) {
+                    Some(lower) => depth = lower,
+                    None => return false,
+                },
+                _ => {}
+            }
+        }
+        depth == 0
     }
 
     /// Parse object field definitions

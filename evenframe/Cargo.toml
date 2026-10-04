@@ -64,8 +64,10 @@ cli = [
 
 # --- Type synchronization (forwarded to evenframe_core) ---
 
-# Core typesync generators (ArkType, Effect-TS).
+# Shared typesync infrastructure. Select each output generator explicitly.
 typesync = ["evenframe_core/typesync"]
+arktype = ["evenframe_core/arktype"]
+effect = ["evenframe_core/effect"]
 # All typesync generators including Protocol Buffers, FlatBuffers, and Macroforge.
 typesync-all = ["evenframe_core/typesync-all"]
 # Protocol Buffers (.proto) generation. Implies: typesync.

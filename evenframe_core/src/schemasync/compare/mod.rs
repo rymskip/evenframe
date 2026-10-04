@@ -825,8 +825,8 @@ impl Comparator {
                     }
                 }
             }
-            // Nullable types - unwrap and compare
-            (ObjectType::Nullable(old_inner), ObjectType::Nullable(new_inner)) => {
+            // Optional types - unwrap and compare
+            (ObjectType::Optional(old_inner), ObjectType::Optional(new_inner)) => {
                 changes.extend(Self::compare_object_types(prefix, old_inner, new_inner));
             }
             // Different types entirely
@@ -1018,8 +1018,8 @@ fn normalize_event_statement(stmt: &str) -> String {
 /// locally-generated schema and the form SurrealDB stores and returns.
 ///
 /// SurrealDB rewrites assertions on store: it drops redundant parentheses
-/// (e.g. `$value = NULL OR (string::len($value) <= 5)` becomes
-/// `$value = NULL OR string::len($value) <= 5`) and canonicalizes string
+/// (e.g. `$value = NONE OR (string::len($value) <= 5)` becomes
+/// `$value = NONE OR string::len($value) <= 5`) and canonicalizes string
 /// literals to single quotes (`"@"` becomes `'@'`). To avoid re-emitting an
 /// unchanged field every sync, this neutralizes those differences: it joins
 /// multiple clauses with ` AND `, drops `(`/`)`, maps `"`/`` ` `` to `'`,
@@ -1059,8 +1059,8 @@ mod normalize_assert_tests {
     #[test]
     fn paren_and_quote_insensitive() {
         // Desired (as emitted) vs stored (as SurrealDB returns it) must match.
-        let desired = vec!["$value = NULL OR (string::len($value) <= 5)".to_string()];
-        let stored = vec!["$value = NULL OR string::len($value) <= 5".to_string()];
+        let desired = vec!["$value = NONE OR (string::len($value) <= 5)".to_string()];
+        let stored = vec!["$value = NONE OR string::len($value) <= 5".to_string()];
         assert_eq!(normalize_assert(&desired), normalize_assert(&stored));
 
         let desired = vec!["string::starts_with($value, \"@\")".to_string()];

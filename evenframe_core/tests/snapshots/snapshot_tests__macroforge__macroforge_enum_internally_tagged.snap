@@ -2,19 +2,19 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface CircleData {
   radius: number;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface RectangleData {
   width: number;
   height: number;
 }
 
-/** @derive(Deserialize) */
-/** @serde({ tag: "type" }) */
+/** @derive(Decode) */
+/** @endec({ tag: "type" }) */
 export type Shape =
 	| { type: "Circle" } & CircleData
 	| { type: "Rectangle" } & RectangleData

@@ -16,26 +16,84 @@ use serde_derive_internals::{
 use syn::{Attribute, DeriveInput, Ident, LitStr, Token, spanned::Spanned};
 
 /// The wire form of one struct or enum, in declaration order.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ItemWire {
     /// A struct's named fields.
     pub fields: Vec<Wire>,
+    /// How serde reads each of a struct's named fields.
+    pub reads: Vec<FieldRead>,
     pub variants: Vec<VariantWire>,
     /// An enum's representation in serde's JSON.
     pub representation: EnumRepresentation,
+    /// What a struct's missing fields take under `#[serde(default)]`.
+    pub container_default: FieldDefault,
+    pub deny_unknown_fields: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct VariantWire {
     pub wire: Wire,
     /// A struct variant's named fields.
     pub fields: Vec<Wire>,
+    pub reads: Vec<FieldRead>,
+    /// The other names serde reads the variant by.
+    pub aliases: Vec<String>,
+}
+
+/// How serde reads one named field.
+#[derive(Default, Clone)]
+pub struct FieldRead {
+    /// What it gives the field when the input lacks it.
+    pub default: FieldDefault,
+    /// `#[serde(flatten)]`: the field's own fields sit beside its siblings.
+    pub flatten: bool,
+    /// The other names serde reads the field by.
+    pub aliases: Vec<String>,
+}
+
+/// What serde gives a field missing from its input.
+#[derive(Default, Clone)]
+pub enum FieldDefault {
+    #[default]
+    None,
+    /// `Default::default()`.
+    Trait,
+    /// The function `#[serde(default = "...")]` names.
+    Function(syn::ExprPath),
+}
+
+impl From<&serde_derive_internals::attr::Default> for FieldDefault {
+    fn from(default: &serde_derive_internals::attr::Default) -> Self {
+        match default {
+            serde_derive_internals::attr::Default::None => Self::None,
+            serde_derive_internals::attr::Default::Default => Self::Trait,
+            serde_derive_internals::attr::Default::Path(function) => {
+                Self::Function(function.clone())
+            }
+        }
+    }
 }
 
 /// Resolves the serde and SurrealValue names of `input`'s fields and
 /// variants, rejecting the attributes that give a field no single key.
 pub fn resolve(input: &DeriveInput) -> syn::Result<ItemWire> {
-    let mut item = serde_wire(input)?;
+    resolve_as(input, Flatten::Rejected)
+}
+
+/// [`resolve`] for a query's row, which only the database reads: a flattened
+/// field is allowed, as no output describes the row.
+pub fn resolve_row(input: &DeriveInput) -> syn::Result<ItemWire> {
+    resolve_as(input, Flatten::Allowed)
+}
+
+#[derive(Clone, Copy)]
+enum Flatten {
+    Rejected,
+    Allowed,
+}
+
+fn resolve_as(input: &DeriveInput, flatten: Flatten) -> syn::Result<ItemWire> {
+    let mut item = serde_wire(input, flatten)?;
     apply_surreal(input, &mut item)?;
     Ok(item)
 }
@@ -46,17 +104,17 @@ pub fn unraw(ident: &Ident) -> String {
     name.strip_prefix("r#").map(str::to_owned).unwrap_or(name)
 }
 
-fn serde_wire(input: &DeriveInput) -> syn::Result<ItemWire> {
+fn serde_wire(input: &DeriveInput, flatten: Flatten) -> syn::Result<ItemWire> {
     let context = Ctxt::new();
     let private = Ident::new("__private", Span::call_site());
     let item = Container::from_ast(&context, input, Derive::Serialize, &private)
-        .map(|container| container_wire(&context, &container));
+        .map(|container| container_wire(&context, &container, flatten));
     context.check()?;
     // `from_ast` returns nothing only after recording an error, which `check` returned.
     item.ok_or_else(|| syn::Error::new(input.ident.span(), "serde cannot describe a union"))
 }
 
-fn container_wire(context: &Ctxt, container: &Container) -> ItemWire {
+fn container_wire(context: &Ctxt, container: &Container, flatten: Flatten) -> ItemWire {
     if container.attrs.transparent() {
         context.error_spanned_by(
             &container.ident,
@@ -75,8 +133,11 @@ fn container_wire(context: &Ctxt, container: &Container) -> ItemWire {
         Data::Struct(Style::Struct, fields) => ItemWire {
             fields: fields
                 .iter()
-                .map(|field| field_wire(context, field))
+                .map(|field| field_wire(context, field, flatten))
                 .collect(),
+            reads: fields.iter().map(field_read).collect(),
+            container_default: container.attrs.default().into(),
+            deny_unknown_fields: container.attrs.deny_unknown_fields(),
             ..ItemWire::default()
         },
         Data::Struct(_, _) => ItemWire::default(),
@@ -112,10 +173,12 @@ fn container_wire(context: &Ctxt, container: &Container) -> ItemWire {
                             Style::Struct => variant
                                 .fields
                                 .iter()
-                                .map(|field| field_wire(context, field))
+                                .map(|field| field_wire(context, field, flatten))
                                 .collect(),
                             Style::Tuple | Style::Newtype | Style::Unit => Vec::new(),
                         },
+                        reads: variant.fields.iter().map(field_read).collect(),
+                        aliases: aliases(variant.attrs.aliases(), variant.attrs.name()),
                     }
                 })
                 .collect(),
@@ -130,13 +193,34 @@ fn container_wire(context: &Ctxt, container: &Container) -> ItemWire {
                 },
                 TagType::None => EnumRepresentation::Untagged,
             },
+            deny_unknown_fields: container.attrs.deny_unknown_fields(),
             ..ItemWire::default()
         },
     }
 }
 
-fn field_wire(context: &Ctxt, field: &Field) -> Wire {
-    if field.attrs.flatten() {
+fn field_read(field: &Field) -> FieldRead {
+    FieldRead {
+        default: field.attrs.default().into(),
+        flatten: field.attrs.flatten(),
+        aliases: aliases(field.attrs.aliases(), field.attrs.name()),
+    }
+}
+
+/// `#[serde(alias)]` names, without the name serde reads by anyway.
+fn aliases(
+    names: &std::collections::BTreeSet<serde_derive_internals::name::Name>,
+    name: &serde_derive_internals::name::MultiName,
+) -> Vec<String> {
+    names
+        .iter()
+        .map(|alias| alias.value.clone())
+        .filter(|alias| *alias != name.deserialize_name().value)
+        .collect()
+}
+
+fn field_wire(context: &Ctxt, field: &Field, flatten: Flatten) -> Wire {
+    if field.attrs.flatten() && matches!(flatten, Flatten::Rejected) {
         context.error_spanned_by(
             field.original,
             "#[serde(flatten)] is not supported: evenframe gives every field its own key",

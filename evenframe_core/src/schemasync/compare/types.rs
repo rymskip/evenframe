@@ -22,8 +22,9 @@ pub enum ObjectType {
     Array(Box<ObjectType>),
     /// Union of multiple types (e.g., string | int)
     Union(Vec<ObjectType>),
-    /// Nullable type (e.g., null | string)
-    Nullable(Box<ObjectType>),
+    /// An optional value, `option<string>`, which SurrealDB lists as
+    /// `none | string`
+    Optional(Box<ObjectType>),
 }
 
 impl Display for ObjectType {
@@ -42,7 +43,7 @@ impl Display for ObjectType {
                 let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
                 write!(f, "({})", type_strs.join(" | "))
             }
-            ObjectType::Nullable(inner) => write!(f, "null | {}", inner),
+            ObjectType::Optional(inner) => write!(f, "none | {}", inner),
         }
     }
 }

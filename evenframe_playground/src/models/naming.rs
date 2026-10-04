@@ -2,11 +2,10 @@
 
 use evenframe::Evenframe;
 use serde::{Deserialize, Serialize};
-use surrealdb_types::SurrealValue;
 
-#[derive(Debug, Clone, Serialize, SurrealValue, Evenframe)]
+#[derive(Debug, Clone, Serialize, Evenframe)]
 #[serde(rename_all = "camelCase")]
-#[surreal(crate = "surrealdb_types", rename_all = "camelCase")]
+#[surreal(rename_all = "camelCase")]
 #[mock_data(n = 20)]
 pub struct Membership {
     pub id: String,
@@ -27,9 +26,9 @@ pub struct Membership {
     pub tier: MembershipTier,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Evenframe)]
+#[derive(Debug, Clone, Serialize, Deserialize, Evenframe)]
 #[serde(rename_all = "kebab-case")]
-#[surreal(crate = "surrealdb_types", rename_all = "kebab-case")]
+#[surreal(rename_all = "kebab-case")]
 pub enum MembershipTier {
     Free,
     PaidMonthly,

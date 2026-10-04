@@ -5,7 +5,9 @@ use crate::{
     schemasync::mockmake::format::Format,
     schemasync::mockmake::validator_gen,
     schemasync::table::surql_ident,
-    types::{EnumRepresentation, FieldType, ForeignTypeRegistry, StructField, VariantData},
+    types::{
+        EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, VariantData,
+    },
     validator::{MockValue, Validator},
 };
 use bon::Builder;
@@ -248,11 +250,17 @@ impl<'a> FieldValueGenerator<'a> {
                             )?),
                             FieldType::Option(inner_type) => {
                                 // An optional value holding a link with nothing to
-                                // point at stays null.
+                                // point at stays unset.
                                 if rng.random_bool(0.5)
                                     || self.mockmaker.has_unfillable_link(inner_type)
                                 {
-                                    value_stack.push("null".to_string());
+                                    value_stack.push(
+                                        self.mockmaker
+                                            .schemasync_config
+                                            .option_none
+                                            .literal()
+                                            .to_string(),
+                                    );
                                 } else {
                                     work_stack.push(WorkItem::Generate(Frame {
                                         field_type: inner_type,
@@ -445,9 +453,9 @@ impl<'a> FieldValueGenerator<'a> {
                                     tracing::debug!(
                                         type_name = %type_name,
                                         field_path = %ctx.field_path,
-                                        "Detected circular reference, generating null"
+                                        "Detected circular reference, leaving it unset"
                                     );
-                                    value_stack.push("null".to_string());
+                                    value_stack.push("NONE".to_string());
                                     continue;
                                 }
 
@@ -505,131 +513,129 @@ impl<'a> FieldValueGenerator<'a> {
                                         })?;
                                     let repr = &tagged_union.representation;
                                     if let Some(ref variant_data) = variant.data {
-                                        match variant_data {
-                                            VariantData::InlineStruct(enum_struct) => {
-                                                let struct_config = enum_struct.effective();
-                                                let field_names: Vec<String> = struct_config
-                                                    .fields
-                                                    .iter()
-                                                    .map(|field| {
-                                                        field.effective().db_name().to_owned()
-                                                    })
-                                                    .collect();
+                                        let struct_payload = match variant_data {
+                                            VariantData::InlineStruct(enum_struct) => Some(enum_struct.effective()),
+                                            VariantData::DataStructureRef(field_type)
+                                                if matches!(repr, EnumRepresentation::InternallyTagged { .. }) => {
+                                                Some(match field_type {
+                                                    FieldType::Other(name) => self.mockmaker.objects.get(name).map(StructConfig::effective),
+                                                    _ => None,
+                                                }.ok_or_else(|| EvenframeError::mock_generation(format!(
+                                                    "Internally tagged enum `{type_name}` variant `{}` must reference a known struct payload; found `{field_type:?}`",
+                                                    variant.db_name(),
+                                                )))?)
+                                            }
+                                            VariantData::DataStructureRef(_) => None,
+                                        };
+                                        if let Some(struct_config) = struct_payload {
+                                            let field_names: Vec<String> = struct_config
+                                                .fields
+                                                .iter()
+                                                .map(|field| field.effective().db_name().to_owned())
+                                                .collect();
 
-                                                match repr {
-                                                    EnumRepresentation::ExternallyTagged => {
-                                                        work_stack.push(
-                                                            WorkItem::WrapInVariantKey {
-                                                                variant_name: variant
-                                                                    .db_name()
-                                                                    .to_owned(),
-                                                            },
-                                                        );
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            field_names,
-                                                        });
-                                                    }
-                                                    EnumRepresentation::InternallyTagged {
-                                                        tag,
-                                                    } => {
-                                                        let mut names_with_tag = vec![tag.clone()];
-                                                        names_with_tag.extend(field_names);
-                                                        work_stack.push(
-                                                            WorkItem::AssembleTaggedStruct {
-                                                                tag_key: tag.clone(),
-                                                                tag_value: variant
-                                                                    .db_name()
-                                                                    .to_owned(),
-                                                                field_names: names_with_tag,
-                                                            },
-                                                        );
-                                                    }
-                                                    EnumRepresentation::AdjacentlyTagged {
-                                                        tag,
-                                                        content,
-                                                    } => {
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            field_names: vec![
-                                                                tag.clone(),
-                                                                content.clone(),
-                                                            ],
-                                                        });
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            field_names,
-                                                        });
-                                                        // tag value will be pushed after struct fields
-                                                    }
-                                                    EnumRepresentation::Untagged => {
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            field_names,
-                                                        });
-                                                    }
+                                            match repr {
+                                                EnumRepresentation::ExternallyTagged => {
+                                                    work_stack.push(WorkItem::WrapInVariantKey {
+                                                        variant_name: variant.db_name().to_owned(),
+                                                    });
+                                                    work_stack.push(WorkItem::AssembleStruct {
+                                                        field_names,
+                                                    });
                                                 }
-
-                                                let visited_types = ctx.inside(type_name);
-                                                for struct_field in
-                                                    struct_config.fields.iter().rev()
-                                                {
-                                                    work_stack.push(WorkItem::Generate(Frame {
-                                                        field: struct_field,
-                                                        field_type: &struct_field.field_type,
-                                                        field_path: Rc::from(format!(
-                                                            "{}.{}",
-                                                            ctx.field_path, struct_field.field_name
-                                                        )),
-                                                        table_config: ctx.table_config,
-                                                        visited_types: visited_types.clone(),
-                                                    }));
+                                                EnumRepresentation::InternallyTagged { tag } => {
+                                                    let mut names_with_tag = vec![tag.clone()];
+                                                    names_with_tag.extend(field_names);
+                                                    work_stack.push(
+                                                        WorkItem::AssembleTaggedStruct {
+                                                            tag_key: tag.clone(),
+                                                            tag_value: variant.db_name().to_owned(),
+                                                            field_names: names_with_tag,
+                                                        },
+                                                    );
                                                 }
+                                                EnumRepresentation::AdjacentlyTagged {
+                                                    tag,
+                                                    content,
+                                                } => {
+                                                    work_stack.push(WorkItem::AssembleStruct {
+                                                        field_names: vec![
+                                                            tag.clone(),
+                                                            content.clone(),
+                                                        ],
+                                                    });
+                                                    work_stack.push(WorkItem::AssembleStruct {
+                                                        field_names,
+                                                    });
+                                                    // tag value will be pushed after struct fields
+                                                }
+                                                EnumRepresentation::Untagged => {
+                                                    work_stack.push(WorkItem::AssembleStruct {
+                                                        field_names,
+                                                    });
+                                                }
+                                            }
 
-                                                // For adjacently tagged, push tag value after struct fields (processed first due to LIFO)
-                                                if let EnumRepresentation::AdjacentlyTagged {
-                                                    ..
-                                                } = repr
-                                                {
+                                            let visited_types = ctx.inside(type_name);
+                                            for struct_field in struct_config.fields.iter().rev() {
+                                                work_stack.push(WorkItem::Generate(Frame {
+                                                    field: struct_field,
+                                                    field_type: &struct_field.field_type,
+                                                    field_path: Rc::from(format!(
+                                                        "{}.{}",
+                                                        ctx.field_path, struct_field.field_name
+                                                    )),
+                                                    table_config: ctx.table_config,
+                                                    visited_types: visited_types.clone(),
+                                                }));
+                                            }
+
+                                            // For adjacently tagged, push tag value after struct fields (processed first due to LIFO)
+                                            if let EnumRepresentation::AdjacentlyTagged { .. } =
+                                                repr
+                                            {
+                                                value_stack
+                                                    .push(format!("'{}'", variant.db_name()));
+                                            }
+                                        } else if let VariantData::DataStructureRef(field_type) =
+                                            variant_data
+                                        {
+                                            match repr {
+                                                EnumRepresentation::ExternallyTagged => {
+                                                    work_stack.push(WorkItem::WrapInVariantKey {
+                                                        variant_name: variant.db_name().to_owned(),
+                                                    });
+                                                }
+                                                EnumRepresentation::AdjacentlyTagged {
+                                                    tag,
+                                                    content,
+                                                } => {
+                                                    work_stack.push(WorkItem::AssembleStruct {
+                                                        field_names: vec![
+                                                            tag.clone(),
+                                                            content.clone(),
+                                                        ],
+                                                    });
+                                                    // Push the tag value directly; inner value comes from Generate
                                                     value_stack
                                                         .push(format!("'{}'", variant.db_name()));
                                                 }
-                                            }
-                                            VariantData::DataStructureRef(field_type) => {
-                                                match repr {
-                                                    EnumRepresentation::ExternallyTagged
-                                                    | EnumRepresentation::InternallyTagged {
-                                                        ..
-                                                    } => {
-                                                        work_stack.push(
-                                                            WorkItem::WrapInVariantKey {
-                                                                variant_name: variant
-                                                                    .db_name()
-                                                                    .to_owned(),
-                                                            },
-                                                        );
-                                                    }
-                                                    EnumRepresentation::AdjacentlyTagged {
-                                                        tag,
-                                                        content,
-                                                    } => {
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            field_names: vec![
-                                                                tag.clone(),
-                                                                content.clone(),
-                                                            ],
-                                                        });
-                                                        // Push the tag value directly; inner value comes from Generate
-                                                        value_stack.push(format!(
-                                                            "'{}'",
-                                                            variant.db_name()
-                                                        ));
-                                                    }
-                                                    EnumRepresentation::Untagged => {
-                                                        work_stack.push(WorkItem::AssembleEnum);
-                                                    }
+                                                EnumRepresentation::Untagged => {
+                                                    work_stack.push(WorkItem::AssembleEnum);
                                                 }
-                                                work_stack.push(WorkItem::Generate(Frame {
-                                                    field_type,
-                                                    ..ctx.clone()
-                                                }));
+                                                EnumRepresentation::InternallyTagged { .. } => {
+                                                    return Err(EvenframeError::mock_generation(
+                                                        format!(
+                                                            "Internally tagged enum `{type_name}` variant `{}` has no struct payload",
+                                                            variant.db_name(),
+                                                        ),
+                                                    ));
+                                                }
                                             }
+                                            work_stack.push(WorkItem::Generate(Frame {
+                                                field_type,
+                                                ..ctx.clone()
+                                            }));
                                         }
                                     } else {
                                         // Unit variant

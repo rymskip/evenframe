@@ -2,7 +2,7 @@
 pub mod config;
 pub mod plugin_types;
 
-#[cfg(feature = "typesync")]
+#[cfg(feature = "arktype")]
 pub mod arktype;
 #[cfg(feature = "typesync")]
 pub mod checks;
@@ -10,7 +10,7 @@ pub mod checks;
 pub mod default_value;
 #[cfg(feature = "typesync")]
 pub mod doc_comment;
-#[cfg(feature = "typesync")]
+#[cfg(feature = "effect")]
 pub mod effect;
 #[cfg(feature = "typesync")]
 pub mod file_grouping;

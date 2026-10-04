@@ -3,7 +3,7 @@
 
 use crate::config::{EvenframeConfig, ForeignTypeConfig, IncludeFile};
 use crate::error::EvenframeError;
-use crate::typesync::config::{CollisionStrategy, OutputKind, StructVariants, TypesyncOutput};
+use crate::typesync::config::{CollisionStrategy, StructVariants, TypesyncOutput};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -71,7 +71,7 @@ impl Default for ScanConfig {
             config_path: None,
             apply_aliases: Vec::new(),
             expand_macros: false,
-            outputs: vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")],
+            outputs: Vec::new(),
             collision_strategy: CollisionStrategy::Error,
             struct_variants: StructVariants::Named,
             foreign_types: BTreeMap::new(),
@@ -184,7 +184,7 @@ impl ScanConfigBuilder {
         self
     }
 
-    /// Sets the outputs to generate, replacing the default ArkType output.
+    /// Sets the outputs to generate. No output is selected implicitly.
     pub fn outputs(mut self, outputs: Vec<TypesyncOutput>) -> Self {
         self.config.outputs = outputs;
         self
@@ -198,7 +198,8 @@ impl ScanConfigBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvenframeConfig, EvenframeError, OutputKind, PathBuf, ScanConfig, TypesyncOutput};
+    use super::{EvenframeConfig, EvenframeError, PathBuf, ScanConfig, TypesyncOutput};
+    use crate::typesync::config::OutputKind;
 
     fn parse_at(content: &str, config_path: &str) -> Result<ScanConfig, EvenframeError> {
         let config = EvenframeConfig::parse(content, PathBuf::from(config_path), false)?;
@@ -210,11 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_generates_arktype() {
-        assert_eq!(
-            ScanConfig::default().outputs,
-            vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")]
-        );
+    fn default_config_requires_explicit_outputs() {
+        assert!(ScanConfig::default().outputs.is_empty());
     }
 
     #[test]

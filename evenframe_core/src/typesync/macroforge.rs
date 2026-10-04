@@ -1,7 +1,7 @@
 //! Macroforge TypeScript interface generation with JSDoc validator annotations.
 //!
-//! This module generates TypeScript interfaces with `@derive(Deserialize)` at the type level
-//! and `@serde({ validate: [...] })` annotations at the field level for validators.
+//! This module generates TypeScript interfaces with `@derive(Decode)` at the type level
+//! and `@endec({ validate: [...] })` annotations at the field level for validators.
 
 use crate::config::{RECORD_LINK, TsMapping, fill};
 use crate::error::{EvenframeError, Result};
@@ -265,27 +265,27 @@ fn generate_enum_block(
         lines.push(format!("/** {} */", ann));
     }
 
-    // Emit @serde annotation for tagged representations so the macroforge
+    // Emit @endec annotation for tagged representations so the macroforge
     // type registry knows how to parse/stringify these unions at runtime.
     match &view.representation {
         EnumRepresentation::InternallyTagged { tag } => {
             lines.push(format!(
-                "/** @serde({{ tag: \"{}\" }}) */",
+                "/** @endec({{ tag: \"{}\" }}) */",
                 escape_for_jsdoc(tag)
             ));
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
             lines.push(format!(
-                "/** @serde({{ tag: \"{}\", content: \"{}\" }}) */",
+                "/** @endec({{ tag: \"{}\", content: \"{}\" }}) */",
                 escape_for_jsdoc(tag),
                 escape_for_jsdoc(content)
             ));
         }
         EnumRepresentation::ExternallyTagged => {
-            lines.push("/** @serde({ externallyTagged: true }) */".to_string());
+            lines.push("/** @endec({ externallyTagged: true }) */".to_string());
         }
         EnumRepresentation::Untagged => {
-            lines.push("/** @serde({ untagged: true }) */".to_string());
+            lines.push("/** @endec({ untagged: true }) */".to_string());
         }
     }
 
@@ -478,7 +478,7 @@ fn inline_struct_type(
             let annotation = if validators.is_empty() {
                 String::new()
             } else {
-                format!("/** @serde({{ validate: [{validators}] }}) */ ")
+                format!("/** @endec({{ validate: [{validators}] }}) */ ")
             };
             Ok(format!(
                 "{annotation}{}: {};",
@@ -496,8 +496,8 @@ fn field_key(field: &crate::types::StructField) -> Result<String> {
     Ok(format!("{}{optional}", object_key(field.serde_name())?))
 }
 
-/// Render a complete field block including annotations, @serde, and the field declaration.
-/// This handles both inline @serde (for RecordLink fields) and separate-line @serde.
+/// Render a complete field block including annotations, @endec, and the field declaration.
+/// This handles both inline @endec (for RecordLink fields) and separate-line @endec.
 fn render_field_block(
     field: &crate::types::StructField,
     array_style: ArrayStyle,
@@ -513,15 +513,15 @@ fn render_field_block(
         lines.push(format!("  /** {} */", ann));
     }
 
-    // 2. Compute validators and serde annotation
+    // 2. Compute validators and endec annotation
     let validators_str = collect_validators_for_field(
         &field.validators,
         &field.field_type,
         &field.field_name,
         helpers,
     )?;
-    let (serde_annotation, is_inline) =
-        build_serde_annotation(&validators_str, &field.field_type, registry);
+    let (endec_annotation, is_inline) =
+        build_endec_annotation(&validators_str, &field.field_type, registry);
 
     // 3. Legacy doccom handling (for backwards compatibility)
     if let Some(ref dc) = field.doccom {
@@ -534,18 +534,18 @@ fn render_field_block(
         }
     }
 
-    // 4. If not inline, render @serde as separate line(s) above the field
-    if !is_inline && !serde_annotation.is_empty() {
-        for serde_line in serde_annotation.split('\n') {
-            lines.push(format!("  {}", serde_line));
+    // 4. If not inline, render @endec as separate line(s) above the field
+    if !is_inline && !endec_annotation.is_empty() {
+        for endec_line in endec_annotation.split('\n') {
+            lines.push(format!("  {}", endec_line));
         }
     }
 
     // 5. Field declaration line
-    let type_str = if is_inline && !serde_annotation.is_empty() {
+    let type_str = if is_inline && !endec_annotation.is_empty() {
         render_field_type(
             &field.field_type,
-            &serde_annotation,
+            &endec_annotation,
             true,
             array_style,
             registry,
@@ -560,10 +560,10 @@ fn render_field_block(
 }
 
 /// Format the `@derive(...)` JSDoc line from a list of macro names.
-/// Falls back to `["Deserialize"]` when the vec is empty, preserving current behavior.
+/// Falls back to `["Decode"]` when no derives are configured.
 fn format_derive_line(derives: &[String]) -> String {
     if derives.is_empty() {
-        "/** @derive(Deserialize) */".to_string()
+        "/** @derive(Decode) */".to_string()
     } else {
         format!("/** @derive({}) */", derives.join(", "))
     }
@@ -686,48 +686,48 @@ fn wrap_union_type(
     }
 }
 
-/// Compute `@serde({ format: "..." })` annotation for field types that need it.
+/// Compute `@endec({ format: "..." })` annotation for field types that need it.
 /// Returns None if no format annotation is needed.
-fn collect_serde_format(
+fn collect_endec_format(
     field_type: &FieldType,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Option<String> {
     if let FieldType::Other(name) = field_type
         && let Some(ftc) = registry.lookup(name)
-        && !ftc.serde_format.is_empty()
+        && !ftc.endec_format.is_empty()
     {
         return Some(format!(
-            "/** @serde({{ format: \"{}\" }}) */",
-            ftc.serde_format
+            "/** @endec({{ format: \"{}\" }}) */",
+            ftc.endec_format
         ));
     }
     None
 }
 
-/// Build the full serde annotation string for a field.
+/// Build the full endec annotation string for a field.
 /// Combines validate and format annotations as needed.
 /// Returns the annotation line (or empty string), and a boolean indicating
-/// whether the serde should be rendered inline (for RecordLink fields).
-fn build_serde_annotation(
+/// whether the endec should be rendered inline (for RecordLink fields).
+fn build_endec_annotation(
     validators_str: &str,
     field_type: &FieldType,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> (String, bool) {
-    let format_ann = collect_serde_format(field_type, registry);
+    let format_ann = collect_endec_format(field_type, registry);
     let is_record_link = matches!(field_type, FieldType::RecordLink(_));
 
     if !validators_str.is_empty()
         && let Some(format_line) = format_ann
     {
         // Both validate and format: render as separate lines (validate first)
-        let validate_line = format!("/** @serde({{ validate: [{}] }}) */", validators_str);
+        let validate_line = format!("/** @endec({{ validate: [{}] }}) */", validators_str);
         (
             format!("{}\n{}", validate_line, format_line),
             is_record_link,
         )
     } else if !validators_str.is_empty() {
         (
-            format!("/** @serde({{ validate: [{}] }}) */", validators_str),
+            format!("/** @endec({{ validate: [{}] }}) */", validators_str),
             is_record_link,
         )
     } else if let Some(fmt) = format_ann {
@@ -737,19 +737,19 @@ fn build_serde_annotation(
     }
 }
 
-/// Render the field type, with optional inline @serde for RecordLink fields.
+/// Render the field type, with optional inline @endec for RecordLink fields.
 fn render_field_type(
     field_type: &FieldType,
-    serde_annotation: &str,
+    endec_annotation: &str,
     inline: bool,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> String {
-    if inline && !serde_annotation.is_empty() {
-        // For RecordLink, render @serde inline: /** @serde(...) */ RecordLink<Type>
+    if inline && !endec_annotation.is_empty() {
+        // For RecordLink, render @endec inline: /** @endec(...) */ RecordLink<Type>
         if let FieldType::RecordLink(inner) = field_type {
             return format!(
-                "{serde_annotation} {}",
+                "{endec_annotation} {}",
                 record_link_type(
                     field_type_to_typescript(inner, array_style, registry),
                     registry
@@ -765,12 +765,12 @@ const BUILT_IN_DERIVES: [&str; 9] = [
     "Clone",
     "Debug",
     "Default",
-    "Deserialize",
+    "Decode",
+    "Encode",
     "Hash",
     "Ord",
     "PartialEq",
     "PartialOrd",
-    "Serialize",
 ];
 
 /// The `import macro` lines for the derives the written types in `type_names` carry,
@@ -1020,7 +1020,7 @@ impl HelperModule {
     }
 }
 
-/// A field's validators as the items of a `@serde({ validate: [...] })`
+/// A field's validators as the items of a `@endec({ validate: [...] })`
 /// array, each a quoted string. A char field is held to exactly one
 /// character.
 fn collect_validators_for_field(
@@ -1252,7 +1252,7 @@ fn string_validator_to_macroforge(
     }
 }
 
-/// Escapes text for a string inside a JSDoc `@serde(...)` annotation: its
+/// Escapes text for a string inside a JSDoc `@endec(...)` annotation: its
 /// quotes and backslashes, and a `*/` that would end the comment.
 fn escape_for_jsdoc(text: &str) -> String {
     text.replace('\\', "\\\\")
@@ -1688,6 +1688,42 @@ mod tests {
     }
 
     #[test]
+    fn foreign_format_config_emits_an_endec_annotation() {
+        let foreign: crate::config::ForeignTypeConfig = toml::from_str(
+            r#"
+                endec_format = "decimal"
+                macroforge = { type = "number" }
+            "#,
+        )
+        .unwrap();
+        let registry = crate::types::ForeignTypeRegistry::from_config(&BTreeMap::from([(
+            "Counter".to_string(),
+            foreign,
+        )]));
+        let structs = BTreeMap::from([(
+            "Reading".to_string(),
+            StructConfig {
+                struct_name: "Reading".to_string(),
+                fields: vec![StructField {
+                    field_name: "count".to_string(),
+                    field_type: FieldType::Other("Counter".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let output = generate_macroforge_type_string(
+            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+            ArrayStyle::default(),
+            &registry,
+            &mut helpers(),
+        )
+        .unwrap();
+        assert!(output.contains("/** @endec({ format: \"decimal\" }) */"));
+        assert!(output.contains("count: number;"));
+    }
+
+    #[test]
     fn test_generate_complete_interface() {
         let mut structs = BTreeMap::new();
         structs.insert(
@@ -1744,11 +1780,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(output.contains("/** @derive(Deserialize) */"));
+        assert!(output.contains("/** @derive(Decode) */"));
         assert!(output.contains("export interface UserRegistrationForm"));
-        assert!(output.contains("@serde({ validate: [\"email\"] })"));
-        assert!(output.contains("@serde({ validate: [\"minLength(8)\", \"maxLength(50)\"] })"));
-        assert!(output.contains("@serde({ validate: [\"int\", \"between(18, 120)\"] })"));
+        assert!(output.contains("@endec({ validate: [\"email\"] })"));
+        assert!(output.contains("@endec({ validate: [\"minLength(8)\", \"maxLength(50)\"] })"));
+        assert!(output.contains("@endec({ validate: [\"int\", \"between(18, 120)\"] })"));
         assert!(output.contains("email: string"));
         assert!(output.contains("password: string"));
         assert!(output.contains("age: number"));
@@ -1782,8 +1818,8 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![
                     "Default".to_string(),
-                    "Serialize".to_string(),
-                    "Deserialize".to_string(),
+                    "Encode".to_string(),
+                    "Decode".to_string(),
                     "Gigaform".to_string(),
                     "Overview".to_string(),
                 ],
@@ -1828,8 +1864,8 @@ mod tests {
                 doccom: None,
                 macroforge_derives: vec![
                     "Default".to_string(),
-                    "Serialize".to_string(),
-                    "Deserialize".to_string(),
+                    "Encode".to_string(),
+                    "Decode".to_string(),
                 ],
                 annotations: vec![],
                 representation: EnumRepresentation::default(),
@@ -1851,7 +1887,7 @@ mod tests {
 
         // Struct: custom derives
         assert!(
-            output.contains("/** @derive(Default, Serialize, Deserialize, Gigaform, Overview) */"),
+            output.contains("/** @derive(Default, Encode, Decode, Gigaform, Overview) */"),
             "Should contain custom derives. Output:\n{}",
             output
         );
@@ -1876,7 +1912,7 @@ mod tests {
 
         // Enum: custom derives
         assert!(
-            output.contains("/** @derive(Default, Serialize, Deserialize) */"),
+            output.contains("/** @derive(Default, Encode, Decode) */"),
             "Should contain enum custom derives. Output:\n{}",
             output
         );
@@ -1889,7 +1925,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_macroforge_derives_falls_back_to_deserialize() {
+    fn test_empty_macroforge_derives_falls_back_to_decode() {
         let mut structs = BTreeMap::new();
         structs.insert(
             "simple".to_string(),
@@ -1917,8 +1953,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            output.contains("/** @derive(Deserialize) */"),
-            "Empty macroforge_derives should fall back to Deserialize. Output:\n{}",
+            output.contains("/** @derive(Decode) */"),
+            "Empty macroforge_derives should fall back to Decode. Output:\n{}",
             output
         );
     }
@@ -2089,7 +2125,7 @@ mod tests {
         let structs = BTreeMap::from([
             (
                 "Order".to_string(),
-                derived("Order", &["Debug", "Form", "Serialize"]),
+                derived("Order", &["Debug", "Form", "Encode", "Decode"]),
             ),
             (
                 "Invoice".to_string(),
@@ -2396,7 +2432,7 @@ mod tests {
                 }],
                 validators: vec![],
                 doccom: None,
-                macroforge_derives: vec!["Serialize".to_string(), "Deserialize".to_string()],
+                macroforge_derives: vec!["Encode".to_string(), "Decode".to_string()],
                 annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
@@ -2416,7 +2452,7 @@ mod tests {
         .expect("the types render");
 
         assert!(
-            output.contains("/** @derive(Serialize, Deserialize) */"),
+            output.contains("/** @derive(Encode, Decode) */"),
             "Should contain custom derives in per-file mode. Output:\n{}",
             output
         );

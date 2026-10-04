@@ -3,7 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 /** Application configuration settings */
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Config {
   /** The API key used for authentication */
   api_key: string;
@@ -12,8 +12,8 @@ export interface Config {
 }
 
 /** Severity levels for log output */
-/** @derive(Deserialize) */
-/** @serde({ externallyTagged: true }) */
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
 export type LogLevel =
 	| "Debug"
 	| "Info"

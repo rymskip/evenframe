@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 /// Type mapper for SurrealDB
 pub struct SurrealdbTypeMapper<'a> {
     registry: &'a ForeignTypeRegistry,
+    option_none: crate::schemasync::config::OptionNone,
     registries: Option<Registries<'a>>,
 }
 
@@ -25,8 +26,14 @@ impl<'a> SurrealdbTypeMapper<'a> {
     pub fn new(registry: &'a ForeignTypeRegistry) -> Self {
         Self {
             registry,
+            option_none: crate::schemasync::config::OptionNone::default(),
             registries: None,
         }
+    }
+
+    pub fn with_option_none(mut self, option_none: crate::schemasync::config::OptionNone) -> Self {
+        self.option_none = option_none;
+        self
     }
 
     /// Provide the struct, table and enum registries so `RecordLink` targets
@@ -78,9 +85,9 @@ impl<'a> SurrealdbTypeMapper<'a> {
             FieldType::F32 | FieldType::F64 => "float".to_string(),
             FieldType::Unit => "null".to_string(),
             FieldType::Duration => "duration".to_string(),
-            FieldType::Option(inner) => {
-                format!("option<{}>", self.field_type_to_surql_inner(inner))
-            }
+            FieldType::Option(inner) => self
+                .option_none
+                .surql_type(&self.field_type_to_surql_inner(inner)),
             FieldType::Vec(inner) => {
                 format!("array<{}>", self.field_type_to_surql_inner(inner))
             }

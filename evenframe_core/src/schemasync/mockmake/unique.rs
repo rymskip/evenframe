@@ -18,14 +18,14 @@ const UNIQUE_ROUNDS: usize = 20;
 pub(crate) enum PlannedValue {
     /// The field takes this SurrealQL literal.
     Set(String),
-    /// An optional field keeps NULL, and otherwise takes this literal.
-    UnlessNull(String),
+    /// An unset optional field stays unset, and otherwise takes this literal.
+    UnlessAbsent(String),
 }
 
 impl PlannedValue {
     pub(crate) fn literal(&self) -> &str {
         match self {
-            PlannedValue::Set(literal) | PlannedValue::UnlessNull(literal) => literal,
+            PlannedValue::Set(literal) | PlannedValue::UnlessAbsent(literal) => literal,
         }
     }
 }
@@ -170,7 +170,17 @@ impl Mockmaker<'_> {
                 evaluated[position] = None;
             }
         }
+        self.evaluate(records, &mut evaluated, &fields)
+            .await
+            .map_err(|failure| {
+                EvenframeError::mock_generation(format!(
+                    "checking the final unique-index regeneration for `{table_name}`: {failure}"
+                ))
+            })?;
         let remaining = colliding_records(&indexes, &stored, records, &evaluated);
+        if remaining.is_empty() {
+            return Ok(());
+        }
         let names: BTreeSet<&str> = remaining.iter().map(|(_, name)| name.as_str()).collect();
         Err(EvenframeError::mock_generation(format!(
             "`{table_name}` found no unique values for index {} after {UNIQUE_ROUNDS} attempts; \
@@ -334,15 +344,14 @@ impl Mockmaker<'_> {
                 .iter()
                 .find(|field| field.db_name() == *name)
                 .ok_or_else(|| EvenframeError::mock_generation(format!("no field `{name}`")))?;
-            *value =
-                match value {
-                    PlannedValue::Set(_) => {
-                        PlannedValue::Set(self.generate_value(table, field, record.position)?)
-                    }
-                    PlannedValue::UnlessNull(_) => PlannedValue::UnlessNull(
-                        self.generate_present(table, field, record.position)?,
-                    ),
-                };
+            *value = match value {
+                PlannedValue::Set(_) => {
+                    PlannedValue::Set(self.generate_value(table, field, record.position)?)
+                }
+                PlannedValue::UnlessAbsent(_) => PlannedValue::UnlessAbsent(
+                    self.generate_present(table, field, record.position)?,
+                ),
+            };
             regenerated = true;
         }
         if regenerated {
@@ -393,11 +402,9 @@ fn colliding_records(
             let Some(evaluated_value) = written.get(name) else {
                 continue;
             };
-            // `IF field != NULL` keeps only a NULL; an absent (NONE) field
-            // takes the value.
-            let keeps_null = matches!(value, PlannedValue::UnlessNull(_))
-                && matches!(fields.get(name), Some(Value::Null));
-            if !keeps_null {
+            let keeps_absent = matches!(value, PlannedValue::UnlessAbsent(_))
+                && matches!(fields.get(name), None | Some(Value::None | Value::Null));
+            if !keeps_absent {
                 fields.insert(name.clone(), evaluated_value.clone());
             }
         }
@@ -502,15 +509,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_unique_index_lets_records_share_null() {
+    async fn a_unique_index_lets_records_share_none() {
         let db = Surreal::new::<Mem>(()).await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
         db.query(
             "DEFINE TABLE post SCHEMAFULL;\
-             DEFINE FIELD slug ON post TYPE null | string;\
+             DEFINE FIELD slug ON post TYPE option<string>;\
              DEFINE INDEX post_slug ON post FIELDS slug UNIQUE;\
-             CREATE post:1 SET slug = NULL;\
-             CREATE post:2 SET slug = NULL;",
+             CREATE post:1;\
+             CREATE post:2;",
         )
         .await
         .unwrap()

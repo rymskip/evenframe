@@ -34,16 +34,16 @@ pub enum QueryErrorType {
     UnknownError,
 }
 
-/// Remove top-level SurrealQL comments (`-- …`, `// …`, `# …` and
+/// Remove SurrealQL comments (`-- …`, `// …`, `# …` and
 /// `/* … */`) from `block`, keeping line breaks so statements stay apart.
 ///
-/// Comments are only recognised outside string literals and outside
-/// `{...}`/`(...)`/`[...]` groups: inside those, `--` or `//` can be real code
-/// (e.g. `i--` in an embedded JavaScript `ASSERT` body), and a `;` there never
-/// splits a statement anyway. Strip before [`split_surql_statements`] so a
-/// `;` inside a comment doesn't produce a phantom statement and a
-/// comment-only fragment isn't counted as one.
-pub fn strip_surql_comments(block: &str) -> String {
+/// Comments are only recognised outside string literals. Inside a
+/// `{...}`/`(...)`/`[...]` group, `--` or `//` can be real code (e.g. `i--` in
+/// an embedded JavaScript `ASSERT` body), so there a marker is a comment only
+/// when it stands as its own word: after whitespace or a line start, and
+/// before whitespace. The statement splitter calls this before scanning so
+/// punctuation in comments cannot change statement boundaries.
+fn strip_surql_comments(block: &str) -> String {
     let bytes = block.as_bytes();
     let mut out = String::with_capacity(block.len());
     let mut copied = 0;
@@ -64,8 +64,13 @@ pub fn strip_surql_comments(block: &str) -> String {
             continue;
         }
         let next = bytes.get(position + 1).copied();
+        let standalone = (position == 0 || bytes[position - 1].is_ascii_whitespace())
+            && bytes
+                .get(position + 2)
+                .is_none_or(|after| after.is_ascii_whitespace());
         let comment_end = match (byte, next) {
-            _ if depth > 0 => None,
+            (b'-', Some(b'-')) | (b'/', Some(b'/')) if depth > 0 && !standalone => None,
+            (b'#', _) | (b'/', Some(b'*')) if depth > 0 => None,
             (b'-', Some(b'-')) | (b'/', Some(b'/')) | (b'#', _) => {
                 // Line comment: drop up to (not including) the newline
                 Some(
@@ -108,13 +113,14 @@ pub fn strip_surql_comments(block: &str) -> String {
 /// ignoring semicolons inside `{...}`/`(...)`/`[...]` groups (e.g. embedded
 /// JavaScript `ASSERT function(){…}` bodies) and inside string literals.
 ///
-/// Returned slices include their trailing `;` (matching `split_inclusive(';')`),
+/// Returned statements include their trailing `;` (matching `split_inclusive(';')`),
 /// and a trailing fragment without a `;` is still returned. A naive
 /// `split(';')` truncates DEFINE FIELD statements whose ASSERT is an embedded
 /// JS function, so any code that routes/counts individual statements must use
-/// this instead. It does not understand comments: run hand-written SurrealQL
-/// through [`strip_surql_comments`] first.
-pub fn split_surql_statements(block: &str) -> Vec<&str> {
+/// this instead. Comments are removed before scanning, preserving line breaks
+/// and literal contents. Empty statements and comment-only fragments are omitted.
+pub fn split_surql_statements(block: &str) -> Vec<String> {
+    let block = strip_surql_comments(block);
     let bytes = block.as_bytes();
     let mut out = Vec::new();
     let mut start = 0;
@@ -139,7 +145,10 @@ pub fn split_surql_statements(block: &str) -> Vec<&str> {
                 b'{' | b'(' | b'[' => depth += 1,
                 b'}' | b')' | b']' => depth = depth.saturating_sub(1),
                 b';' if depth == 0 => {
-                    out.push(&block[start..=position]);
+                    let statement = block[start..=position].trim();
+                    if statement != ";" {
+                        out.push(statement.to_string());
+                    }
                     start = position + 1;
                 }
                 _ => {}
@@ -148,9 +157,9 @@ pub fn split_surql_statements(block: &str) -> Vec<&str> {
         position += 1;
     }
     if start < block.len() {
-        let tail = &block[start..];
-        if !tail.trim().is_empty() {
-            out.push(tail);
+        let tail = block[start..].trim();
+        if !tail.is_empty() {
+            out.push(tail.to_string());
         }
     }
     out
@@ -163,15 +172,7 @@ pub async fn validate_surql_response(
     mut response: IndexedResults,
     statements: &str,
 ) -> std::result::Result<usize, Vec<QueryValidationError>> {
-    // Brace/string-aware so embedded JavaScript function bodies (which
-    // contain their own `;`) aren't split mid-statement and miscounted
-    // against the response. Comments are stripped first: SurrealDB returns
-    // no result for them.
-    let uncommented = strip_surql_comments(statements);
-    let statement_lines: Vec<&str> = split_surql_statements(&uncommented)
-        .into_iter()
-        .filter(|statement| !statement.trim().is_empty())
-        .collect();
+    let statement_lines = split_surql_statements(statements);
 
     let mut errors: Vec<QueryValidationError> = response
         .take_errors()
@@ -194,9 +195,7 @@ pub async fn validate_surql_response(
                 statement_index: index,
                 error_type,
                 message,
-                statement: statement_lines
-                    .get(index)
-                    .map(|statement| statement.to_string()),
+                statement: statement_lines.get(index).cloned(),
             }
         })
         .collect();
@@ -272,10 +271,9 @@ where
         size = statements.len(),
         "Splitting statements across requests"
     );
-    let uncommented = strip_surql_comments(statements);
     let mut executed = 0;
     let mut request = String::new();
-    for statement in split_surql_statements(&uncommented) {
+    for statement in split_surql_statements(statements) {
         if statement.len() > RPC_SIZE_LIMIT {
             if !request.is_empty() {
                 executed += execute_request(
@@ -288,7 +286,7 @@ where
                 .await?;
                 request.clear();
             }
-            import_oversized(db, statement, operation_type, table_name).await?;
+            import_oversized(db, &statement, operation_type, table_name).await?;
             executed += 1;
             continue;
         }
@@ -303,7 +301,7 @@ where
             .await?;
             request.clear();
         }
-        request.push_str(statement);
+        request.push_str(&statement);
         request.push('\n');
     }
     if !request.trim().is_empty() {
@@ -731,20 +729,37 @@ mod split_tests {
             "line structure must survive: {stripped:?}"
         );
 
-        let parts = split_surql_statements(&stripped);
+        let parts = split_surql_statements(block);
         assert_eq!(parts.len(), 2, "{parts:?}");
         assert!(parts[0].contains("ANALYZER a"));
         assert!(parts[1].contains("ANALYZER b"));
     }
 
     #[test]
-    fn keeps_comment_markers_inside_strings_and_groups() {
+    fn keeps_comment_markers_that_are_code_inside_strings_and_groups() {
         let block = "DEFINE FIELD url ON t TYPE string VALUE 'http://x -- y # z';\n\
-                     DEFINE FIELD n ON t TYPE int ASSERT function($value) { let i = 1; i--; return i >= 0; };\n\
-                     DEFINE EVENT e ON t WHEN true THEN { -- inner comment stays\n CREATE log; };\n";
+                     DEFINE FIELD n ON t TYPE int ASSERT function($value) { let i = 1; i--; --i; return i >= 0; };\n";
         let stripped = strip_surql_comments(block);
         assert_eq!(stripped, block);
-        assert_eq!(split_surql_statements(&stripped).len(), 3);
+        assert_eq!(split_surql_statements(block).len(), 2);
+    }
+
+    #[test]
+    fn a_quote_in_a_comment_inside_a_block_does_not_join_statements() {
+        let block = "DEFINE ACCESS a ON DATABASE TYPE RECORD AUTHENTICATE {\n\
+                     -- The token's `tenant` claim must match\n\
+                     RETURN $auth;\n\
+                     };\n\
+                     DEFINE ACCESS b ON DATABASE TYPE RECORD AUTHENTICATE {\n\
+                     // the owner's key\n\
+                     RETURN $auth;\n\
+                     };\n";
+        let stripped = strip_surql_comments(block);
+        assert!(!stripped.contains("token's"), "{stripped}");
+        assert!(!stripped.contains("owner's"), "{stripped}");
+        let parts = split_surql_statements(block);
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts[1].contains("ACCESS b"));
     }
 
     #[test]
@@ -753,6 +768,11 @@ mod split_tests {
             strip_surql_comments("DEFINE ANALYZER a; /* never closed; \n"),
             "DEFINE ANALYZER a; \n"
         );
+    }
+
+    #[test]
+    fn comment_only_and_empty_statements_are_omitted() {
+        assert!(split_surql_statements("; -- a comment's ; {\n ; /* ; } */").is_empty());
     }
 
     #[test]

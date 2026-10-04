@@ -1,6 +1,6 @@
 //! Every kind of type the derive handles, in a crate that depends only on
-//! `evenframe` with no default features. Verify builds and tests it both
-//! without features and with `metadata`.
+//! `evenframe` with no default features. Verify builds and tests it without
+//! features, with `metadata` and with `surrealdb-types`.
 
 use evenframe::{Evenframe, EvenframeUnion};
 use serde::{Deserialize, Serialize};
@@ -85,5 +85,44 @@ mod tests {
             get_union_of_tables("Contributor"),
             Some(["Author", "Editor"].as_slice())
         );
+    }
+
+    #[cfg(feature = "surrealdb-types")]
+    #[test]
+    fn surreal_value_reads_the_database_shape_and_validates() {
+        use super::{Address, Status};
+        use evenframe::surreal_value::__private::{SurrealValue, Value};
+
+        let author = Author {
+            id: "author:ada".to_owned(),
+            email: "ada@example.com".to_owned(),
+            address: Address {
+                street: "Main".to_owned(),
+            },
+            status: Status::Draft,
+        };
+        let read = Author::from_value(author.clone().into_value()).expect("reads");
+        assert_eq!(read.email, author.email);
+        assert_eq!(read.address.street, "Main");
+        assert!(matches!(read.status, Status::Draft));
+        let error = Author::from_value(Value::Object(
+            [
+                ("id".to_owned(), Value::String("author:ada".to_owned())),
+                ("email".to_owned(), Value::String("not an email".to_owned())),
+                (
+                    "address".to_owned(),
+                    Value::Object(
+                        [("street".to_owned(), Value::String("Main".to_owned()))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
+                ("status".to_owned(), Value::String("Draft".to_owned())),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+        .expect_err("email fails validation");
+        assert!(error.to_string().contains("email"), "{error}");
     }
 }

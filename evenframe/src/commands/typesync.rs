@@ -45,8 +45,9 @@ pub(crate) fn generate(
 
     let (mut outputs, file) = select_outputs(cli, &args, config)?;
     if outputs.is_empty() {
-        println!("No outputs selected; configure them under [typesync] as `output` or `outputs`");
-        return Ok(());
+        return Err(EvenframeError::config(
+            "No outputs selected; configure them under [typesync] as `output` or `outputs`",
+        ));
     }
     if args.per_file {
         for output in outputs.iter_mut() {

@@ -2,13 +2,13 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Address {
   street: string;
   city: string;
 }
 
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Person {
   name: string;
   home_address: Address;

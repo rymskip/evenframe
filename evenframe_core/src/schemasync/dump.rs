@@ -49,7 +49,7 @@ pub fn dump_surql(
         objects,
         enums,
         &registry,
-        schemasync.mock_gen_config.scripting_asserts,
+        schemasync.surql_options(),
     )?;
     match scope {
         DumpScope::Tables => Ok(tables),
@@ -93,8 +93,9 @@ pub fn tables_surql(
     objects: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &ForeignTypeRegistry,
-    allow_scripting: bool,
+    options: impl Into<crate::schemasync::config::SurqlOptions>,
 ) -> Result<String> {
+    let options = options.into();
     Ok(tables
         .iter()
         .map(|(table_name, table)| {
@@ -105,7 +106,7 @@ pub fn tables_surql(
                 objects,
                 enums,
                 registry,
-                allow_scripting,
+                options,
             )
         })
         .collect::<Result<Vec<_>>>()?

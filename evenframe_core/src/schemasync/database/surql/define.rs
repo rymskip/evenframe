@@ -15,8 +15,9 @@ pub fn generate_define_statements(
     server_only: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
     registry: &crate::types::ForeignTypeRegistry,
-    allow_scripting: bool,
+    options: impl Into<crate::schemasync::config::SurqlOptions>,
 ) -> Result<String> {
+    let options = options.into();
     info!("Generating define statements for table {table_name}");
     debug!(
         query_details_count = query_details.len(),
@@ -92,7 +93,7 @@ pub fn generate_define_statements(
                         query_details,
                         &table_name.to_string(),
                         registry,
-                        allow_scripting,
+                        options,
                     )
                     .map_err(|error| {
                         EvenframeError::database(format!(
@@ -684,12 +685,211 @@ mod tests {
     }
 
     #[test]
-    fn optional_field_assert_is_null_guarded() {
+    fn internally_tagged_named_payload_keeps_its_discriminator() {
+        use crate::types::{EnumRepresentation, Variant, VariantData};
+        let payload = StructConfig {
+            struct_name: "Created".to_string(),
+            fields: vec![StructField {
+                field_name: "initial_data".to_string(),
+                field_type: FieldType::Option(Box::new(FieldType::String)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let structs = BTreeMap::from([("Created".to_string(), payload)]);
+        let enums = BTreeMap::from([(
+            "Action".to_string(),
+            TaggedUnion {
+                enum_name: "Action".to_string(),
+                representation: EnumRepresentation::InternallyTagged {
+                    tag: "variant".to_string(),
+                },
+                variants: vec![Variant {
+                    name: "Created".to_string(),
+                    data: Some(VariantData::DataStructureRef(FieldType::Other(
+                        "Created".to_string(),
+                    ))),
+                    wire: Default::default(),
+                    doccom: None,
+                    annotations: Vec::new(),
+                    output_override: None,
+                    raw_attributes: BTreeMap::new(),
+                    is_default: false,
+                }],
+                doccom: None,
+                macroforge_derives: Vec::new(),
+                annotations: Vec::new(),
+                pipeline: Default::default(),
+                rust_derives: Vec::new(),
+                output_override: None,
+                resolve_only: false,
+                raw_attributes: BTreeMap::new(),
+            },
+        )]);
+        let field = StructField {
+            field_name: "action".to_string(),
+            field_type: FieldType::Other("Action".to_string()),
+            define_config: DefineConfig::parse(&syn::parse_quote! {
+                #[define_field_statement()]
+                action: Action
+            })
+            .unwrap(),
+            ..Default::default()
+        };
+        let statement = field
+            .generate_define_statement(
+                &enums,
+                &structs,
+                &BTreeMap::new(),
+                &"entry".to_string(),
+                &crate::types::ForeignTypeRegistry::default(),
+                false,
+            )
+            .unwrap();
+        assert!(statement.contains("variant: \"Created\""), "{statement}");
+        assert!(
+            statement.contains("initial_data: option<string>"),
+            "{statement}"
+        );
+        assert!(
+            statement.contains("DEFAULT { variant: 'Created', initial_data: NONE }"),
+            "{statement}"
+        );
+    }
+
+    #[test]
+    fn null_option_policy_controls_schema_defaults_and_assertions() {
+        use crate::schemasync::config::{OptionNone, SurqlOptions};
+        use crate::validator::{StringValidator, Validator};
+        let field = StructField {
+            field_name: "bio".to_string(),
+            field_type: FieldType::Option(Box::new(FieldType::String)),
+            define_config: DefineConfig::parse(&syn::parse_quote! {
+                #[define_field_statement()]
+                bio: Option<String>
+            })
+            .unwrap(),
+            validators: vec![Validator::StringValidator(StringValidator::MaxLength(500))],
+            ..Default::default()
+        };
+        let render = |field: &StructField| {
+            field
+                .generate_define_statement(
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    &"profile".to_string(),
+                    &crate::types::ForeignTypeRegistry::default(),
+                    SurqlOptions {
+                        option_none: OptionNone::Null,
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+        };
+        let statement = render(&field);
+        assert!(
+            statement.contains("TYPE null | string DEFAULT NULL"),
+            "{statement}"
+        );
+        assert!(statement.contains("$value = NULL OR"), "{statement}");
+        let unannotated = render(&StructField {
+            define_config: None,
+            ..field
+        });
+        assert!(
+            unannotated.contains("TYPE null | string DEFAULT NULL"),
+            "{unannotated}"
+        );
+    }
+
+    #[cfg(feature = "schemasync")]
+    #[tokio::test]
+    async fn optional_values_round_trip_under_both_database_policies() {
+        use crate::schemasync::config::{OptionNone, SurqlOptions};
+        use crate::schemasync::database::surql::execute::execute_and_validate;
+        use surrealdb::Surreal;
+        use surrealdb::engine::local::Mem;
+        use surrealdb::types::{ToSql, Value};
+
+        let database = Surreal::new::<Mem>(()).await.expect("create test database");
+        database
+            .use_ns("test")
+            .use_db("test")
+            .await
+            .expect("select test database");
+        for option_none in [OptionNone::None, OptionNone::Null] {
+            let table_name = format!("samples_{}", option_none.literal().to_lowercase());
+            let options = SurqlOptions {
+                option_none,
+                ..Default::default()
+            };
+            let mut statements = format!("DEFINE TABLE {table_name} SCHEMAFULL;\n");
+            for field in [
+                StructField {
+                    field_name: "values".to_string(),
+                    field_type: FieldType::Vec(Box::new(FieldType::Option(Box::new(
+                        FieldType::I32,
+                    )))),
+                    ..Default::default()
+                },
+                StructField {
+                    field_name: "note".to_string(),
+                    field_type: FieldType::Option(Box::new(FieldType::String)),
+                    ..Default::default()
+                },
+            ] {
+                statements.push_str(
+                    &field
+                        .generate_define_statement(
+                            &BTreeMap::new(),
+                            &BTreeMap::new(),
+                            &BTreeMap::new(),
+                            &table_name,
+                            &crate::types::ForeignTypeRegistry::default(),
+                            options,
+                        )
+                        .expect("render policy-aware fields"),
+                );
+            }
+            execute_and_validate(&database, &statements, "define test policy", &table_name)
+                .await
+                .expect("apply policy-aware schema");
+            let expected = vec![Some(7_i32), None];
+            execute_and_validate(
+                &database,
+                &format!(
+                    "CREATE {table_name}:example SET values = {};",
+                    option_none.into_value(expected.clone()).to_sql()
+                ),
+                "write configured absence",
+                &table_name,
+            )
+            .await
+            .expect("write configured absence with conflict replay");
+            let mut response = database.query(format!(
+                "RETURN (SELECT VALUE values FROM ONLY {table_name}:example); RETURN (SELECT VALUE note FROM ONLY {table_name}:example);"
+            )).await.expect("read configured absence").check().expect("check every statement");
+            let stored: Value = response.take(0).expect("read stored array");
+            assert_eq!(stored, option_none.into_value(expected.clone()));
+            assert_eq!(
+                option_none
+                    .read_value::<Vec<Option<i32>>>(stored)
+                    .expect("decode configured absence"),
+                expected
+            );
+            let note: Value = response.take(1).expect("read absent optional field");
+            assert_eq!(note, option_none.into_value(None::<String>));
+        }
+    }
+
+    #[test]
+    fn optional_field_assert_is_none_guarded() {
         use crate::validator::{StringValidator, Validator};
 
-        // Option<String> is emitted as `null | string DEFAULT NULL`; the
-        // validator assert must skip NULL or inserts of unset values fail with
-        // "string::len() ... found NULL".
+        // Option<String> is emitted as `option<string>`; the validator assert
+        // must skip NONE or inserts of unset values fail with
+        // "string::len() ... found NONE".
         let field = StructField {
             field_name: "bio".to_string(),
             wire: Default::default(),
@@ -723,7 +923,7 @@ mod tests {
         let merged = field
             .merged_assert(true)
             .expect("optional field with validators should produce an assert");
-        assert_eq!(merged, "$value = NULL OR (string::len($value) <= 500)");
+        assert_eq!(merged, "$value = NONE OR (string::len($value) <= 500)");
 
         // Non-optional fields are not guarded.
         let mut required = field.clone();

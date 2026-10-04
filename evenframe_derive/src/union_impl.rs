@@ -1,4 +1,6 @@
+use crate::surreal_value_impl::{UnionTable, union_surreal_value};
 use crate::validate_impl::enum_validate;
+use convert_case::{Case, Casing};
 use evenframe_core::derive::naming;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -40,43 +42,42 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
     if let Data::Enum(ref data_enum) = input.data {
         let mut table_config_arms = Vec::new();
         let mut table_names = Vec::new();
+        let mut tables = Vec::new();
 
         for variant in &data_enum.variants {
             let variant_ident = &variant.ident;
-
-            match &variant.fields {
-                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                    let field_type = &fields.unnamed.first().unwrap().ty;
-                    let type_name = extract_inner_type_name(field_type);
-                    table_names.push(type_name);
-
-                    table_config_arms.push(quote! {
-                        #ident::#variant_ident(inner) => inner.table_config()
-                    });
-                }
-                Fields::Named(fields) if fields.named.len() == 1 => {
-                    let field_type = &fields.named.first().unwrap().ty;
-                    let type_name = extract_inner_type_name(field_type);
-                    table_names.push(type_name);
-
-                    let field_name = fields.named.first().unwrap().ident.as_ref().unwrap();
-                    table_config_arms.push(quote! {
-                        #ident::#variant_ident { #field_name } => #field_name.table_config()
-                    });
-                }
-                Fields::Unit => {
+            let mut fields = variant.fields.iter();
+            let field = match (&variant.fields, fields.next(), fields.next()) {
+                (Fields::Unit, _, _) => {
                     return syn::Error::new(
                         variant.span(),
                         format!("EvenframeUnion variant '{}' cannot be a unit variant. Each variant must contain exactly one persistable struct.", variant_ident)
                     ).to_compile_error();
                 }
+                (_, Some(field), None) => field,
                 _ => {
                     return syn::Error::new(
                         variant.span(),
                         format!("EvenframeUnion variant '{}' must contain exactly one field that is a persistable struct.", variant_ident)
                     ).to_compile_error();
                 }
+            };
+            let type_name = extract_inner_type_name(&field.ty);
+            match &field.ident {
+                Some(field_name) => table_config_arms.push(quote! {
+                    #ident::#variant_ident { #field_name } => #field_name.table_config()
+                }),
+                None => table_config_arms.push(quote! {
+                    #ident::#variant_ident(inner) => inner.table_config()
+                }),
             }
+            tables.push(UnionTable {
+                variant: variant_ident,
+                member: field.ident.as_ref(),
+                ty: &field.ty,
+                table: type_name.to_case(Case::Snake),
+            });
+            table_names.push(type_name);
         }
 
         let union_name = ident.to_string();
@@ -106,10 +107,14 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
                 Err(err) => return err.to_compile_error(),
             };
 
+        let surreal_value_impl = union_surreal_value(&input, &tables);
+
         quote! {
             impl ::evenframe::traits::EvenframeTable for #ident {}
 
             #validate_impl
+
+            #surreal_value_impl
 
             ::evenframe::__metadata! {
                 const _: () = {

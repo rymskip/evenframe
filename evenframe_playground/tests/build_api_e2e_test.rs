@@ -58,10 +58,9 @@ fn generate_one(output: TypesyncOutput) -> GeneratedFile {
 fn test_build_config_default() {
     let config = ScanConfig::default();
 
-    assert_eq!(
-        config.outputs,
-        vec![TypesyncOutput::new(OutputKind::Arktype, "./src/generated/")],
-        "ArkType into ./src/generated/ should be the default output"
+    assert!(
+        config.outputs.is_empty(),
+        "Output generators must be selected explicitly"
     );
 }
 

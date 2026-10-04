@@ -2,7 +2,7 @@
 //! tools that consume it: deno type-checks the TypeScript and runs the serde
 //! parity cases, protoc and flatc compile the schemas.
 
-use crate::{project_root, run};
+use crate::project_root;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -50,9 +50,28 @@ fn write_outputs() -> std::io::Result<Outputs> {
     let typescript = out.join("typescript");
     fs::create_dir_all(&typescript)?;
     let check_dir = root.join("tooling/generated_check");
-    for file in ["deno.json", "serde_parity.ts"] {
-        fs::copy(check_dir.join(file), typescript.join(file))?;
-    }
+    let config = std::env::var_os("EVENFRAME_GENERATED_CHECK_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| check_dir.join("deno.json"));
+    fs::copy(&config, typescript.join("deno.json")).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "Copying generated-check configuration {}: {error}",
+                config.display()
+            ),
+        )
+    })?;
+    fs::copy(
+        check_dir.join("serde_parity.ts"),
+        typescript.join("serde_parity.ts"),
+    )
+    .map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("Copying generated-check runtime cases: {error}"),
+        )
+    })?;
 
     let mut typescript_files = Vec::new();
     let mut schemas = Vec::new();
@@ -148,9 +167,8 @@ fn snapshot_body(path: &Path) -> std::io::Result<String> {
         })
 }
 
-/// Runs a schema compiler, failing on a warning as well as an error: either
-/// is a defect in the generated schema.
-fn compile_schema(program: &str, configure: impl FnOnce(&mut Command)) -> bool {
+/// Runs a generated-output check, failing on warnings as well as errors.
+fn run_checked(program: &str, configure: impl FnOnce(&mut Command)) -> bool {
     let mut command = Command::new(program);
     configure(&mut command);
     let output = match command.output() {
@@ -171,7 +189,7 @@ fn compile_schema(program: &str, configure: impl FnOnce(&mut Command)) -> bool {
     let warnings = stdout
         .lines()
         .chain(stderr.lines())
-        .filter(|line| line.contains("warning:"))
+        .filter(|line| line.to_ascii_lowercase().contains("warning"))
         .count();
     if warnings > 0 {
         eprintln!("{program} printed {warnings} warning(s)");
@@ -190,13 +208,18 @@ fn compile(outputs: &Outputs) -> bool {
     };
     let well_known = PathBuf::from(prefix).join("include");
     let validate = project_root().join("tooling/generated_check");
-    let mut ok = run("deno", |command| {
+    if !run_checked("deno", |command| {
+        command.arg("install").current_dir(&outputs.typescript);
+    }) {
+        return false;
+    }
+    let mut ok = run_checked("deno", |command| {
         command
             .args(["check", "--config", "deno.json"])
             .args(&outputs.typescript_files)
             .current_dir(&outputs.typescript);
     });
-    ok &= run("deno", |command| {
+    ok &= run_checked("deno", |command| {
         command
             .args(["run", "--config", "deno.json", "serde_parity.ts"])
             .current_dir(&outputs.typescript);
@@ -208,7 +231,7 @@ fn compile(outputs: &Outputs) -> bool {
             continue;
         };
         ok &= match *kind {
-            "protobuf" | "protobuf_validated" => compile_schema("protoc", |command| {
+            "protobuf" | "protobuf_validated" => run_checked("protoc", |command| {
                 command
                     .arg(format!("--proto_path={}", directory.display()))
                     .arg(format!("--proto_path={}", validate.display()))
@@ -219,7 +242,7 @@ fn compile(outputs: &Outputs) -> bool {
                     ))
                     .arg(path);
             }),
-            _ => compile_schema("flatc", |command| {
+            _ => run_checked("flatc", |command| {
                 command
                     .args(["--cpp", "-o"])
                     .arg(directory.join("cpp"))

@@ -1,13 +1,13 @@
 pub use evenframe_core::{
-    __metadata, config,
+    __metadata, __surreal_value, config,
     error::{self, EvenframeError, Result},
-    registry, schemasync, traits, types, typesync, validator,
+    registry, schemasync, surreal_value, traits, types, typesync, validator,
 };
 
 #[cfg(any(feature = "build-typesync", feature = "build-schemadump"))]
 pub use evenframe_core::{build, scan};
 
-pub use evenframe_derive::{Evenframe, EvenframeUnion, Schemasync, Typesync};
+pub use evenframe_derive::{Evenframe, EvenframeUnion, Schemasync, SurrealValue, Typesync};
 pub use linkme;
 
 pub mod prelude {

@@ -2,15 +2,15 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-/** @derive(Deserialize) */
+/** @derive(Decode) */
 export interface Registration {
-  /** @serde({ validate: ["email", "maxLength(255)", "minLength(5)"] }) */
+  /** @endec({ validate: ["email", "maxLength(255)", "minLength(5)"] }) */
   email: string;
-  /** @serde({ validate: ["custom({ function: \"isAlphanumeric\", source: \"./helpers\" })", "minLength(3)", "maxLength(50)"] }) */
+  /** @endec({ validate: ["custom({ function: \"isAlphanumeric\", source: \"./helpers\" })", "minLength(3)", "maxLength(50)"] }) */
   username: string;
-  /** @serde({ validate: ["greaterThanOrEqualTo(13)", "lessThanOrEqualTo(150)"] }) */
+  /** @endec({ validate: ["greaterThanOrEqualTo(13)", "lessThanOrEqualTo(150)"] }) */
   age: number;
-  /** @serde({ validate: ["url"] }) */
+  /** @endec({ validate: ["url"] }) */
   website: string | null;
 }
 

@@ -3,6 +3,7 @@
   "imports": {
     "arktype": "npm:arktype@2.2.3",
     "effect": "npm:effect@3.22.2",
-    "surrealdb": "npm:surrealdb@2.0.8"
+    "surrealdb": "npm:surrealdb@2.0.10",
+    "typescript": "npm:typescript@^5.0.0"
   }
 }

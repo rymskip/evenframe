@@ -15,6 +15,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Validate generated output with Deno, protoc, and flatc.
+    Generated,
     /// Run tests (unit, snapshot, e2e)
     Test {
         /// Run only snapshot tests
@@ -91,6 +93,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let ok = match cli.command {
+        Cmd::Generated => generated::check(),
         Cmd::Test {
             snapshot,
             e2e,
@@ -310,12 +313,20 @@ fn cmd_verify(fail_fast: bool) -> bool {
             }),
         ),
         (
-            "derive without features, then with metadata",
+            "derive without features, then with metadata, then with SurrealValue",
             Box::new(|| {
                 run("cargo", |c| {
                     c.args(["test", "-p", "derive_check"]);
                 }) && run("cargo", |c| {
                     c.args(["test", "-p", "derive_check", "--features", "metadata"]);
+                }) && run("cargo", |c| {
+                    c.args([
+                        "test",
+                        "-p",
+                        "derive_check",
+                        "--features",
+                        "surrealdb-types",
+                    ]);
                 })
             }),
         ),

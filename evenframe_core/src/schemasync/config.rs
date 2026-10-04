@@ -4,6 +4,146 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tracing::{debug, trace};
 
+/// The database representation of a Rust `Option::None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionNone {
+    #[default]
+    None,
+    Null,
+}
+
+impl OptionNone {
+    pub fn literal(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Null => "NULL",
+        }
+    }
+
+    pub fn surql_type(self, inner: &str) -> String {
+        match self {
+            Self::None => format!("option<{inner}>"),
+            Self::Null => format!("null | {inner}"),
+        }
+    }
+
+    /// Applies the configured absence representation to a typed SDK value.
+    #[cfg(feature = "surrealdb-types")]
+    pub fn into_value<Item: surrealdb_types::SurrealValue>(
+        self,
+        item: Item,
+    ) -> surrealdb_types::Value {
+        let mut value = item.into_value();
+        if self == Self::Null {
+            Self::null_for_none(&mut value);
+        }
+        value
+    }
+
+    #[cfg(feature = "surrealdb-types")]
+    fn null_for_none(value: &mut surrealdb_types::Value) {
+        match value {
+            surrealdb_types::Value::None => *value = surrealdb_types::Value::Null,
+            surrealdb_types::Value::Array(items) => items.iter_mut().for_each(Self::null_for_none),
+            surrealdb_types::Value::Object(fields) => {
+                fields.values_mut().for_each(Self::null_for_none)
+            }
+            _ => {}
+        }
+    }
+
+    /// Reads the configured absence representation using the SDK type's shape.
+    #[cfg(feature = "surrealdb-types")]
+    pub fn read_value<Item: surrealdb_types::SurrealValue>(
+        self,
+        mut value: surrealdb_types::Value,
+    ) -> Result<Item, surrealdb_types::Error> {
+        if self == Self::Null {
+            Self::optional_nulls(&mut value, &Item::kind_of());
+        }
+        Item::from_value(value).map_err(|failure| {
+            surrealdb_types::Error::serialization(
+                format!("reading {} absence policy: {failure}", self.literal()),
+                surrealdb_types::SerializationError::Deserialization,
+            )
+        })
+    }
+
+    #[cfg(feature = "surrealdb-types")]
+    fn optional_nulls(value: &mut surrealdb_types::Value, kind: &surrealdb_types::Kind) {
+        use surrealdb_types::{Kind, KindLiteral, Value};
+        if matches!(value, Value::Null)
+            && matches!(kind, Kind::Either(candidates) if candidates.contains(&Kind::None))
+        {
+            *value = Value::None;
+            return;
+        }
+        match (kind, value) {
+            (Kind::None, absent @ Value::Null) => *absent = Value::None,
+            (Kind::Either(candidates), value) => {
+                for candidate in candidates {
+                    let mut converted = value.clone();
+                    Self::optional_nulls(&mut converted, candidate);
+                    if converted.is_kind(candidate) {
+                        *value = converted;
+                        break;
+                    }
+                }
+            }
+            (Kind::Array(inner, _) | Kind::Set(inner, _), Value::Array(items)) => {
+                for item in items.iter_mut() {
+                    Self::optional_nulls(item, inner);
+                }
+            }
+            (Kind::Literal(KindLiteral::Array(kinds)), Value::Array(items)) => {
+                for (item, kind) in items.iter_mut().zip(kinds) {
+                    Self::optional_nulls(item, kind);
+                }
+            }
+            (Kind::Literal(KindLiteral::Object(kinds)), Value::Object(fields)) => {
+                for (name, kind) in kinds {
+                    if let Some(field) = fields.get_mut(name) {
+                        Self::optional_nulls(field, kind);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Options shared by schema and database-default rendering.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SurqlOptions {
+    pub allow_scripting: bool,
+    pub option_none: OptionNone,
+}
+
+#[derive(Clone, Copy)]
+pub struct SurqlContext<'registry> {
+    pub registry: &'registry crate::types::ForeignTypeRegistry,
+    pub options: SurqlOptions,
+}
+
+impl<'registry> From<&'registry crate::types::ForeignTypeRegistry> for SurqlContext<'registry> {
+    fn from(registry: &'registry crate::types::ForeignTypeRegistry) -> Self {
+        Self {
+            registry,
+            options: SurqlOptions::default(),
+        }
+    }
+}
+
+impl From<bool> for SurqlOptions {
+    fn from(allow_scripting: bool) -> Self {
+        Self {
+            allow_scripting,
+            ..Self::default()
+        }
+    }
+}
+
 /// Configuration for a WASM mock data plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +165,10 @@ pub struct SchemasyncConfig {
     pub database: DatabaseConfig,
     /// Whether to generate mock data
     pub should_generate_mocks: bool,
+    /// The absence representation used by generated schema and mock values.
+    #[serde(default)]
+    #[builder(default)]
+    pub option_none: OptionNone,
     /// default mock data generation configuration, overridden by table and field level configs
     #[serde(default)]
     pub mock_gen_config: SchemasyncMockGenConfig,
@@ -215,6 +359,13 @@ pub struct MockOverrides {
 }
 
 impl SchemasyncConfig {
+    pub fn surql_options(&self) -> SurqlOptions {
+        SurqlOptions {
+            allow_scripting: self.mock_gen_config.scripting_asserts,
+            option_none: self.option_none,
+        }
+    }
+
     /// Apply the settings that `overrides` switches on.
     pub fn apply_mock_overrides(&mut self, overrides: &MockOverrides) {
         if overrides.skip_mocks {
@@ -295,7 +446,64 @@ impl DatabaseConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionOverrides, DatabaseConfig, MockOverrides, SchemasyncConfig};
+    use super::{ConnectionOverrides, DatabaseConfig, MockOverrides, OptionNone, SchemasyncConfig};
+
+    #[test]
+    fn optional_absence_defaults_to_none_and_accepts_null() {
+        let defaults: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = false\n[database]\nurl = \"x\"\n").unwrap();
+        assert_eq!(defaults.option_none, OptionNone::None);
+        let nullable: SchemasyncConfig = toml::from_str(
+            "should_generate_mocks = false\noption_none = \"null\"\n[database]\nurl = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(nullable.option_none, OptionNone::Null);
+        assert_eq!(nullable.surql_options().option_none, OptionNone::Null);
+        assert!(
+            toml::from_str::<SchemasyncConfig>(
+                "should_generate_mocks = false\noption_none = \"empty\"\n[database]\nurl = \"x\"\n",
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "surrealdb-types")]
+    #[test]
+    fn null_policy_translates_nested_typed_option_values() {
+        use surrealdb_types::{SurrealValue, Value};
+        let original = vec![Some(7_i32), None].into_value();
+        assert_eq!(OptionNone::None.into_value(original.clone()), original);
+        let converted = OptionNone::Null.into_value(original);
+        assert_eq!(
+            converted,
+            vec![Value::from_t(7_i32), Value::Null].into_value()
+        );
+        assert_eq!(
+            OptionNone::Null
+                .read_value::<Vec<Option<i32>>>(converted)
+                .unwrap(),
+            vec![Some(7), None]
+        );
+        assert_eq!(
+            OptionNone::Null.read_value::<Value>(Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            OptionNone::Null
+                .read_value::<Option<Value>>(Value::Null)
+                .unwrap(),
+            None
+        );
+        let nested = (vec![None::<Value>], Value::Null);
+        assert_eq!(
+            OptionNone::Null
+                .read_value::<(Vec<Option<Value>>, Value)>(
+                    OptionNone::Null.into_value(nested.clone())
+                )
+                .unwrap(),
+            nested
+        );
+    }
 
     #[test]
     fn mock_overrides_only_switch_settings_on() {
