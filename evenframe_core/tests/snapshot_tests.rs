@@ -1,35 +1,98 @@
 #![cfg(feature = "typesync")]
 
-use evenframe_core::config::ForeignTypeConfig;
-use evenframe_core::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
-use evenframe_core::typesync::config::StructVariants;
-use evenframe_core::typesync::struct_variants::declare_payloads;
-use std::collections::BTreeMap;
+/// Typesync spec files and loading them.
+#[cfg(any(
+    feature = "arktype",
+    feature = "effect",
+    feature = "macroforge",
+    feature = "protobuf",
+    feature = "flatbuffers"
+))]
+mod fixture {
+    use evenframe_core::config::ForeignTypeConfig;
+    use evenframe_core::types::{
+        AllConfigs, ForeignTypeRegistry, NewtypeConfig, StructConfig, TaggedUnion,
+    };
+    use evenframe_core::typesync::config::StructVariants;
+    use evenframe_core::typesync::struct_variants::declare_payloads;
+    use std::collections::BTreeMap;
 
-#[derive(serde::Deserialize)]
-struct TypesyncFixture {
-    structs: BTreeMap<String, StructConfig>,
-    enums: BTreeMap<String, TaggedUnion>,
-    #[serde(default)]
-    foreign_types: BTreeMap<String, ForeignTypeConfig>,
-    #[serde(default)]
-    struct_variants: StructVariants,
-}
-
-fn load_typesync_fixture(
-    path: &str,
-) -> (
-    BTreeMap<String, StructConfig>,
-    BTreeMap<String, TaggedUnion>,
-    ForeignTypeRegistry,
-) {
-    let input = std::fs::read_to_string(path).unwrap();
-    let mut fixture: TypesyncFixture = serde_json::from_str(&input).unwrap();
-    if fixture.struct_variants == StructVariants::Named {
-        declare_payloads(&mut fixture.structs, &mut fixture.enums).unwrap();
+    #[derive(serde::Deserialize)]
+    struct TypesyncFixture {
+        structs: BTreeMap<String, StructConfig>,
+        enums: BTreeMap<String, TaggedUnion>,
+        #[serde(default)]
+        newtypes: BTreeMap<String, NewtypeConfig>,
+        #[serde(default)]
+        foreign_types: BTreeMap<String, ForeignTypeConfig>,
+        #[serde(default)]
+        struct_variants: StructVariants,
     }
-    let registry = ForeignTypeRegistry::from_config(&fixture.foreign_types);
-    (fixture.structs, fixture.enums, registry)
+
+    /// A spec's types, ready for the generators.
+    pub struct Loaded {
+        structs: BTreeMap<String, StructConfig>,
+        enums: BTreeMap<String, TaggedUnion>,
+        newtypes: BTreeMap<String, NewtypeConfig>,
+        pub registry: ForeignTypeRegistry,
+    }
+
+    impl Loaded {
+        #[cfg(any(feature = "arktype", feature = "effect", feature = "macroforge"))]
+        pub fn index(&self) -> evenframe_core::typesync::type_index::TypeIndex<'_> {
+            evenframe_core::typesync::type_index::TypeIndex::with_newtypes(
+                &self.structs,
+                &self.enums,
+                &self.newtypes,
+            )
+            .unwrap()
+        }
+
+        /// The structs and enums with every newtype stored as its inner type, as
+        /// the binary schema outputs describe them.
+        #[cfg(any(feature = "protobuf", feature = "flatbuffers"))]
+        pub fn stored(
+            &self,
+        ) -> (
+            BTreeMap<String, StructConfig>,
+            BTreeMap<String, TaggedUnion>,
+        ) {
+            let mut structs = self.structs.clone();
+            let mut enums = self.enums.clone();
+            evenframe_core::types::desugar_newtypes(
+                &self.newtypes,
+                &mut enums,
+                &mut BTreeMap::new(),
+                &mut structs,
+            )
+            .unwrap();
+            (structs, enums)
+        }
+    }
+
+    /// The spec's types as the typesync pipeline gives them to the outputs.
+    pub fn load(path: &str) -> Loaded {
+        let input = std::fs::read_to_string(path).unwrap();
+        let mut fixture: TypesyncFixture = serde_json::from_str(&input).unwrap();
+        if fixture.struct_variants == StructVariants::Named {
+            declare_payloads(&mut fixture.structs, &mut fixture.enums).unwrap();
+        }
+        let registry = ForeignTypeRegistry::from_config(&fixture.foreign_types);
+        let typesync = AllConfigs {
+            enums: fixture.enums,
+            tables: BTreeMap::new(),
+            objects: fixture.structs,
+            newtypes: fixture.newtypes,
+        }
+        .for_typesync()
+        .unwrap();
+        Loaded {
+            structs: typesync.objects,
+            enums: typesync.enums,
+            newtypes: typesync.newtypes,
+            registry,
+        }
+    }
 }
 
 #[cfg(feature = "arktype")]
@@ -40,10 +103,10 @@ mod arktype {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
         let output = evenframe_core::typesync::arktype::generate_arktype_type_string(
-            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
-            &registry,
+            &loaded.index(),
+            &loaded.registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -65,11 +128,11 @@ mod effect {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
         let output = evenframe_core::typesync::effect::generate_effect_schema_string(
-            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
+            &loaded.index(),
             true,
-            &registry,
+            &loaded.registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -91,14 +154,15 @@ mod macroforge {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
         let mut helpers =
             evenframe_core::typesync::macroforge::HelperModule::new("./helpers".to_owned());
         let interfaces = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
-            &evenframe_core::typesync::type_index::TypeIndex::new(&structs, &enums).unwrap(),
+            &loaded.index(),
             Default::default(),
-            &registry,
+            &loaded.registry,
             &mut helpers,
+            None,
         )
         .unwrap();
         let output = if helpers.is_empty() {
@@ -125,9 +189,14 @@ mod protobuf {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
+        let (structs, enums) = loaded.stored();
         let output = evenframe_core::typesync::protobuf::generate_protobuf_schema_string(
-            &structs, &enums, None, false, &registry,
+            &structs,
+            &enums,
+            None,
+            false,
+            &loaded.registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -151,9 +220,14 @@ mod protobuf_validated {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
+        let (structs, enums) = loaded.stored();
         let output = evenframe_core::typesync::protobuf::generate_protobuf_schema_string(
-            &structs, &enums, None, true, &registry,
+            &structs,
+            &enums,
+            None,
+            true,
+            &loaded.registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)
@@ -175,9 +249,13 @@ mod flatbuffers {
         _test_directory: &str,
         _file_type: &str,
     ) {
-        let (structs, enums, registry) = crate::load_typesync_fixture(spec_input_file);
+        let loaded = crate::fixture::load(spec_input_file);
+        let (structs, enums) = loaded.stored();
         let output = evenframe_core::typesync::flatbuffers::generate_flatbuffers_schema_string(
-            &structs, &enums, None, &registry,
+            &structs,
+            &enums,
+            None,
+            &loaded.registry,
         )
         .unwrap();
         let name = std::path::Path::new(spec_input_file)

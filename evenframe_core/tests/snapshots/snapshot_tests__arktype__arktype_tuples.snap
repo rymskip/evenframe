@@ -5,8 +5,8 @@ expression: output
 export const bindings = scope({
 
 Geometry: {
-  point_2d: ['number', 'number'],
-  point_3d: ['number', 'number', 'number'],
+  point2D: ['number', 'number'],
+  point3D: ['number', 'number', 'number'],
   labeled: ['string', 'number']
 },
 
@@ -15,8 +15,8 @@ Geometry: {
 const exported = bindings.export();
 
 export const defaultGeometry: Geometry = {
-point_2d: [0, 0],
-point_3d: [0, 0, 0],
+point2D: [0, 0],
+point3D: [0, 0, 0],
 labeled: ["", 0]
 };
 

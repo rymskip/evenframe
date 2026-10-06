@@ -3,6 +3,7 @@
 //! keyword patterns in [`crate::validator::keywords`].
 
 use crate::error::{EvenframeError, Result};
+use crate::schemasync::format::Format;
 use crate::validator::keywords::{self, NormalForm};
 use crate::validator::{BigDecimalValidator, DurationValidator, StringValidator};
 use crate::validator::{bounds, runtime};
@@ -10,8 +11,9 @@ use crate::validator::{bounds, runtime};
 /// How a string check is written in JavaScript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JsCheck {
-    /// A regex the value must match, as its source.
-    Pattern(String),
+    /// A regex the value must match: its source, and the flags of a
+    /// typesync-only pattern.
+    Pattern { source: String, flags: String },
     /// A boolean expression over `value`.
     Predicate(String),
     /// A length constraint both libraries express natively.
@@ -63,7 +65,23 @@ pub fn template_literal(text: &str) -> String {
 }
 
 fn pattern(source: &str) -> JsCheck {
-    JsCheck::Pattern(source.to_string())
+    JsCheck::Pattern {
+        source: source.to_string(),
+        flags: String::new(),
+    }
+}
+
+/// `new RegExp(...)` for a pattern's source and flags.
+pub fn regexp(source: &str, flags: &str) -> Result<String> {
+    Ok(if flags.is_empty() {
+        format!("new RegExp({})", string_literal(source)?)
+    } else {
+        format!(
+            "new RegExp({}, {})",
+            string_literal(source)?,
+            string_literal(flags)?
+        )
+    })
 }
 
 fn test(source: &str) -> Result<String> {
@@ -145,6 +163,10 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::Literal(literal) => {
             JsCheck::Predicate(format!("value === {}", string_literal(literal)?))
         }
+        StringValidator::RegexLiteral(Format::Custom(custom)) => JsCheck::Pattern {
+            source: custom.as_str().to_owned(),
+            flags: custom.flags().unwrap_or_default().to_owned(),
+        },
         StringValidator::RegexLiteral(format) => pattern(&format.pattern()),
         StringValidator::Length(bound) => JsCheck::Length(LengthCheck::Exactly(
             bounds::length(bound).map_err(EvenframeError::config)?,

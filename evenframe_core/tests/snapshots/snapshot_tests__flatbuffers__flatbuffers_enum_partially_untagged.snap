@@ -1,0 +1,34 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Contact {
+    ContactPhone,
+    ContactNobody,
+    ContactEmail,
+    ContactPostal
+}
+
+table Phone {
+    number: string;
+}
+
+table Postal {
+    street: string;
+    city: string;
+}
+
+table ContactPhone {
+    value: Phone;
+}
+
+table ContactNobody {
+}
+
+table ContactEmail {
+    value: string;
+}
+
+table ContactPostal {
+    value: Postal;
+}

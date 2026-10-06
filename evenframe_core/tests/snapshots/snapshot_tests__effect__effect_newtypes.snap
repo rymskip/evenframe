@@ -1,0 +1,69 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Status = Schema.Union(Schema.Literal("Active"), Schema.Literal("Inactive")).annotations({ identifier: `Status` });
+export const StatusCode = Status.pipe(Schema.brand("StatusCode")).annotations({ identifier: `StatusCode` });
+export const Pair = Schema.Tuple(Schema.String, Schema.Number).annotations({ identifier: `Pair` });
+export const Marker = Schema.Null.annotations({ identifier: `Marker` });
+export const Label = Schema.String.pipe(Schema.brand("Label")).annotations({ identifier: `Label` });
+export const NonEmptyString = Schema.String.pipe(Schema.minLength(1, { message: () => `'Non Empty String' must be at least 1 characters long` })).pipe(Schema.brand("NonEmptyString")).annotations({ identifier: `NonEmptyString` });
+export const Handle = NonEmptyString.pipe(Schema.compose(Schema.Trim)).pipe(Schema.compose(Schema.Lowercase)).pipe(Schema.compose(NonEmptyString)).pipe(Schema.brand("Handle")).annotations({ identifier: `Handle` });
+export const Count = Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => `'Count' must be an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER` })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(-9007199254740991, 9007199254740991, { message: () => `'Count' must be an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER` })).pipe(Schema.greaterThanOrEqualTo(0, { message: () => `'Count' must be greater than or equal to 0` })).pipe(Schema.brand("Count")).annotations({ identifier: `Count` });
+export const Age = Schema.Number.pipe(Schema.brand("Age")).annotations({ identifier: `Age` });
+export class Profile extends Schema.Class<Profile>("Profile")( { 
+  name: Schema.propertySignature(NonEmptyString).annotations({ missingMessage: () => `'Name' is required` }),
+  nickname: Schema.OptionFromNullishOr(NonEmptyString, null),
+  handles: Schema.propertySignature(Schema.Array(Handle)).annotations({ missingMessage: () => `'Handles' is required` }),
+  visits: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Count }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Visits' is required` }),
+  label: Schema.propertySignature(Label).annotations({ missingMessage: () => `'Label' is required` }),
+  position: Schema.propertySignature(Pair).annotations({ missingMessage: () => `'Position' is required` }),
+  marker: Schema.propertySignature(Marker).annotations({ missingMessage: () => `'Marker' is required` }),
+  status: Schema.propertySignature(StatusCode).annotations({ missingMessage: () => `'Status' is required` }),
+  title: Schema.propertySignature(NonEmptyString.pipe(Schema.compose(Schema.Trim)).pipe(Schema.compose(NonEmptyString))).annotations({ missingMessage: () => `'Title' is required` }),
+  age: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => `'Age' must be an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER` })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(-9007199254740991, 9007199254740991, { message: () => `'Age' must be an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER` })).pipe(Schema.compose(Age))).annotations({ missingMessage: () => `'Age' is required` })
+}) {[key: string]: unknown}
+
+
+export type StatusEncoded = "Active" | "Inactive";
+
+export type StatusCodeEncoded = StatusEncoded;
+
+export type PairEncoded = readonly [string, number];
+
+export type MarkerEncoded = null;
+
+export type LabelEncoded = string;
+
+export type NonEmptyStringEncoded = string;
+
+export type HandleEncoded = NonEmptyStringEncoded;
+
+export type CountEncoded = string;
+
+export type AgeEncoded = number;
+
+export interface ProfileEncoded {
+  readonly name: NonEmptyStringEncoded;
+  readonly nickname: NonEmptyStringEncoded | null | undefined;
+  readonly handles: ReadonlyArray<HandleEncoded>;
+  readonly visits: Record<string, CountEncoded>;
+  readonly label: LabelEncoded;
+  readonly position: PairEncoded;
+  readonly marker: MarkerEncoded;
+  readonly status: StatusCodeEncoded;
+  readonly title: NonEmptyStringEncoded;
+  readonly age: string;
+}
+
+
+export type StatusType = typeof Status.Type;
+export type StatusCodeType = typeof StatusCode.Type;
+export type PairType = typeof Pair.Type;
+export type MarkerType = typeof Marker.Type;
+export type LabelType = typeof Label.Type;
+export type NonEmptyStringType = typeof NonEmptyString.Type;
+export type HandleType = typeof Handle.Type;
+export type CountType = typeof Count.Type;
+export type AgeType = typeof Age.Type;
+export type ProfileType = typeof Profile.Type;

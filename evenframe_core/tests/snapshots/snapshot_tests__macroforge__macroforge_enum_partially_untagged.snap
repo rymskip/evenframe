@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Phone {
+  number: string;
+}
+
+/** @derive(Decode) */
+export interface Postal {
+  street: string;
+  city: string;
+}
+
+/** @derive(Decode) */
+/** @endec({ untagged: true }) */
+export type Contact =
+	| { kind: "Phone" } & Phone
+	| { kind: "Nobody" }
+	| string
+	| Postal;

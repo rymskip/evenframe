@@ -108,8 +108,18 @@ fn enum_surql_default(
         .iter()
         .find(|v| v.is_default)
         .or_else(|| enum_schema.variants.first())?;
+    let representation = chosen_variant.stored_representation(&enum_schema.representation);
+    let storage = &chosen_variant.wire.storage;
+    // A variant serde skips is stored as NONE, an untagged unit one as its
+    // literal.
+    if storage.skipped {
+        return Some("NONE".to_owned());
+    }
+    if let Some(literal) = &storage.value {
+        return Some(literal.clone());
+    }
     let Some(variant_data) = &chosen_variant.data else {
-        return Some(match &enum_schema.representation {
+        return Some(match representation {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
                 format!("{{ {}: '{}' }}", surql_ident(tag), chosen_variant.db_name())
@@ -127,16 +137,24 @@ fn enum_surql_default(
             app_structs,
             context,
         )?,
-        VariantData::DataStructureRef(field_type) => field_type_to_surql_default(
-            field_name,
-            table_name,
-            field_type,
-            enums,
-            app_structs,
-            context,
-        )?,
+        VariantData::DataStructureRef(field_type) => {
+            let element = field_type_to_surql_default(
+                field_name,
+                table_name,
+                field_type,
+                enums,
+                app_structs,
+                context,
+            )?;
+            // `#[surreal(tuple)]` stores a payload of one element as an array.
+            if storage.tuple {
+                format!("[{element}]")
+            } else {
+                element
+            }
+        }
     };
-    Some(match &enum_schema.representation {
+    Some(match representation {
         EnumRepresentation::ExternallyTagged => {
             format!(
                 "{{ {}: {} }}",
@@ -160,6 +178,11 @@ fn enum_surql_default(
                 surql_ident(tag),
                 chosen_variant.db_name()
             )
+        }
+        EnumRepresentation::AdjacentlyTagged { tag, .. }
+            if storage.content == crate::types::ContentStorage::Never =>
+        {
+            format!("{{ {}: '{}' }}", surql_ident(tag), chosen_variant.db_name())
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
             format!(
@@ -316,6 +339,8 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         }
     }
 
@@ -432,8 +457,8 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(enum_name.clone(), card_or_row);
 
-        let overview_settings = StructConfig {
-            struct_name: "OverviewSettings".to_string(),
+        let listing_settings = StructConfig {
+            struct_name: "ListingSettings".to_string(),
             fields: vec![
                 StructField {
                     field_name: "row_height".to_string(),
@@ -465,13 +490,13 @@ mod tests {
             ..Default::default()
         };
         let mut app_structs = BTreeMap::new();
-        app_structs.insert("OverviewSettings".to_string(), overview_settings);
+        app_structs.insert("ListingSettings".to_string(), listing_settings);
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"lorecast_section_overview_settings".to_string(),
+            &"section_listing_settings".to_string(),
             &"user".to_string(),
-            &FieldType::Other("OverviewSettings".to_string()),
+            &FieldType::Other("ListingSettings".to_string()),
             &enums,
             &app_structs,
             &registry,

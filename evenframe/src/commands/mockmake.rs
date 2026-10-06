@@ -2,7 +2,7 @@
 
 use crate::cli::MockmakeArgs;
 use crate::scan_cache::ScanCache;
-use evenframe_core::scan::{ScanConfig, filter_for_schemasync};
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::{
     error::Result,
     schemasync::{Schemasync, config::ConnectionOverrides},
@@ -13,14 +13,13 @@ use tracing::info;
 pub async fn run(args: MockmakeArgs) -> Result<()> {
     let build_config = ScanConfig::discover()?;
     let cache = ScanCache::load_current(&build_config)?;
-    let (enums, tables, objects) = cache.into_configs();
-    let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
+    let types = cache.into_configs().into_schemasync()?;
 
     info!(
         "Loaded {} tables, {} objects, {} enums from the scan cache",
-        tables.len(),
-        objects.len(),
-        enums.len()
+        types.tables.len(),
+        types.objects.len(),
+        types.enums.len()
     );
 
     Schemasync::new()
@@ -29,9 +28,7 @@ pub async fn run(args: MockmakeArgs) -> Result<()> {
             namespace: args.namespace,
             database: args.database,
         })
-        .with_tables(&tables)
-        .with_objects(&objects)
-        .with_enums(&enums)
+        .with_types(&types)
         .insert_mock_data(args.count, args.tables)
         .await?;
 

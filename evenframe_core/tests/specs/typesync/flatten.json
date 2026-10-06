@@ -1,0 +1,67 @@
+{
+  "description": "Flattened fields: a struct and an Option of one written as their fields, a map whose keys sit beside the struct's own, and an enum whose tag and fields do",
+  "structs": {
+    "Audit": {
+      "struct_name": "Audit",
+      "fields": [
+        { "field_name": "created_by", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "Geo": {
+      "struct_name": "Geo",
+      "fields": [
+        { "field_name": "lat", "field_type": "F64", "validators": [], "always_regenerate": false },
+        { "field_name": "lon", "field_type": "F64", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    },
+    "Post": {
+      "struct_name": "Post",
+      "fields": [
+        { "field_name": "title", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "audit", "field_type": { "Other": "Audit" }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } },
+        { "field_name": "geo", "field_type": { "Option": { "Other": "Geo" } }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
+      ],
+      "validators": []
+    },
+    "Settings": {
+      "struct_name": "Settings",
+      "fields": [
+        { "field_name": "theme", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "rest", "field_type": { "HashMap": ["String", "I32"] }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
+      ],
+      "validators": []
+    },
+    "Event": {
+      "struct_name": "Event",
+      "fields": [
+        { "field_name": "at", "field_type": "String", "validators": [], "always_regenerate": false },
+        { "field_name": "payload", "field_type": { "Other": "Payload" }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Payload": {
+      "enum_name": "Payload",
+      "variants": [
+        {
+          "name": "Click",
+          "data": {
+            "InlineStruct": {
+              "struct_name": "Click",
+              "fields": [
+                { "field_name": "x", "field_type": "I32", "validators": [], "always_regenerate": false }
+              ],
+              "validators": []
+            }
+          }
+        },
+        { "name": "Close" }
+      ],
+      "representation": { "InternallyTagged": { "tag": "kind" } }
+    }
+  },
+  "struct_variants": "inline"
+}

@@ -1,0 +1,14 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Shape = Schema.Union(Schema.Struct({ Circle: Schema.Number.pipe(Schema.positive({ message: () => `'Circle' must be a positive number` })) }), Schema.Struct({ Tag: Schema.Tuple(Schema.String.pipe(Schema.minLength(1, { message: () => `'Tag.0' must be at least 1 characters long` })), Schema.Number.pipe(Schema.lessThan(10, { message: () => `'Tag.1' must be less than 10` }))) }), Schema.String.pipe(Schema.filter((value) => value.toUpperCase() === value, { message: () => `'Code' must be uppercase` }))).annotations({ identifier: `Shape` });
+export const Range = Schema.Tuple(Schema.Number.pipe(Schema.greaterThanOrEqualTo(0, { message: () => `'Range.0' must be greater than or equal to 0` })), Schema.String).annotations({ identifier: `Range` });
+
+export type ShapeEncoded = { readonly Circle: number } | { readonly Tag: readonly [string, number] } | string;
+
+export type RangeEncoded = readonly [number, string];
+
+
+export type ShapeType = typeof Shape.Type;
+export type RangeType = typeof Range.Type;

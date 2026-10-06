@@ -1,6 +1,0 @@
-error: #[serde(skip)] on a variant is not supported: SurrealValue writes every variant
- --> tests/ui/fail/surreal_value_skipped_variant.rs:7:5
-  |
-7 | /     #[serde(skip)]
-8 | |     Internal,
-  | |____________^

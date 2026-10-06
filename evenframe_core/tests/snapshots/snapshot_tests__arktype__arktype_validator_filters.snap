@@ -10,7 +10,7 @@ Booking: {
   code: [[['string', ':', (value) => value.startsWith("bk`${x}\"")], ':', (value) => value.trim() === value], ':', (value) => value.toUpperCase() === value],
   nickname: [[['string', '&', 'string >= 2'], '|', 'undefined'], '|', 'null'],
   guests: [['string', '[]'], '&', 'unknown[] <= 8'],
-  starts_on: [['string', ':', (value) => !Number.isNaN(new Date(value).valueOf())], ':', (value) => ((millis) => millis >= 1704067200000 && millis <= 1924905600000)(new Date(value).valueOf())],
+  startsOn: [['string', ':', (value) => !Number.isNaN(new Date(value).valueOf())], ':', (value) => ((millis) => millis >= 1704067200000 && millis <= 1924905600000)(new Date(value).valueOf())],
   deposit: ['string', ':', (value) => compareDecimal(String(value), "10.50") >= 0],
   sequence: ['string', ':', (value) => (() => { try { const big = BigInt(value); return big < -5n; } catch { return false; } })()],
   stay: ['string', ':', (value) => ((nanos) => nanos !== null && nanos >= 5400000000000n && nanos <= 172800000000000n)(durationNanos(value))]
@@ -24,7 +24,7 @@ export const defaultBooking: Booking = {
 code: "",
 nickname: null,
 guests: [],
-starts_on: "",
+startsOn: "",
 deposit: "0",
 sequence: "0",
 stay: "0s"

@@ -43,9 +43,9 @@ use serde::Serialize;
 #[mock_data(n = 50)]
 pub struct User {
     pub id: String,
-    #[validators(StringValidator::Email)]
+    #[validators(email)]
     pub email: String,
-    #[validators(StringValidator::NonEmpty, StringValidator::MaxLength(80))]
+    #[validators(trim, non_empty, max_length = 80)]
     pub name: String,
 }
 ```
@@ -64,6 +64,11 @@ println!("tables: {:?}", get_all_table_names());
 assert_eq!(User::static_table_config().table_name, user.table_name);
 ```
 
+Each validator is named in snake case: a check such as `email` alone, one
+with a value as `max_length = 80` or `between = (0.0, 100.0)`. A name two kinds
+of validator share takes the kind, as in `string_validator(min_length = 3)`,
+and the path form, `StringValidator::MaxLength(80)`, reads the same.
+
 A struct whose fields carry `#[validators(...)]` also gets a generated
 `serde::Deserialize`: serde reads the input under the struct's own
 `#[serde(...)]` attributes, then every field's validators run, and every field
@@ -74,6 +79,92 @@ built in code, and every value nested in it, the same way. Neither needs
 `metadata`: without it the derive emits only these and the `EvenframeTable`
 marker that `RecordLink` accepts, which is all a project using only a build
 script or the CLI needs.
+
+A single-field tuple struct, or a `#[serde(transparent)]` struct, is a
+newtype: serde writes it as its one field's value, and so does every output.
+`#[validators(...)]` on the struct checks that value wherever the newtype is
+read, and a validator on a field holding a newtype checks the value inside it:
+
+```rust
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[validators(non_empty)]
+pub struct NonEmptyString(String);
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Team {
+    pub id: String,
+    #[validators(max_length = 40)]
+    pub name: NonEmptyString,
+    pub tags: Vec<NonEmptyString>,
+}
+```
+
+A newtype with validators is also built from a value the program holds:
+`NonEmptyString::try_from(text)` runs its validators, rewriting the value as
+reading it does, and fails with `ValidationErrors`. One holding a `String`
+takes a `&str` too and reads back with `as_str()`. A newtype whose value is a
+type parameter gets neither, since core's blanket `TryFrom` already covers it,
+and needs a build without the `metadata` feature, whose registry names one
+concrete type.
+
+The TypeScript outputs brand a newtype (ArkType and Effect brands,
+Macroforge's `$Newtype<T>`), so a plain string is not one. The schema stores
+it as its inner type and asserts its validators on a field holding it directly
+or in an `Option`. One held deeper, such as `tags` above, is checked when read
+but not asserted, and schemasync warns about it. A tuple struct of several
+fields is written as an array and a unit struct as null, as serde writes them.
+
+A validator runs in three places: the Rust read, the schema's `ASSERT`, and
+every TypeScript output. A custom pattern,
+`regex_literal = format(custom = "...")`, therefore takes only the syntax
+Rust's `regex` and JavaScript's `RegExp` read the same way: no `\d`, `\w`,
+`\s`, `\b`, `\p{...}`, `.`, inline flags or class set operations, and a
+negated class only directly under `*` or `+`. Anything else is a compile error
+naming the portable form, such as `[0-9]` for `\d`.
+
+Where one pipeline needs something the others cannot read, an override
+replaces a field's, tuple element's or newtype's `#[validators(...)]` there:
+
+```rust
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Member {
+    pub id: String,
+    #[validators(non_empty)]
+    #[typesync(validators(regex_literal = format(custom = "/^\\p{Lu}/u")))]
+    #[schemasync(validators(min_length = 2))]
+    pub name: String,
+}
+```
+
+`#[typesync(validators(...))]` applies to the TypeScript outputs, and its
+patterns are JavaScript regex literals with their flags (`i`, `m`, `s`, and `u`
+or `v`). `#[schemasync(validators(...))]` applies to the schema and mock data,
+and its patterns are Rust regexes, which SurrealDB's `string::matches` runs.
+Either replaces the list outright for its pipeline. The Rust read runs only
+`#[validators(...)]`, so a value with overrides alone is not validated in Rust.
+Mock data meets the schema's list and, where it differs, the TypeScript one.
+
+Every other shape serde writes is described as serde writes it:
+
+- A variant's own `#[serde(untagged)]` writes it bare, after the tagged
+  variants, which are read first.
+- `#[serde(rename(serialize = "...", deserialize = "..."))]` is described by
+  the name serde writes, and read by both.
+- A key serde skips in one direction only is optional in the TypeScript, and
+  the database holds only what serde writes.
+- `#[serde(flatten)]` on a struct, or an `Option` of one, puts its fields
+  beside the struct's own. A flattened map or enum adds keys known only from
+  a value: the TypeScript gains an index signature or an intersection, a table
+  holding them is defined SCHEMALESS, and an object holding them is a FLEXIBLE
+  `object` field. `[schemasync] warn_schemaless = true` warns about each such
+  table.
+- `#[serde(into = "X")]` is described as `X` and stored as the struct's own
+  fields. With `from` or `try_from`, the read converts first, then the fields'
+  validators check the result.
+- With `#[serde(remote = "...")]`, the definition's validators check the
+  remote value it hands serde.
+- Validators on a tuple variant's or tuple struct's elements check each
+  element at its position, such as `Circle.0`.
 
 With the `surrealdb-types` feature, every derived type also implements the
 SurrealDB SDK's `SurrealValue` in the shape evenframe's schema defines: fields
@@ -143,8 +234,30 @@ FlatBuffers. ArkType and Effect are always available; enable `macroforge`,
 macroforge does not provide is written as a function in a helpers module beside
 the output, which the generated types name in `custom({ function, source })`.
 
-Macroforge output uses `Decode` by default. Configure additional derives with
-`#[macroforge_derive(Default, Encode, Decode)]`. Validation, enum tagging, and
+Macroforge output gives a struct or enum `Decode` by default and a newtype no
+derive. A macroforge output's `default_derives = ["Default", "Encode", "Decode"]`
+replaces that default for every type with no derives of its own, whether from
+the source or an output rule plugin. `#[typesync(...)]` adds to what the outputs
+write for a type, struct variant or field:
+
+```rust
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[typesync(macroforge(derives = [Default, Encode, Decode]))]
+pub struct Profile {
+    #[typesync(annotation("@input({ label: \"Name\" })"))]
+    pub name: String,
+    #[typesync(macroforge(attributes = [endec(rename = "joined_at"), hidden]))]
+    pub joined: String,
+}
+```
+
+`macroforge(derives = [...])` adds to the type's `@derive(...)` and applies to
+a struct, enum, newtype or struct variant. `macroforge(attributes = [...])` writes each
+entry as the JSDoc annotation Macroforge reads: `hidden` as `/** @hidden */`,
+`endec(rename = "joined_at")` as `/** @endec({ rename: "joined_at" }) */`, with
+each key in camelCase, a bare key `true` and a nested list an object. Values
+are string, number and boolean literals or arrays of them. `annotation("...")`
+writes its text as `/** ... */` unchanged. Validation, enum tagging, and
 foreign-type format annotations use `@endec`; a foreign type's `endec_format`
 option supplies its format annotation. Rust field names and enum representations
 still follow their Rust `serde` attributes.
@@ -266,13 +379,61 @@ people = { path = "plugins/people.wasm", params = { locale = "en" } }
 
 ## Field names
 
-Each TypeScript output keys a field and tags a variant as serde writes it,
-honouring `rename`, `rename_all`, `rename_all_fields` and `skip`, and marks a
-key under `skip_serializing_if` optional. The schema and mock data name them as
-SurrealValue writes them, honouring `#[surreal(rename)]` and
-`#[surreal(rename_all)]`. A field serde or SurrealValue flattens, a field serde
-names or skips differently in each direction, and a SurrealValue
-representation that differs from serde's are compile errors.
+TypeScript fields default to camelCase. Explicit naming takes precedence:
+field `#[evenframe(ts_name = "snake_case")]`, then container
+`#[evenframe(all_ts_names = "snake_case")]`, then serde's `rename`, `rename_all`
+or `rename_all_fields`. Evenframe casing rules convert the Rust field name.
+Supported styles are `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`,
+`snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case` and `SCREAMING-KEBAB-CASE`.
+An `all_ts_names` on an enum or a named variant applies to its payload fields,
+never its variant names.
+
+Set `ts_names = "respect_serde"` under `[typesync]` to use serde's exact names
+for fields without an Evenframe override, including unchanged Rust names.
+The other accepted value is `"default"`, which is selected when omitted.
+Enum variant names and tag/content keys always follow serde. Serde `skip`
+omits fields and variants, and `skip_serializing_if` makes a key optional.
+TypeScript naming does not change Rust serialization or database naming.
+
+## Database storage
+
+The database stores what serde writes unless a `#[surreal(...)]` key says
+otherwise. Every key the SurrealDB SDK's `SurrealValue` derive defines is
+accepted where it applies, and the schema, mock data and the derived
+`SurrealValue` all follow it:
+
+- On a field: `rename`, `default`, `wrap` (stored as serde writes it, typed
+  `any`), `flatten`, and evenframe's `skip`, which leaves a field serde writes
+  out of the database.
+- On a container: `rename`, `rename_all`, `default`; `tuple` on a tuple struct
+  stores it as an array; `value` on a unit struct stores that literal.
+- On an enum: `untagged`, `tag`, `content`, `rename_all` (or the legacy
+  `uppercase` and `lowercase`), `skip_content` and `skip_content_if`.
+- On a variant: `rename`, `rename_all`, `default`, `tuple`, `value` on an
+  untagged unit variant, `other` for the unit variant that reads any tag no
+  variant names, and `skip_content` or `skip_content_if` on an adjacently
+  tagged one.
+
+A key outside these, or one used where it does not apply, is a compile error,
+as are the combinations the SDK refuses.
+
+`rename_all` names keys as the SDK does, with one difference: the SDK cases
+names with heck 0.4, which splits words at every non-ASCII character and drops
+it, while evenframe keeps letters of any script. Under every casing but
+`lowercase` and `UPPERCASE`, a field `größe` is stored as `größe` where the
+SDK writes `gr_e`, and a variant `ÜberCool` as `über_cool` where it writes
+`ber_cool`. ASCII names are stored identically
+(`evenframe_derive/tests/surreal_casing.rs`).
+
+A field serde skips is not stored, and a variant serde skips is stored as
+NONE, unless the field or variant has a `#[surreal(...)]` attribute or
+`#[schemasync(retain)]`, which on a container keeps every field and variant
+serde skips. serde writes a unit struct and an untagged unit variant as null,
+which is how they are stored. A field with `#[serde(with)]`,
+`serialize_with` or `deserialize_with` is stored as that module writes it and
+typed `any`. An internally tagged newtype variant stores its tag beside the
+keys of the struct it holds; a payload that is not a struct of named fields is
+a compile error, where serde would fail when writing it.
 
 ## Foreign types
 
@@ -303,7 +464,7 @@ A `RecordLink<T>` field holds the linked record's id, the SurrealDB SDK's
 `surrealdb-types` feature. Each TypeScript output writes the id half as the
 project's `RecordId` foreign type says, so a project with record links maps
 it, for example to a codec for the JavaScript SDK's `RecordId` (the
-playground's `src/record-id.ts` is one):
+testground's `tooling/testground/src/record-id.ts` is one):
 
 ```toml
 [general.foreign_types.RecordId]

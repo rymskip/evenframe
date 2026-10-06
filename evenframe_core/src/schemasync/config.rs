@@ -180,6 +180,11 @@ pub struct SchemasyncConfig {
     #[serde(default)]
     #[builder(default)]
     pub lint: LintConfig,
+    /// Warn about each table defined SCHEMALESS because its record holds keys
+    /// known only from a value, such as a flattened map's.
+    #[serde(default)]
+    #[builder(default)]
+    pub warn_schemaless: bool,
 }
 
 /// Configuration for the schemasync lint pass, under `[schemasync.lint]`.

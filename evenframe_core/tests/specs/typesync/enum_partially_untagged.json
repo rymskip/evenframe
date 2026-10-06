@@ -1,0 +1,41 @@
+{
+  "description": "Enum whose tagged variants come first and whose last variants serde writes bare, under an internal tag",
+  "structs": {
+    "Phone": {
+      "struct_name": "Phone",
+      "fields": [
+        { "field_name": "number", "field_type": "String", "validators": [], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Contact": {
+      "enum_name": "Contact",
+      "variants": [
+        { "name": "Phone", "data": { "DataStructureRef": { "Other": "Phone" } } },
+        { "name": "Nobody" },
+        {
+          "name": "Email",
+          "data": { "DataStructureRef": "String" },
+          "wire": { "serde_untagged": true }
+        },
+        {
+          "name": "Postal",
+          "data": {
+            "InlineStruct": {
+              "struct_name": "Postal",
+              "fields": [
+                { "field_name": "street", "field_type": "String", "validators": [], "always_regenerate": false },
+                { "field_name": "city", "field_type": "String", "validators": [], "always_regenerate": false }
+              ],
+              "validators": []
+            }
+          },
+          "wire": { "serde_untagged": true }
+        }
+      ],
+      "representation": { "InternallyTagged": { "tag": "kind" } }
+    }
+  }
+}

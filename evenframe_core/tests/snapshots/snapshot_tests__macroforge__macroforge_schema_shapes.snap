@@ -15,24 +15,24 @@ export interface Place {
 
 /** @derive(Decode) */
 export interface Shapes {
-  maybe_tags: string[] | null;
+  maybeTags: string[] | null;
   matrix: number[][];
   gaps: (number | null)[];
-  tri_state: (boolean | null) | null;
-  maybe_count: number | null;
-  lists_by_name: Record<string, string[]>;
-  optional_by_name: Record<string, number | null>;
-  maps_by_name: Record<string, Record<number, boolean>>;
+  triState: (boolean | null) | null;
+  maybeCount: number | null;
+  listsByName: Record<string, string[]>;
+  optionalByName: Record<string, number | null>;
+  mapsByName: Record<string, Record<number, boolean>>;
   pair: [string, number];
   pairs: [number, number][];
   corner: { x: number; y: number };
   nothing: null;
   huge: number;
-  huge_by_id: Record<number, string>;
+  hugeById: Record<number, string>;
   event: Event;
   events: Event[];
-  last_event: Event | null;
-  events_by_name: Record<string, Event>;
+  lastEvent: Event | null;
+  eventsByName: Record<string, Event>;
 }
 
 /** @derive(Decode) */

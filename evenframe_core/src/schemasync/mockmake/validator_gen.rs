@@ -718,6 +718,34 @@ mod tests {
     }
 
     #[test]
+    fn a_string_meets_the_typescript_checks_listed_before_the_schemas_validators() {
+        use crate::schemasync::format::{CustomPattern, Format, PatternDialect};
+        let pattern = |written: &str, dialect| {
+            Validator::StringValidator(StringValidator::RegexLiteral(Format::Custom(
+                CustomPattern::parse(written, dialect).expect("the pattern parses"),
+            )))
+        };
+        // The TypeScript outputs want six or more characters; the schema's
+        // pattern, listed last, seeds the value.
+        let validators = vec![
+            pattern("/^[a-z]{6,}$/u", PatternDialect::JavaScript),
+            pattern("^[a-c]{1,10}$", PatternDialect::Portable),
+        ];
+        let mut rng = rand::rng();
+        for _ in 0..50 {
+            let literal = generate_with_validators(&FieldType::String, &validators, &mut rng)
+                .expect("a value meets both lists");
+            let value = unquote(&literal);
+            assert!(
+                validators
+                    .iter()
+                    .all(|validator| validator.matches(&MockValue::Str(value))),
+                "{value} meets both lists"
+            );
+        }
+    }
+
+    #[test]
     fn string_min_max_length_satisfied() {
         let validators = vec![
             Validator::StringValidator(StringValidator::MinLength(8)),

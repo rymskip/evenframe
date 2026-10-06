@@ -1,0 +1,59 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Payload: [{ kind: ['===', "Click"], x: 'number' }, '|', { kind: ['===', "Close"] }],
+Audit: {
+  createdBy: 'string'
+},
+Event: [{
+  at: 'string'
+}, '&', 'Payload'],
+Geo: {
+  lat: 'number',
+  lon: 'number'
+},
+Post: {
+  title: 'string',
+  createdBy: 'string',
+  "lat?": [['number', '|', 'undefined'], '|', 'null'],
+  "lon?": [['number', '|', 'undefined'], '|', 'null']
+},
+Settings: {
+  theme: 'string',
+  "[string]": ['number', '|', 'string']
+},
+
+});
+
+const exported = bindings.export();
+
+export const defaultAudit: Audit = {
+createdBy: ""
+};
+export const defaultEvent: Event = {
+at: "",
+...{ kind: "Click", x: 0 }
+};
+export const defaultGeo: Geo = {
+lat: 0,
+lon: 0
+};
+export const defaultPost: Post = {
+title: "",
+createdBy: "",
+lat: null,
+lon: null
+};
+export const defaultSettings: Settings = {
+theme: ""
+};
+
+export type Payload = typeof exported.Payload.infer;
+export type Audit = typeof exported.Audit.infer;
+export type Event = typeof exported.Event.infer;
+export type Geo = typeof exported.Geo.infer;
+export type Post = typeof exported.Post.infer;
+export type Settings = typeof exported.Settings.infer;

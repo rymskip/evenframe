@@ -3,7 +3,7 @@
 
 use crate::config::{EvenframeConfig, ForeignTypeConfig, IncludeFile};
 use crate::error::EvenframeError;
-use crate::typesync::config::{CollisionStrategy, StructVariants, TypesyncOutput};
+use crate::typesync::config::{CollisionStrategy, StructVariants, TsNames, TypesyncOutput};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -28,6 +28,8 @@ pub(crate) fn build_script_config() -> Result<EvenframeConfig, EvenframeError> {
 /// What a workspace scan reads, and the type outputs generated from it.
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
+    /// The TypeScript field naming fallback.
+    pub ts_names: TsNames,
     /// Root path to scan for Rust types.
     pub scan_path: PathBuf,
 
@@ -67,6 +69,7 @@ pub struct ScanConfig {
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
+            ts_names: TsNames::default(),
             scan_path: PathBuf::from("."),
             config_path: None,
             apply_aliases: Vec::new(),
@@ -92,6 +95,7 @@ impl ScanConfig {
     /// the rest of a command read the same, environment-substituted file.
     pub fn from_config(config: &EvenframeConfig) -> Self {
         Self {
+            ts_names: config.typesync.ts_names,
             scan_path: config.project_root().to_path_buf(),
             config_path: Some(config.config_file_path.clone()),
             apply_aliases: config.general.apply_aliases.clone(),
@@ -190,6 +194,12 @@ impl ScanConfigBuilder {
         self
     }
 
+    /// Sets the TypeScript field naming fallback.
+    pub fn ts_names(mut self, ts_names: TsNames) -> Self {
+        self.config.ts_names = ts_names;
+        self
+    }
+
     /// Builds the final ScanConfig.
     pub fn build(self) -> ScanConfig {
         self.config
@@ -198,7 +208,7 @@ impl ScanConfigBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvenframeConfig, EvenframeError, PathBuf, ScanConfig, TypesyncOutput};
+    use super::{EvenframeConfig, EvenframeError, PathBuf, ScanConfig, TsNames, TypesyncOutput};
     use crate::typesync::config::OutputKind;
 
     fn parse_at(content: &str, config_path: &str) -> Result<ScanConfig, EvenframeError> {
@@ -216,18 +226,41 @@ mod tests {
     }
 
     #[test]
-    fn builder_sets_paths_aliases_and_outputs() {
+    fn ts_names_policy_is_parsed_and_forwarded() {
+        assert_eq!(
+            parse("[typesync]").expect("default naming").ts_names,
+            TsNames::Default
+        );
+        assert_eq!(
+            parse("[typesync]\nts_names = \"default\"")
+                .expect("explicit default naming")
+                .ts_names,
+            TsNames::Default
+        );
+        assert_eq!(
+            parse("[typesync]\nts_names = \"respect_serde\"")
+                .expect("serde naming")
+                .ts_names,
+            TsNames::RespectSerde
+        );
+        assert!(parse("[typesync]\nts_names = \"snake_case\"").is_err());
+    }
+
+    #[test]
+    fn builder_sets_paths_aliases_outputs_and_naming() {
         let outputs = vec![TypesyncOutput::new(OutputKind::Effect, "/custom/output")];
         let config = ScanConfig::builder()
             .scan_path("/custom/scan")
             .apply_alias("MyMacro")
             .apply_alias("OtherMacro")
             .outputs(outputs.clone())
+            .ts_names(TsNames::RespectSerde)
             .build();
 
         assert_eq!(config.scan_path, PathBuf::from("/custom/scan"));
         assert_eq!(config.apply_aliases, vec!["MyMacro", "OtherMacro"]);
         assert_eq!(config.outputs, outputs);
+        assert_eq!(config.ts_names, TsNames::RespectSerde);
     }
 
     #[test]
@@ -238,7 +271,7 @@ mod tests {
 apply_aliases = ["MyMacro"]
 
 [typesync]
-output = { kind = "macroforge", dir = "./generated", mode = "per_file", file_extension = ".svelte.ts", import_extension = "js", macros = { Form = "@app/forms" } }
+output = { kind = "macroforge", dir = "./generated", mode = "per_file", file_extension = ".svelte.ts", import_extension = "js", macros = { Form = "@app/forms" }, default_derives = ["Default", "Encode", "Form"] }
 "#,
         )
         .unwrap();
@@ -270,6 +303,7 @@ outputs = [
             "output = { kind = \"arktype\", dir = \"g\", mode = \"per_file\" }",
             "output = { kind = \"effect\", dir = \"g\", package = \"com.example\" }",
             "output = { kind = \"effect\", dir = \"g\", macros = { Form = \"@app/forms\" } }",
+            "output = { kind = \"effect\", dir = \"g\", default_derives = [\"Encode\"] }",
             "output = { kind = \"effect\", dir = \"g\", mode = \"per_file\", file = \"x.ts\" }",
             "output = { kind = \"macroforge\", dir = \"g\", file_naming = \"kebabcase\" }",
             "collision_strategy = \"autorename\"",
@@ -291,7 +325,7 @@ outputs = [
         let toml_content = r#"
 [general]
 include_files = [
-  "../idp/src/lib/policy.rs",
+  "../auth/src/lib/policy.rs",
   { path = "/abs/shared/ids.rs", resolve_only = true },
 ]
 "#;
@@ -303,7 +337,7 @@ include_files = [
         // Relative path joined to project root (/proj); `.evenframe/` stripped.
         assert_eq!(
             config.include_files[0].path,
-            PathBuf::from("/proj/../idp/src/lib/policy.rs")
+            PathBuf::from("/proj/../auth/src/lib/policy.rs")
         );
         assert!(!config.include_files[0].resolve_only);
         // Absolute path used as-is; `resolve_only` carried through.

@@ -10,8 +10,8 @@ Address: {
 },
 Person: {
   name: 'string',
-  home_address: 'Address',
-  work_address: [['Address', '|', 'undefined'], '|', 'null']
+  homeAddress: 'Address',
+  workAddress: [['Address', '|', 'undefined'], '|', 'null']
 },
 
 });
@@ -24,8 +24,8 @@ city: ""
 };
 export const defaultPerson: Person = {
 name: "",
-home_address: { street: "", city: "" },
-work_address: null
+homeAddress: { street: "", city: "" },
+workAddress: null
 };
 
 export type Address = typeof exported.Address.infer;

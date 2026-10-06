@@ -1,0 +1,5 @@
+error: serde writes a tuple struct of several fields as an array and a unit struct as null, so there is no one value for `#[validators]` to check: put each validator on the value it checks
+ --> tests/ui/fail/tuple_struct_validators.rs:5:1
+  |
+5 | #[validators(StringValidator::NonEmpty)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -3,6 +3,8 @@ use syn::{Data, DeriveInput, parse_macro_input};
 mod deserialization_impl;
 mod enum_impl;
 mod imports;
+mod metadata;
+mod newtype_impl;
 mod struct_impl;
 mod surreal_value_impl;
 mod union_impl;
@@ -23,6 +25,22 @@ impl PipelineKind {
         matches!(self, PipelineKind::Both | PipelineKind::Schemasync)
     }
 
+    /// The part of the pipeline that is typesync, if any.
+    pub fn typesync_part(self) -> Option<PipelineKind> {
+        match self {
+            PipelineKind::Both | PipelineKind::Typesync => Some(PipelineKind::Typesync),
+            PipelineKind::Schemasync => None,
+        }
+    }
+
+    /// The part of the pipeline that is schemasync, if any.
+    pub fn schemasync_part(self) -> Option<PipelineKind> {
+        match self {
+            PipelineKind::Both | PipelineKind::Schemasync => Some(PipelineKind::Schemasync),
+            PipelineKind::Typesync => None,
+        }
+    }
+
     pub fn to_tokens(self) -> proc_macro2::TokenStream {
         use quote::quote;
         match self {
@@ -38,6 +56,7 @@ impl PipelineKind {
 #[proc_macro_derive(
     Evenframe,
     attributes(
+        evenframe,
         edge,
         define_field_statement,
         format,
@@ -47,15 +66,15 @@ impl PipelineKind {
         relation,
         event,
         doccom,
-        macroforge_derive,
-        annotation,
         unique,
         index,
         indexes,
         fulltext,
         hnsw,
         diskann,
-        surreal
+        surreal,
+        schemasync,
+        typesync
     )
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {
@@ -75,7 +94,7 @@ pub fn evenframe_derive(input: TokenStream) -> TokenStream {
 
 /// Derive macro for unions of persistable structs
 /// Each variant must contain exactly one persistable struct type
-#[proc_macro_derive(EvenframeUnion, attributes(macroforge_derive, annotation))]
+#[proc_macro_derive(EvenframeUnion, attributes(typesync))]
 pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -100,7 +119,7 @@ pub fn surreal_value_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let mode = surreal_value_impl::Mode::Row;
     let tokens =
-        evenframe_core::derive::naming::resolve_row(&input).and_then(|wire| match input.data {
+        evenframe_core::derive::naming::resolve(&input).and_then(|wire| match input.data {
             Data::Struct(_) => surreal_value_impl::struct_surreal_value(&input, &wire, mode, &[]),
             Data::Enum(_) => surreal_value_impl::enum_surreal_value(&input, &wire, mode),
             Data::Union(_) => Err(syn::Error::new(
@@ -115,6 +134,7 @@ pub fn surreal_value_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(
     Typesync,
     attributes(
+        evenframe,
         edge,
         define_field_statement,
         format,
@@ -124,15 +144,15 @@ pub fn surreal_value_derive(input: TokenStream) -> TokenStream {
         relation,
         event,
         doccom,
-        macroforge_derive,
-        annotation,
         unique,
         index,
         indexes,
         fulltext,
         hnsw,
         diskann,
-        surreal
+        surreal,
+        schemasync,
+        typesync
     )
 )]
 pub fn typesync_derive(input: TokenStream) -> TokenStream {
@@ -154,6 +174,7 @@ pub fn typesync_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(
     Schemasync,
     attributes(
+        evenframe,
         edge,
         define_field_statement,
         format,
@@ -163,15 +184,15 @@ pub fn typesync_derive(input: TokenStream) -> TokenStream {
         relation,
         event,
         doccom,
-        macroforge_derive,
-        annotation,
         unique,
         index,
         indexes,
         fulltext,
         hnsw,
         diskann,
-        surreal
+        surreal,
+        schemasync,
+        typesync
     )
 )]
 pub fn schemasync_derive(input: TokenStream) -> TokenStream {

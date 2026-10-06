@@ -45,16 +45,21 @@ pub fn typesync_with(config: ScanConfig) -> Result<GenerationReport, EvenframeEr
 /// the path written.
 #[cfg(feature = "build-schemadump")]
 pub fn schemadump() -> Result<std::path::PathBuf, EvenframeError> {
-    use crate::scan::{build_all_configs, filter_for_schemasync};
+    use crate::scan::build_all_configs;
     use crate::schemasync::dump::{DumpScope, dump_surql, write_dump};
 
     let config = crate::scan::config::build_script_config()?;
-    let (enums, tables, objects) = build_all_configs(&ScanConfig::from_config(&config))?;
-    let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
+    let types = build_all_configs(&ScanConfig::from_config(&config))?.into_schemasync()?;
     let path = DumpScope::Schema.default_path(config.project_root());
     write_dump(
         &path,
-        &dump_surql(&config, &tables, &objects, &enums, DumpScope::Schema)?,
+        &dump_surql(
+            &config,
+            &types.tables,
+            &types.objects,
+            &types.enums,
+            DumpScope::Schema,
+        )?,
     )?;
     Ok(path)
 }

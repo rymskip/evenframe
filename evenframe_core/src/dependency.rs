@@ -1,6 +1,6 @@
 use crate::evenframe_log;
 use crate::schemasync::TableConfig;
-use crate::types::{FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{FieldType, NewtypeConfig, StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use petgraph::algo::toposort;
 use petgraph::{algo::kosaraju_scc, graphmap::DiGraphMap};
@@ -29,12 +29,13 @@ impl RecursionInfo {
     }
 }
 
-/// Each type's direct dependencies: the other scanned types its fields or
-/// variants reference, keyed by PascalCase name. Types that share a name
-/// share one entry.
+/// Each type's direct dependencies: the other scanned types its fields,
+/// variants or inner type reference, keyed by PascalCase name. Types that
+/// share a name share one entry.
 pub fn dependency_map(
     structs: &BTreeMap<String, StructConfig>,
     enums: &BTreeMap<String, TaggedUnion>,
+    newtypes: &BTreeMap<String, NewtypeConfig>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let known: BTreeSet<String> = structs
         .values()
@@ -43,6 +44,11 @@ pub fn dependency_map(
             enums
                 .values()
                 .map(|tagged_union| tagged_union.enum_name.to_case(Case::Pascal)),
+        )
+        .chain(
+            newtypes
+                .values()
+                .map(|newtype| newtype.name.to_case(Case::Pascal)),
         )
         .collect();
 
@@ -74,6 +80,10 @@ pub fn dependency_map(
                 None => {}
             }
         }
+    }
+    for newtype in newtypes.values() {
+        let entry = deps.entry(newtype.name.to_case(Case::Pascal)).or_default();
+        collect_refs(&newtype.inner, &known, entry);
     }
     deps
 }
@@ -620,6 +630,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         }
     }
 
@@ -824,7 +835,7 @@ mod tests {
         let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
         let enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
 
-        let info = recursion_of(&dependency_map(&structs, &enums));
+        let info = recursion_of(&dependency_map(&structs, &enums, &BTreeMap::new()));
 
         assert!(info.comp_of.is_empty());
         assert!(info.meta.is_empty());
@@ -844,7 +855,11 @@ mod tests {
             ),
         );
 
-        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
+        let info = recursion_of(&dependency_map(
+            &structs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
 
         assert!(info.comp_of.contains_key("User"));
         let scc_id = info.comp_of["User"];
@@ -869,7 +884,11 @@ mod tests {
             ),
         );
 
-        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
+        let info = recursion_of(&dependency_map(
+            &structs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
 
         assert!(info.comp_of.contains_key("Node"));
         // Self-loop should be detected as recursive
@@ -901,7 +920,11 @@ mod tests {
             ),
         );
 
-        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
+        let info = recursion_of(&dependency_map(
+            &structs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
 
         // Both should be in the same SCC
         assert_eq!(info.comp_of.get("TypeA"), info.comp_of.get("TypeB"));
@@ -932,7 +955,11 @@ mod tests {
             create_struct_config("C", vec![create_struct_field("value", FieldType::I32)]),
         );
 
-        let info = recursion_of(&dependency_map(&structs, &BTreeMap::new()));
+        let info = recursion_of(&dependency_map(
+            &structs,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
 
         // All should be in different SCCs (no cycles)
         assert_ne!(info.comp_of.get("A"), info.comp_of.get("B"));
@@ -957,7 +984,7 @@ mod tests {
             ),
         );
 
-        let deps = dependency_map(&structs, &BTreeMap::new())
+        let deps = dependency_map(&structs, &BTreeMap::new(), &BTreeMap::new())
             .remove("Simple")
             .unwrap_or_default();
 
@@ -985,7 +1012,7 @@ mod tests {
             ),
         );
 
-        let deps = dependency_map(&structs, &BTreeMap::new())
+        let deps = dependency_map(&structs, &BTreeMap::new(), &BTreeMap::new())
             .remove("Parent")
             .unwrap_or_default();
 
@@ -996,7 +1023,7 @@ mod tests {
     #[test]
     fn test_dependency_map_unknown_type() {
         let structs: BTreeMap<String, StructConfig> = BTreeMap::new();
-        let deps = dependency_map(&structs, &BTreeMap::new())
+        let deps = dependency_map(&structs, &BTreeMap::new(), &BTreeMap::new())
             .remove("Unknown")
             .unwrap_or_default();
 
@@ -1024,6 +1051,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                     Variant {
                         name: "Inactive".to_string(),
@@ -1034,6 +1063,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -1057,7 +1088,7 @@ mod tests {
             ),
         );
 
-        let deps = dependency_map(&structs_with_user, &enums)
+        let deps = dependency_map(&structs_with_user, &enums, &BTreeMap::new())
             .remove("Status")
             .unwrap_or_default();
 
@@ -1451,6 +1482,8 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_validators: Vec::new(),
+                    element_validator_overrides: Vec::new(),
                 }],
                 representation: EnumRepresentation::default(),
                 doccom: None,

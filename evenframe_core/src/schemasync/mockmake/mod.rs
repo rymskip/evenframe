@@ -45,8 +45,8 @@ pub struct TableMocks {
     /// `new_records` ids of the table's id pool.
     pub new_records: usize,
     /// The fields rewritten on the existing records: every field, or only
-    /// the changed ones under Smart or Full preservation. A removed field is
-    /// typed `Unit` and written as NONE, which unsets it. Empty leaves the
+    /// the changed ones under Smart or Full preservation. A field the table no
+    /// longer has is written as NONE, which unsets it. Empty leaves the
     /// existing records untouched.
     pub rewrite_fields: Vec<StructField>,
 }
@@ -57,7 +57,10 @@ pub struct Mockmaker<'a> {
     db: &'a Surreal<Client>,
     pub(super) tables: &'a BTreeMap<String, TableConfig>,
     pub(super) objects: &'a BTreeMap<String, StructConfig>,
-    enums: &'a BTreeMap<String, TaggedUnion>,
+    pub(super) enums: &'a BTreeMap<String, TaggedUnion>,
+    /// The types as declared where they held a newtype, whose validators a
+    /// mock value must meet even where the stored type no longer names it.
+    pub(super) declared: &'a crate::types::DeclaredTypes,
     pub(super) schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
     pub(super) registry: &'a crate::types::ForeignTypeRegistry,
 
@@ -85,6 +88,7 @@ impl<'a> Mockmaker<'a> {
         tables: &'a BTreeMap<String, TableConfig>,
         objects: &'a BTreeMap<String, StructConfig>,
         enums: &'a BTreeMap<String, TaggedUnion>,
+        declared: &'a crate::types::DeclaredTypes,
         schemasync_config: &'a crate::schemasync::config::SchemasyncConfig,
         registry: &'a crate::types::ForeignTypeRegistry,
     ) -> crate::error::Result<Self> {
@@ -107,6 +111,7 @@ impl<'a> Mockmaker<'a> {
             tables,
             objects,
             enums,
+            declared,
             schemasync_config,
             registry,
             id_map: BTreeMap::new(),
@@ -980,8 +985,7 @@ pub struct Comment { pub id: String, pub post: RecordLink<Post> }
             scan_path: tmp.path().to_path_buf(),
             ..ScanConfig::default()
         };
-        let (_, tables, _) = build_all_configs(&config).unwrap();
-        tables
+        build_all_configs(&config).unwrap().tables
     }
 
     /// The records each table selected for insert plans over an empty
@@ -996,8 +1000,9 @@ pub struct Comment { pub id: String, pub post: RecordLink<Post> }
         let objects = BTreeMap::new();
         let enums = BTreeMap::new();
         let registry = crate::types::ForeignTypeRegistry::default();
+        let declared = crate::types::DeclaredTypes::default();
         let mut mockmaker =
-            Mockmaker::new(&db, tables, &objects, &enums, &config, &registry).unwrap();
+            Mockmaker::new(&db, tables, &objects, &enums, &declared, &config, &registry).unwrap();
         // What `generate_ids` leaves over an empty database: generated IDs only.
         let counts: BTreeMap<String, usize> = tables
             .iter()

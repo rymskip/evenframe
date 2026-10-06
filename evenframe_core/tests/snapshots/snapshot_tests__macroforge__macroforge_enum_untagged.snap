@@ -8,4 +8,4 @@ export type Value =
 	| string
 	| number
 	| boolean
-	| "Nothing";
+	| null;

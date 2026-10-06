@@ -23,7 +23,7 @@ enum Cmd {
         #[arg(long)]
         snapshot: bool,
 
-        /// Run only e2e tests (evenframe_playground)
+        /// Run only e2e tests (testground)
         #[arg(long)]
         e2e: bool,
 
@@ -174,9 +174,11 @@ fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[St
     }
 
     if !specific || e2e {
-        header("e2e tests (evenframe_playground)");
+        header("e2e tests (testground, all features)");
         if !run("cargo", |c| {
-            c.arg("test").current_dir(playground_dir()).args(extra);
+            c.args(["test", "--all-features"])
+                .current_dir(testground_dir())
+                .args(extra);
         }) {
             return false;
         }
@@ -244,16 +246,16 @@ fn cmd_verify(fail_fast: bool) -> bool {
             }),
         ),
         (
-            "fmt (playground)",
+            "fmt (testground)",
             Box::new(|| {
                 run("cargo", |c| {
                     c.args(["fmt", "--all", "--", "--check"])
-                        .current_dir(playground_dir());
+                        .current_dir(testground_dir());
                 })
             }),
         ),
         (
-            "clippy (playground, all features, all targets)",
+            "clippy (testground, all features, all targets)",
             Box::new(|| {
                 run("cargo", |c| {
                     c.args([
@@ -264,7 +266,7 @@ fn cmd_verify(fail_fast: bool) -> bool {
                         "-D",
                         "warnings",
                     ])
-                    .current_dir(playground_dir());
+                    .current_dir(testground_dir());
                 })
             }),
         ),
@@ -331,10 +333,11 @@ fn cmd_verify(fail_fast: bool) -> bool {
             }),
         ),
         (
-            "e2e tests (evenframe_playground)",
+            "e2e tests (testground, all features)",
             Box::new(|| {
                 run("cargo", |c| {
-                    c.arg("test").current_dir(playground_dir());
+                    c.args(["test", "--all-features"])
+                        .current_dir(testground_dir());
                 })
             }),
         ),
@@ -373,8 +376,8 @@ fn header(label: &str) {
     println!("\n--- {label} ---");
 }
 
-fn playground_dir() -> std::path::PathBuf {
-    project_root().join("evenframe_playground")
+fn testground_dir() -> std::path::PathBuf {
+    project_root().join("tooling/testground")
 }
 
 fn project_root() -> std::path::PathBuf {

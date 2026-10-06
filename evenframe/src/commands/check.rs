@@ -58,9 +58,9 @@ impl Report {
         let status = match status {
             CacheStatus::Current(cache) => ReportStatus::InSync {
                 types: TypeCounts {
-                    tables: cache.tables.len(),
-                    objects: cache.objects.len(),
-                    enums: cache.enums.len(),
+                    tables: cache.configs.tables.len(),
+                    objects: cache.configs.objects.len(),
+                    enums: cache.configs.enums.len(),
                 },
             },
             CacheStatus::Absent => ReportStatus::Missing,
@@ -101,7 +101,7 @@ impl Report {
 mod tests {
     use super::{CacheStatus, Report, ScanCache};
     use crate::scan_cache::CACHE_FORMAT_VERSION;
-    use evenframe_core::types::StructConfig;
+    use evenframe_core::types::{AllConfigs, StructConfig};
     use std::collections::BTreeMap;
 
     fn cache_with_one_object() -> ScanCache {
@@ -110,9 +110,10 @@ mod tests {
             evenframe_version: "0.0.0".to_string(),
             stamped_at_ns: 0,
             inputs: BTreeMap::new(),
-            enums: BTreeMap::new(),
-            tables: BTreeMap::new(),
-            objects: BTreeMap::from([("Address".to_string(), StructConfig::default())]),
+            configs: AllConfigs {
+                objects: BTreeMap::from([("Address".to_string(), StructConfig::default())]),
+                ..AllConfigs::default()
+            },
         }
     }
 

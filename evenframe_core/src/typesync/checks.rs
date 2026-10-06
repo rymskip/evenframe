@@ -3,10 +3,9 @@
 //! map key must have a JSON object-key form.
 
 use crate::error::{EvenframeError, Result};
-use crate::schemasync::TableConfig;
 use crate::types::{
-    EnumRepresentation, FieldType, ForeignTypeRegistry, Pipeline, StructConfig, StructField,
-    TaggedUnion, VariantData,
+    AllConfigs, EnumRepresentation, FieldType, ForeignTypeRegistry, NewtypeConfig, Pipeline,
+    StructField, TaggedUnion, VariantData,
 };
 use crate::typesync::map_key::{MapKey, UNSUPPORTED};
 use convert_case::{Case, Casing};
@@ -25,15 +24,12 @@ fn is_emitted(pipeline: Pipeline, resolve_only: bool) -> bool {
 
 /// Rejects every field of an emitted type that no output can generate,
 /// listing each with the reason and its fix.
-pub fn check_types(
-    enums: &BTreeMap<String, TaggedUnion>,
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
-    registry: &ForeignTypeRegistry,
-) -> Result<()> {
-    let structs = objects
+pub fn check_types(configs: &AllConfigs, registry: &ForeignTypeRegistry) -> Result<()> {
+    let enums = &configs.enums;
+    let structs = configs
+        .objects
         .values()
-        .chain(tables.values().map(|table| &table.struct_config));
+        .chain(configs.tables.values().map(|table| &table.struct_config));
     let struct_names: BTreeSet<String> = structs
         .clone()
         .map(|struct_config| struct_config.struct_name.to_case(Case::Pascal))
@@ -55,6 +51,33 @@ pub fn check_types(
             tagged_union.resolve_only,
         );
     }
+    for newtype in configs.newtypes.values() {
+        record(
+            &mut scanned,
+            &newtype.name,
+            newtype.pipeline,
+            newtype.resolve_only,
+        );
+    }
+    let newtypes_by_name: BTreeMap<String, &NewtypeConfig> = configs
+        .newtypes
+        .values()
+        .map(|newtype| (newtype.name.to_case(Case::Pascal), newtype))
+        .collect();
+    // A newtype is written as its inner type, so what it holds decides.
+    let underlying = |field_type: &FieldType| -> FieldType {
+        let mut current = field_type.clone();
+        for _ in 0..=newtypes_by_name.len() {
+            match &current {
+                FieldType::Other(name) => match newtypes_by_name.get(&name.to_case(Case::Pascal)) {
+                    Some(newtype) => current = newtype.inner.clone(),
+                    None => break,
+                },
+                _ => break,
+            }
+        }
+        current
+    };
 
     let enums_by_name: BTreeMap<String, &TaggedUnion> = enums
         .values()
@@ -70,7 +93,9 @@ pub fn check_types(
         let mut keys = Vec::new();
         collect(field_type, &mut names, &mut keys);
         for key in keys {
-            if let Some((described, reason)) = unkeyable(key, registry, &scanned, &enums_by_name) {
+            if let Some((described, reason)) =
+                unkeyable(&underlying(key), registry, &scanned, &enums_by_name)
+            {
                 problems.insert(format!(
                     "{location} holds a map keyed by {described}, so it {reason}."
                 ));
@@ -121,18 +146,23 @@ pub fn check_types(
             );
         }
     }
+    for newtype in configs.newtypes.values() {
+        if is_emitted(newtype.pipeline, newtype.resolve_only) {
+            check(format!("`{}.0`", newtype.name), &newtype.inner);
+        }
+    }
     let mut untaggable = Vec::new();
     for tagged_union in enums.values() {
         if !is_emitted(tagged_union.pipeline, tagged_union.resolve_only) {
             continue;
         }
         let tagged_union = tagged_union.effective();
-        let internally_tagged = matches!(
-            tagged_union.representation,
-            EnumRepresentation::InternallyTagged { .. }
-        );
         for variant in &tagged_union.variants {
             let variant = variant.effective();
+            let internally_tagged = matches!(
+                variant.serde_representation(&tagged_union.representation),
+                EnumRepresentation::InternallyTagged { .. }
+            );
             let owner = format!("{}::{}", tagged_union.enum_name, variant.name);
             match &variant.data {
                 Some(VariantData::InlineStruct(inline)) => {
@@ -142,7 +172,7 @@ pub fn check_types(
                 }
                 Some(VariantData::DataStructureRef(field_type)) => {
                     check(format!("`{owner}`"), field_type);
-                    let holds_struct = match field_type {
+                    let holds_struct = match &underlying(field_type) {
                         FieldType::Other(name) => {
                             struct_names.contains(&name.to_case(Case::Pascal))
                         }
@@ -230,6 +260,17 @@ fn unkeyable(
         if let Some(representation) = representation {
             return Some((format!("`{name}`, an {representation} enum"), UNSUPPORTED));
         }
+        if let Some(variant) = tagged_union
+            .variants
+            .iter()
+            .map(|variant| variant.effective())
+            .find(|variant| variant.wire.serde_untagged)
+        {
+            return Some((
+                format!("`{name}`, whose variant `{}` is untagged", variant.name),
+                UNSUPPORTED,
+            ));
+        }
         return tagged_union
             .variants
             .iter()
@@ -294,9 +335,11 @@ fn collect<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, FieldType, ForeignTypeRegistry, Pipeline, Result, StructConfig, StructField,
-        TableConfig, TaggedUnion, check_types,
+        AllConfigs, BTreeMap, FieldType, ForeignTypeRegistry, Pipeline, Result, StructField,
+        TaggedUnion, check_types,
     };
+    use crate::schemasync::TableConfig;
+    use crate::types::StructConfig;
 
     fn named(name: &str) -> FieldType {
         FieldType::Other(name.to_string())
@@ -328,9 +371,11 @@ mod tests {
             .map(|tagged_union| (tagged_union.enum_name.clone(), tagged_union))
             .collect();
         check_types(
-            &enums,
-            &BTreeMap::new(),
-            &objects.into_iter().collect(),
+            &AllConfigs {
+                enums,
+                objects: objects.into_iter().collect(),
+                ..AllConfigs::default()
+            },
             registry,
         )
     }
@@ -661,9 +706,10 @@ mod tests {
         });
         let tables = BTreeMap::from([("user".to_string(), table)]);
         let error = check_types(
-            &BTreeMap::new(),
-            &tables,
-            &BTreeMap::new(),
+            &AllConfigs {
+                tables,
+                ..AllConfigs::default()
+            },
             &ForeignTypeRegistry::default(),
         )
         .unwrap_err()

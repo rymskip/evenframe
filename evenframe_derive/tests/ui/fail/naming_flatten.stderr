@@ -1,6 +1,0 @@
-error: #[serde(flatten)] is not supported: evenframe gives every field its own key
-  --> tests/ui/fail/naming_flatten.rs:12:5
-   |
-12 | /     #[serde(flatten)]
-13 | |     pub address: Address,
-   | |________________________^

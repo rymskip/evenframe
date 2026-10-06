@@ -1,0 +1,58 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Status: [['===', "Active"], '|', ['===', "Inactive"]],
+Profile: {
+  name: 'NonEmptyString',
+  nickname: [['NonEmptyString', '|', 'undefined'], '|', 'null'],
+  handles: ['Handle', '[]'],
+  visits: { '+': 'reject', "[string]": 'Count' },
+  label: 'Label',
+  position: 'Pair',
+  marker: 'Marker',
+  status: 'StatusCode',
+  title: [['NonEmptyString', '|>', 'string.trim'], '|>', 'NonEmptyString'],
+  age: ['string.integer.parse', '|>', 'Age']
+},
+Age: "number#Age",
+"#Count__value": ['string.integer.parse', '|>', 'number >= 0'],
+Count: "Count__value#Count",
+"#Handle__value": [[['NonEmptyString', '|>', 'string.trim'], '|>', 'string.lower'], '|>', 'NonEmptyString'],
+Handle: "Handle__value#Handle",
+Label: "string#Label",
+Marker: 'null',
+"#NonEmptyString__value": ['string', '&', 'string >= 1'],
+NonEmptyString: "NonEmptyString__value#NonEmptyString",
+Pair: ['string', 'number'],
+StatusCode: "Status#StatusCode",
+
+});
+
+const exported = bindings.export();
+
+export const defaultProfile: Profile = {
+name: ("" as NonEmptyString),
+nickname: null,
+handles: [],
+visits: {},
+label: ("" as Label),
+position: ["", 0],
+marker: null,
+status: ("Active" as StatusCode),
+title: ("" as NonEmptyString),
+age: (0 as Age)
+};
+
+export type Status = typeof exported.Status.infer;
+export type Profile = typeof exported.Profile.infer;
+export type Age = typeof exported.Age.infer;
+export type Count = typeof exported.Count.infer;
+export type Handle = typeof exported.Handle.infer;
+export type Label = typeof exported.Label.infer;
+export type Marker = typeof exported.Marker.infer;
+export type NonEmptyString = typeof exported.NonEmptyString.infer;
+export type Pair = typeof exported.Pair.infer;
+export type StatusCode = typeof exported.StatusCode.infer;

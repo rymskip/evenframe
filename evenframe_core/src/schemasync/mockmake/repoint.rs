@@ -293,8 +293,8 @@ impl Mockmaker<'_> {
             Named::Object(fields) => self.fields_hold_excess(fields, place, depth, walk)?,
             Named::Enum(union) => {
                 let mut parts = Vec::new();
-                for (variant, payload) in variants(union) {
-                    let found = match (&union.representation, payload) {
+                for (variant, representation, payload) in variants(union) {
+                    let found = match (representation, payload) {
                         (EnumRepresentation::Untagged, payload) => {
                             if self
                                 .payload_holds_excess(payload, place, depth, walk)?
@@ -354,7 +354,7 @@ impl Mockmaker<'_> {
                 Some(Named::Object(fields)) => fields
                     .iter()
                     .any(|field| self.reaches_excess(&field.field_type, seen)),
-                Some(Named::Enum(union)) => variants(union).any(|(_, payload)| match payload {
+                Some(Named::Enum(union)) => variants(union).any(|(_, _, payload)| match payload {
                     Payload::Inline(fields) => fields
                         .iter()
                         .any(|field| self.reaches_excess(&field.field_type, seen)),
@@ -534,8 +534,8 @@ impl Mockmaker<'_> {
             Named::Object(fields) => self.fields_repointed(fields, place, depth, walk)?,
             Named::Enum(union) => {
                 let mut branches = Vec::new();
-                for (variant, payload) in variants(union) {
-                    let branch = match (&union.representation, payload) {
+                for (variant, representation, payload) in variants(union) {
+                    let branch = match (representation, payload) {
                         (EnumRepresentation::InternallyTagged { tag }, payload) => {
                             match self.payload_holds_excess(payload, place, depth, walk)? {
                                 Some(condition) => Some((
@@ -636,13 +636,18 @@ enum Payload<'t> {
 }
 
 /// The variants of `union` that carry data, by name.
-fn variants(union: &TaggedUnion) -> impl Iterator<Item = (&str, Payload<'_>)> {
+/// Each variant holding a value: its name, how serde writes it and its payload.
+fn variants(union: &TaggedUnion) -> impl Iterator<Item = (&str, &EnumRepresentation, Payload<'_>)> {
     union.variants.iter().filter_map(|variant| {
         let variant = variant.effective();
         let payload = match variant.data.as_ref()? {
             VariantData::InlineStruct(config) => Payload::Inline(&config.effective().fields),
             VariantData::DataStructureRef(ty) => Payload::Type(ty),
         };
-        Some((variant.db_name(), payload))
+        Some((
+            variant.db_name(),
+            variant.stored_representation(&union.representation),
+            payload,
+        ))
     })
 }

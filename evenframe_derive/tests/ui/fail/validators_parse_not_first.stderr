@@ -1,11 +1,4 @@
 error: Failed to parse validators for field 'value': StringValidator(IntegerParse) parses the field's input, so it must be the first validator and appear once
-
-       Example usage:
-       #[validators(StringValidator::MinLength(3), StringValidator::MaxLength(50))]
-       pub name: String
-
-       #[validators(StringValidator::Email)]
-       pub email: String
  --> tests/ui/fail/validators_parse_not_first.rs:5:45
   |
 5 |     #[validators(NumberValidator::Positive, StringValidator::IntegerParse)]

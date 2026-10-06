@@ -1,5 +1,0 @@
-error: a custom serde deserializer has no SurrealValue equivalent; implement SurrealValue for a field wrapper instead
-  --> tests/ui/fail/surreal_value_deserialize_with.rs:11:13
-   |
-11 |     #[serde(deserialize_with = "read_name")]
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -141,6 +141,8 @@ struct Ready<'a> {
     tables: &'a BTreeMap<String, TableConfig>,
     objects: &'a BTreeMap<String, StructConfig>,
     enums: &'a BTreeMap<String, TaggedUnion>,
+    #[cfg(feature = "mockmake")]
+    declared: &'a crate::types::DeclaredTypes,
     config: crate::schemasync::config::SchemasyncConfig,
 }
 
@@ -148,9 +150,7 @@ struct Ready<'a> {
 #[derive(Default)]
 pub struct Schemasync<'a> {
     // Input parameters - set via builder methods
-    tables: Option<&'a BTreeMap<String, TableConfig>>,
-    objects: Option<&'a BTreeMap<String, StructConfig>>,
-    enums: Option<&'a BTreeMap<String, TaggedUnion>>,
+    types: Option<&'a crate::types::SchemasyncTypes>,
     registry: Option<&'a crate::types::ForeignTypeRegistry>,
 
     // Internal state - initialized automatically
@@ -261,9 +261,7 @@ impl<'a> Schemasync<'a> {
     pub fn new() -> Self {
         trace!("Creating new Schemasync instance");
         Self {
-            tables: None,
-            objects: None,
-            enums: None,
+            types: None,
             registry: None,
             db: None,
             schemasync_config: None,
@@ -273,25 +271,16 @@ impl<'a> Schemasync<'a> {
         }
     }
 
-    /// Builder methods for setting up the parameters
-    pub fn with_tables(mut self, tables: &'a BTreeMap<String, TableConfig>) -> Self {
-        debug!("Configuring Schemasync with {} tables", tables.len());
-        trace!("Table names: {:?}", tables.keys().collect::<Vec<_>>());
-        self.tables = Some(tables);
-        self
-    }
-
-    pub fn with_objects(mut self, objects: &'a BTreeMap<String, StructConfig>) -> Self {
-        debug!("Configuring Schemasync with {} objects", objects.len());
-        trace!("Object names: {:?}", objects.keys().collect::<Vec<_>>());
-        self.objects = Some(objects);
-        self
-    }
-
-    pub fn with_enums(mut self, enums: &'a BTreeMap<String, TaggedUnion>) -> Self {
-        debug!("Configuring Schemasync with {} enums", enums.len());
-        trace!("Enum names: {:?}", enums.keys().collect::<Vec<_>>());
-        self.enums = Some(enums);
+    /// The types to synchronize, as `AllConfigs::into_schemasync` gives them.
+    pub fn with_types(mut self, types: &'a crate::types::SchemasyncTypes) -> Self {
+        debug!(
+            "Configuring Schemasync with {} tables, {} objects, {} enums",
+            types.tables.len(),
+            types.objects.len(),
+            types.enums.len()
+        );
+        trace!("Table names: {:?}", types.tables.keys().collect::<Vec<_>>());
+        self.types = Some(types);
         self
     }
 
@@ -344,15 +333,14 @@ impl<'a> Schemasync<'a> {
             .db
             .take()
             .ok_or_else(|| EvenframeError::config("Database connection failed to initialize"))?;
-        let tables = self
-            .tables
-            .ok_or_else(|| EvenframeError::config("Tables not provided"))?;
-        let objects = self
-            .objects
-            .ok_or_else(|| EvenframeError::config("Objects not provided"))?;
-        let enums = self
-            .enums
-            .ok_or_else(|| EvenframeError::config("Enums not provided"))?;
+        let crate::types::SchemasyncTypes {
+            tables,
+            objects,
+            enums,
+            declared,
+        } = self
+            .types
+            .ok_or_else(|| EvenframeError::config("Types not provided"))?;
         let config = self
             .schemasync_config
             .take()
@@ -424,11 +412,35 @@ impl<'a> Schemasync<'a> {
             }
         }
 
+        if config.warn_schemaless {
+            for (name, table) in tables {
+                if table.effective().struct_config.is_open() {
+                    warn!(
+                        table = %name,
+                        "`{name}` is defined SCHEMALESS: its record holds keys known only from a \
+                         value, such as a flattened map's, so the schema cannot list them",
+                    );
+                }
+            }
+        }
+        for finding in crate::schemasync::lint::lint_unasserted_newtypes(declared) {
+            warn!(
+                location = %finding.location,
+                newtype = %finding.newtype,
+                "`{}` holds the newtype `{}` below its own value, where the schema does not \
+                 assert the newtype's validators: the database accepts a value failing them, \
+                 and reading that record back fails.",
+                finding.location, finding.newtype,
+            );
+        }
+
         Ok(Ready {
             db,
             tables,
             objects,
             enums,
+            #[cfg(feature = "mockmake")]
+            declared,
             config,
         })
     }
@@ -478,6 +490,7 @@ impl<'a> Schemasync<'a> {
             objects,
             enums,
             config,
+            ..
         } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
@@ -520,6 +533,7 @@ impl<'a> Schemasync<'a> {
             tables,
             objects,
             enums,
+            declared,
             config,
         } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
@@ -556,8 +570,15 @@ impl<'a> Schemasync<'a> {
             config.surql_options(),
         )?;
 
-        let mut mockmaker =
-            Mockmaker::new(&db, effective_tables, objects, enums, &config, registry)?;
+        let mut mockmaker = Mockmaker::new(
+            &db,
+            effective_tables,
+            objects,
+            enums,
+            declared,
+            &config,
+            registry,
+        )?;
         mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
 
@@ -597,6 +618,7 @@ impl<'a> Schemasync<'a> {
             tables,
             objects,
             enums,
+            declared,
             config,
         } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
@@ -635,7 +657,8 @@ impl<'a> Schemasync<'a> {
             }
         };
 
-        let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry)?;
+        let mut mockmaker =
+            Mockmaker::new(&db, tables, objects, enums, declared, &config, registry)?;
         mockmaker.count_override = count_override;
         mockmaker.generate_ids().await?;
         mockmaker.clear_records_for_full_refresh().await?;
@@ -658,7 +681,10 @@ impl<'a> Schemasync<'a> {
             tables,
             objects,
             enums,
+            #[cfg(feature = "mockmake")]
+            declared,
             config,
+            ..
         } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
@@ -686,7 +712,8 @@ impl<'a> Schemasync<'a> {
 
         #[cfg(feature = "mockmake")]
         let mockmaker = if config.should_generate_mocks {
-            let mut mockmaker = Mockmaker::new(&db, tables, objects, enums, &config, registry)?;
+            let mut mockmaker =
+                Mockmaker::new(&db, tables, objects, enums, declared, &config, registry)?;
             mockmaker.generate_ids().await?;
             Some(mockmaker)
         } else {

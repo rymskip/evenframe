@@ -1,5 +1,6 @@
 pub mod bounds;
 pub mod keywords;
+pub mod portable_regex;
 pub mod runtime;
 pub mod string_rules;
 pub mod validate;
@@ -22,6 +23,61 @@ pub enum Validator {
     BigIntValidator(BigIntValidator),
     BigDecimalValidator(BigDecimalValidator),
     DurationValidator(DurationValidator),
+}
+
+/// Validators that replace a value's `#[validators(...)]` in one pipeline:
+/// `#[typesync(validators(...))]` in the TypeScript outputs and
+/// `#[schemasync(validators(...))]` in the schema and mock data. The Rust read
+/// only ever runs `#[validators(...)]`, so a value listing only overrides is
+/// not validated in Rust.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ValidatorOverrides {
+    /// In the schemasync view, the TypeScript outputs' whole list where it
+    /// differs from the schema's, which mock data meets as well.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typesync: Option<Vec<Validator>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schemasync: Option<Vec<Validator>>,
+}
+
+impl ValidatorOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.typesync.is_none() && self.schemasync.is_none()
+    }
+
+    /// These overrides, then `later`'s, as a newtype runs its container's
+    /// validators before its field's.
+    pub fn followed_by(self, later: Self) -> Self {
+        let join =
+            |first: Option<Vec<Validator>>, second: Option<Vec<Validator>>| match (first, second) {
+                (Some(mut first), Some(second)) => {
+                    first.extend(second);
+                    Some(first)
+                }
+                (first, second) => first.or(second),
+            };
+        Self {
+            typesync: join(self.typesync, later.typesync),
+            schemasync: join(self.schemasync, later.schemasync),
+        }
+    }
+}
+
+impl ToTokens for ValidatorOverrides {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let list = |validators: &Option<Vec<Validator>>| match validators {
+            Some(validators) => quote! { ::std::option::Option::Some(vec![#(#validators),*]) },
+            None => quote! { ::std::option::Option::None },
+        };
+        let typesync = list(&self.typesync);
+        let schemasync = list(&self.schemasync);
+        tokens.extend(quote! {
+            ::evenframe::validator::ValidatorOverrides {
+                typesync: #typesync,
+                schemasync: #schemasync,
+            }
+        });
+    }
 }
 
 /// Describes various string validation and transformation _requirements.
@@ -138,7 +194,7 @@ pub enum StringValidator {
     /// A morph from a well-formed numeric string to a number
     NumericParse,
 
-    /// A string and a regex pattern
+    /// Checks that the value is itself a valid regular expression
     Regex,
 
     /// A semantic version (see <https://semver.org/>)
@@ -200,7 +256,7 @@ pub enum StringValidator {
     /// Minimum length of a string
     MinLength(usize),
 
-    /// Maximum length of a string  
+    /// Maximum length of a string
     MaxLength(usize),
 
     /// Non-empty string (equivalent to MinLength(1))
@@ -242,7 +298,7 @@ pub enum NumberValidator {
     /// Number less than a value
     LessThan(OrderedFloat<f64>),
 
-    /// Number less than or equal to a value  
+    /// Number less than or equal to a value
     LessThanOrEqualTo(OrderedFloat<f64>),
 
     /// Number between two values (inclusive)
@@ -571,6 +627,16 @@ pub fn parse_duration_to_nanos(s: &str) -> Option<i128> {
 }
 
 impl Validator {
+    /// Whether this validator rewrites the value rather than checking it: a
+    /// parse morph or a transform.
+    pub fn rewrites(&self) -> bool {
+        matches!(
+            self,
+            Validator::StringValidator(validator)
+                if matches!(validator.rule(), StringRule::Parse(_) | StringRule::Transform(_))
+        )
+    }
+
     /// This validator in words, for messages about the values it accepts.
     pub fn describe(&self) -> String {
         match self {

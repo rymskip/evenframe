@@ -11,7 +11,7 @@ export interface Booking {
   /** @endec({ validate: ["maxItems(8)"] }) */
   guests: string[];
   /** @endec({ validate: ["validDate", "betweenDate(\"2024-01-01\", \"2030-12-31\")"] }) */
-  starts_on: string;
+  startsOn: string;
   /** @endec({ validate: ["custom({ function: \"isGreaterThanOrEqualToBigDecimal_105a3ef4\", source: \"./helpers\" })"] }) */
   deposit: string;
   /** @endec({ validate: ["lessThanBigInt(\"-5\")"] }) */

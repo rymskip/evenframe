@@ -1,8 +1,8 @@
 //! Type generation for build-time usage.
 
 use crate::error::EvenframeError;
-use crate::scan::{ScanConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects};
-use crate::types::ForeignTypeRegistry;
+use crate::scan::{ScanConfig, build_all_configs, merge_tables_and_objects};
+use crate::types::{AllConfigs, ForeignTypeRegistry};
 use crate::typesync::checks::check_types;
 use crate::typesync::config::TypesyncOutput;
 use crate::typesync::output::{GeneratedFile, OutputTypes, render_outputs};
@@ -52,10 +52,15 @@ impl TypeGenerator {
             ));
         }
         info!("Starting type generation");
-        let (enums, tables, objects) = build_all_configs(&self.config)?;
+        let configs = build_all_configs(&self.config)?;
         let registry = ForeignTypeRegistry::from_config(&self.config.foreign_types);
-        check_types(&enums, &tables, &objects, &registry)?;
-        let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
+        check_types(&configs, &registry)?;
+        let AllConfigs {
+            enums,
+            tables,
+            objects,
+            newtypes,
+        } = configs.for_typesync()?;
         let (tables_processed, structs_processed) = (tables.len(), objects.len());
         debug!(
             "Processing {} enums, {tables_processed} tables, {structs_processed} objects",
@@ -63,7 +68,7 @@ impl TypeGenerator {
         );
         let structs = merge_tables_and_objects(tables, objects);
 
-        let types = OutputTypes::new(&structs, &enums, &registry)?;
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry)?;
         let targets: Vec<_> = outputs
             .iter()
             .map(|output| (output, output.resolve_dir(&self.config.scan_path)))

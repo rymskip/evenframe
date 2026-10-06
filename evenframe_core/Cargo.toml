@@ -126,6 +126,8 @@ cli = ["mockmake", "typesync-all", "wasm-plugins", "build-typesync", "dep:clap"]
 # workspace dependencies
 serde_json = { workspace = true }
 regex = { workspace = true }
+regex-syntax = "0.8.11"
+regress = "0.12.0"
 try_from_expr = { workspace = true }
 syn = { workspace = true }
 tracing = { workspace = true }
@@ -135,8 +137,8 @@ toml = { workspace = true }
 url = { workspace = true }
 
 # Database providers (optional based on features)
-surrealdb = { version = "3.2.4", features = ["kv-mem", "protocol-http"], optional = true }
-surrealdb-types = { version = "3.2.4", optional = true }
+surrealdb = { version = "3.3.0", features = ["kv-mem", "protocol-http"], optional = true }
+surrealdb-types = { version = "3.3.0", optional = true }
 tempfile = { version = "3.27", optional = true }
 # Lets the CLI use core enums as argument values.
 clap = { version = "4.6", features = ["derive"], optional = true }
@@ -149,26 +151,24 @@ serde = { version = "1.0.229", features = ["derive"] }
 chrono = "0.4.45"
 derive_more = { version = "2.1.1", features = ["from"] }
 petgraph = "0.8.3"
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 ordered-float = { version = "5.5.0", features = ["serde"] }
 linkme = { version = "0.3.37", optional = true }
 # ArkType string keyword checks shared by derive, mockmake and typesync
 unicode-normalization = "0.1.25"
 fancy-regex = "0.19.2"
-# Field and variant names as serde and SurrealValue write them. heck stays on
-# 0.4 because surrealdb-types-derive cases names with it, and 0.5 splits words
-# differently.
+# Field and variant names as serde and SurrealValue write them
 serde_derive_internals = "0.30.0"
-heck = "0.4.1"
+heck = "0.5.0"
 
 # Always compiled (used in type definitions throughout)
-bon = "3.10.1"
-uuid = { version = "1.26", features = ["v4", "serde"] }
+bon = "3.10.2"
+uuid = { workspace = true }
 strum = { version = "0.28.0", features = ["derive"] }
 
 # Optional: the schemasync engine
 futures = { version = "0.3.34", optional = true }
-rand = { version = "0.10.2", optional = true }
+rand = { version = "0.10.3", optional = true }
 
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
@@ -179,7 +179,7 @@ ignore = { version = "0.4.33", optional = true }
 blake3 = { version = "1.8", optional = true }
 
 # Optional: WASM plugin runtime
-wasmtime = { version = "48", optional = true }
+wasmtime = { version = "49.0.2", optional = true }
 
 [dev-dependencies]
 proptest = "1.11"
@@ -189,7 +189,7 @@ tempfile = "3.27"
 pretty_assertions = "1.4"
 insta = { workspace = true }
 serde_json = { workspace = true }
-tests_macros = { path = "../tests_macros" }
+tests_macros = { path = "../tooling/tests_macros" }
 
 [lints]
 workspace = true

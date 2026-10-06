@@ -12,7 +12,7 @@ Post: {
   id: 'string',
   title: 'string',
   author: ['Author', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }],
-  related_posts: [['Post', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }], '[]']
+  relatedPosts: [['Post', "|", { '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }], '[]']
 },
 
 });
@@ -27,7 +27,7 @@ export const defaultPost: Post = {
 id: "",
 title: "",
 author: { table: "", key: { String: "" } },
-related_posts: []
+relatedPosts: []
 };
 
 export type Author = typeof exported.Author.infer;

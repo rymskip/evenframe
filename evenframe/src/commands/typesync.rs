@@ -2,19 +2,17 @@
 
 use crate::cli::{Cli, TypesyncArgs, TypesyncCommands};
 use crate::scan_cache::build_and_record;
-use evenframe_core::scan::{ScanConfig, filter_for_typesync, merge_tables_and_objects};
+use evenframe_core::scan::{ScanConfig, merge_tables_and_objects};
 use evenframe_core::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
-    schemasync::table::TableConfig,
-    types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
+    types::{AllConfigs, ForeignTypeRegistry},
     typesync::{
         checks::check_types,
         config::{OutputKind, OutputMode, TypesyncOutput},
         output::{OutputTypes, render_outputs},
     },
 };
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -22,8 +20,8 @@ use tracing::info;
 pub async fn run(cli: &Cli, args: TypesyncArgs) -> Result<()> {
     let config = EvenframeConfig::new_offline()?;
     let build_config = ScanConfig::from_config(&config);
-    let (enums, tables, objects) = build_and_record(&build_config)?;
-    generate(cli, args, &config, &enums, &tables, &objects)
+    let configs = build_and_record(&build_config)?;
+    generate(cli, args, &config, &configs)
 }
 
 /// Generates the types for an already-scanned project, so `generate` can
@@ -32,16 +30,19 @@ pub(crate) fn generate(
     cli: &Cli,
     args: TypesyncArgs,
     config: &EvenframeConfig,
-    enums: &BTreeMap<String, TaggedUnion>,
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
+    configs: &AllConfigs,
 ) -> Result<()> {
     info!("Starting type generation");
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
-    check_types(enums, tables, objects, &registry)?;
-    let (enums, tables, objects) = filter_for_typesync(enums, tables, objects);
+    check_types(configs, &registry)?;
+    let AllConfigs {
+        enums,
+        tables,
+        objects,
+        newtypes,
+    } = configs.for_typesync()?;
     let structs = merge_tables_and_objects(tables, objects);
-    let types = OutputTypes::new(&structs, &enums, &registry)?;
+    let types = OutputTypes::new(&structs, &enums, &newtypes, &registry)?;
 
     let (mut outputs, file) = select_outputs(cli, &args, config)?;
     if outputs.is_empty() {

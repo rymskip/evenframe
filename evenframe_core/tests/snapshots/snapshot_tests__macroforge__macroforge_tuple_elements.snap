@@ -1,0 +1,12 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+/** @endec({ untagged: true }) */
+export type Shape =
+	| { /** @endec({ validate: ["positive"] }) */ Circle: number }
+	| { Tag: [/** @endec({ validate: ["nonEmpty"] }) */ string, /** @endec({ validate: ["lessThan(10)"] }) */ number] }
+	| /** @endec({ validate: ["uppercase"] }) */ string;
+
+export type Range = [/** @endec({ validate: ["greaterThanOrEqualTo(0)"] }) */ number, string];

@@ -33,6 +33,9 @@ pub fn declare_payloads(
         let enum_derives = tagged_union.macroforge_derives.clone();
         for variant in &mut tagged_union.variants {
             let variant = effective_variant_mut(variant);
+            if variant.wire.serde_skipped {
+                continue;
+            }
             let Some(VariantData::InlineStruct(inline)) = &variant.data else {
                 continue;
             };
@@ -53,6 +56,8 @@ pub fn declare_payloads(
                     None => {
                         let mut payload = StructConfig {
                             struct_name: name.clone(),
+                            pipeline: tagged_union.pipeline,
+                            resolve_only: tagged_union.resolve_only,
                             ..inline.effective().clone()
                         };
                         if payload.macroforge_derives.is_empty() {

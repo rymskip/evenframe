@@ -21,6 +21,7 @@ expression: config.outputs
         package: None,
         import_validate: false,
         macros: {},
+        default_derives: None,
     },
     TypesyncOutput {
         kind: Protobuf,
@@ -40,5 +41,6 @@ expression: config.outputs
         ),
         import_validate: true,
         macros: {},
+        default_derives: None,
     },
 ]

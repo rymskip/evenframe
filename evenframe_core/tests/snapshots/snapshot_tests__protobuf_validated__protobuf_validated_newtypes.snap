@@ -1,0 +1,37 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_ACTIVE = 1;
+    STATUS_INACTIVE = 2;
+}
+
+message Profile {
+    message Position {
+        string item_0 = 1;
+        uint32 item_1 = 2;
+    }
+    message Marker {
+    }
+    string name = 1 [(validate.rules).string = {min_len: 1}];
+    optional string nickname = 2 [(validate.rules).string = {min_len: 1}];
+    repeated string handles = 3;
+    map<string, int64> visits = 4;
+    string label = 5;
+    Position position = 6;
+    Marker marker = 7;
+    .Status status = 8;
+    // protoc-gen-validate cannot check: trimmed
+    string title = 9 [(validate.rules).string = {min_len: 1}];
+    // protoc-gen-validate cannot check: an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER
+    uint32 age = 10;
+}

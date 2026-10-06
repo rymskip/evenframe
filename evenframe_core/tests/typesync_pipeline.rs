@@ -4,10 +4,8 @@
 #![cfg(all(feature = "macroforge", feature = "build-typesync"))]
 
 use evenframe_core::config::ForeignTypeConfig;
-use evenframe_core::scan::{
-    ScanConfig, build_all_configs, filter_for_typesync, merge_tables_and_objects,
-};
-use evenframe_core::types::ForeignTypeRegistry;
+use evenframe_core::scan::{ScanConfig, build_all_configs, merge_tables_and_objects};
+use evenframe_core::types::{AllConfigs, ForeignTypeRegistry};
 use evenframe_core::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
 use evenframe_core::typesync::output::{OutputTypes, render_output};
 use std::collections::BTreeMap;
@@ -21,7 +19,7 @@ use evenframe::types::RecordLink;
 #[derive(Evenframe)]
 pub struct Author {
     pub id: String,
-    pub name: String,
+    pub name: NonEmptyString,
     pub home: Address,
 }
 
@@ -30,12 +28,23 @@ pub struct Post {
     pub id: String,
     pub title: String,
     pub author: RecordLink<Author>,
+    pub editor: AuthorId,
+    pub subtitle: Option<NonEmptyString>,
+    pub tags: Vec<NonEmptyString>,
     pub read_time: std::time::Duration,
     pub status: Status,
     pub location: Address,
     pub outline: Option<Section>,
     pub comments: Vec<Comment>,
 }
+
+#[derive(Evenframe)]
+#[validators(StringValidator::NonEmpty)]
+pub struct NonEmptyString(String);
+
+/// Shared by two types, so it gets its own file.
+#[derive(Evenframe)]
+pub struct AuthorId(String);
 
 /// Shared by two types, so it gets its own file.
 #[derive(Evenframe)]
@@ -62,6 +71,7 @@ pub struct Section {
 #[derive(Evenframe)]
 pub struct Comment {
     pub body: String,
+    pub author: AuthorId,
     pub replies: Vec<Reply>,
 }
 
@@ -87,11 +97,11 @@ fn outputs() -> Vec<TypesyncOutput> {
     ]
 }
 
-/// The playground's mapping of the SDK's record id, whose codec the generated
+/// The testground's mapping of the SDK's record id, whose codec the generated
 /// check places beside these outputs at `../record-id.ts`.
-fn playground_record_id() -> ForeignTypeConfig {
+fn testground_record_id() -> ForeignTypeConfig {
     let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../evenframe_playground/evenframe.toml");
+        .join("../tooling/testground/evenframe.toml");
     let config: toml::Table = fs::read_to_string(&config_path).unwrap().parse().unwrap();
     config["general"]["foreign_types"]["RecordId"]
         .clone()
@@ -114,14 +124,18 @@ fn every_output_of_a_scanned_project() {
         ..ScanConfig::default()
     };
 
-    let (enums, tables, objects) = build_all_configs(&config).unwrap();
-    let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
+    let AllConfigs {
+        enums,
+        tables,
+        objects,
+        newtypes,
+    } = build_all_configs(&config).unwrap().for_typesync().unwrap();
     let structs = merge_tables_and_objects(tables, objects);
     let registry = ForeignTypeRegistry::from_config(&BTreeMap::from([(
         "RecordId".to_string(),
-        playground_record_id(),
+        testground_record_id(),
     )]));
-    let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+    let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
 
     let out = TempDir::new().unwrap();
     let mut rendered = String::new();

@@ -74,15 +74,24 @@ pub fn generate_define_statements(
             .and_then(|p| p.delete_permissions.as_deref())
             .unwrap_or("FULL");
 
+        // A record whose keys are partly known only from a value cannot list
+        // them all, so its table takes any key.
+        let schema = if table_config.struct_config.is_open() {
+            "SCHEMALESS"
+        } else {
+            "SCHEMAFULL"
+        };
         output.push_str(&format!(
-            "DEFINE TABLE OVERWRITE {table_name} SCHEMAFULL TYPE {table_type} CHANGEFEED 3d PERMISSIONS FOR select {select_permissions} FOR update {update_permissions} FOR create {create_permissions} FOR delete {delete_permissions};\n"
+            "DEFINE TABLE OVERWRITE {table_name} {schema} TYPE {table_type} CHANGEFEED 3d PERMISSIONS FOR select {select_permissions} FOR update {update_permissions} FOR create {create_permissions} FOR delete {delete_permissions};\n"
         ));
     }
 
     debug!(table_name = %table_name, field_count = table_config.struct_config.fields.len(), "Processing table fields");
     for table_field in &table_config.struct_config.fields {
-        // if struct field is an edge it should not be defined in the table itself
+        // An edge is not defined in the table itself, and a flattened
+        // field's keys sit beside the record's own, under no key of its own.
         if table_field.edge_config.is_none()
+            && !table_field.effective().wire.storage.flatten
             && !matches!(table_field.db_name(), "in" | "out" | "id")
         {
             if table_field.define_config.is_some() {
@@ -232,6 +241,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let result = field
@@ -284,6 +294,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let result = field
@@ -332,6 +343,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let result = field
@@ -388,6 +400,7 @@ mod tests {
                         unique: true,
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
+                        validator_overrides: Default::default(),
                     },
                     StructField {
                         field_name: "name".to_string(),
@@ -417,6 +430,7 @@ mod tests {
                         unique: false,
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
+                        validator_overrides: Default::default(),
                     },
                 ],
                 validators: Vec::new(),
@@ -493,6 +507,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let table_config = TableConfig {
@@ -618,6 +633,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let reg = crate::types::ForeignTypeRegistry::default();
@@ -715,6 +731,8 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_validators: Vec::new(),
+                    element_validator_overrides: Vec::new(),
                 }],
                 doccom: None,
                 macroforge_derives: Vec::new(),
@@ -918,6 +936,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let merged = field
@@ -966,6 +985,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
         let reg = crate::types::ForeignTypeRegistry::default();
         let gen_stmt = |f: StructField| {

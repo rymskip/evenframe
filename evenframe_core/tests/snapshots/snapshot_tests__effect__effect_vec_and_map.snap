@@ -8,16 +8,16 @@ export class Collection extends Schema.Class<Collection>("Collection")( {
   tags: Schema.propertySignature(Schema.Array(Schema.String)).annotations({ missingMessage: () => `'Tags' is required` }),
   scores: Schema.propertySignature(Schema.Array(Schema.Number)).annotations({ missingMessage: () => `'Scores' is required` }),
   metadata: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.String }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Metadata' is required` }),
-  sorted_data: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Sorted Data' is required` }),
-  notes_by_rank: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.OptionFromNullishOr(Schema.String, null) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Notes By Rank' is required` }),
-  related_by_name: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Collection, CollectionEncoded> => Collection).annotations({ identifier: `CollectionRef` })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Related By Name' is required` }),
-  balance_by_offset: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Balance By Offset' is required` }),
-  count_by_letter: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Count By Letter' is required` }),
-  owner_by_role: Schema.propertySignature(Schema.Record({ key: Role, value: Schema.String }).pipe(Schema.partialWith({ exact: true })).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Owner By Role' is required` }),
-  label_by_account: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.String }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Label By Account' is required` }),
+  sortedData: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Sorted Data' is required` }),
+  notesByRank: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.OptionFromNullishOr(Schema.String, null) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Notes By Rank' is required` }),
+  relatedByName: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Collection, CollectionEncoded> => Collection).annotations({ identifier: `CollectionRef` })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Related By Name' is required` }),
+  balanceByOffset: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Balance By Offset' is required` }),
+  countByLetter: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$"))), value: Schema.Number }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Count By Letter' is required` }),
+  ownerByRole: Schema.propertySignature(Schema.Record({ key: Role, value: Schema.String }).pipe(Schema.partialWith({ exact: true })).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Owner By Role' is required` }),
+  labelByAccount: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.String }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Label By Account' is required` }),
   grid: Schema.propertySignature(Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Record({ key: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"))), value: Schema.Boolean }).annotations({ parseOptions: { onExcessProperty: "error" } }) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Grid' is required` }),
   initial: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])$")))).annotations({ missingMessage: () => `'Initial' is required` }),
-  note_by_flag: Schema.propertySignature(Schema.Record({ key: Schema.Literal("true", "false"), value: Schema.String }).pipe(Schema.partialWith({ exact: true })).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Note By Flag' is required` })
+  noteByFlag: Schema.propertySignature(Schema.Record({ key: Schema.Literal("true", "false"), value: Schema.String }).pipe(Schema.partialWith({ exact: true })).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Note By Flag' is required` })
 }) {[key: string]: unknown}
 
 
@@ -28,16 +28,16 @@ export interface CollectionEncoded {
   readonly tags: ReadonlyArray<string>;
   readonly scores: ReadonlyArray<number>;
   readonly metadata: Record<string, string>;
-  readonly sorted_data: Record<string, number>;
-  readonly notes_by_rank: Record<string, string | null | undefined>;
-  readonly related_by_name: Record<string, { readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | CollectionEncoded>;
-  readonly balance_by_offset: Record<string, number>;
-  readonly count_by_letter: Record<string, number>;
-  readonly owner_by_role: Partial<Record<RoleEncoded, string>>;
-  readonly label_by_account: Record<string, string>;
+  readonly sortedData: Record<string, number>;
+  readonly notesByRank: Record<string, string | null | undefined>;
+  readonly relatedByName: Record<string, { readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | CollectionEncoded>;
+  readonly balanceByOffset: Record<string, number>;
+  readonly countByLetter: Record<string, number>;
+  readonly ownerByRole: Partial<Record<RoleEncoded, string>>;
+  readonly labelByAccount: Record<string, string>;
   readonly grid: Record<string, Record<string, boolean>>;
   readonly initial: string;
-  readonly note_by_flag: Partial<Record<"true" | "false", string>>;
+  readonly noteByFlag: Partial<Record<"true" | "false", string>>;
 }
 
 

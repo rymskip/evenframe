@@ -21,5 +21,12 @@ expression: config.outputs
         macros: {
             "Form": "@app/forms",
         },
+        default_derives: Some(
+            [
+                "Default",
+                "Encode",
+                "Form",
+            ],
+        ),
     },
 ]

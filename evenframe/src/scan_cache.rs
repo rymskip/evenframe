@@ -15,11 +15,10 @@
 
 use evenframe_core::error::{EvenframeError, Result};
 use evenframe_core::scan::{
-    AllConfigs, MAX_SCAN_DEPTH, ScanConfig, build_all_configs, canonical_manifests, find_manifests,
+    MAX_SCAN_DEPTH, ScanConfig, build_all_configs, canonical_manifests, find_manifests,
     member_has_own_manifest,
 };
-use evenframe_core::schemasync::TableConfig;
-use evenframe_core::types::{StructConfig, TaggedUnion};
+use evenframe_core::types::AllConfigs;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Bumped whenever the cache layout changes incompatibly.
-pub const CACHE_FORMAT_VERSION: u32 = 4;
+pub const CACHE_FORMAT_VERSION: u32 = 8;
 
 /// Where the cache lives, relative to the project root.
 pub const CACHE_RELATIVE_PATH: &str = ".evenframe/cache.json";
@@ -50,9 +49,8 @@ pub struct ScanCache {
     pub stamped_at_ns: u128,
     /// Every scan input, keyed by its path relative to the project root.
     pub inputs: BTreeMap<String, InputStamp>,
-    pub enums: BTreeMap<String, TaggedUnion>,
-    pub tables: BTreeMap<String, TableConfig>,
-    pub objects: BTreeMap<String, StructConfig>,
+    #[serde(flatten)]
+    pub configs: AllConfigs,
 }
 
 /// One scan input as last seen: its content hash, and the metadata that lets
@@ -79,15 +77,12 @@ impl ScanCache {
         inputs: BTreeMap<String, InputStamp>,
         configs: AllConfigs,
     ) -> Self {
-        let (enums, tables, objects) = configs;
         Self {
             format_version: CACHE_FORMAT_VERSION,
             evenframe_version: env!("CARGO_PKG_VERSION").to_string(),
             stamped_at_ns,
             inputs,
-            enums,
-            tables,
-            objects,
+            configs,
         }
     }
 
@@ -231,7 +226,7 @@ impl ScanCache {
 
     /// The scan results, in the shape `build_all_configs` returns.
     pub fn into_configs(self) -> AllConfigs {
-        (self.enums, self.tables, self.objects)
+        self.configs
     }
 }
 
@@ -590,9 +585,9 @@ fn describe_changes(
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeMap, CACHE_FORMAT_VERSION, CACHE_REFRESH_COMMAND, CacheStatus, EvenframeError,
-        InputStamp, MAX_SCAN_DEPTH, RACY_WINDOW_NS, ScanCache, ScanConfig, build_all_configs,
-        build_and_record, fs, now_ns, scan_inputs,
+        AllConfigs, BTreeMap, CACHE_FORMAT_VERSION, CACHE_REFRESH_COMMAND, CacheStatus,
+        EvenframeError, InputStamp, MAX_SCAN_DEPTH, RACY_WINDOW_NS, ScanCache, ScanConfig,
+        build_all_configs, build_and_record, fs, now_ns, scan_inputs,
     };
     use tempfile::TempDir;
 
@@ -729,7 +724,7 @@ mod tests {
             !inputs.keys().any(|k| k.starts_with("generated/")),
             "gitignored crate fingerprinted: {inputs:?}"
         );
-        let (_, tables, _) = build_all_configs(&config).unwrap();
+        let tables = build_all_configs(&config).unwrap().tables;
         assert!(!tables.contains_key("hidden"), "gitignored crate scanned");
 
         config.include_files = vec![evenframe_core::config::IncludeFile {
@@ -738,7 +733,7 @@ mod tests {
         }];
         let inputs = scan_inputs(&config, None).unwrap();
         assert!(inputs.contains_key("generated/src/lib.rs"), "{inputs:?}");
-        let (_, tables, _) = build_all_configs(&config).unwrap();
+        let tables = build_all_configs(&config).unwrap().tables;
         assert!(tables.contains_key("hidden"), "included file not scanned");
     }
 
@@ -761,7 +756,7 @@ mod tests {
     fn cache_round_trips_and_detects_staleness() {
         let (tmp, config) = project();
         let cache = scanned(&config);
-        assert!(cache.tables.contains_key("user"));
+        assert!(cache.configs.tables.contains_key("user"));
 
         let path = cache.write(tmp.path()).unwrap();
         assert_eq!(path, tmp.path().join(".evenframe/cache.json"));
@@ -822,7 +817,7 @@ mod tests {
         let mut cache = ScanCache::from_parts(
             now_ns(),
             scan_inputs(&config, None).unwrap(),
-            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new()),
+            AllConfigs::default(),
         );
         cache.evenframe_version = "0.0.1".to_string();
         let reason = cache.stale_reason(&config).unwrap().unwrap();
@@ -842,15 +837,15 @@ mod tests {
     #[test]
     fn an_unchanged_project_is_served_from_the_cache() {
         let (tmp, config) = project();
-        let (_, tables, _) = build_and_record(&config).unwrap();
+        let tables = build_and_record(&config).unwrap().tables;
         assert!(tables.contains_key("user"));
 
         // Edit the recorded types without touching any input: a run that
         // returns the edit read the cache instead of scanning.
         let mut cache = ScanCache::load(tmp.path()).unwrap();
-        cache.tables.clear();
+        cache.configs.tables.clear();
         cache.write(tmp.path()).unwrap();
-        let (_, tables, _) = build_and_record(&config).unwrap();
+        let tables = build_and_record(&config).unwrap().tables;
         assert!(tables.is_empty(), "the scan ran although nothing changed");
 
         fs::write(
@@ -858,7 +853,7 @@ mod tests {
             "#[derive(Evenframe)]\npub struct Post { pub id: String }\n",
         )
         .unwrap();
-        let (_, tables, _) = build_and_record(&config).unwrap();
+        let tables = build_and_record(&config).unwrap().tables;
         assert!(tables.contains_key("user") && tables.contains_key("post"));
     }
 
@@ -906,7 +901,7 @@ mod tests {
             CacheStatus::Stale(reason) => assert!(reason.contains("format changed"), "{reason}"),
             other => panic!("expected a stale cache, got {other:?}"),
         }
-        let (_, tables, _) = build_and_record(&config).unwrap();
+        let tables = build_and_record(&config).unwrap().tables;
         assert!(tables.contains_key("user"));
         assert_eq!(
             ScanCache::load(tmp.path()).unwrap().format_version,

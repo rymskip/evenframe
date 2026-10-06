@@ -11,6 +11,6 @@ export interface Address {
 /** @derive(Decode) */
 export interface Person {
   name: string;
-  home_address: Address;
-  work_address: Address | null;
+  homeAddress: Address;
+  workAddress: Address | null;
 }

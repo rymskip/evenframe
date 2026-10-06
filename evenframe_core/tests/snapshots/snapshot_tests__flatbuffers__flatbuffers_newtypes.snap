@@ -1,0 +1,36 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+enum Status : ubyte {
+    Active = 0,
+    Inactive = 1
+}
+
+table Profile {
+    name: string (validate: "nonEmpty");
+    nickname: string (validate: "nonEmpty");
+    handles: [string];
+    visits: [ProfileVisitsEntry];
+    label: string;
+    position: ProfilePosition;
+    marker: ProfileMarker;
+    status: Status;
+    title: string (validate: "nonEmpty, trim");
+    age: uint8 (validate: "integerParse");
+}
+
+table ProfileVisitsEntry {
+    key: string (key);
+    value: int64;
+}
+
+table ProfilePosition {
+    item_0: string;
+    item_1: uint32;
+}
+
+table ProfileMarker {
+}

@@ -6,9 +6,9 @@ expression: output
 /** @derive(Decode) */
 export interface Config {
   /** The API key used for authentication */
-  api_key: string;
+  apiKey: string;
   /** Request timeout in milliseconds */
-  timeout_ms: number;
+  timeoutMs: number;
 }
 
 /** Severity levels for log output */

@@ -1,7 +1,10 @@
 use crate::surreal_value_impl::{UnionTable, union_surreal_value};
 use crate::validate_impl::enum_validate;
 use convert_case::{Case, Casing};
-use evenframe_core::derive::naming;
+use evenframe_core::derive::{
+    naming,
+    typesync_attributes::{Position, TypesyncAttributes},
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Type, TypePath, spanned::Spanned};
@@ -40,6 +43,19 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
     let ident = input.ident.clone();
 
     if let Data::Enum(ref data_enum) = input.data {
+        // The scan reads these for the outputs; the derive checks them.
+        let typesync = std::iter::once((&input.attrs, Position::Container)).chain(
+            data_enum
+                .variants
+                .iter()
+                .map(|variant| (&variant.attrs, Position::Variant)),
+        );
+        for (attrs, position) in typesync {
+            if let Err(err) = TypesyncAttributes::parse(attrs, position) {
+                return err.to_compile_error();
+            }
+        }
+
         let mut table_config_arms = Vec::new();
         let mut table_names = Vec::new();
         let mut tables = Vec::new();
@@ -109,14 +125,9 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
 
         let surreal_value_impl = union_surreal_value(&input, &tables);
 
-        quote! {
-            impl ::evenframe::traits::EvenframeTable for #ident {}
-
-            #validate_impl
-
-            #surreal_value_impl
-
-            ::evenframe::__metadata! {
+        let metadata_gate = crate::metadata::gate(
+            &input,
+            quote! {
                 const _: () = {
                     impl ::evenframe::traits::EvenframePersistableStruct for #ident {
                         fn static_table_config() -> ::evenframe::schemasync::TableConfig {
@@ -132,7 +143,16 @@ pub fn generate_union_impl(input: DeriveInput) -> TokenStream {
 
                     #registry_submission
                 };
-            }
+            },
+        );
+        quote! {
+            impl ::evenframe::traits::EvenframeTable for #ident {}
+
+            #validate_impl
+
+            #surreal_value_impl
+
+            #metadata_gate
         }
     } else {
         syn::Error::new(

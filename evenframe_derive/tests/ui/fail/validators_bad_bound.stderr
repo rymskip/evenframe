@@ -1,11 +1,4 @@
 error: Failed to parse validators for field 'stay': duration bound "soon" is not a duration such as 1h30m
-
-       Example usage:
-       #[validators(StringValidator::MinLength(3), StringValidator::MaxLength(50))]
-       pub name: String
-
-       #[validators(StringValidator::Email)]
-       pub email: String
  --> tests/ui/fail/validators_bad_bound.rs:5:18
   |
 5 |     #[validators(DurationValidator::LessThanDuration("soon"))]

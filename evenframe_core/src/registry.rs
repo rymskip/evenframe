@@ -1,6 +1,6 @@
 use crate::{
     schemasync::TableConfig,
-    types::{Pipeline, StructConfig, TaggedUnion},
+    types::{AllConfigs, FieldType, NewtypeConfig, Pipeline, StructConfig, TaggedUnion},
 };
 use linkme::distributed_slice;
 use std::collections::{BTreeMap, HashMap};
@@ -30,6 +30,14 @@ pub struct EnumRegistryEntry {
     pub pipeline: Pipeline,
 }
 
+/// Registry entry for newtypes: structs serde writes as another type
+#[derive(Clone, Copy)]
+pub struct NewtypeRegistryEntry {
+    pub type_name: &'static str,
+    pub newtype_config_fn: fn() -> NewtypeConfig,
+    pub pipeline: Pipeline,
+}
+
 /// Registry entry for union of tables
 #[derive(Clone, Copy)]
 pub struct UnionOfTablesRegistryEntry {
@@ -49,6 +57,10 @@ pub static OBJECT_REGISTRY_ENTRIES: [ObjectRegistryEntry] = [..];
 /// Distributed slice that collects enum entries from all crates
 #[distributed_slice]
 pub static ENUM_REGISTRY_ENTRIES: [EnumRegistryEntry] = [..];
+
+/// Distributed slice that collects newtype entries from all crates
+#[distributed_slice]
+pub static NEWTYPE_REGISTRY_ENTRIES: [NewtypeRegistryEntry] = [..];
 
 /// Distributed slice that collects union of tables entries from all crates
 #[distributed_slice]
@@ -78,6 +90,14 @@ static TAGGED_UNIONS: LazyLock<HashMap<&'static str, TaggedUnion>> = LazyLock::n
         .collect()
 });
 
+/// Every registered newtype, built once on first use.
+static NEWTYPE_CONFIGS: LazyLock<HashMap<&'static str, NewtypeConfig>> = LazyLock::new(|| {
+    NEWTYPE_REGISTRY_ENTRIES
+        .iter()
+        .map(|entry| (entry.type_name, (entry.newtype_config_fn)()))
+        .collect()
+});
+
 /// Every registered union of tables.
 static UNION_OF_TABLES_REGISTRY: LazyLock<
     HashMap<&'static str, &'static UnionOfTablesRegistryEntry>,
@@ -103,6 +123,25 @@ pub fn get_tagged_union(type_name: &str) -> Option<&'static TaggedUnion> {
     TAGGED_UNIONS.get(type_name)
 }
 
+/// Get newtype configuration by type name
+pub fn get_newtype_config(type_name: &str) -> Option<&'static NewtypeConfig> {
+    NEWTYPE_CONFIGS.get(type_name)
+}
+
+/// The type a value of `field_type` is written as: the type a newtype it names
+/// holds, through any newtype that holds another, else `field_type` itself. A
+/// walk over registered types matches on this, so a field typed by a newtype
+/// is seen as the value it carries.
+pub fn underlying(field_type: &FieldType) -> &FieldType {
+    let mut current = field_type;
+    while let FieldType::Other(name) = current
+        && let Some(newtype) = get_newtype_config(name)
+    {
+        current = &newtype.inner;
+    }
+    current
+}
+
 /// Get union of tables by type name
 pub fn get_union_of_tables(type_name: &str) -> Option<&'static [&'static str]> {
     UNION_OF_TABLES_REGISTRY
@@ -116,6 +155,7 @@ pub enum TypeCategory {
     Table,
     Object,
     Enum,
+    Newtype,
     UnionOfTables,
 }
 
@@ -127,6 +167,8 @@ pub fn resolve_type_category(type_name: &str) -> Option<TypeCategory> {
         Some(TypeCategory::Object)
     } else if TAGGED_UNIONS.contains_key(type_name) {
         Some(TypeCategory::Enum)
+    } else if NEWTYPE_CONFIGS.contains_key(type_name) {
+        Some(TypeCategory::Newtype)
     } else if UNION_OF_TABLES_REGISTRY.contains_key(type_name) {
         Some(TypeCategory::UnionOfTables)
     } else {
@@ -155,6 +197,43 @@ pub fn get_all_enum_names() -> Vec<&'static str> {
     names
 }
 
+/// Get all registered newtype names
+pub fn get_all_newtype_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = NEWTYPE_CONFIGS.keys().copied().collect();
+    names.sort();
+    names
+}
+
+/// Every registered type, keyed as a workspace scan keys them, so the
+/// pipeline views of a scan apply: `AllConfigs::into_schemasync` gives the
+/// schema's types and `AllConfigs::for_typesync` the generated outputs'.
+pub fn all_configs() -> AllConfigs {
+    AllConfigs {
+        enums: TAGGED_UNIONS
+            .iter()
+            .map(|(name, tagged_union)| ((*name).to_owned(), tagged_union.clone()))
+            .collect(),
+        tables: TABLE_CONFIGS
+            .values()
+            .map(|table| (table.table_name.clone(), table.clone()))
+            .collect(),
+        // A scan lists every struct among the objects, tables included.
+        objects: STRUCT_CONFIGS
+            .iter()
+            .map(|(name, object)| ((*name).to_owned(), object.clone()))
+            .chain(
+                TABLE_CONFIGS
+                    .iter()
+                    .map(|(name, table)| ((*name).to_owned(), table.struct_config.clone())),
+            )
+            .collect(),
+        newtypes: NEWTYPE_CONFIGS
+            .iter()
+            .map(|(name, newtype)| ((*name).to_owned(), newtype.clone()))
+            .collect(),
+    }
+}
+
 /// Get all registered union of tables names
 pub fn get_all_union_of_tables_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = UNION_OF_TABLES_REGISTRY.keys().copied().collect();
@@ -168,6 +247,7 @@ pub fn get_all_type_names() -> BTreeMap<TypeCategory, Vec<&'static str>> {
     result.insert(TypeCategory::Table, get_all_table_names());
     result.insert(TypeCategory::Object, get_all_object_names());
     result.insert(TypeCategory::Enum, get_all_enum_names());
+    result.insert(TypeCategory::Newtype, get_all_newtype_names());
     result.insert(TypeCategory::UnionOfTables, get_all_union_of_tables_names());
     result
 }
@@ -263,10 +343,10 @@ mod tests {
     #[test]
     fn test_get_all_type_names_structure() {
         let all_types = get_all_type_names();
-        // Should have all 4 categories
         assert!(all_types.contains_key(&TypeCategory::Table));
         assert!(all_types.contains_key(&TypeCategory::Object));
         assert!(all_types.contains_key(&TypeCategory::Enum));
+        assert!(all_types.contains_key(&TypeCategory::Newtype));
         assert!(all_types.contains_key(&TypeCategory::UnionOfTables));
     }
 

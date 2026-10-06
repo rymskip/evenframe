@@ -1,0 +1,30 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Postal extends Schema.Class<Postal>("Postal")( { 
+  street: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Street' is required` }),
+  city: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'City' is required` })
+}) {[key: string]: unknown}
+
+export class Phone extends Schema.Class<Phone>("Phone")( { 
+  number: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Number' is required` })
+}) {[key: string]: unknown}
+
+export const Contact = Schema.Union(Schema.Struct({ kind: Schema.Literal("Phone"), number: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Number' is required` }) }), Schema.Struct({ kind: Schema.Literal("Nobody") }), Schema.String, Postal).annotations({ identifier: `Contact` });
+
+export interface PostalEncoded {
+  readonly street: string;
+  readonly city: string;
+}
+
+export interface PhoneEncoded {
+  readonly number: string;
+}
+
+export type ContactEncoded = ({ readonly kind: "Phone"; } & PhoneEncoded) | { readonly kind: "Nobody"; } | string | PostalEncoded;
+
+
+export type PostalType = typeof Postal.Type;
+export type PhoneType = typeof Phone.Type;
+export type ContactType = typeof Contact.Type;

@@ -1,0 +1,5 @@
+error: a typesync pattern is a JavaScript regex literal, such as "/^[a-z]+$/u", not `^[0-9]{4}$`
+ --> tests/ui/fail/typesync_validators_plain_pattern.rs:6:27
+  |
+6 |     #[typesync(validators(StringValidator::RegexLiteral(Format::Custom("^[0-9]{4}$"))))]
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

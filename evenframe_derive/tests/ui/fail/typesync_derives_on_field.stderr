@@ -1,0 +1,5 @@
+error: Macroforge derives apply to a type: put them on the struct, enum or struct variant
+ --> tests/ui/fail/typesync_derives_on_field.rs:6:27
+  |
+6 |     #[typesync(macroforge(derives = [Default]))]
+  |                           ^^^^^^^^^^^^^^^^^^^

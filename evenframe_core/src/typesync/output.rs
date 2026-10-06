@@ -4,7 +4,7 @@ use crate::config::RECORD_LINK;
 #[cfg(any(feature = "arktype", feature = "effect"))]
 use crate::config::{ForeignTypeConfig, TsOutputMapping};
 use crate::error::{EvenframeError, Result};
-use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
+use crate::types::{ForeignTypeRegistry, NewtypeConfig, StructConfig, TaggedUnion};
 #[cfg(feature = "arktype")]
 use crate::typesync::arktype::generate_arktype_type_string;
 use crate::typesync::config::{OutputKind, OutputMode, TypesyncOutput};
@@ -40,12 +40,33 @@ impl<'a> OutputTypes<'a> {
     pub fn new(
         structs: &'a BTreeMap<String, StructConfig>,
         enums: &'a BTreeMap<String, TaggedUnion>,
+        newtypes: &'a BTreeMap<String, NewtypeConfig>,
         registry: &'a ForeignTypeRegistry,
     ) -> Result<Self> {
         Ok(Self {
-            index: TypeIndex::new(structs, enums)?,
+            index: TypeIndex::with_newtypes(structs, enums, newtypes)?,
             registry,
         })
+    }
+
+    /// The structs and enums with every newtype replaced by its inner type,
+    /// for the schema formats, which have no branded types.
+    #[cfg(any(feature = "flatbuffers", feature = "protobuf"))]
+    fn stored_shapes(
+        &self,
+    ) -> Result<(
+        BTreeMap<String, StructConfig>,
+        BTreeMap<String, TaggedUnion>,
+    )> {
+        let mut structs = self.index.structs().clone();
+        let mut enums = self.index.enums().clone();
+        crate::types::desugar_newtypes(
+            self.index.newtypes(),
+            &mut enums,
+            &mut BTreeMap::new(),
+            &mut structs,
+        )?;
+        Ok((structs, enums))
     }
 }
 
@@ -176,15 +197,21 @@ fn macroforge_single_file(
     let mut helpers = HelperModule::new(format!("./{helpers_name}{suffix}"));
 
     let all_types: Vec<String> = types.index.names().cloned().collect();
-    let mut content: String = macro_import_lines(&all_types, &types.index, &output.macros)?
-        .iter()
-        .map(|line| format!("{line}\n"))
-        .collect();
+    let mut content: String = macro_import_lines(
+        &all_types,
+        &types.index,
+        &output.macros,
+        output.default_derives.as_deref(),
+    )?
+    .iter()
+    .map(|line| format!("{line}\n"))
+    .collect();
     content.push_str(&generate_macroforge_type_string(
         &types.index,
         settings.array_style,
         types.registry,
         &mut helpers,
+        output.default_derives.as_deref(),
     )?);
     let mut files = vec![(path, content)];
     let mut removed = Vec::new();
@@ -310,25 +337,29 @@ fn single_file(
         }
         OutputKind::Flatbuffers => {
             #[cfg(feature = "flatbuffers")]
-            let content = crate::typesync::flatbuffers::generate_flatbuffers_schema_string(
-                types.index.structs(),
-                types.index.enums(),
-                output.namespace.as_deref(),
-                types.registry,
-            );
+            let content = types.stored_shapes().and_then(|(structs, enums)| {
+                crate::typesync::flatbuffers::generate_flatbuffers_schema_string(
+                    &structs,
+                    &enums,
+                    output.namespace.as_deref(),
+                    types.registry,
+                )
+            });
             #[cfg(not(feature = "flatbuffers"))]
             let content = Err(not_built(OutputKind::Flatbuffers, types));
             content
         }
         OutputKind::Protobuf => {
             #[cfg(feature = "protobuf")]
-            let content = crate::typesync::protobuf::generate_protobuf_schema_string(
-                types.index.structs(),
-                types.index.enums(),
-                output.package.as_deref(),
-                output.import_validate,
-                types.registry,
-            );
+            let content = types.stored_shapes().and_then(|(structs, enums)| {
+                crate::typesync::protobuf::generate_protobuf_schema_string(
+                    &structs,
+                    &enums,
+                    output.package.as_deref(),
+                    output.import_validate,
+                    types.registry,
+                )
+            });
             #[cfg(not(feature = "protobuf"))]
             let content = Err(not_built(OutputKind::Protobuf, types));
             content
@@ -597,7 +628,12 @@ fn macroforge_per_file_content(
     use crate::typesync::macroforge::{
         compute_extra_imports, generate_macroforge_for_types, macro_import_lines,
     };
-    for import_line in macro_import_lines(type_names, &types.index, &output.macros)? {
+    for import_line in macro_import_lines(
+        type_names,
+        &types.index,
+        &output.macros,
+        output.default_derives.as_deref(),
+    )? {
         content.push_str(&import_line);
         content.push('\n');
     }
@@ -626,6 +662,7 @@ fn macroforge_per_file_content(
         output.files.array_style,
         types.registry,
         helpers,
+        output.default_derives.as_deref(),
     )?);
     Ok(())
 }
@@ -728,7 +765,8 @@ mod tests {
     ) -> Result<Vec<GeneratedFile>> {
         let registry = ForeignTypeRegistry::default();
         let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
-        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        let newtypes = BTreeMap::new();
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
         render_output(output, dir, file, &types)?.write()
     }
 
@@ -771,7 +809,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let registry = ForeignTypeRegistry::default();
         let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
-        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        let newtypes = BTreeMap::new();
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
         let mut per_file = TypesyncOutput::new(OutputKind::Effect, "unused");
         per_file.files.mode = OutputMode::PerFile;
         per_file.files.barrel_file = true;
@@ -809,7 +848,8 @@ mod tests {
         let registry =
             ForeignTypeRegistry::from_config(&BTreeMap::from([("DateTime".to_string(), foreign)]));
         let (structs, enums) = (BTreeMap::new(), BTreeMap::new());
-        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        let newtypes = BTreeMap::new();
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
 
         let arktype = TypesyncOutput::new(OutputKind::Arktype, "unused");
         let error = render_output(&arktype, tmp.path(), None, &types)
@@ -856,7 +896,8 @@ mod tests {
             record_id,
         )]));
         let (structs, enums) = (post_linking_an_author(), BTreeMap::new());
-        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        let newtypes = BTreeMap::new();
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
         render_output(&output, tmp.path(), None, &types)
             .unwrap()
             .write()
@@ -887,7 +928,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let registry = ForeignTypeRegistry::default();
         let (structs, enums) = (post_linking_an_author(), BTreeMap::new());
-        let types = OutputTypes::new(&structs, &enums, &registry).unwrap();
+        let newtypes = BTreeMap::new();
+        let types = OutputTypes::new(&structs, &enums, &newtypes, &registry).unwrap();
         for kind in [
             OutputKind::Arktype,
             OutputKind::Effect,

@@ -1,6 +1,0 @@
-error: skipping only one direction is not supported: serde would write and read different shapes; use #[serde(skip)], or #[serde(skip_serializing_if = "...")] for an optional key
- --> tests/ui/fail/naming_one_way_skip.rs:7:5
-  |
-7 | /     #[serde(skip_serializing)]
-8 | |     pub password: String,
-  | |________________________^

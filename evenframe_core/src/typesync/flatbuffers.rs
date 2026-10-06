@@ -4,6 +4,7 @@
 //! `(validate: "...")` attributes at the field level for validators.
 
 use crate::error::{EvenframeError, Result};
+use crate::schemasync::format::Format;
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData};
 use crate::typesync::doc_comment::format_triple_slash;
 use crate::typesync::map_key::MapKey;
@@ -492,6 +493,15 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         StringValidator::Includes(s) => Some(format!("includes(\\\"{}\\\")", escape_for_fbs(s))),
 
         // Pattern validators
+        StringValidator::RegexLiteral(Format::Custom(custom))
+            if custom.flags().is_some_and(|flags| !flags.is_empty()) =>
+        {
+            Some(format!(
+                "pattern(\\\"{}\\\", \\\"{}\\\")",
+                escape_for_fbs(custom.as_str()),
+                escape_for_fbs(custom.flags().unwrap_or_default())
+            ))
+        }
         StringValidator::RegexLiteral(format) => Some(format!(
             "pattern(\\\"{}\\\")",
             escape_for_fbs(&format.pattern())
@@ -978,6 +988,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                     Variant {
                         name: "Inactive".to_string(),
@@ -988,6 +1000,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                     Variant {
                         name: "Pending".to_string(),
@@ -998,6 +1012,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),
@@ -1100,6 +1116,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                     Variant {
                         name: "User".to_string(),
@@ -1110,6 +1128,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                 ],
                 representation: EnumRepresentation::default(),

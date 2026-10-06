@@ -5,18 +5,18 @@ expression: output
 export class Appointment extends Schema.Class<Appointment>("Appointment")( { 
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
-  scheduled_at: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Scheduled At' is required` }),
+  scheduledAt: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Scheduled At' is required` }),
   duration: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Duration' is required` }),
-  cancelled_at: Schema.OptionFromNullishOr(Schema.String, null)
+  cancelledAt: Schema.OptionFromNullishOr(Schema.String, null)
 }) {[key: string]: unknown}
 
 
 export interface AppointmentEncoded {
   readonly id: string;
   readonly title: string;
-  readonly scheduled_at: string;
+  readonly scheduledAt: string;
   readonly duration: number;
-  readonly cancelled_at: string | null | undefined;
+  readonly cancelledAt: string | null | undefined;
 }
 
 
