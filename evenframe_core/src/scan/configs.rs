@@ -7,25 +7,29 @@ use crate::error::{EvenframeError, Result};
 use crate::{
     derive::{
         attributes::{
-            find_duplicate_index_name, indexable_fields, parse_annotation_attributes,
-            parse_doccom_attribute, parse_event_attributes, parse_field_index_attributes,
-            parse_format_attribute_bin, parse_index_attributes, parse_macroforge_derive_attribute,
-            parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
-            parse_table_validators,
+            find_duplicate_index_name, indexable_fields, parse_doccom_attribute,
+            parse_event_attributes, parse_field_index_attributes, parse_format_attribute_bin,
+            parse_index_attributes, parse_mock_data_attribute, parse_relation_attribute,
+            parse_rust_derives, parse_table_validators,
         },
         naming,
-        validator_parser::parse_field_validators,
+        schemasync_attributes::{
+            parse_container_validator_overrides, parse_validator_overrides,
+            refuse_container_validator_overrides,
+        },
+        typesync_attributes::{Position, TypesyncAttributes},
+        validator_parser::{parse_element_validators, parse_field_validators},
     },
     schemasync::mockmake::MockGenerationConfig,
     schemasync::table::TableConfig,
     schemasync::{DefineConfig, EdgeConfig, EventConfig, IndexConfig, PermissionsConfig},
     types::{
-        FieldType, ForeignTypeRegistry, PathNames, STD_DURATION_PATHS, StructConfig, StructField,
-        TaggedUnion, Variant, VariantData, Wire,
+        AllConfigs, FieldType, ForeignTypeRegistry, NewtypeConfig, NewtypeKind, PathNames,
+        STD_DURATION_PATHS, StructConfig, StructField, TaggedUnion, Variant, VariantData, Wire,
     },
     typesync::config::{CollisionStrategy, StructVariants},
     typesync::struct_variants::declare_payloads,
-    validator::{StringValidator, Validator},
+    validator::{StringValidator, Validator, ValidatorOverrides},
 };
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Serialize};
@@ -33,21 +37,13 @@ use std::collections::BTreeMap;
 use syn::{Fields, FieldsNamed, ItemEnum, ItemStruct, spanned::Spanned};
 use tracing::{debug, info, trace, warn};
 
-/// All configurations extracted from the workspace.
-pub type AllConfigs = (
-    BTreeMap<String, TaggedUnion>,
-    BTreeMap<String, TableConfig>,
-    BTreeMap<String, StructConfig>,
-);
-
 /// Builds all configurations from the workspace using the provided build config.
-///
-/// Returns a tuple of (enums, tables, objects).
 pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
     debug!("Starting build_all_configs");
     let mut enum_configs = BTreeMap::new();
     let mut table_configs = BTreeMap::new();
     let mut struct_configs = BTreeMap::new();
+    let mut newtype_configs = BTreeMap::new();
 
     debug!("Creating workspace scanner");
     let scanner = WorkspaceScanner::with_path(
@@ -65,6 +61,7 @@ pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
         &mut enum_configs,
         &mut table_configs,
         &mut struct_configs,
+        &mut newtype_configs,
         config.collision_strategy,
         &ForeignTypeRegistry::from_config(&config.foreign_types),
     )?;
@@ -108,6 +105,7 @@ pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
             &mut table_configs,
             &mut struct_configs,
             &mut enum_configs,
+            &mut newtype_configs,
         )?;
     }
 
@@ -133,7 +131,30 @@ pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
     // overrides applied).
     resolve_relation_endpoints(&mut table_configs, &enum_configs, &struct_configs);
 
-    Ok((enum_configs, table_configs, struct_configs))
+    for struct_config in struct_configs.values_mut().chain(
+        table_configs
+            .values_mut()
+            .map(|table| &mut table.struct_config),
+    ) {
+        crate::typesync::naming::apply_struct(struct_config, config.ts_names).map_err(|error| {
+            EvenframeError::type_sync(format!(
+                "naming struct '{}': {error}",
+                struct_config.struct_name
+            ))
+        })?;
+    }
+    for tagged_union in enum_configs.values_mut() {
+        crate::typesync::naming::apply_enum(tagged_union, config.ts_names).map_err(|error| {
+            EvenframeError::type_sync(format!("naming enum '{}': {error}", tagged_union.enum_name))
+        })?;
+    }
+
+    Ok(AllConfigs {
+        enums: enum_configs,
+        tables: table_configs,
+        objects: struct_configs,
+        newtypes: newtype_configs,
+    })
 }
 
 /// A scanned type named `RecordLink` in the schemasync pipeline would stand
@@ -303,8 +324,13 @@ pub enum ParsedType {
         /// The table attributes of a struct with a database `id` field that is
         /// not `resolve_only`.
         table: Option<Box<TableAttributes>>,
+        /// The type `#[serde(into = "...")]` writes the struct as, which the
+        /// typesync outputs describe in place of its fields.
+        wire_as: Option<FieldType>,
     },
     Enum(TaggedUnion),
+    /// A struct serde writes as another type.
+    Newtype(NewtypeConfig),
 }
 
 /// A table struct's table-level attributes.
@@ -326,12 +352,25 @@ pub(super) fn parse_scanned_item(
 ) -> Result<ParsedType> {
     match item {
         ScannedAst::Struct(item_struct) => {
-            let mut config = parse_struct_config(item_struct).map_err(|error| {
+            let failed = |error: syn::Error| {
                 EvenframeError::parse_error(
                     file_path,
                     format!("struct '{}': {error}", item_struct.ident),
                 )
-            })?;
+            };
+            let wire =
+                naming::resolve(&syn::DeriveInput::from(item_struct.clone())).map_err(failed)?;
+            if wire.shape != naming::ItemShape::Named {
+                let mut newtype = parse_newtype_config(item_struct, &wire).map_err(failed)?;
+                newtype.pipeline = evenframe_type.pipeline;
+                newtype.resolve_only = evenframe_type.resolve_only;
+                return Ok(ParsedType::Newtype(newtype));
+            }
+            let wire_as = wire
+                .wire_as
+                .as_ref()
+                .map(|written| FieldType::parse(written, PathNames::Written));
+            let mut config = parse_struct_config(item_struct, wire).map_err(failed)?;
             config.pipeline = evenframe_type.pipeline;
             config.resolve_only = evenframe_type.resolve_only;
             // A `resolve_only` struct is registered for resolution, so
@@ -346,7 +385,11 @@ pub(super) fn parse_scanned_item(
             } else {
                 None
             };
-            Ok(ParsedType::Struct { config, table })
+            Ok(ParsedType::Struct {
+                config,
+                table,
+                wire_as,
+            })
         }
         ScannedAst::Enum(item_enum) => {
             let mut tagged_union = parse_enum_config(item_enum).map_err(|error| {
@@ -423,6 +466,7 @@ fn process_types(
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
+    newtype_configs: &mut BTreeMap<String, NewtypeConfig>,
     collision_strategy: CollisionStrategy,
     registry: &ForeignTypeRegistry,
 ) -> Result<()> {
@@ -473,9 +517,39 @@ fn process_types(
         let module_path = evenframe_type.module_path.as_str();
         let file_path = evenframe_type.file_path.as_str();
         match parsed {
-            ParsedType::Struct { mut config, table } => {
+            ParsedType::Struct {
+                mut config,
+                table,
+                wire_as,
+            } => {
                 config.struct_name = name.clone();
                 resolver.fields(&mut config.fields, module_path, &config.struct_name)?;
+                // serde writes the struct as another type, which the typesync
+                // outputs describe; the database stores its own fields.
+                if let Some(mut written) = wire_as {
+                    if let Some(typesync) = config.pipeline.typesync_part() {
+                        resolver.field_type(
+                            &mut written,
+                            module_path,
+                            &format!("{name} (into)"),
+                        )?;
+                        newtype_configs.insert(
+                            name.clone(),
+                            NewtypeConfig {
+                                name: name.clone(),
+                                inner: written,
+                                kind: NewtypeKind::Alias,
+                                pipeline: typesync,
+                                resolve_only: config.resolve_only,
+                                ..NewtypeConfig::default()
+                            },
+                        );
+                    }
+                    match config.pipeline.schemasync_part() {
+                        Some(schemasync) => config.pipeline = schemasync,
+                        None => continue,
+                    }
+                }
                 if let Some(table) = table {
                     let table_name = config.struct_name.to_case(Case::Snake);
                     if let Some((_, name)) = find_duplicate_index_name(&table_name, &table.indexes)
@@ -513,6 +587,17 @@ fn process_types(
                     &tagged_union.enum_name,
                 )?;
                 enum_configs.insert(tagged_union.enum_name.clone(), tagged_union);
+            }
+            ParsedType::Newtype(mut newtype) => {
+                // A foreign mapping for the name already describes it to
+                // every output, and wins there.
+                if registry.is_foreign(name) {
+                    continue;
+                }
+                newtype.name = name.clone();
+                let site = format!("{name}.0");
+                resolver.field_type(&mut newtype.inner, module_path, &site)?;
+                newtype_configs.insert(newtype.name.clone(), newtype);
             }
         }
     }
@@ -685,11 +770,13 @@ impl Resolver<'_> {
     }
 }
 
-fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
+fn parse_struct_config(
+    item_struct: &ItemStruct,
+    wire: naming::ItemWire,
+) -> syn::Result<StructConfig> {
     let struct_name = item_struct.ident.to_string();
     trace!("Parsing struct config for: {}", struct_name);
     let mut fields = Vec::new();
-    let wire = naming::resolve(&syn::DeriveInput::from(item_struct.clone()))?;
 
     if let Fields::Named(ref fields_named) = item_struct.fields {
         debug!(
@@ -703,8 +790,12 @@ fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
     let table_validators = parse_table_validators(&item_struct.attrs)?;
 
     let doccom = parse_doccom_attribute(&item_struct.attrs)?;
-    let macroforge_derives = parse_macroforge_derive_attribute(&item_struct.attrs)?;
-    let annotations = parse_annotation_attributes(&item_struct.attrs)?;
+    refuse_container_validator_overrides(&item_struct.attrs)?;
+    let TypesyncAttributes {
+        macroforge_derives,
+        annotations,
+        ..
+    } = TypesyncAttributes::parse(&item_struct.attrs, Position::Container)?;
     let rust_derives = parse_rust_derives(&item_struct.attrs);
     let raw_attributes = collect_raw_attributes(&item_struct.attrs);
 
@@ -726,14 +817,135 @@ fn parse_struct_config(item_struct: &ItemStruct) -> syn::Result<StructConfig> {
     })
 }
 
+/// A struct serde writes as `shape`: the field it writes, a tuple of its
+/// fields, or nothing. Container validators check that value.
+fn parse_newtype_config(
+    item_struct: &ItemStruct,
+    wire: &naming::ItemWire,
+) -> syn::Result<NewtypeConfig> {
+    let shape = &wire.shape;
+    let (inner, kind) = match shape {
+        naming::ItemShape::Newtype { member } => {
+            let field = item_struct
+                .fields
+                .iter()
+                .enumerate()
+                .find(|(position, field)| match (member, &field.ident) {
+                    (syn::Member::Named(name), Some(ident)) => name == ident,
+                    (syn::Member::Unnamed(index), None) => index.index as usize == *position,
+                    _ => false,
+                })
+                .map(|(_, field)| field)
+                .ok_or_else(|| {
+                    syn::Error::new(item_struct.ident.span(), "the newtype's field is missing")
+                })?;
+            (
+                FieldType::parse(&field.ty, PathNames::Written),
+                NewtypeKind::Branded,
+            )
+        }
+        naming::ItemShape::Tuple(_) => (
+            FieldType::Tuple(
+                item_struct
+                    .fields
+                    .iter()
+                    .map(|field| FieldType::parse(&field.ty, PathNames::Written))
+                    .collect(),
+            ),
+            NewtypeKind::Alias,
+        ),
+        naming::ItemShape::Unit => (FieldType::Unit, NewtypeKind::Alias),
+        naming::ItemShape::Named => {
+            return Err(syn::Error::new(
+                item_struct.ident.span(),
+                "a struct of named fields is not a newtype",
+            ));
+        }
+    };
+    let (validators, validator_overrides) = match kind {
+        NewtypeKind::Branded => {
+            let mut validators = parse_field_validators(&item_struct.attrs)?.validators;
+            let mut overrides = parse_container_validator_overrides(&item_struct.attrs)?;
+            // The field's own validators check the same value.
+            if let naming::ItemShape::Newtype { member } = shape
+                && let Some(field) =
+                    item_struct
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .find_map(|(position, field)| match (member, &field.ident) {
+                            (syn::Member::Named(name), Some(ident)) if name == ident => Some(field),
+                            (syn::Member::Unnamed(index), None)
+                                if index.index as usize == position =>
+                            {
+                                Some(field)
+                            }
+                            _ => None,
+                        })
+            {
+                validators.extend(parse_field_validators(&field.attrs)?.validators);
+                overrides = overrides.followed_by(parse_validator_overrides(&field.attrs)?);
+            }
+            (validators, overrides)
+        }
+        NewtypeKind::Alias => {
+            refuse_container_validator_overrides(&item_struct.attrs)?;
+            (Vec::new(), ValidatorOverrides::default())
+        }
+    };
+    let (element_validators, element_validator_overrides) = match shape {
+        naming::ItemShape::Tuple(_) => parse_element_validators(&item_struct.fields)?,
+        naming::ItemShape::Newtype { .. } | naming::ItemShape::Unit | naming::ItemShape::Named => {
+            (Vec::new(), Vec::new())
+        }
+    };
+    let TypesyncAttributes {
+        macroforge_derives,
+        annotations,
+        ..
+    } = TypesyncAttributes::parse(&item_struct.attrs, Position::Container)?;
+    Ok(NewtypeConfig {
+        name: item_struct.ident.to_string(),
+        inner,
+        kind,
+        validators,
+        doccom: parse_doccom_attribute(&item_struct.attrs)?,
+        annotations,
+        macroforge_derives,
+        rust_derives: parse_rust_derives(&item_struct.attrs),
+        pipeline: crate::types::Pipeline::default(),
+        resolve_only: false,
+        raw_attributes: collect_raw_attributes(&item_struct.attrs),
+        element_validators,
+        storage: newtype_storage(wire),
+        element_validator_overrides,
+        validator_overrides,
+        output_override: None,
+    })
+}
+
+/// How the database stores a newtype, by its own `#[surreal]` keys.
+pub(crate) fn newtype_storage(wire: &naming::ItemWire) -> crate::types::Storage {
+    crate::types::Storage {
+        tuple: wire.stored_tuple,
+        opaque_elements: wire.opaque_elements.clone(),
+        value: wire.unit_value.as_ref().map(naming::UnitValue::surql),
+        ..crate::types::Storage::default()
+    }
+}
+
 fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
     let enum_name = item_enum.ident.to_string();
     trace!("Parsing enum config for: {}", enum_name);
     let mut variants = Vec::new();
 
     let enum_doccom = parse_doccom_attribute(&item_enum.attrs)?;
-    let enum_macroforge_derives = parse_macroforge_derive_attribute(&item_enum.attrs)?;
-    let enum_annotations = parse_annotation_attributes(&item_enum.attrs)?;
+    refuse_container_validator_overrides(&item_enum.attrs)?;
+    let TypesyncAttributes {
+        macroforge_derives: enum_macroforge_derives,
+        annotations: enum_annotations,
+        ..
+    } = TypesyncAttributes::parse(&item_enum.attrs, Position::Container)?;
     let wire = naming::resolve(&syn::DeriveInput::from(item_enum.clone()))?;
     let representation = wire.representation;
     let enum_rust_derives = parse_rust_derives(&item_enum.attrs);
@@ -743,8 +955,15 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
         trace!("Processing variant: {} in enum {}", variant_name, enum_name);
 
         let variant_doccom = parse_doccom_attribute(&variant.attrs)?;
-        let variant_annotations = parse_annotation_attributes(&variant.attrs)?;
-        let variant_macroforge_derives = parse_macroforge_derive_attribute(&variant.attrs)?;
+        let variant_position = match variant.fields {
+            Fields::Named(_) => Position::StructVariant,
+            Fields::Unnamed(_) | Fields::Unit => Position::Variant,
+        };
+        let TypesyncAttributes {
+            macroforge_derives: variant_macroforge_derives,
+            annotations: variant_annotations,
+            ..
+        } = TypesyncAttributes::parse(&variant.attrs, variant_position)?;
 
         let data = match &variant.fields {
             Fields::Unit => None,
@@ -770,6 +989,11 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
 
         let variant_raw_attributes = collect_raw_attributes(&variant.attrs);
         let is_default_variant = variant.attrs.iter().any(|a| a.path().is_ident("default"));
+        let (variant_element_validators, variant_element_validator_overrides) =
+            match &variant.fields {
+                Fields::Unnamed(fields) => parse_element_validators(&fields.unnamed)?,
+                Fields::Named(_) | Fields::Unit => (Vec::new(), Vec::new()),
+            };
 
         variants.push(Variant {
             name: variant_name,
@@ -780,6 +1004,8 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
             output_override: None,
             raw_attributes: variant_raw_attributes,
             is_default: is_default_variant,
+            element_validators: variant_element_validators,
+            element_validator_overrides: variant_element_validator_overrides,
         });
     }
 
@@ -820,7 +1046,7 @@ fn process_struct_fields(
         let format = parse_format_attribute_bin(&field.attrs)?;
         let validators = parse_field_validators(&field.attrs)?.validators;
         let doccom = parse_doccom_attribute(&field.attrs)?;
-        let annotations = parse_annotation_attributes(&field.attrs)?;
+        let annotations = TypesyncAttributes::parse(&field.attrs, Position::Field)?.annotations;
 
         let field_raw_attributes = collect_raw_attributes(&field.attrs);
 
@@ -843,6 +1069,7 @@ fn process_struct_fields(
             unique,
             output_override: None,
             raw_attributes: field_raw_attributes,
+            validator_overrides: parse_validator_overrides(&field.attrs)?,
         });
     }
     Ok(struct_fields)
@@ -851,7 +1078,7 @@ fn process_struct_fields(
 /// Attributes that evenframe's own attribute parsers handle. Everything
 /// else ends up in `StructConfig::raw_attributes` so plugins can see it.
 const KNOWN_ATTRS: &[&str] = &[
-    "annotation",
+    "evenframe",
     "apply",
     "define_field_statement",
     "derive",
@@ -866,13 +1093,14 @@ const KNOWN_ATTRS: &[&str] = &[
     "diskann",
     "index",
     "indexes",
-    "macroforge_derive",
     "mock_data",
     "permissions",
     "relation",
     "serde",
+    "schemasync",
     "subquery",
     "surreal",
+    "typesync",
     "unique",
     "validators",
     // These are handled by proc-macros but aren't plugin-relevant metadata.
@@ -947,105 +1175,14 @@ pub fn merge_tables_and_objects(
     struct_configs
 }
 
-/// The types that take part in the typesync pipeline, copied out of the
-/// scan, which stays whole for schemasync. Fields and variants serde skips
-/// are left out, since its JSON never carries them.
-pub fn filter_for_typesync(
-    enums: &BTreeMap<String, TaggedUnion>,
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
-) -> (
-    BTreeMap<String, TaggedUnion>,
-    BTreeMap<String, TableConfig>,
-    BTreeMap<String, StructConfig>,
-) {
-    (
-        enums
-            .iter()
-            .filter(|(_, tagged_union)| tagged_union.pipeline.includes_typesync())
-            .map(|(name, tagged_union)| {
-                let mut tagged_union = tagged_union.clone();
-                drop_serde_skipped_variants(&mut tagged_union);
-                (name.clone(), tagged_union)
-            })
-            .collect(),
-        tables
-            .iter()
-            .filter(|(_, table)| table.struct_config.pipeline.includes_typesync())
-            .map(|(name, table)| {
-                let mut table = table.clone();
-                drop_serde_skipped_fields(&mut table.struct_config);
-                (name.clone(), table)
-            })
-            .collect(),
-        objects
-            .iter()
-            .filter(|(_, object)| object.pipeline.includes_typesync())
-            .map(|(name, object)| {
-                let mut object = object.clone();
-                drop_serde_skipped_fields(&mut object);
-                (name.clone(), object)
-            })
-            .collect(),
-    )
-}
-
-fn drop_serde_skipped_fields(struct_config: &mut StructConfig) {
-    struct_config
-        .fields
-        .retain(|field| !field.effective().wire.serde_skipped);
-    if let Some(replacement) = struct_config.output_override.as_deref_mut() {
-        drop_serde_skipped_fields(replacement);
-    }
-}
-
-fn drop_serde_skipped_variants(tagged_union: &mut TaggedUnion) {
-    tagged_union
-        .variants
-        .retain(|variant| !variant.effective().wire.serde_skipped);
-    for variant in &mut tagged_union.variants {
-        if let Some(VariantData::InlineStruct(inline)) = &mut variant.data {
-            drop_serde_skipped_fields(inline);
-        }
-    }
-    if let Some(replacement) = tagged_union.output_override.as_deref_mut() {
-        drop_serde_skipped_variants(replacement);
-    }
-}
-
-/// Filter configs to only types that participate in the schemasync pipeline.
-pub fn filter_for_schemasync(
-    enums: BTreeMap<String, TaggedUnion>,
-    tables: BTreeMap<String, TableConfig>,
-    objects: BTreeMap<String, StructConfig>,
-) -> (
-    BTreeMap<String, TaggedUnion>,
-    BTreeMap<String, TableConfig>,
-    BTreeMap<String, StructConfig>,
-) {
-    (
-        enums
-            .into_iter()
-            .filter(|(_, tagged_union)| tagged_union.pipeline.includes_schemasync())
-            .collect(),
-        tables
-            .into_iter()
-            .filter(|(_, table)| table.struct_config.pipeline.includes_schemasync())
-            .collect(),
-        objects
-            .into_iter()
-            .filter(|(_, object)| object.pipeline.includes_schemasync())
-            .collect(),
-    )
-}
-
 // ============================================================
 // Rule plugin application
 // ============================================================
 
 /// Apply output rule plugins to set output overrides on configs.
 ///
-/// Every plugin sees each table, struct and enum as the scan produced it, and
+/// Every plugin sees each table, struct, enum and newtype as the scan produced
+/// it, and
 /// their overrides apply in plugin order. The typesync and schemasync
 /// generators read a config's `output_override` before computing output.
 #[cfg(feature = "wasm-plugins")]
@@ -1054,6 +1191,7 @@ fn apply_rule_plugins(
     table_configs: &mut BTreeMap<String, TableConfig>,
     struct_configs: &mut BTreeMap<String, StructConfig>,
     enum_configs: &mut BTreeMap<String, TaggedUnion>,
+    newtype_configs: &mut BTreeMap<String, NewtypeConfig>,
 ) -> Result<()> {
     use crate::typesync::plugin::OutputRulePluginManager;
     use crate::typesync::plugin_types::OutputRulePluginInput;
@@ -1121,6 +1259,24 @@ fn apply_rule_plugins(
         };
         for output in rule_plugin_outputs(&mut plugins, &input, "enum", enum_name)? {
             override_enum(enum_config, &output);
+        }
+    }
+
+    info!(
+        "Applying output rule plugins to {} newtypes",
+        newtype_configs.len()
+    );
+    for (newtype_name, newtype_config) in newtype_configs
+        .iter_mut()
+        .filter(|(_, newtype_config)| !newtype_config.resolve_only)
+    {
+        let input = OutputRulePluginInput::Newtype {
+            pipeline: format!("{:?}", newtype_config.pipeline),
+            generator: String::new(),
+            config: newtype_config,
+        };
+        for output in rule_plugin_outputs(&mut plugins, &input, "newtype", newtype_name)? {
+            override_newtype(newtype_config, &output);
         }
     }
 
@@ -1217,6 +1373,26 @@ fn override_enum(
     }
     push_missing(&mut overridden.annotations, &type_override.annotations);
     enum_config.output_override = Some(Box::new(overridden));
+}
+
+/// Applies a rule plugin's type-level overrides to a newtype, which has no
+/// fields or variants of its own to annotate.
+#[cfg(feature = "wasm-plugins")]
+fn override_newtype(
+    newtype_config: &mut NewtypeConfig,
+    output: &crate::typesync::plugin_types::OutputRulePluginOutput,
+) {
+    let type_override = &output.type_override;
+    if type_override.macroforge_derives.is_empty() && type_override.annotations.is_empty() {
+        return;
+    }
+    let mut overridden = newtype_config.effective().clone();
+    overridden.output_override = None;
+    if !type_override.macroforge_derives.is_empty() {
+        overridden.macroforge_derives = type_override.macroforge_derives.clone();
+    }
+    push_missing(&mut overridden.annotations, &type_override.annotations);
+    newtype_config.output_override = Some(Box::new(overridden));
 }
 
 /// Appends each of `annotations` that `existing` does not hold yet.
@@ -1424,9 +1600,11 @@ fn merge_synthetic_output(
 #[cfg(test)]
 mod resolution_tests {
     use super::{
-        AllConfigs, BTreeMap, CollisionStrategy, FieldType, Result, ScanConfig, StructVariants,
-        VariantData, build_all_configs,
+        AllConfigs, BTreeMap, CollisionStrategy, FieldType, NewtypeKind, Result, ScanConfig,
+        StringValidator, StructVariants, Validator, VariantData, build_all_configs,
     };
+    use crate::schemasync::lint::{UnassertedNewtype, lint_unasserted_newtypes};
+    use crate::types::FieldOwner;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1457,6 +1635,108 @@ mod resolution_tests {
         pub enum Event { Changed(Status), Moved { from: Status, to: Status } }
     "#;
 
+    const NEWTYPES: &str = r#"
+        use evenframe::Evenframe;
+
+        #[derive(Evenframe)]
+        #[validators(StringValidator::NonEmpty)]
+        pub struct NonEmptyString(String);
+
+        #[derive(Evenframe)]
+        #[validators(StringValidator::Email)]
+        pub struct Email(NonEmptyString);
+
+        #[derive(Evenframe)]
+        #[serde(transparent)]
+        pub struct Label {
+            #[validators(StringValidator::MinLength(2))]
+            value: String,
+        }
+
+        #[derive(Evenframe)]
+        pub enum Status { Open, Closed }
+
+        #[derive(Evenframe)]
+        pub struct Code(Status);
+
+        #[derive(Evenframe)]
+        pub struct Pair(String, u32);
+
+        #[derive(Evenframe)]
+        pub struct Marker;
+
+        #[derive(Evenframe)]
+        pub struct Profile {
+            pub id: String,
+            pub name: NonEmptyString,
+            pub email: Option<Email>,
+            pub tags: Vec<NonEmptyString>,
+            pub code: Code,
+        }
+    "#;
+
+    const FLATTENED: &str = r#"
+        use evenframe::Evenframe;
+        use std::collections::HashMap;
+
+        #[derive(Evenframe)]
+        pub struct Audit { pub created_by: String, pub note: Option<String> }
+
+        #[derive(Evenframe)]
+        pub struct Geo { pub lat: f64, pub lon: f64 }
+
+        #[derive(Evenframe)]
+        pub struct Extras {
+            pub label: String,
+            #[serde(flatten)]
+            pub rest: HashMap<String, String>,
+        }
+
+        #[derive(Evenframe)]
+        pub struct Post {
+            pub id: String,
+            pub title: String,
+            #[serde(flatten)]
+            pub audit: Audit,
+            #[serde(flatten)]
+            pub geo: Option<Geo>,
+            pub extras: Extras,
+        }
+
+        #[derive(Evenframe)]
+        pub struct Event {
+            pub id: String,
+            pub kind: String,
+            #[serde(flatten)]
+            pub data: HashMap<String, i64>,
+        }
+    "#;
+
+    const TYPESYNC: &str = r#"
+        use evenframe::Evenframe;
+
+        #[derive(Evenframe)]
+        #[typesync(macroforge(derives = [Default, Encode]), annotation("@form"))]
+        pub struct Profile {
+            pub id: String,
+            #[typesync(macroforge(attributes = [endec(rename = "full_name"), hidden]))]
+            pub name: String,
+        }
+
+        #[derive(Evenframe)]
+        #[typesync(macroforge(attributes = [endec(tag = "kind")]))]
+        pub enum Shape {
+            #[typesync(macroforge(derives = [Decode]), annotation("@circle"))]
+            Circle { radius: f64 },
+            #[typesync(annotation("@dot"))]
+            Dot,
+        }
+
+        #[derive(Evenframe)]
+        #[typesync(macroforge(derives = [Encode]))]
+        pub struct Slug(String);
+    "#;
+
     /// Builds a crate named `shop` from `files`, paths relative to `src/`.
     fn build(collision_strategy: CollisionStrategy, files: &[(&str, &str)]) -> Result<AllConfigs> {
         let root = TempDir::new().expect("temp dir");
@@ -1483,13 +1763,308 @@ mod resolution_tests {
     }
 
     fn field(configs: &AllConfigs, struct_name: &str, field_name: &str) -> FieldType {
-        let (_, _, objects) = configs;
-        objects[struct_name]
+        configs.objects[struct_name]
             .fields
             .iter()
             .find(|field| field.field_name == field_name)
             .map(|field| field.field_type.clone())
             .expect("field")
+    }
+
+    #[test]
+    fn typesync_attributes_reach_every_position_they_apply_to() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", TYPESYNC)]).expect("configs");
+        let profile = &configs.objects["Profile"];
+        assert_eq!(profile.macroforge_derives, ["Default", "Encode"]);
+        assert_eq!(profile.annotations, ["@form"]);
+        let name = profile
+            .fields
+            .iter()
+            .find(|field| field.field_name == "name")
+            .expect("the name field");
+        assert_eq!(
+            name.annotations,
+            [r#"@endec({ rename: "full_name" })"#, "@hidden"]
+        );
+
+        let shape = &configs.enums["Shape"];
+        assert_eq!(shape.annotations, [r#"@endec({ tag: "kind" })"#]);
+        assert_eq!(shape.variants[0].annotations, ["@circle"]);
+        match &shape.variants[0].data {
+            Some(VariantData::InlineStruct(circle)) => {
+                assert_eq!(circle.macroforge_derives, ["Decode"]);
+            }
+            other => panic!("expected the circle's fields, got {other:?}"),
+        }
+        assert_eq!(shape.variants[1].annotations, ["@dot"]);
+        assert_eq!(configs.newtypes["Slug"].macroforge_derives, ["Encode"]);
+    }
+
+    #[test]
+    fn a_struct_serde_writes_as_another_type_is_scanned_as_a_newtype() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", NEWTYPES)]).expect("configs");
+        let names: Vec<&str> = configs.newtypes.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            ["Code", "Email", "Label", "Marker", "NonEmptyString", "Pair"]
+        );
+        for name in &names {
+            assert!(
+                !configs.objects.contains_key(*name),
+                "{name} is not an object"
+            );
+        }
+        let newtype = |name: &str| &configs.newtypes[name];
+        assert_eq!(newtype("NonEmptyString").inner, FieldType::String);
+        assert_eq!(newtype("NonEmptyString").kind, NewtypeKind::Branded);
+        assert_eq!(
+            newtype("NonEmptyString").validators,
+            [Validator::StringValidator(StringValidator::NonEmpty)]
+        );
+        assert_eq!(
+            newtype("Email").inner,
+            FieldType::Other("NonEmptyString".to_owned())
+        );
+        assert_eq!(newtype("Label").inner, FieldType::String);
+        assert_eq!(newtype("Label").validators.len(), 1);
+        assert_eq!(newtype("Code").inner, FieldType::Other("Status".to_owned()));
+        assert_eq!(newtype("Pair").kind, NewtypeKind::Alias);
+        assert_eq!(
+            newtype("Pair").inner,
+            FieldType::Tuple(vec![FieldType::String, FieldType::U32])
+        );
+        assert_eq!(newtype("Marker").inner, FieldType::Unit);
+    }
+
+    #[test]
+    fn schemasync_stores_a_newtype_as_its_inner_value_with_its_validators() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", NEWTYPES)]).expect("configs");
+        let tables = configs
+            .into_schemasync()
+            .expect("schemasync configs")
+            .tables;
+        let field = |name: &str| {
+            tables["profile"]
+                .struct_config
+                .fields
+                .iter()
+                .find(|field| field.field_name == name)
+                .expect("field")
+        };
+        let non_empty = Validator::StringValidator(StringValidator::NonEmpty);
+        let email = Validator::StringValidator(StringValidator::Email);
+        assert_eq!(field("name").field_type, FieldType::String);
+        assert_eq!(field("name").validators, std::slice::from_ref(&non_empty));
+        assert_eq!(
+            field("email").field_type,
+            FieldType::Option(Box::new(FieldType::String))
+        );
+        // The innermost newtype's validators first, as Rust reads them.
+        assert_eq!(field("email").validators, [non_empty, email]);
+        assert_eq!(
+            field("tags").field_type,
+            FieldType::Vec(Box::new(FieldType::String))
+        );
+        assert!(field("tags").validators.is_empty());
+        assert_eq!(
+            field("code").field_type,
+            FieldType::Other("Status".to_owned())
+        );
+    }
+
+    #[test]
+    fn schemasync_keeps_the_declared_type_of_each_field_holding_a_newtype() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", NEWTYPES)]).expect("configs");
+        let declared = configs
+            .into_schemasync()
+            .expect("schemasync configs")
+            .declared;
+        let profile = FieldOwner::Table("profile".to_owned());
+        let other = |name: &str| FieldType::Other(name.to_owned());
+        assert_eq!(
+            declared.field(&profile, "tags"),
+            Some(&FieldType::Vec(Box::new(other("NonEmptyString"))))
+        );
+        assert_eq!(
+            declared.field(&profile, "name"),
+            Some(&other("NonEmptyString"))
+        );
+        assert_eq!(declared.field(&profile, "id"), None);
+        let non_empty = Validator::StringValidator(StringValidator::NonEmpty);
+        let email = Validator::StringValidator(StringValidator::Email);
+        assert_eq!(
+            declared.newtype(&other("Email")),
+            Some((&FieldType::String, [non_empty, email].as_slice()))
+        );
+        assert_eq!(declared.newtype(&other("Status")), None);
+    }
+
+    #[test]
+    fn a_newtype_below_a_fields_own_value_is_reported_unasserted() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", NEWTYPES)]).expect("configs");
+        let declared = configs
+            .into_schemasync()
+            .expect("schemasync configs")
+            .declared;
+        assert_eq!(
+            lint_unasserted_newtypes(&declared),
+            [UnassertedNewtype {
+                location: "profile.tags".to_owned(),
+                newtype: "NonEmptyString".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_flattened_struct_is_written_as_its_fields_and_a_flattened_map_stays() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", FLATTENED)]).expect("configs");
+        let typesync = configs.for_typesync().expect("typesync view");
+        let post = &typesync.objects["Post"];
+        let names: Vec<&str> = post
+            .fields
+            .iter()
+            .map(|field| field.field_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["id", "title", "created_by", "note", "lat", "lon", "extras"]
+        );
+        let lat = &post.fields[4];
+        assert_eq!(lat.field_type, FieldType::Option(Box::new(FieldType::F64)));
+        assert!(
+            lat.wire.serde_optional,
+            "a flattened Option's keys may be absent"
+        );
+        assert!(!post.is_open());
+        assert!(typesync.objects["Extras"].is_open());
+
+        let stored = configs.into_schemasync().expect("schemasync view");
+        assert_eq!(stored.tables["post"].struct_config.fields.len(), 7);
+        assert!(stored.tables["event"].struct_config.is_open());
+    }
+
+    #[cfg(feature = "schemadump")]
+    #[test]
+    fn a_record_with_keys_known_only_from_a_value_is_schemaless_or_flexible() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", FLATTENED)]).expect("configs");
+        let stored = configs.into_schemasync().expect("schemasync view");
+        let schema = crate::schemasync::dump::tables_surql(
+            &stored.tables,
+            &stored.objects,
+            &stored.enums,
+            &crate::types::ForeignTypeRegistry::default(),
+            crate::schemasync::config::SurqlOptions::default(),
+        )
+        .expect("the schema generates");
+        assert!(
+            schema.contains("DEFINE TABLE OVERWRITE event SCHEMALESS"),
+            "{schema}"
+        );
+        assert!(
+            !schema.contains("FIELD OVERWRITE data ON TABLE event"),
+            "{schema}"
+        );
+        assert!(
+            schema.contains("DEFINE TABLE OVERWRITE post SCHEMAFULL"),
+            "{schema}"
+        );
+        assert!(
+            schema.contains("DEFINE FIELD OVERWRITE created_by ON TABLE post TYPE string"),
+            "{schema}"
+        );
+        assert!(
+            schema.contains("DEFINE FIELD OVERWRITE extras ON TABLE post FLEXIBLE TYPE object"),
+            "{schema}"
+        );
+    }
+
+    #[test]
+    fn a_struct_that_flattens_itself_is_refused() {
+        let source = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            pub struct Node { pub name: String, #[serde(flatten)] pub next: Option<Box<Node>> }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", source)]).expect("configs");
+        let error = configs.for_typesync().unwrap_err().to_string();
+        assert!(
+            error.contains("`Node` flattens itself (Node → Node)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_struct_serde_writes_as_another_type_is_described_as_it_and_stored_as_its_fields() {
+        let source = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            #[serde(into = "String", from = "String")]
+            pub struct Slug { pub value: String }
+
+            #[derive(Evenframe)]
+            pub struct Page { pub id: String, pub slug: Slug }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", source)]).expect("configs");
+        let slug = &configs.newtypes["Slug"];
+        assert_eq!(slug.kind, NewtypeKind::Alias);
+        assert_eq!(slug.inner, FieldType::String);
+        assert_eq!(slug.pipeline, crate::types::Pipeline::Typesync);
+        assert_eq!(
+            configs.objects["Slug"].pipeline,
+            crate::types::Pipeline::Schemasync
+        );
+
+        let typesync = configs.for_typesync().expect("typesync view");
+        assert!(!typesync.objects.contains_key("Slug"));
+        assert!(typesync.newtypes.contains_key("Slug"));
+        let stored = configs.into_schemasync().expect("schemasync view");
+        assert!(stored.objects.contains_key("Slug"));
+    }
+
+    #[test]
+    fn each_tuple_element_keeps_its_validators() {
+        let source = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            pub struct Range(#[validators(NumberValidator::Positive)] i32, String);
+
+            #[derive(Evenframe)]
+            pub enum Shape {
+                Circle(#[validators(NumberValidator::Positive)] f64),
+                Dot,
+            }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", source)]).expect("configs");
+        let positive = Validator::NumberValidator(crate::validator::NumberValidator::Positive);
+        assert_eq!(
+            configs.newtypes["Range"].element_validators,
+            [vec![positive.clone()], Vec::new()]
+        );
+        let shape = &configs.enums["Shape"];
+        assert_eq!(shape.variants[0].element_validators, [vec![positive]]);
+        assert!(shape.variants[1].element_validators.is_empty());
+    }
+
+    #[test]
+    fn a_newtype_that_holds_itself_has_no_stored_form() {
+        let source = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            pub struct Tree(Vec<Tree>);
+
+            #[derive(Evenframe)]
+            pub struct Forest { pub id: String, pub tree: Tree }
+        "#;
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", source)]).expect("configs");
+        let error = configs.into_schemasync().unwrap_err().to_string();
+        assert!(
+            error.contains("`Tree` holds itself (Tree → Tree)"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1542,9 +2117,8 @@ mod resolution_tests {
             &[("auth.rs", AUTH), ("billing.rs", BILLING)],
         )
         .expect("configs");
-        let (enums, _, _) = &configs;
 
-        let event = &enums["Event"];
+        let event = &configs.enums["Event"];
         let payload = |name: &str| {
             event
                 .variants
@@ -1567,7 +2141,9 @@ mod resolution_tests {
                 .all(|field| field.field_type == other("BillingStatus")),
             "{moved:?}"
         );
-        assert!(enums.contains_key("Status") && enums.contains_key("BillingStatus"));
+        assert!(
+            configs.enums.contains_key("Status") && configs.enums.contains_key("BillingStatus")
+        );
     }
 
     #[test]
@@ -1585,9 +2161,13 @@ mod resolution_tests {
             "{error}"
         );
 
-        let (enums, _, objects) = build(CollisionStrategy::AutoRename, &files).expect("configs");
-        assert!(objects.contains_key("Status"));
-        assert!(enums.contains_key("BStatus"), "{:?}", enums.keys());
+        let configs = build(CollisionStrategy::AutoRename, &files).expect("configs");
+        assert!(configs.objects.contains_key("Status"));
+        assert!(
+            configs.enums.contains_key("BStatus"),
+            "{:?}",
+            configs.enums.keys()
+        );
     }
 
     #[test]
@@ -1666,12 +2246,13 @@ mod resolution_tests {
         .expect("source file");
         let foreign = toml::from_str("rust_type_names = [\"Duration\"]\nsurrealdb = \"int\"")
             .expect("foreign type");
-        let (_, _, objects) = build_all_configs(&ScanConfig {
+        let objects = build_all_configs(&ScanConfig {
             scan_path: root.path().to_path_buf(),
             foreign_types: BTreeMap::from([("Duration".to_string(), foreign)]),
             ..ScanConfig::default()
         })
-        .expect("configs");
+        .expect("configs")
+        .objects;
         assert_eq!(objects["Timer"].fields[0].field_type, other("Duration"));
     }
 
@@ -1702,7 +2283,7 @@ mod resolution_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeMap, ItemStruct, parse_struct_config, reject_scanned_record_link};
+    use super::{BTreeMap, ItemStruct, naming, parse_struct_config, reject_scanned_record_link};
 
     #[test]
     fn a_scanned_record_link_is_rejected_in_schemasync() {
@@ -1744,7 +2325,9 @@ mod tests {
         )
         .expect("failed to parse test struct");
 
-        let config = parse_struct_config(&item_struct).expect("expected a struct config");
+        let wire =
+            naming::resolve(&syn::DeriveInput::from(item_struct.clone())).expect("names resolve");
+        let config = parse_struct_config(&item_struct, wire).expect("expected a struct config");
         let email = config
             .fields
             .iter()

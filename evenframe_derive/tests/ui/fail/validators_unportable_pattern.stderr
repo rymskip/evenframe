@@ -1,0 +1,5 @@
+error: Failed to parse validators for field 'pin': this pattern runs in Rust and in JavaScript, so it must read the same in both: `\d`, `\w` and `\s` are Unicode-aware in Rust and ASCII in JavaScript: write `[0-9]`, `[A-Za-z0-9_]` or `[ \t\n\r\f\v]`
+ --> tests/ui/fail/validators_unportable_pattern.rs:6:18
+  |
+6 |     #[validators(StringValidator::RegexLiteral(Format::Custom(r"^\d{4}$")))]
+  |                  ^^^^^^^^^^^^^^^

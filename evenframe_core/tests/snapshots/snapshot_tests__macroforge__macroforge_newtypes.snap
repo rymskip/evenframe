@@ -1,0 +1,42 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Profile {
+  name: NonEmptyString;
+  nickname: NonEmptyString | null;
+  handles: Handle[];
+  visits: Record<string, Count>;
+  label: Label;
+  position: Pair;
+  marker: Marker;
+  status: StatusCode;
+  title: NonEmptyString;
+  age: Age;
+}
+
+/** @derive(Decode) */
+/** @endec({ externallyTagged: true }) */
+export type Status =
+	| "Active"
+	| "Inactive";
+
+export type Age = $Newtype<number>;
+
+/** @endec({ validate: ["greaterThanOrEqualTo(0)"] }) */
+export type Count = $Newtype<number>;
+
+export type Handle = $Newtype<NonEmptyString>;
+
+export type Label = $Newtype<string>;
+
+export type Marker = null;
+
+/** @derive(Encode, Decode) */
+/** @endec({ validate: ["nonEmpty"] }) */
+export type NonEmptyString = $Newtype<string>;
+
+export type Pair = [string, number];
+
+export type StatusCode = $Newtype<Status>;

@@ -1,0 +1,62 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Settings = Schema.Struct({ theme: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Theme' is required` }) }, Schema.Record({ key: Schema.String, value: Schema.Union(Schema.Number, Schema.String) })).annotations({ identifier: `Settings` });
+export type Settings = typeof Settings.Type;
+
+export class Post extends Schema.Class<Post>("Post")( { 
+  title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
+  createdBy: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Created By' is required` }),
+  lat: Schema.OptionFromNullishOr(Schema.Number, null),
+  lon: Schema.OptionFromNullishOr(Schema.Number, null)
+}) {[key: string]: unknown}
+
+export class Geo extends Schema.Class<Geo>("Geo")( { 
+  lat: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lat' is required` }),
+  lon: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'Lon' is required` })
+}) {[key: string]: unknown}
+
+export const Payload = Schema.Union(Schema.Struct({ kind: Schema.Literal("Click"), x: Schema.propertySignature(Schema.Number).annotations({ missingMessage: () => `'X' is required` }) }), Schema.Struct({ kind: Schema.Literal("Close") })).annotations({ identifier: `Payload` });
+export const Event = Schema.extend(Schema.Struct({ at: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'At' is required` }) }), Payload).annotations({ identifier: `Event` });
+export type Event = typeof Event.Type;
+
+export class Audit extends Schema.Class<Audit>("Audit")( { 
+  createdBy: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Created By' is required` })
+}) {[key: string]: unknown}
+
+
+export interface SettingsEncoded {
+  readonly theme: string;
+  readonly [key: string]: number | string;
+}
+
+export interface PostEncoded {
+  readonly title: string;
+  readonly createdBy: string;
+  readonly lat?: number | null | undefined;
+  readonly lon?: number | null | undefined;
+}
+
+export interface GeoEncoded {
+  readonly lat: number;
+  readonly lon: number;
+}
+
+export type PayloadEncoded = { readonly kind: "Click"; readonly x: number; } | { readonly kind: "Close"; };
+
+export type EventEncoded = {
+  readonly at: string;
+} & PayloadEncoded;
+
+export interface AuditEncoded {
+  readonly createdBy: string;
+}
+
+
+export type SettingsType = typeof Settings.Type;
+export type PostType = typeof Post.Type;
+export type GeoType = typeof Geo.Type;
+export type PayloadType = typeof Payload.Type;
+export type EventType = typeof Event.Type;
+export type AuditType = typeof Audit.Type;

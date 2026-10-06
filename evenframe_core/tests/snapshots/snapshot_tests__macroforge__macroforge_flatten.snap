@@ -1,0 +1,39 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Audit {
+  createdBy: string;
+}
+
+/** @derive(Decode) */
+export type Event = {
+  at: string;
+} & Payload;
+
+/** @derive(Decode) */
+export interface Geo {
+  lat: number;
+  lon: number;
+}
+
+/** @derive(Decode) */
+export interface Post {
+  title: string;
+  createdBy: string;
+  lat?: number | null;
+  lon?: number | null;
+}
+
+/** @derive(Decode) */
+export interface Settings {
+  theme: string;
+  [key: string]: number | string;
+}
+
+/** @derive(Decode) */
+/** @endec({ tag: "kind" }) */
+export type Payload =
+	| { kind: "Click" } & { x: number; }
+	| { kind: "Close" };

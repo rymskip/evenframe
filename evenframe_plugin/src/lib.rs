@@ -113,7 +113,7 @@ macro_rules! define_mock_data_plugin {
 /// This is a tagged union matching
 /// `evenframe_core::typesync::plugin_types::OutputRulePluginInput`.
 /// Plugins should `match` on the variant to dispatch: free-standing
-/// struct, table-backed struct, or tagged-union enum. Each variant
+/// struct, table-backed struct, tagged-union enum, or newtype. Each variant
 /// carries the full evenframe-side config(s) as `serde_json::Value` so
 /// plugin authors don't have to pull `evenframe_core` into their
 /// cdylibs. See the helper methods on [`TypeContext`] for ergonomic
@@ -149,6 +149,14 @@ pub enum TypeContext {
         /// JSON form of `evenframe_core::types::TaggedUnion`.
         config: serde_json::Value,
     },
+    /// A struct serde writes as another type: a single-field tuple struct, a
+    /// transparent struct, a multi-field tuple struct or a unit struct.
+    Newtype {
+        pipeline: String,
+        generator: String,
+        /// JSON form of `evenframe_core::types::NewtypeConfig`.
+        config: serde_json::Value,
+    },
 }
 
 impl TypeContext {
@@ -158,7 +166,8 @@ impl TypeContext {
         match self {
             TypeContext::Struct { pipeline, .. }
             | TypeContext::Table { pipeline, .. }
-            | TypeContext::Enum { pipeline, .. } => pipeline,
+            | TypeContext::Enum { pipeline, .. }
+            | TypeContext::Newtype { pipeline, .. } => pipeline,
         }
     }
 
@@ -167,12 +176,13 @@ impl TypeContext {
         match self {
             TypeContext::Struct { generator, .. }
             | TypeContext::Table { generator, .. }
-            | TypeContext::Enum { generator, .. } => generator,
+            | TypeContext::Enum { generator, .. }
+            | TypeContext::Newtype { generator, .. } => generator,
         }
     }
 
     /// The type's PascalCase name: `struct_name` for structs/tables,
-    /// `enum_name` for enums.
+    /// `enum_name` for enums, `name` for newtypes.
     pub fn type_name(&self) -> Option<&str> {
         match self {
             TypeContext::Struct { config, .. } => {
@@ -182,6 +192,7 @@ impl TypeContext {
                 struct_config.get("struct_name").and_then(|v| v.as_str())
             }
             TypeContext::Enum { config, .. } => config.get("enum_name").and_then(|v| v.as_str()),
+            TypeContext::Newtype { config, .. } => config.get("name").and_then(|v| v.as_str()),
         }
     }
 
@@ -242,12 +253,13 @@ impl TypeContext {
     }
 
     /// Macroforge derives already declared in the Rust source via
-    /// `#[macroforge_derive(...)]`. Empty if none are present.
+    /// `#[typesync(macroforge(derives = [...]))]`. Empty if none are present.
     pub fn existing_macroforge_derives(&self) -> Vec<String> {
         let node = match self {
-            TypeContext::Struct { config, .. } => config.get("macroforge_derives"),
             TypeContext::Table { struct_config, .. } => struct_config.get("macroforge_derives"),
-            TypeContext::Enum { config, .. } => config.get("macroforge_derives"),
+            TypeContext::Struct { config, .. }
+            | TypeContext::Enum { config, .. }
+            | TypeContext::Newtype { config, .. } => config.get("macroforge_derives"),
         };
         node.and_then(|v| v.as_array())
             .map(|arr| {
@@ -258,13 +270,32 @@ impl TypeContext {
             .unwrap_or_default()
     }
 
-    /// Type-level `#[annotation("...")]` strings as written in the
-    /// Rust source.
+    /// Rust derives declared on the type in its source, such as `Serialize`.
+    pub fn rust_derives(&self) -> Vec<String> {
+        let node = match self {
+            TypeContext::Table { struct_config, .. } => struct_config.get("rust_derives"),
+            TypeContext::Struct { config, .. }
+            | TypeContext::Enum { config, .. }
+            | TypeContext::Newtype { config, .. } => config.get("rust_derives"),
+        };
+        node.and_then(|derives| derives.as_array())
+            .map(|derives| {
+                derives
+                    .iter()
+                    .filter_map(|derive| derive.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Type-level annotations as written in the Rust source:
+    /// `#[typesync(annotation("..."))]` and each Macroforge attribute.
     pub fn annotations(&self) -> Vec<String> {
         let node = match self {
-            TypeContext::Struct { config, .. } => config.get("annotations"),
             TypeContext::Table { struct_config, .. } => struct_config.get("annotations"),
-            TypeContext::Enum { config, .. } => config.get("annotations"),
+            TypeContext::Struct { config, .. }
+            | TypeContext::Enum { config, .. }
+            | TypeContext::Newtype { config, .. } => config.get("annotations"),
         };
         node.and_then(|v| v.as_array())
             .map(|arr| {
@@ -278,15 +309,16 @@ impl TypeContext {
     /// Type-level raw attribute stubs: attributes that evenframe doesn't
     /// parse natively, keyed by attribute name with each value being the
     /// parenthesized body (or `""` for bare path attributes like
-    /// `#[overview]`). Multi-occurrence attributes preserve order.
+    /// `#[listing]`). Multi-occurrence attributes preserve order.
     ///
     /// Returned as a `BTreeMap` so iteration is in sorted attribute-name
     /// order, which keeps downstream annotation emission deterministic.
     pub fn raw_attributes(&self) -> BTreeMap<String, Vec<String>> {
         let node = match self {
-            TypeContext::Struct { config, .. } => config.get("raw_attributes"),
             TypeContext::Table { struct_config, .. } => struct_config.get("raw_attributes"),
-            TypeContext::Enum { config, .. } => config.get("raw_attributes"),
+            TypeContext::Struct { config, .. }
+            | TypeContext::Enum { config, .. }
+            | TypeContext::Newtype { config, .. } => config.get("raw_attributes"),
         };
         node.and_then(|v| v.as_object())
             .map(|obj| {
@@ -306,12 +338,14 @@ impl TypeContext {
 
     /// Iterate the struct's fields (or enum's variants). Each entry is
     /// the raw JSON node so callers can introspect anything; use the
-    /// [`TypeFieldInfo`] accessors for the common fields.
+    /// [`TypeFieldInfo`] accessors for the common fields. A newtype has
+    /// none: its value's type is its `inner`.
     pub fn fields(&self) -> Vec<TypeFieldInfo> {
         let arr = match self {
             TypeContext::Struct { config, .. } => config.get("fields"),
             TypeContext::Table { struct_config, .. } => struct_config.get("fields"),
             TypeContext::Enum { config, .. } => config.get("variants"),
+            TypeContext::Newtype { .. } => None,
         };
         arr.and_then(|v| v.as_array())
             .map(|items| {
@@ -345,7 +379,7 @@ impl TypeFieldInfo {
             .or_else(|| self.node.get("name").and_then(|v| v.as_str()))
     }
 
-    /// Natively-parsed `#[annotation("...")]` strings on this field/variant.
+    /// Natively-parsed `#[typesync(...)]` annotations on this field/variant.
     pub fn annotations(&self) -> Vec<String> {
         self.node
             .get("annotations")
@@ -382,6 +416,39 @@ impl TypeFieldInfo {
     /// Documentation comment on this field/variant, if any.
     pub fn doccom(&self) -> Option<&str> {
         self.node.get("doccom").and_then(|v| v.as_str())
+    }
+
+    /// The field's type as its source names it: `"String"` for a unit
+    /// variant of `FieldType`, `"Decimal"` for `Other("Decimal")`, which
+    /// serializes as `{"Other":"Decimal"}`. Empty for a compound type.
+    pub fn field_type_name(&self) -> String {
+        match self.node.get("field_type") {
+            Some(serde_json::Value::String(name)) => name.clone(),
+            Some(serde_json::Value::Object(variant)) => variant
+                .values()
+                .next()
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    /// Whether the field's type is an `Option`, which `FieldType` serializes
+    /// as `{"Option": ...}`.
+    pub fn is_optional(&self) -> bool {
+        matches!(
+            self.node.get("field_type"),
+            Some(serde_json::Value::Object(variant)) if variant.contains_key("Option")
+        )
+    }
+
+    /// How many validators the field declares.
+    pub fn validator_count(&self) -> usize {
+        self.node
+            .get("validators")
+            .and_then(|validators| validators.as_array())
+            .map_or(0, Vec::len)
     }
 }
 
@@ -587,7 +654,7 @@ impl TypeContextBuilder {
     }
 
     /// Add a struct field with a pre-existing annotation (from a native
-    /// `#[annotation("...")]` attribute in Rust).
+    /// `#[typesync(annotation("..."))]` attribute in Rust).
     pub fn field_with_annotation(mut self, name: &str, field_type: &str, annotation: &str) -> Self {
         self.fields.push(serde_json::json!({
             "field_name": name,
@@ -610,8 +677,8 @@ impl TypeContextBuilder {
         self
     }
 
-    /// Add a type-level raw attribute stub (e.g. `#[overview]` →
-    /// `("overview", "")`). Appends bodies so multi-occurrence attributes
+    /// Add a type-level raw attribute stub (e.g. `#[listing]` →
+    /// `("listing", "")`). Appends bodies so multi-occurrence attributes
     /// accumulate.
     pub fn with_raw_attr(mut self, name: &str, body: &str) -> Self {
         let target = match self.variant {
@@ -648,7 +715,7 @@ impl TypeContextBuilder {
     }
 
     /// Seed `macroforge_derives` on the underlying struct/enum config as
-    /// if the Rust source had `#[macroforge_derive(...)]`.
+    /// if the Rust source had `#[typesync(macroforge(derives = [...]))]`.
     pub fn with_macroforge_derives(mut self, derives: &[&str]) -> Self {
         let derives: Vec<String> = derives.iter().map(|s| s.to_string()).collect();
         match self.variant {
@@ -791,6 +858,16 @@ pub fn test_plugin(
             config,
         } => serde_json::json!({
             "kind": "Enum",
+            "pipeline": pipeline,
+            "generator": generator,
+            "config": config,
+        }),
+        TypeContext::Newtype {
+            pipeline,
+            generator,
+            config,
+        } => serde_json::json!({
+            "kind": "Newtype",
             "pipeline": pipeline,
             "generator": generator,
             "config": config,
@@ -962,7 +1039,7 @@ impl SyntheticContext {
             .unwrap_or_default()
     }
 
-    /// Returns every `#[annotation("...")]` string on a struct.
+    /// Returns every `#[typesync(...)]` annotation on a struct.
     pub fn struct_annotations(&self, struct_name: &str) -> Vec<String> {
         self.structs
             .get(struct_name)
@@ -1127,4 +1204,53 @@ macro_rules! define_synthetic_item_plugin {
             ((out_ptr as i64) << 32) | (bytes.len() as i64)
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TypeContext, TypeFieldInfo};
+
+    fn field(field_type: serde_json::Value) -> TypeFieldInfo {
+        TypeFieldInfo {
+            node: serde_json::json!({ "field_name": "amount", "field_type": field_type }),
+        }
+    }
+
+    #[test]
+    fn field_accessors_read_field_types_as_core_writes_them() {
+        let optional = field(serde_json::json!({ "Option": "String" }));
+        assert!(optional.is_optional());
+        assert_eq!(optional.field_type_name(), "String");
+
+        let decimal = field(serde_json::json!({ "Other": "Decimal" }));
+        assert!(!decimal.is_optional());
+        assert_eq!(decimal.field_type_name(), "Decimal");
+
+        let text = field(serde_json::json!("String"));
+        assert!(!text.is_optional());
+        assert_eq!(text.field_type_name(), "String");
+    }
+
+    #[test]
+    fn a_newtype_context_reads_its_name_and_derives() {
+        let context: TypeContext = serde_json::from_value(serde_json::json!({
+            "kind": "Newtype",
+            "pipeline": "Both",
+            "generator": "",
+            "config": {
+                "name": "NonEmptyString",
+                "inner": "String",
+                "macroforge_derives": ["Encode"],
+                "rust_derives": ["Serialize"],
+            },
+        }))
+        .expect("a newtype context reads");
+        assert_eq!(context.type_name(), Some("NonEmptyString"));
+        assert_eq!(
+            context.existing_macroforge_derives(),
+            vec!["Encode".to_owned()]
+        );
+        assert_eq!(context.rust_derives(), vec!["Serialize".to_owned()]);
+        assert!(context.fields().is_empty());
+    }
 }

@@ -1,5 +1,8 @@
 {
   "unstable": ["sloppy-imports"],
+  "compilerOptions": {
+    "types": ["./newtype.d.ts"]
+  },
   "imports": {
     "arktype": "npm:arktype@2.2.3",
     "effect": "npm:effect@3.22.2",

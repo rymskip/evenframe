@@ -5,7 +5,11 @@
 
 use crate::config::{RECORD_LINK, TsMapping, fill};
 use crate::error::{EvenframeError, Result};
-use crate::types::{EnumRepresentation, FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::schemasync::format::Format;
+use crate::types::{
+    EnumRepresentation, FieldType, NewtypeConfig, NewtypeKind, StructConfig, TaggedUnion,
+    VariantData,
+};
 use crate::typesync::config::{ArrayStyle, OutputKind};
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::typesync::foreign_ts::{
@@ -20,6 +24,7 @@ use crate::validator::{
 };
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 /// Pick the StructConfig view to emit fields and metadata from.
 ///
@@ -52,13 +57,31 @@ fn enum_view(enum_def: &TaggedUnion) -> &TaggedUnion {
     }
 }
 
+/// What rendering a type needs: the array style, the foreign types, and the
+/// scanned types, which say what a newtype is written as.
+#[derive(Clone, Copy)]
+struct Rendering<'a> {
+    array_style: ArrayStyle,
+    registry: &'a crate::types::ForeignTypeRegistry,
+    index: &'a TypeIndex<'a>,
+    /// The output's `default_derives`, for a type with none of its own.
+    default_derives: Option<&'a [String]>,
+}
+
 /// Main entry point for generating Macroforge TypeScript interfaces.
 pub fn generate_macroforge_type_string(
     index: &TypeIndex,
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut HelperModule,
+    default_derives: Option<&[String]>,
 ) -> Result<String> {
+    let rendering = Rendering {
+        array_style,
+        registry,
+        index,
+        default_derives,
+    };
     tracing::info!(
         struct_count = index.structs().len(),
         enum_count = index.enums().len(),
@@ -82,11 +105,16 @@ pub fn generate_macroforge_type_string(
         .filter(|(_, tagged_union)| !tagged_union.resolve_only)
         .collect();
     unique_enums.sort_by(|left, right| left.0.cmp(&right.0));
+    let unique_newtypes: Vec<(&String, &NewtypeConfig)> = index
+        .named_newtypes()
+        .filter(|(_, newtype)| !newtype.resolve_only)
+        .collect();
 
     let all_type_names: Vec<String> = unique_structs
         .iter()
         .map(|(name, _)| name.clone())
         .chain(unique_enums.iter().map(|(name, _)| name.clone()))
+        .chain(unique_newtypes.iter().map(|(name, _)| (*name).clone()))
         .collect();
 
     let mut result = String::new();
@@ -102,20 +130,13 @@ pub fn generate_macroforge_type_string(
 
     let mut parts: Vec<String> = Vec::new();
     for (_, struct_config) in &unique_structs {
-        parts.push(generate_struct_block(
-            struct_config,
-            array_style,
-            registry,
-            helpers,
-        )?);
+        parts.push(generate_struct_block(struct_config, rendering, helpers)?);
     }
     for (_, enum_def) in &unique_enums {
-        parts.push(generate_enum_block(
-            enum_def,
-            array_style,
-            registry,
-            helpers,
-        )?);
+        parts.push(generate_enum_block(enum_def, rendering, helpers)?);
+    }
+    for (name, newtype) in &unique_newtypes {
+        parts.push(generate_newtype_block(name, newtype, rendering, helpers)?);
     }
 
     result.push_str(&parts.join("\n"));
@@ -172,7 +193,14 @@ pub fn generate_macroforge_for_types(
     array_style: ArrayStyle,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut HelperModule,
+    default_derives: Option<&[String]>,
 ) -> Result<String> {
+    let rendering = Rendering {
+        array_style,
+        registry,
+        index,
+        default_derives,
+    };
     let type_set: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
 
     // Filter to requested types by the entry's own name. See the full-output
@@ -192,29 +220,69 @@ pub fn generate_macroforge_for_types(
 
     let mut parts: Vec<String> = Vec::new();
     for (_, struct_config) in &filtered_structs {
-        parts.push(generate_struct_block(
-            struct_config,
-            array_style,
-            registry,
-            helpers,
-        )?);
+        parts.push(generate_struct_block(struct_config, rendering, helpers)?);
     }
     for (_, enum_def) in &filtered_enums {
-        parts.push(generate_enum_block(
-            enum_def,
-            array_style,
-            registry,
-            helpers,
-        )?);
+        parts.push(generate_enum_block(enum_def, rendering, helpers)?);
+    }
+    for (name, newtype) in index
+        .named_newtypes()
+        .filter(|(name, _)| type_set.contains(name.as_str()))
+    {
+        parts.push(generate_newtype_block(name, newtype, rendering, helpers)?);
     }
     Ok(parts.join("\n"))
+}
+
+/// A newtype's declaration: its validators on `$Newtype` over the type serde
+/// writes it as, which Macroforge brands. A tuple or unit struct is just that
+/// type.
+fn generate_newtype_block(
+    name: &str,
+    newtype: &NewtypeConfig,
+    rendering: Rendering<'_>,
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    let view = newtype.effective();
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(ref doc) = view.doccom {
+        lines.push(format_jsdoc(doc, ""));
+    }
+    lines.extend(format_derive_line(rendered_derives(
+        &view.macroforge_derives,
+        rendering.default_derives,
+        &[],
+    )));
+    for annotation in &view.annotations {
+        lines.push(format!("/** {annotation} */"));
+    }
+    let (_, inner) = element_types(
+        &newtype.inner,
+        &newtype.element_validators,
+        name,
+        rendering,
+        helpers,
+    )?;
+    let declared = match newtype.kind {
+        NewtypeKind::Branded => {
+            let validators =
+                collect_validators_for_field(&newtype.validators, &newtype.inner, name, helpers)?;
+            let (endec, _) =
+                build_endec_annotation(&validators, &newtype.inner, rendering.registry);
+            lines.extend(endec.lines().map(str::to_owned));
+            format!("$Newtype<{inner}>")
+        }
+        NewtypeKind::Alias => inner,
+    };
+    lines.push(format!("export type {name} = {declared};"));
+    lines.push(String::new());
+    Ok(lines.join("\n"))
 }
 
 /// Generate a single struct's TypeScript interface block.
 fn generate_struct_block(
     struct_config: &StructConfig,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     // Always emit the interface under the entry's own struct_name; pull
@@ -225,19 +293,48 @@ fn generate_struct_block(
     let view = struct_view(struct_config);
     let mut lines: Vec<String> = Vec::new();
 
-    let derive_line = format_derive_line(&view.macroforge_derives);
+    let derive_line = format_derive_line(rendered_derives(
+        &view.macroforge_derives,
+        rendering.default_derives,
+        &DECODE,
+    ));
     if let Some(ref desc) = view.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
-    lines.push(derive_line);
+    lines.extend(derive_line);
     for ann in &view.annotations {
         lines.push(format!("/** {} */", ann));
     }
-    lines.push(format!("export interface {} {{", name));
-    for field in &view.fields {
-        lines.push(render_field_block(field, array_style, registry, helpers)?);
+    let mut members = Vec::new();
+    let mut held_types = Vec::new();
+    let mut index_types = Vec::new();
+    let mut intersections = Vec::new();
+    for field in view.fields.iter().map(crate::types::StructField::effective) {
+        if field.wire.serde_flatten {
+            // serde writes what the field holds beside its siblings.
+            match field.field_type.flattened_map_value() {
+                Some(value) => index_types.push(field_type_to_typescript(value, rendering)),
+                None => intersections.push(field_type_to_typescript(&field.field_type, rendering)),
+            }
+            continue;
+        }
+        members.push(render_field_block(field, rendering, helpers)?);
+        held_types.push(field_type_to_typescript(&field.field_type, rendering));
     }
-    lines.push("}".to_string());
+    if !index_types.is_empty() {
+        // A key of the map may share an object with every named field.
+        let values: Vec<String> = index_types.into_iter().chain(held_types).collect();
+        members.push(format!("  [key: string]: {};", values.join(" | ")));
+    }
+    if intersections.is_empty() {
+        lines.push(format!("export interface {} {{", name));
+        lines.extend(members);
+        lines.push("}".to_string());
+    } else {
+        lines.push(format!("export type {} = {{", name));
+        lines.extend(members);
+        lines.push(format!("}} & {};", intersections.join(" & ")));
+    }
     lines.push(String::new());
     Ok(lines.join("\n"))
 }
@@ -245,8 +342,7 @@ fn generate_struct_block(
 /// Generate a single enum's TypeScript type block.
 fn generate_enum_block(
     enum_def: &TaggedUnion,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     // Same approach as [`generate_struct_block`]: emit under the entry's own
@@ -256,18 +352,33 @@ fn generate_enum_block(
     let view = enum_view(enum_def);
     let mut lines: Vec<String> = Vec::new();
 
-    let derive_line = format_derive_line(&view.macroforge_derives);
+    let derive_line = format_derive_line(rendered_derives(
+        &view.macroforge_derives,
+        rendering.default_derives,
+        &DECODE,
+    ));
     if let Some(ref desc) = view.doccom {
         lines.push(format_jsdoc(desc, ""));
     }
-    lines.push(derive_line);
+    lines.extend(derive_line);
     for ann in &view.annotations {
         lines.push(format!("/** {} */", ann));
     }
 
     // Emit @endec annotation for tagged representations so the macroforge
-    // type registry knows how to parse/stringify these unions at runtime.
-    match &view.representation {
+    // type registry knows how to parse/stringify these unions at runtime. An
+    // enum with an untagged variant is read structurally: each tagged
+    // variant's type spells out its tag, and comes first, as serde reads it.
+    let partly_untagged = view
+        .variants
+        .iter()
+        .any(|variant| variant.effective().wire.serde_untagged);
+    let representation = if partly_untagged {
+        &EnumRepresentation::Untagged
+    } else {
+        &view.representation
+    };
+    match representation {
         EnumRepresentation::InternallyTagged { tag } => {
             lines.push(format!(
                 "/** @endec({{ tag: \"{}\" }}) */",
@@ -294,10 +405,11 @@ fn generate_enum_block(
         .iter()
         .map(|variant| {
             render_variant(
-                variant,
-                &view.representation,
-                array_style,
-                registry,
+                variant.effective(),
+                variant
+                    .effective()
+                    .serde_representation(&view.representation),
+                rendering,
                 helpers,
             )
         })
@@ -320,8 +432,7 @@ fn generate_enum_block(
 fn render_variant(
     variant: &crate::types::Variant,
     representation: &EnumRepresentation,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     // Resolve `output_override` literally, as [`generate_struct_block`] does.
@@ -342,17 +453,15 @@ fn render_variant(
 
     let type_str = match representation {
         EnumRepresentation::ExternallyTagged => {
-            render_variant_externally_tagged(variant, array_style, registry, helpers)?
+            render_variant_externally_tagged(variant, rendering, helpers)?
         }
         EnumRepresentation::InternallyTagged { tag } => {
-            render_variant_internally_tagged(variant, tag, array_style, registry, helpers)?
+            render_variant_internally_tagged(variant, tag, rendering, helpers)?
         }
         EnumRepresentation::AdjacentlyTagged { tag, content } => {
-            render_variant_adjacently_tagged(variant, tag, content, array_style, registry, helpers)?
+            render_variant_adjacently_tagged(variant, tag, content, rendering, helpers)?
         }
-        EnumRepresentation::Untagged => {
-            render_variant_untagged(variant, array_style, registry, helpers)?
-        }
+        EnumRepresentation::Untagged => render_variant_untagged(variant, rendering, helpers)?,
     };
 
     Ok(format!("{}{}", ann_prefix, type_str))
@@ -361,20 +470,19 @@ fn render_variant(
 /// ExternallyTagged: `{ VariantName: Type }` for data variants, `"VariantName"` for unit.
 fn render_variant_externally_tagged(
     variant: &crate::types::Variant,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     let key = object_key(variant.serde_name())?;
     Ok(match &variant.data {
         Some(VariantData::InlineStruct(inline)) => format!(
             "{{ {key}: {} }}",
-            inline_struct_type(inline, array_style, registry, helpers)?
+            inline_struct_type(inline, rendering, helpers)?
         ),
-        Some(VariantData::DataStructureRef(field_type)) => format!(
-            "{{ {key}: {} }}",
-            field_type_to_typescript(field_type, array_style, registry)
-        ),
+        Some(VariantData::DataStructureRef(field_type)) => {
+            let (annotation, payload) = payload_type(variant, field_type, rendering, helpers)?;
+            format!("{{ {annotation}{key}: {payload} }}")
+        }
         None => string_literal(variant.serde_name())?,
     })
 }
@@ -386,8 +494,7 @@ fn render_variant_externally_tagged(
 fn render_variant_internally_tagged(
     variant: &crate::types::Variant,
     tag: &str,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     let tag_entry = format!(
@@ -398,12 +505,12 @@ fn render_variant_internally_tagged(
     Ok(match &variant.data {
         Some(VariantData::InlineStruct(inline)) => format!(
             "{tag_entry} & {}",
-            inline_struct_type(inline, array_style, registry, helpers)?
+            inline_struct_type(inline, rendering, helpers)?
         ),
         // serde writes the tag into the struct a newtype variant holds.
         Some(VariantData::DataStructureRef(field_type)) => format!(
             "{tag_entry} & {}",
-            field_type_to_typescript(field_type, array_style, registry)
+            field_type_to_typescript(field_type, rendering)
         ),
         None => tag_entry,
     })
@@ -415,8 +522,7 @@ fn render_variant_adjacently_tagged(
     variant: &crate::types::Variant,
     tag: &str,
     content: &str,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     let tag_entry = format!(
@@ -428,40 +534,104 @@ fn render_variant_adjacently_tagged(
     Ok(match &variant.data {
         Some(VariantData::InlineStruct(inline)) => format!(
             "{{ {tag_entry}; {content}: {} }}",
-            inline_struct_type(inline, array_style, registry, helpers)?
+            inline_struct_type(inline, rendering, helpers)?
         ),
-        Some(VariantData::DataStructureRef(field_type)) => format!(
-            "{{ {tag_entry}; {content}: {} }}",
-            field_type_to_typescript(field_type, array_style, registry)
-        ),
+        Some(VariantData::DataStructureRef(field_type)) => {
+            let (annotation, payload) = payload_type(variant, field_type, rendering, helpers)?;
+            format!("{{ {tag_entry}; {annotation}{content}: {payload} }}")
+        }
         None => format!("{{ {tag_entry} }}"),
     })
 }
 
-/// Untagged: bare type reference, no wrapping.
+/// Untagged: bare type reference, no wrapping, and `null` for a unit variant,
+/// which serde writes as null.
 fn render_variant_untagged(
     variant: &crate::types::Variant,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     Ok(match &variant.data {
-        Some(VariantData::InlineStruct(inline)) => {
-            inline_struct_type(inline, array_style, registry, helpers)?
-        }
+        Some(VariantData::InlineStruct(inline)) => inline_struct_type(inline, rendering, helpers)?,
         Some(VariantData::DataStructureRef(field_type)) => {
-            field_type_to_typescript(field_type, array_style, registry)
+            let (annotation, payload) = payload_type(variant, field_type, rendering, helpers)?;
+            format!("{annotation}{payload}")
         }
-        None => string_literal(variant.serde_name())?,
+        None => "null".to_owned(),
     })
+}
+
+/// A tuple variant's payload type with each element's validators as `@endec`
+/// before it, and for a newtype payload, its one element's annotation to put
+/// before what holds it.
+fn payload_type(
+    variant: &crate::types::Variant,
+    field_type: &FieldType,
+    rendering: Rendering<'_>,
+    helpers: &mut HelperModule,
+) -> Result<(String, String)> {
+    element_types(
+        field_type,
+        &variant.element_validators,
+        variant.serde_name(),
+        rendering,
+        helpers,
+    )
+}
+
+/// A payload's TypeScript with its elements' validators, as [`payload_type`]
+/// writes it.
+fn element_types(
+    field_type: &FieldType,
+    element_validators: &[Vec<Validator>],
+    owner: &str,
+    rendering: Rendering<'_>,
+    helpers: &mut HelperModule,
+) -> Result<(String, String)> {
+    let mut annotation = |held: &FieldType, validators: &[Validator], name: &str| {
+        let validators = collect_validators_for_field(validators, held, name, helpers)?;
+        Ok::<_, EvenframeError>(if validators.is_empty() {
+            String::new()
+        } else {
+            format!("/** @endec({{ validate: [{validators}] }}) */ ")
+        })
+    };
+    match (field_type, element_validators) {
+        (_, []) => Ok((
+            String::new(),
+            field_type_to_typescript(field_type, rendering),
+        )),
+        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+            let elements = items
+                .iter()
+                .zip(validators)
+                .enumerate()
+                .map(|(position, (item, validators))| {
+                    Ok(format!(
+                        "{}{}",
+                        annotation(item, validators, &format!("{owner}.{position}"))?,
+                        field_type_to_typescript(item, rendering)
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((String::new(), format!("[{}]", elements.join(", "))))
+        }
+        (single, [validators]) => Ok((
+            annotation(single, validators, owner)?,
+            field_type_to_typescript(single, rendering),
+        )),
+        (_, validators) => Err(EvenframeError::config(format!(
+            "`{owner}` has validators for {} elements but holds {field_type:?}",
+            validators.len()
+        ))),
+    }
 }
 
 /// A struct variant's fields as a TypeScript object type, as serde writes
 /// them inline, each with its validators.
 fn inline_struct_type(
     inline: &StructConfig,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     let members = inline
@@ -483,7 +653,7 @@ fn inline_struct_type(
             Ok(format!(
                 "{annotation}{}: {};",
                 field_key(field)?,
-                field_type_to_typescript(&field.field_type, array_style, registry)
+                field_type_to_typescript(&field.field_type, rendering)
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -493,15 +663,14 @@ fn inline_struct_type(
 /// A field's key as serde writes it, optional when serde may leave it out.
 fn field_key(field: &crate::types::StructField) -> Result<String> {
     let optional = if field.wire.serde_optional { "?" } else { "" };
-    Ok(format!("{}{optional}", object_key(field.serde_name())?))
+    Ok(format!("{}{optional}", object_key(&field.ts_name())?))
 }
 
 /// Render a complete field block including annotations, @endec, and the field declaration.
 /// This handles both inline @endec (for RecordLink fields) and separate-line @endec.
 fn render_field_block(
     field: &crate::types::StructField,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<String> {
     // Resolve `output_override` literally, as [`generate_struct_block`] does.
@@ -521,7 +690,7 @@ fn render_field_block(
         helpers,
     )?;
     let (endec_annotation, is_inline) =
-        build_endec_annotation(&validators_str, &field.field_type, registry);
+        build_endec_annotation(&validators_str, &field.field_type, rendering.registry);
 
     // 3. Legacy doccom handling (for backwards compatibility)
     if let Some(ref dc) = field.doccom {
@@ -543,15 +712,9 @@ fn render_field_block(
 
     // 5. Field declaration line
     let type_str = if is_inline && !endec_annotation.is_empty() {
-        render_field_type(
-            &field.field_type,
-            &endec_annotation,
-            true,
-            array_style,
-            registry,
-        )
+        render_field_type(&field.field_type, &endec_annotation, true, rendering)
     } else {
-        field_type_to_typescript(&field.field_type, array_style, registry)
+        field_type_to_typescript(&field.field_type, rendering)
     };
 
     lines.push(format!("  {}: {};", field_key(field)?, type_str));
@@ -561,21 +724,31 @@ fn render_field_block(
 
 /// Format the `@derive(...)` JSDoc line from a list of macro names.
 /// Falls back to `["Decode"]` when no derives are configured.
-fn format_derive_line(derives: &[String]) -> String {
-    if derives.is_empty() {
-        "/** @derive(Decode) */".to_string()
+/// What a struct or enum with no derives of its own and no `default_derives`
+/// renders.
+static DECODE: LazyLock<Vec<String>> = LazyLock::new(|| vec!["Decode".to_owned()]);
+
+/// The derives a type renders: its own, else the output's `default_derives`,
+/// else `fallback`.
+fn rendered_derives<'a>(
+    declared: &'a [String],
+    default_derives: Option<&'a [String]>,
+    fallback: &'a [String],
+) -> &'a [String] {
+    if declared.is_empty() {
+        default_derives.unwrap_or(fallback)
     } else {
-        format!("/** @derive({}) */", derives.join(", "))
+        declared
     }
 }
 
+fn format_derive_line(derives: &[String]) -> Option<String> {
+    (!derives.is_empty()).then(|| format!("/** @derive({}) */", derives.join(", ")))
+}
+
 /// Convert a FieldType to its TypeScript representation.
-fn field_type_to_typescript(
-    field_type: &FieldType,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    let render = |inner: &FieldType| field_type_to_typescript(inner, array_style, registry);
+fn field_type_to_typescript(field_type: &FieldType, rendering: Rendering<'_>) -> String {
+    let render = |inner: &FieldType| field_type_to_typescript(inner, rendering);
     match field_type {
         FieldType::String | FieldType::Char => "string".to_string(),
         FieldType::Bool => "boolean".to_string(),
@@ -596,9 +769,9 @@ fn field_type_to_typescript(
         | FieldType::Usize => "number".to_string(),
         FieldType::Duration => render(&FieldType::serde_duration()),
         FieldType::Option(inner) => {
-            format!("{} | null", wrap_union_type(inner, array_style, registry))
+            format!("{} | null", wrap_union_type(inner, rendering))
         }
-        FieldType::Vec(inner) => format_array(inner, array_style, registry),
+        FieldType::Vec(inner) => format_array(inner, rendering),
         FieldType::Tuple(items) => format!(
             "[{}]",
             items.iter().map(render).collect::<Vec<_>>().join(", ")
@@ -611,8 +784,10 @@ fn field_type_to_typescript(
                 .collect::<Vec<_>>()
                 .join("; ")
         ),
-        FieldType::RecordLink(inner) => record_link_type(render(inner), registry),
+        FieldType::RecordLink(inner) => record_link_type(render(inner), rendering.registry),
         FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
+            // A newtype key is written as the key it holds, unbranded.
+            let key = rendering.index.underlying(key);
             let map_key = MapKey::of(key);
             let key_type = match map_key {
                 Ok(MapKey::Bool) => BOOL_KEYS
@@ -624,11 +799,14 @@ fn field_type_to_typescript(
             };
             let record = format!("Record<{key_type}, {}>", render(value));
             match map_key {
-                Ok(map_key) if map_key.is_finite(registry) => format!("Partial<{record}>"),
+                Ok(map_key) if map_key.is_finite(rendering.registry) => {
+                    format!("Partial<{record}>")
+                }
                 _ => record,
             }
         }
-        FieldType::Other(type_name) => match registry
+        FieldType::Other(type_name) => match rendering
+            .registry
             .lookup(type_name)
             .and_then(|foreign| foreign.macroforge.as_ref())
         {
@@ -651,20 +829,13 @@ fn record_link_type(linked: String, registry: &crate::types::ForeignTypeRegistry
 }
 
 /// Format a Vec type as either `Type[]` (shorthand) or `Array<Type>` (generic).
-fn format_array(
-    inner: &FieldType,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    match array_style {
+fn format_array(inner: &FieldType, rendering: Rendering<'_>) -> String {
+    match rendering.array_style {
         ArrayStyle::Shorthand => {
-            format!("{}[]", wrap_union_type(inner, array_style, registry))
+            format!("{}[]", wrap_union_type(inner, rendering))
         }
         ArrayStyle::Generic => {
-            format!(
-                "Array<{}>",
-                field_type_to_typescript(inner, array_style, registry)
-            )
+            format!("Array<{}>", field_type_to_typescript(inner, rendering))
         }
     }
 }
@@ -673,13 +844,9 @@ fn format_array(
 /// shorthand array style, for Vec as well).
 /// Wraps Option in parentheses for correct `Type[]` semantics; not needed
 /// for generic `Array<Type>` syntax since the angle brackets handle grouping.
-fn wrap_union_type(
-    ft: &FieldType,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> String {
-    let rendered = field_type_to_typescript(ft, array_style, registry);
-    if matches!(ft, FieldType::Option(_)) && array_style == ArrayStyle::Shorthand {
+fn wrap_union_type(ft: &FieldType, rendering: Rendering<'_>) -> String {
+    let rendered = field_type_to_typescript(ft, rendering);
+    if matches!(ft, FieldType::Option(_)) && rendering.array_style == ArrayStyle::Shorthand {
         format!("({rendered})")
     } else {
         rendered
@@ -742,8 +909,7 @@ fn render_field_type(
     field_type: &FieldType,
     endec_annotation: &str,
     inline: bool,
-    array_style: ArrayStyle,
-    registry: &crate::types::ForeignTypeRegistry,
+    rendering: Rendering<'_>,
 ) -> String {
     if inline && !endec_annotation.is_empty() {
         // For RecordLink, render @endec inline: /** @endec(...) */ RecordLink<Type>
@@ -751,13 +917,13 @@ fn render_field_type(
             return format!(
                 "{endec_annotation} {}",
                 record_link_type(
-                    field_type_to_typescript(inner, array_style, registry),
-                    registry
+                    field_type_to_typescript(inner, rendering),
+                    rendering.registry
                 )
             );
         }
     }
-    field_type_to_typescript(field_type, array_style, registry)
+    field_type_to_typescript(field_type, rendering)
 }
 
 /// Derives macroforge provides itself, which need no `import macro`.
@@ -780,17 +946,25 @@ pub fn macro_import_lines(
     type_names: &[String],
     index: &TypeIndex,
     macros: &BTreeMap<String, String>,
+    default_derives: Option<&[String]>,
 ) -> Result<Vec<String>> {
     let type_set: BTreeSet<&str> = type_names.iter().map(String::as_str).collect();
-    // Read through the views `generate_struct_block` and
-    // `generate_enum_block` write, so the imports match each `@derive(...)`.
+    // Resolved as `generate_struct_block`, `generate_enum_block` and
+    // `generate_newtype_block` resolve them, so the imports match each
+    // `@derive(...)`.
     let derives = index
         .named_structs()
         .iter()
         .filter(|(name, struct_config)| {
             !struct_config.resolve_only && type_set.contains(name.as_str())
         })
-        .flat_map(|(_, struct_config)| &struct_view(struct_config).macroforge_derives)
+        .flat_map(|(_, struct_config)| {
+            rendered_derives(
+                &struct_view(struct_config).macroforge_derives,
+                default_derives,
+                &DECODE,
+            )
+        })
         .chain(
             index
                 .named_enums()
@@ -798,7 +972,25 @@ pub fn macro_import_lines(
                 .filter(|(name, tagged_union)| {
                     !tagged_union.resolve_only && type_set.contains(name.as_str())
                 })
-                .flat_map(|(_, tagged_union)| &enum_view(tagged_union).macroforge_derives),
+                .flat_map(|(_, tagged_union)| {
+                    rendered_derives(
+                        &enum_view(tagged_union).macroforge_derives,
+                        default_derives,
+                        &DECODE,
+                    )
+                }),
+        )
+        .chain(
+            index
+                .named_newtypes()
+                .filter(|(name, newtype)| !newtype.resolve_only && type_set.contains(name.as_str()))
+                .flat_map(|(_, newtype)| {
+                    rendered_derives(
+                        &newtype.effective().macroforge_derives,
+                        default_derives,
+                        &[],
+                    )
+                }),
         );
     let mut seen = BTreeSet::new();
     let mut by_package: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -912,8 +1104,8 @@ struct HelperFunction {
 impl HelperFunction {
     fn text(kind: &'static str, bounded: bool, check: Option<JsCheck>) -> Result<Self> {
         let predicate = match check {
-            Some(JsCheck::Pattern(source)) => {
-                format!("new RegExp({}).test(value)", string_literal(&source)?)
+            Some(JsCheck::Pattern { source, flags }) => {
+                format!("{}.test(value)", js_checks::regexp(&source, &flags)?)
             }
             Some(JsCheck::Predicate(predicate)) => predicate,
             Some(JsCheck::Length(_)) | None => {
@@ -1191,6 +1383,13 @@ fn string_validator_to_macroforge(
         StringValidator::StartsWith(prefix) => native(format!("startsWith({})", quoted(prefix))),
         StringValidator::EndsWith(suffix) => native(format!("endsWith({})", quoted(suffix))),
         StringValidator::Includes(substring) => native(format!("includes({})", quoted(substring))),
+        // Macroforge's `pattern` takes no flags, so a flagged pattern is checked
+        // by a helper of its own.
+        StringValidator::RegexLiteral(Format::Custom(custom))
+            if custom.flags().is_some_and(|flags| !flags.is_empty()) =>
+        {
+            helper("matchesPattern", true)
+        }
         StringValidator::RegexLiteral(format) => {
             native(format!("pattern({})", escape_for_jsdoc(&format.pattern())))
         }
@@ -1264,64 +1463,92 @@ fn escape_for_jsdoc(text: &str) -> String {
 mod tests {
     use super::{
         ArrayStyle, ArrayValidator, BTreeMap, BigDecimalValidator, DurationValidator, FieldType,
-        HelperModule, MacroforgeValidator, NumberValidator, StringValidator, StructConfig,
-        TaggedUnion, TypeIndex, Validator, collect_validators_for_field, compute_extra_imports,
-        field_type_to_typescript, generate_macroforge_for_types, generate_macroforge_type_string,
-        macro_import_lines, macroforge_validator,
+        HelperModule, MacroforgeValidator, NumberValidator, Rendering, StringValidator,
+        StructConfig, TaggedUnion, TypeIndex, Validator, collect_validators_for_field,
+        compute_extra_imports, field_type_to_typescript, generate_macroforge_for_types,
+        generate_macroforge_type_string, macro_import_lines, macroforge_validator,
     };
-    use crate::types::{EnumRepresentation, Pipeline, StructField, Variant};
+    use crate::types::{EnumRepresentation, NewtypeConfig, Pipeline, StructField, Variant};
     use ordered_float::OrderedFloat;
 
-    /// A struct whose fields serde names four ways: as written, renamed, by a
-    /// name that is no identifier, and as a key it may leave out.
-    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
-        use crate::types::{StructConfig, StructField, Wire};
-        let field = |name: &str, wire: Wire| StructField {
-            field_name: name.to_owned(),
-            field_type: FieldType::String,
-            wire,
-            ..Default::default()
+    #[test]
+    fn a_flagged_pattern_is_checked_by_a_helper_with_its_flags() {
+        use crate::schemasync::format::{CustomPattern, Format, PatternDialect};
+        let pattern = |written: &str, dialect| {
+            StringValidator::RegexLiteral(Format::Custom(
+                CustomPattern::parse(written, dialect).expect("the pattern parses"),
+            ))
         };
-        let renamed = |name: &str| Wire {
-            serde: Some(name.to_owned()),
-            ..Wire::default()
-        };
-        let fields = vec![
-            field("first_name", Wire::default()),
-            field("last_name", renamed("lastName")),
-            field("zip_code", renamed("zip-code")),
-            field(
-                "nickname",
-                Wire {
-                    serde_optional: true,
-                    ..Wire::default()
-                },
-            ),
-        ];
-        std::collections::BTreeMap::from([(
-            "Person".to_owned(),
-            StructConfig {
-                struct_name: "Person".to_owned(),
-                fields,
-                ..Default::default()
+        match super::string_validator_to_macroforge(&pattern(
+            r"/^\p{Lu}/u",
+            PatternDialect::JavaScript,
+        )) {
+            Ok(Some(MacroforgeValidator::Helper(helper))) => {
+                assert_eq!(helper.kind, "matchesPattern");
+                assert_eq!(
+                    helper.predicate,
+                    r#"new RegExp("^\\p{Lu}", "u").test(value)"#
+                );
+            }
+            _ => panic!("a flagged pattern needs a helper"),
+        }
+        match super::string_validator_to_macroforge(&pattern("^[a-z]+$", PatternDialect::Portable))
+        {
+            Ok(Some(MacroforgeValidator::Native(native))) => {
+                assert!(native.starts_with("pattern("), "{native}");
+            }
+            _ => panic!("an unflagged pattern is macroforge's own"),
+        }
+    }
+
+    /// `field_type` in TypeScript, with no scanned types beside it.
+    fn typescript(
+        field_type: &FieldType,
+        array_style: ArrayStyle,
+        registry: &crate::types::ForeignTypeRegistry,
+    ) -> String {
+        let structs = BTreeMap::new();
+        let enums = BTreeMap::new();
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        field_type_to_typescript(
+            field_type,
+            Rendering {
+                array_style,
+                registry,
+                index: &index,
+                default_derives: None,
             },
-        )])
+        )
     }
 
     #[test]
-    fn fields_are_keyed_as_serde_writes_them() {
-        let structs = wire_named_structs();
-        let output = generate_macroforge_type_string(
-            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
-            ArrayStyle::default(),
-            &crate::types::ForeignTypeRegistry::default(),
-            &mut helpers(),
-        )
-        .unwrap();
-        assert!(output.contains("  first_name: string;"), "{output}");
-        assert!(output.contains("  lastName: string;"), "{output}");
-        assert!(output.contains("  \"zip-code\": string;"), "{output}");
-        assert!(output.contains("  nickname?: string;"), "{output}");
+    fn fields_follow_ts_policy_and_explicit_serde_names() {
+        use crate::typesync::config::TsNames;
+        use crate::typesync::naming::{apply_struct, wire_named_structs};
+        for (policy, first_name) in [
+            (TsNames::Default, "firstName"),
+            (TsNames::RespectSerde, "first_name"),
+        ] {
+            let mut structs = wire_named_structs();
+            for struct_config in structs.values_mut() {
+                apply_struct(struct_config, policy).expect("apply TS naming policy");
+            }
+            let output = generate_macroforge_type_string(
+                &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+                ArrayStyle::default(),
+                &crate::types::ForeignTypeRegistry::default(),
+                &mut helpers(),
+                None,
+            )
+            .unwrap();
+            assert!(
+                output.contains(&format!("  {first_name}: string;")),
+                "{output}"
+            );
+            assert!(output.contains("  lastName: string;"), "{output}");
+            assert!(output.contains("  \"zip-code\": string;"), "{output}");
+            assert!(output.contains("  nickname?: string;"), "{output}");
+        }
     }
 
     /// The validator macroforge provides for `validator`, if it checks anything.
@@ -1484,41 +1711,28 @@ mod tests {
     fn test_field_type_to_typescript() {
         let registry = crate::types::ForeignTypeRegistry::default();
         let s = ArrayStyle::Shorthand;
-        assert_eq!(
-            field_type_to_typescript(&FieldType::String, s, &registry),
-            "string"
-        );
-        assert_eq!(
-            field_type_to_typescript(&FieldType::Bool, s, &registry),
-            "boolean"
-        );
-        assert_eq!(
-            field_type_to_typescript(&FieldType::I32, s, &registry),
-            "number"
-        );
-        assert_eq!(
-            field_type_to_typescript(&FieldType::F64, s, &registry),
-            "number"
-        );
+        assert_eq!(typescript(&FieldType::String, s, &registry), "string");
+        assert_eq!(typescript(&FieldType::Bool, s, &registry), "boolean");
+        assert_eq!(typescript(&FieldType::I32, s, &registry), "number");
+        assert_eq!(typescript(&FieldType::F64, s, &registry), "number");
         assert!(
-            field_type_to_typescript(
+            typescript(
                 &FieldType::Option(Box::new(FieldType::String)),
                 s,
                 &registry
             )
             .contains("string")
-                && field_type_to_typescript(
+                && typescript(
                     &FieldType::Option(Box::new(FieldType::String)),
                     s,
                     &registry
                 )
                 .contains("null")
         );
-        let vec_output =
-            field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), s, &registry);
+        let vec_output = typescript(&FieldType::Vec(Box::new(FieldType::I32)), s, &registry);
         assert!(vec_output.contains("number") && vec_output.contains("[]"));
         assert!(
-            field_type_to_typescript(&FieldType::Other("UserProfile".to_string()), s, &registry)
+            typescript(&FieldType::Other("UserProfile".to_string()), s, &registry)
                 .contains("UserProfile")
         );
     }
@@ -1528,8 +1742,7 @@ mod tests {
         let registry = crate::types::ForeignTypeRegistry::default();
         let g = ArrayStyle::Generic;
         // Vec<i32> → Array<number>
-        let vec_output =
-            field_type_to_typescript(&FieldType::Vec(Box::new(FieldType::I32)), g, &registry);
+        let vec_output = typescript(&FieldType::Vec(Box::new(FieldType::I32)), g, &registry);
         assert!(
             vec_output.contains("Array<number>"),
             "Expected Array<number>, got: {}",
@@ -1541,7 +1754,7 @@ mod tests {
             vec_output
         );
         // Vec<Option<String>> → Array<string | null>
-        let vec_opt = field_type_to_typescript(
+        let vec_opt = typescript(
             &FieldType::Vec(Box::new(FieldType::Option(Box::new(FieldType::String)))),
             g,
             &registry,
@@ -1556,9 +1769,8 @@ mod tests {
     #[test]
     fn test_field_type_to_typescript_exact_output() {
         let registry = make_datetime_registry();
-        let render = |field_type: FieldType, style: ArrayStyle| {
-            field_type_to_typescript(&field_type, style, &registry)
-        };
+        let render =
+            |field_type: FieldType, style: ArrayStyle| typescript(&field_type, style, &registry);
         let s = ArrayStyle::Shorthand;
         let g = ArrayStyle::Generic;
         assert_eq!(render(FieldType::Unit, s), "null");
@@ -1717,6 +1929,7 @@ mod tests {
             ArrayStyle::default(),
             &registry,
             &mut helpers(),
+            None,
         )
         .unwrap();
         assert!(output.contains("/** @endec({ format: \"decimal\" }) */"));
@@ -1777,6 +1990,7 @@ mod tests {
             ArrayStyle::default(),
             &registry,
             &mut helpers(),
+            None,
         )
         .unwrap();
 
@@ -1803,8 +2017,8 @@ mod tests {
                         field_name: "title".to_string(),
                         field_type: FieldType::String,
                         annotations: vec![
-                            "@textController({ label: \"Title\" })".to_string(),
-                            "@overviewColumn({ heading: \"Title\" })".to_string(),
+                            "@input({ label: \"Title\" })".to_string(),
+                            "@column({ heading: \"Title\" })".to_string(),
                         ],
                         ..Default::default()
                     },
@@ -1820,11 +2034,11 @@ mod tests {
                     "Default".to_string(),
                     "Encode".to_string(),
                     "Decode".to_string(),
-                    "Gigaform".to_string(),
-                    "Overview".to_string(),
+                    "Form".to_string(),
+                    "Listing".to_string(),
                 ],
                 annotations: vec![
-                    "@overview({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
+                    "@listing({ dataName: \"account\", apiUrl: \"/api/accounts\" })".to_string(),
                 ],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
@@ -1849,6 +2063,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                     Variant {
                         name: "OnDeck".to_string(),
@@ -1859,6 +2075,8 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_validators: Vec::new(),
+                        element_validator_overrides: Vec::new(),
                     },
                 ],
                 doccom: None,
@@ -1882,31 +2100,32 @@ mod tests {
             ArrayStyle::default(),
             &registry,
             &mut helpers(),
+            None,
         )
         .unwrap();
 
         // Struct: custom derives
         assert!(
-            output.contains("/** @derive(Default, Encode, Decode, Gigaform, Overview) */"),
+            output.contains("/** @derive(Default, Encode, Decode, Form, Listing) */"),
             "Should contain custom derives. Output:\n{}",
             output
         );
         // Struct: type-level annotation
         assert!(
             output
-                .contains("/** @overview({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
+                .contains("/** @listing({ dataName: \"account\", apiUrl: \"/api/accounts\" }) */"),
             "Should contain struct-level annotation. Output:\n{}",
             output
         );
         // Struct: field-level annotations
         assert!(
-            output.contains("/** @textController({ label: \"Title\" }) */"),
-            "Should contain field-level textController annotation. Output:\n{}",
+            output.contains("/** @input({ label: \"Title\" }) */"),
+            "Should contain field-level input annotation. Output:\n{}",
             output
         );
         assert!(
-            output.contains("/** @overviewColumn({ heading: \"Title\" }) */"),
-            "Should contain field-level overviewColumn annotation. Output:\n{}",
+            output.contains("/** @column({ heading: \"Title\" }) */"),
+            "Should contain field-level column annotation. Output:\n{}",
             output
         );
 
@@ -1950,12 +2169,89 @@ mod tests {
             ArrayStyle::default(),
             &registry,
             &mut helpers(),
+            None,
         )
         .unwrap();
         assert!(
             output.contains("/** @derive(Decode) */"),
             "Empty macroforge_derives should fall back to Decode. Output:\n{}",
             output
+        );
+    }
+
+    #[test]
+    fn default_derives_apply_to_every_type_without_its_own() {
+        let structs = BTreeMap::from([
+            (
+                "plain".to_owned(),
+                StructConfig {
+                    struct_name: "plain".to_owned(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "chosen".to_owned(),
+                StructConfig {
+                    struct_name: "chosen".to_owned(),
+                    macroforge_derives: vec!["Encode".to_owned()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let newtypes = BTreeMap::from([(
+            "Slug".to_owned(),
+            NewtypeConfig {
+                name: "Slug".to_owned(),
+                inner: FieldType::String,
+                ..Default::default()
+            },
+        )]);
+        let enums = BTreeMap::new();
+        let index = TypeIndex::with_newtypes(&structs, &enums, &newtypes).unwrap();
+        let registry = crate::types::ForeignTypeRegistry::default();
+        let generate = |default_derives: Option<&[String]>| {
+            generate_macroforge_type_string(
+                &index,
+                ArrayStyle::default(),
+                &registry,
+                &mut helpers(),
+                default_derives,
+            )
+            .unwrap()
+        };
+
+        let defaults = ["Default".to_owned(), "Form".to_owned(), "Decode".to_owned()];
+        let configured = generate(Some(&defaults));
+        assert!(
+            configured.contains("/** @derive(Default, Form, Decode) */\nexport interface Plain"),
+            "{configured}"
+        );
+        assert!(
+            configured.contains("/** @derive(Default, Form, Decode) */\nexport type Slug"),
+            "{configured}"
+        );
+        assert!(
+            configured.contains("/** @derive(Encode) */\nexport interface Chosen"),
+            "a type's own derives win: {configured}"
+        );
+
+        // Unset, a struct falls back to `Decode` and a newtype gets none.
+        let unset = generate(None);
+        assert!(
+            unset.contains("/** @derive(Decode) */\nexport interface Plain"),
+            "{unset}"
+        );
+        assert!(
+            !unset.contains("*/\nexport type Slug"),
+            "a newtype with no derives has no derive line: {unset}"
+        );
+
+        let types = ["plain".to_owned(), "Slug".to_owned()];
+        let macros = BTreeMap::from([("Form".to_owned(), "@app/forms".to_owned())]);
+        assert_eq!(
+            macro_import_lines(&types, &index, &macros, Some(&defaults)).unwrap(),
+            vec!["/** import macro {Form} from \"@app/forms\"; */".to_owned()],
+            "a default derive is imported like a declared one"
         );
     }
 
@@ -2003,18 +2299,18 @@ mod tests {
         let registry = make_datetime_registry();
         let s = ArrayStyle::Shorthand;
         assert!(
-            field_type_to_typescript(&FieldType::Other("DateTime".to_string()), s, &registry)
+            typescript(&FieldType::Other("DateTime".to_string()), s, &registry)
                 .contains("DateTime.Utc")
         );
         // Option<DateTime> should produce DateTime.Utc | null
-        let opt_dt = field_type_to_typescript(
+        let opt_dt = typescript(
             &FieldType::Option(Box::new(FieldType::Other("DateTime".to_string()))),
             s,
             &registry,
         );
         assert!(opt_dt.contains("DateTime.Utc") && opt_dt.contains("null"));
         // Vec<DateTime> should produce DateTime.Utc[]
-        let vec_dt = field_type_to_typescript(
+        let vec_dt = typescript(
             &FieldType::Vec(Box::new(FieldType::Other("DateTime".to_string()))),
             s,
             &registry,
@@ -2027,11 +2323,11 @@ mod tests {
         let registry = make_datetime_registry();
         let s = ArrayStyle::Shorthand;
         assert!(
-            field_type_to_typescript(&FieldType::Other("Decimal".to_string()), s, &registry)
+            typescript(&FieldType::Other("Decimal".to_string()), s, &registry)
                 .contains("BigDecimal.BigDecimal")
         );
         // Option<Decimal> should produce BigDecimal.BigDecimal | null
-        let opt_dec = field_type_to_typescript(
+        let opt_dec = typescript(
             &FieldType::Option(Box::new(FieldType::Other("Decimal".to_string()))),
             s,
             &registry,
@@ -2129,36 +2425,38 @@ mod tests {
             ),
             (
                 "Invoice".to_string(),
-                derived("Invoice", &["Overview", "Form", "Audit"]),
+                derived("Invoice", &["Listing", "Form", "Audit"]),
             ),
         ]);
         let types = ["Order".to_string(), "Invoice".to_string()];
         let macros = BTreeMap::from([
             ("Form".to_string(), "@app/forms".to_string()),
-            ("Overview".to_string(), "@app/forms".to_string()),
+            ("Listing".to_string(), "@app/forms".to_string()),
             ("Audit".to_string(), "@app/audit".to_string()),
         ]);
         assert_eq!(
             macro_import_lines(
                 &types,
                 &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
-                &macros
+                &macros,
+                None,
             )
             .unwrap(),
             vec![
                 "/** import macro {Audit} from \"@app/audit\"; */".to_string(),
-                "/** import macro {Overview, Form} from \"@app/forms\"; */".to_string(),
+                "/** import macro {Listing, Form} from \"@app/forms\"; */".to_string(),
             ]
         );
         let unconfigured = macro_import_lines(
             &types,
             &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
             &BTreeMap::new(),
+            None,
         )
         .unwrap_err()
         .to_string();
         assert!(
-            unconfigured.contains("`Overview`, `Form`, `Audit`") && !unconfigured.contains("Debug"),
+            unconfigured.contains("`Listing`, `Form`, `Audit`") && !unconfigured.contains("Debug"),
             "{unconfigured}"
         );
     }
@@ -2433,7 +2731,7 @@ mod tests {
                 validators: vec![],
                 doccom: None,
                 macroforge_derives: vec!["Encode".to_string(), "Decode".to_string()],
-                annotations: vec!["@overview({ dataName: \"order\" })".to_string()],
+                annotations: vec!["@listing({ dataName: \"order\" })".to_string()],
                 pipeline: Pipeline::default(),
                 rust_derives: vec![],
                 output_override: None,
@@ -2448,6 +2746,7 @@ mod tests {
             ArrayStyle::default(),
             &registry,
             &mut helpers(),
+            None,
         )
         .expect("the types render");
 
@@ -2457,7 +2756,7 @@ mod tests {
             output
         );
         assert!(
-            output.contains("/** @overview({ dataName: \"order\" }) */"),
+            output.contains("/** @listing({ dataName: \"order\" }) */"),
             "Should contain type-level annotation in per-file mode. Output:\n{}",
             output
         );

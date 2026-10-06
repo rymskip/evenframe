@@ -2,18 +2,16 @@
 
 use crate::cli::{DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
 use crate::scan_cache::build_and_record;
-use evenframe_core::scan::{ScanConfig, filter_for_schemasync};
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::{
     error::Result,
-    schemasync::table::TableConfig,
     schemasync::{
         Schemasync,
         config::{ConnectionOverrides, MockOverrides},
         dump::{DumpScope, dump_surql, write_dump},
     },
-    types::{StructConfig, TaggedUnion},
+    types::SchemasyncTypes,
 };
-use std::collections::BTreeMap;
 use tracing::{debug, info};
 
 /// Runs the schemasync command.
@@ -22,14 +20,13 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
 
     // Build all configs and filter to schemasync-eligible types
     let build_config = ScanConfig::discover()?;
-    let (enums, tables, objects) = build_and_record(&build_config)?;
-    let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
+    let types = build_and_record(&build_config)?.into_schemasync()?;
 
     info!(
         "Found {} enums, {} tables, {} objects",
-        enums.len(),
-        tables.len(),
-        objects.len()
+        types.enums.len(),
+        types.tables.len(),
+        types.objects.len()
     );
 
     let overrides = ConnectionOverrides {
@@ -50,9 +47,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
 
                 let schemasync = Schemasync::new()
                     .with_connection_overrides(overrides.clone())
-                    .with_tables(&tables)
-                    .with_objects(&objects)
-                    .with_enums(&enums);
+                    .with_types(&types);
 
                 let changes = schemasync.diff().await?;
 
@@ -93,9 +88,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
 
                     let schemasync = Schemasync::new()
                         .with_connection_overrides(overrides.clone())
-                        .with_tables(&tables)
-                        .with_objects(&objects)
-                        .with_enums(&enums);
+                        .with_types(&types);
 
                     let changes = schemasync.diff().await?;
                     println!("{}", changes.summary());
@@ -122,16 +115,14 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     }
                 }
 
-                run_schemasync(&enums, &tables, &objects, overrides, mocks).await?;
+                run_schemasync(&types, overrides, mocks).await?;
             }
             SchemasyncCommands::Mock(mock_args) => {
                 info!("Generating mock data only...");
 
                 let schemasync = Schemasync::new()
                     .with_connection_overrides(overrides.clone())
-                    .with_tables(&tables)
-                    .with_objects(&objects)
-                    .with_enums(&enums);
+                    .with_types(&types);
 
                 schemasync
                     .mock_only(mock_args.count, mock_args.tables)
@@ -150,7 +141,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     }
                     None => (DumpScope::Schema, dump_args.file),
                 };
-                let ddl = dump_surql(&config, &tables, &objects, &enums, scope)?;
+                let ddl = dump_surql(&config, &types.tables, &types.objects, &types.enums, scope)?;
                 let output_path =
                     chosen_file.unwrap_or_else(|| scope.default_path(config.project_root()));
                 let statement_count = ddl
@@ -161,7 +152,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
 
                 println!(
                     "Wrote {statement_count} DEFINE statements across {} tables to {}",
-                    tables.len(),
+                    types.tables.len(),
                     output_path.display()
                 );
             }
@@ -170,29 +161,25 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
     }
 
     // Default: run full schemasync
-    run_schemasync(&enums, &tables, &objects, overrides, mocks).await
+    run_schemasync(&types, overrides, mocks).await
 }
 
 /// Runs the full schemasync pipeline over the scanned types.
 pub(crate) async fn run_schemasync(
-    enums: &BTreeMap<String, TaggedUnion>,
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
+    types: &SchemasyncTypes,
     overrides: ConnectionOverrides,
     mocks: MockOverrides,
 ) -> Result<()> {
     let schemasync = Schemasync::new()
         .with_connection_overrides(overrides)
         .with_mock_overrides(mocks)
-        .with_tables(tables)
-        .with_objects(objects)
-        .with_enums(enums);
+        .with_types(types);
 
     debug!(
         "Initialized Schemasync with {} tables, {} objects, {} enums",
-        tables.len(),
-        objects.len(),
-        enums.len()
+        types.tables.len(),
+        types.objects.len(),
+        types.enums.len()
     );
 
     info!("Running Schemasync...");

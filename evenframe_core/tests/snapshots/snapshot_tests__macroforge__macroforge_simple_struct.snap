@@ -8,5 +8,5 @@ export interface User {
   email: string;
   age: number;
   score: number;
-  is_active: boolean;
+  isActive: boolean;
 }

@@ -9,12 +9,14 @@ use convert_case::{Case, Casing};
 use evenframe_core::{
     derive::{
         attributes::{
-            find_duplicate_index_name, indexable_fields, parse_annotation_attributes,
-            parse_event_attributes, parse_field_index_attributes, parse_format_attribute,
-            parse_index_attributes, parse_macroforge_derive_attribute, parse_mock_data_attribute,
-            parse_relation_attribute, parse_rust_derives, parse_table_validators,
+            find_duplicate_index_name, indexable_fields, parse_event_attributes,
+            parse_field_index_attributes, parse_format_attribute, parse_index_attributes,
+            parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
+            parse_table_validators,
         },
         naming,
+        schemasync_attributes::{parse_validator_overrides, refuse_container_validator_overrides},
+        typesync_attributes::{Position, TypesyncAttributes},
         validator_parser::parse_field_validators,
     },
     schemasync::{
@@ -34,13 +36,18 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
     let imports = generate_struct_imports();
 
     if let Data::Struct(ref data_struct) = input.data {
-        // Ensure the struct has named fields.
-        let fields_named = if let Fields::Named(ref fields_named) = data_struct.fields {
-            fields_named
-        } else {
+        let wire = match naming::resolve(&input) {
+            Ok(wire) => wire,
+            Err(err) => return err.to_compile_error(),
+        };
+        // A struct serde writes as another type is described as that type.
+        if wire.shape != naming::ItemShape::Named {
+            return crate::newtype_impl::generate_newtype_impl(&input, pipeline, &wire);
+        }
+        let Fields::Named(ref fields_named) = data_struct.fields else {
             return syn::Error::new(
                 ident.span(),
-                format!("Evenframe derive macro only supports structs with named fields.\n\nExample of a valid struct:\n\nstruct {} {{\n    id: String,\n    name: String,\n}}", ident),
+                "a struct written as an object has named fields",
             )
             .to_compile_error();
         };
@@ -118,15 +125,15 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             }
         };
 
-        // Parse macroforge_derive attribute
-        let macroforge_derives = match parse_macroforge_derive_attribute(&input.attrs) {
-            Ok(derives) => derives,
-            Err(err) => return err.to_compile_error(),
-        };
-
-        // Parse annotation attributes
-        let struct_annotations = match parse_annotation_attributes(&input.attrs) {
-            Ok(annotations) => annotations,
+        if let Err(err) = refuse_container_validator_overrides(&input.attrs) {
+            return err.to_compile_error();
+        }
+        let TypesyncAttributes {
+            macroforge_derives,
+            annotations: struct_annotations,
+            ..
+        } = match TypesyncAttributes::parse(&input.attrs, Position::Container) {
+            Ok(typesync) => typesync,
             Err(err) => return err.to_compile_error(),
         };
 
@@ -146,11 +153,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 Ok(v) => v.into_iter().unzip(),
                 Err(err) => return err.to_compile_error(),
             };
-
-        let wire = match naming::resolve(&input) {
-            Ok(wire) => wire,
-            Err(err) => return err.to_compile_error(),
-        };
 
         // A struct with a database `id` field is a table; one without is an
         // application-level data structure.
@@ -237,10 +239,15 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 Err(err) => {
                     return syn::Error::new(
                         err.span(),
-                        format!("Failed to parse validators for field '{}': {}\n\nExample usage:\n#[validators(StringValidator::MinLength(3), StringValidator::MaxLength(50))]\npub name: String\n\n#[validators(StringValidator::Email)]\npub email: String", field_name, err)
+                        format!("Failed to parse validators for field '{field_name}': {err}"),
                     )
                     .to_compile_error();
                 }
+            };
+
+            let validator_overrides = match parse_validator_overrides(&field.attrs) {
+                Ok(overrides) => overrides,
+                Err(err) => return err.to_compile_error(),
             };
 
             // Build the schema token for this field.
@@ -268,9 +275,8 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 quote! { None }
             };
 
-            // Parse field-level annotations
-            let field_annotations = match parse_annotation_attributes(&field.attrs) {
-                Ok(annotations) => annotations,
+            let field_annotations = match TypesyncAttributes::parse(&field.attrs, Position::Field) {
+                Ok(typesync) => typesync.annotations,
                 Err(err) => return err.to_compile_error(),
             };
 
@@ -306,11 +312,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 quote! { vec![#(#field_annotations.to_string()),*] }
             };
 
-            // serde never writes a skipped field, so no output describes it,
-            // as the scanner drops it too.
-            if field_wire.serde_skipped {
-                continue;
-            }
             table_field_tokens.push(quote! {
                 StructField {
                     field_name: #field_name.to_string(),
@@ -320,6 +321,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     define_config: #define_config_tokens,
                     format: #format_tokens,
                     validators: #validators_tokens,
+                    validator_overrides: #validator_overrides,
                     always_regenerate: false,
                     doccom: None,
                     annotations: #field_annotations_tokens,
@@ -393,7 +395,18 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             quote! { vec![#(#rust_derives.to_string()),*] }
         };
 
-        let pipeline_tokens = pipeline.to_tokens();
+        // A struct serde writes as another type is described as that type,
+        // and stored as its own fields.
+        let (struct_pipeline, written_as) = match &wire.wire_as {
+            Some(written) => (
+                pipeline.schemasync_part(),
+                pipeline.typesync_part().map(|typesync| {
+                    crate::newtype_impl::written_as_metadata(&input, written, typesync)
+                }),
+            ),
+            None => (Some(pipeline), None),
+        };
+        let pipeline_tokens = struct_pipeline.unwrap_or(pipeline).to_tokens();
 
         if let Some((position, name)) =
             find_duplicate_index_name(&ident.to_string().to_case(Case::Snake), &indexes)
@@ -480,13 +493,13 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             .iter()
             .zip(&wire.fields)
             .zip(&fields_validators)
-            .map(|((field, field_wire), validators)| CheckedField {
-                field,
-                path: field_wire
+            .enumerate()
+            .map(|(position, ((field, field_wire), validators))| {
+                let path = field_wire
                     .serde
                     .clone()
-                    .unwrap_or_else(|| field.ident.as_ref().map(naming::unraw).unwrap_or_default()),
-                validators,
+                    .unwrap_or_else(|| field.ident.as_ref().map(naming::unraw).unwrap_or_default());
+                CheckedField::new(field, position, path, validators)
             })
             .collect();
         let validate_impl = match struct_validate(&input, &checked_fields) {
@@ -516,7 +529,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 &format!("{}_REGISTRY_ENTRY", ident.to_string().to_uppercase()),
                 ident.span(),
             );
-            let registry_submission = quote! {
+            let registry_submission = struct_pipeline.is_some().then(|| quote! {
                 #[::evenframe::linkme::distributed_slice(::evenframe::registry::TABLE_REGISTRY_ENTRIES)]
                 #[linkme(crate = ::evenframe::linkme)]
                 static #registry_var_name: ::evenframe::registry::TableRegistryEntry = ::evenframe::registry::TableRegistryEntry {
@@ -524,12 +537,11 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     table_config_fn: || #ident::static_table_config(),
                     pipeline: #pipeline_tokens,
                 };
-            };
+            });
 
-            quote! {
-                impl ::evenframe::traits::EvenframeTable for #ident {}
-
-                ::evenframe::__metadata! {
+            let metadata_gate = crate::metadata::gate(
+                &input,
+                quote! {
                     const _: () = {
                         #imports
 
@@ -537,7 +549,14 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
                         #registry_submission
                     };
-                }
+                },
+            );
+            quote! {
+                impl ::evenframe::traits::EvenframeTable for #ident {}
+
+                #metadata_gate
+
+                #written_as
 
                 #validate_impl
 
@@ -572,7 +591,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 &format!("{}_OBJECT_REGISTRY_ENTRY", ident.to_string().to_uppercase()),
                 ident.span(),
             );
-            let registry_submission = quote! {
+            let registry_submission = struct_pipeline.is_some().then(|| quote! {
                 #[::evenframe::linkme::distributed_slice(::evenframe::registry::OBJECT_REGISTRY_ENTRIES)]
                 #[linkme(crate = ::evenframe::linkme)]
                 static #registry_var_name: ::evenframe::registry::ObjectRegistryEntry = ::evenframe::registry::ObjectRegistryEntry {
@@ -580,7 +599,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     struct_config_fn: || #ident::static_struct_config(),
                     pipeline: #pipeline_tokens,
                 };
-            };
+            });
 
             // App structs only need `StructField`/`FieldType` and the registry,
             // not the table import block's schemasync types, which a crate
@@ -590,8 +609,9 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 use ::evenframe::registry;
             };
 
-            quote! {
-                ::evenframe::__metadata! {
+            let metadata_gate = crate::metadata::gate(
+                &input,
+                quote! {
                     const _: () = {
                         #app_imports
 
@@ -599,7 +619,12 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
                         #registry_submission
                     };
-                }
+                },
+            );
+            quote! {
+                #metadata_gate
+
+                #written_as
 
                 #validate_impl
 

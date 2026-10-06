@@ -76,8 +76,12 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
 
 fn validate_types() -> Result<(usize, usize, usize)> {
     let build_config = ScanConfig::discover()?;
-    let (enums, tables, objects) = build_and_record(&build_config)?;
-    Ok((enums.len(), tables.len(), objects.len()))
+    let configs = build_and_record(&build_config)?;
+    Ok((
+        configs.enums.len(),
+        configs.tables.len(),
+        configs.objects.len(),
+    ))
 }
 
 async fn check_database() -> Result<()> {

@@ -348,13 +348,13 @@ fn string_rule(
             rules.max_len = Some(rules.max_len.map_or(length, |current| current.min(length)));
             true
         }
-        Some(JsCheck::Pattern(source)) if holds_in_re2(&source) => {
+        Some(JsCheck::Pattern { source, flags }) if flags.is_empty() && holds_in_re2(&source) => {
             rules
                 .patterns
                 .push((re2(&source), validator.description().to_string()));
             true
         }
-        Some(JsCheck::Pattern(_) | JsCheck::Predicate(_)) | None => false,
+        Some(JsCheck::Pattern { .. } | JsCheck::Predicate(_)) | None => false,
     })
 }
 

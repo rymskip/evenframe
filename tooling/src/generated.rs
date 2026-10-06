@@ -1,6 +1,6 @@
 //! Checks the generated output recorded in the typesync snapshots with the
-//! tools that consume it: deno type-checks the TypeScript and runs the serde
-//! parity cases, protoc and flatc compile the schemas.
+//! tools that consume it: deno type-checks the TypeScript and validates naming
+//! and value shapes, protoc and flatc compile the schemas.
 
 use crate::project_root;
 use std::fs;
@@ -62,16 +62,17 @@ fn write_outputs() -> std::io::Result<Outputs> {
             ),
         )
     })?;
-    fs::copy(
-        check_dir.join("serde_parity.ts"),
-        typescript.join("serde_parity.ts"),
-    )
-    .map_err(|error| {
-        std::io::Error::new(
-            error.kind(),
-            format!("Copying generated-check runtime cases: {error}"),
-        )
-    })?;
+    for (file, purpose) in [
+        ("schema-values.ts", "runtime cases"),
+        ("newtype.d.ts", "Macroforge declarations"),
+    ] {
+        fs::copy(check_dir.join(file), typescript.join(file)).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("Copying generated-check {purpose}: {error}"),
+            )
+        })?;
+    }
 
     let mut typescript_files = Vec::new();
     let mut schemas = Vec::new();
@@ -104,12 +105,12 @@ fn write_outputs() -> std::io::Result<Outputs> {
         }
     }
     // The typesync pipeline snapshot holds whole generated files, including
-    // per-file outputs whose files import each other and the playground's
+    // per-file outputs whose files import each other and the testground's
     // record id codec one directory up.
     let pipeline = snapshot_body(&snapshots.join(PIPELINE_SNAPSHOT))?;
     fs::create_dir_all(typescript.join("pipeline"))?;
     fs::copy(
-        root.join("evenframe_playground/src/record-id.ts"),
+        root.join("tooling/testground/src/record-id.ts"),
         typescript.join("pipeline/record-id.ts"),
     )?;
     for (relative, content) in split_files(&pipeline) {
@@ -221,7 +222,7 @@ fn compile(outputs: &Outputs) -> bool {
     });
     ok &= run_checked("deno", |command| {
         command
-            .args(["run", "--config", "deno.json", "serde_parity.ts"])
+            .args(["run", "--config", "deno.json", "schema-values.ts"])
             .current_dir(&outputs.typescript);
     });
     for (kind, path) in &outputs.schemas {

@@ -1,0 +1,16 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Shape: [[{ Circle: ['number', '&', 'number > 0'] }, '|', { Tag: [['string', '&', 'string >= 1'], ['number', '&', 'number < 10']] }], '|', ['string', ':', (value) => value.toUpperCase() === value]],
+Range: [['number', '&', 'number >= 0'], 'string'],
+
+});
+
+const exported = bindings.export();
+
+
+export type Shape = typeof exported.Shape.infer;
+export type Range = typeof exported.Range.infer;

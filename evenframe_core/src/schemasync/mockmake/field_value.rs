@@ -6,7 +6,8 @@ use crate::{
     schemasync::mockmake::validator_gen,
     schemasync::table::surql_ident,
     types::{
-        EnumRepresentation, FieldType, ForeignTypeRegistry, StructConfig, StructField, VariantData,
+        EnumRepresentation, FieldOwner, FieldType, ForeignTypeRegistry, StructConfig, StructField,
+        TaggedUnion, VariantData,
     },
     validator::{MockValue, Validator},
 };
@@ -25,6 +26,16 @@ struct Frame<'a> {
     field: &'a StructField,
     table_config: &'a TableConfig,
     field_type: &'a FieldType,
+    /// The validators the value must pass: its field's, after those of any
+    /// newtype declared at this position, and the TypeScript outputs' where
+    /// they differ, listed first so the schema's own pattern seeds a string.
+    validators: Rc<[Validator]>,
+    /// The type declared at this position, where the stored type replaced a
+    /// newtype somewhere in the field.
+    declared: Option<&'a FieldType>,
+    /// Whether the field's validators already hold this position's newtype
+    /// validators, as they do for the field itself and an `Option` of it.
+    chained: bool,
     /// The dotted path of the value, shared by the frames that keep it.
     field_path: Rc<str>,
     /// The object and enum types around this value, to stop at a type that
@@ -58,6 +69,55 @@ impl<'a> Frame<'a> {
             outer: self.visited_types.clone(),
         }))
     }
+
+    /// A value inside this one, of `field_type`, declared as what `part`
+    /// picks from this position's declared type.
+    fn part(
+        &self,
+        field_type: &'a FieldType,
+        part: impl FnOnce(&'a FieldType) -> Option<&'a FieldType>,
+    ) -> Self {
+        Frame {
+            field_type,
+            declared: self.declared.and_then(part),
+            chained: false,
+            ..self.clone()
+        }
+    }
+
+    /// The first value of a field: `field` itself, declared as `declared`.
+    fn field(
+        field: &'a StructField,
+        table_config: &'a TableConfig,
+        field_path: Rc<str>,
+        declared: Option<&'a FieldType>,
+        visited_types: Option<Rc<Visited<'a>>>,
+    ) -> Self {
+        Frame {
+            field,
+            table_config,
+            field_type: &field.field_type,
+            validators: checked(
+                field.validator_overrides.typesync.as_deref(),
+                &field.validators,
+            ),
+            declared,
+            chained: true,
+            field_path,
+            visited_types,
+        }
+    }
+}
+
+/// A value's validators: the TypeScript outputs' `checks` where they differ,
+/// then the schema's, whose pattern seeds a string as the last one listed.
+fn checked(checks: Option<&[Validator]>, validators: &[Validator]) -> Rc<[Validator]> {
+    checks
+        .into_iter()
+        .flatten()
+        .chain(validators)
+        .cloned()
+        .collect()
 }
 
 /// Where a generated value goes, written out only when an error names it.
@@ -115,18 +175,21 @@ impl<'a> FieldValueGenerator<'a> {
         let mut value_stack: Vec<String> = Vec::new();
         let mut rng = rand::rng();
 
-        let initial_context = Frame {
-            field: self.field,
-            table_config: self.table_config,
-            field_type: &self.field.field_type,
-            field_path: Rc::from(self.field.field_name.as_str()),
-            visited_types: None,
-        };
-        work_stack.push(WorkItem::Generate(initial_context));
+        let owner = FieldOwner::Table(self.table_config.effective().table_name.clone());
+        work_stack.push(WorkItem::Generate(Frame::field(
+            self.field,
+            self.table_config,
+            Rc::from(self.field.field_name.as_str()),
+            self.mockmaker
+                .declared
+                .field(&owner, &self.field.field_name),
+            None,
+        )));
 
         while let Some(work_item) = work_stack.pop() {
             match work_item {
                 WorkItem::Generate(ctx) => {
+                    let ctx = self.meet_declared(ctx);
                     // Tier 0: the table's mock-data plugin, when it gives a value.
                     #[cfg(feature = "wasm-plugins")]
                     if let Some(plugin_name) = self
@@ -190,47 +253,41 @@ impl<'a> FieldValueGenerator<'a> {
                         value_stack.push(self.handle_format(
                             format,
                             ctx.field_type,
-                            &ctx.field.validators,
+                            &ctx.validators,
                             location,
                         )?);
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
-                        &ctx.field.validators,
+                        &ctx.validators,
                         &mut rng,
                     ) {
                         value_stack.push(value);
                     } else {
                         match ctx.field_type {
                             FieldType::String => value_stack
-                                .push(generate_string_with_retry(&ctx.field.validators, location)?),
+                                .push(generate_string_with_retry(&ctx.validators, location)?),
                             FieldType::Char => value_stack
                                 .push(format!("'{}'", rng.random_range(32u8..=126u8) as char)),
                             FieldType::Bool => {
                                 value_stack.push(format!("{}", rng.random_bool(0.5)))
                             }
-                            FieldType::Unit => value_stack.push("NONE".to_string()),
+                            // serde writes a unit as null.
+                            FieldType::Unit => value_stack.push("NULL".to_string()),
                             FieldType::Duration => {
                                 // The generator draws inside every duration
                                 // bound, so bounds it could not meet are disjoint.
-                                if ctx.field.validators.iter().any(|validator| {
+                                if ctx.validators.iter().any(|validator| {
                                     matches!(validator, Validator::DurationValidator(_))
                                 }) {
-                                    return Err(disjoint_durations(
-                                        location,
-                                        &ctx.field.validators,
-                                    ));
+                                    return Err(disjoint_durations(location, &ctx.validators));
                                 }
                                 value_stack.push(validator_gen::duration_literal(
                                     rng.random_range(0..validator_gen::DAY_NANOS),
                                 ));
                             }
-                            FieldType::F32 | FieldType::F64 => {
-                                value_stack.push(generate_float_with_retry(
-                                    &ctx.field.validators,
-                                    location,
-                                    &mut rng,
-                                )?)
-                            }
+                            FieldType::F32 | FieldType::F64 => value_stack.push(
+                                generate_float_with_retry(&ctx.validators, location, &mut rng)?,
+                            ),
                             FieldType::I8
                             | FieldType::I16
                             | FieldType::I32
@@ -244,7 +301,7 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::U128
                             | FieldType::Usize => value_stack.push(generate_integer_with_retry(
                                 ctx.field_type,
-                                &ctx.field.validators,
+                                &ctx.validators,
                                 location,
                                 &mut rng,
                             )?),
@@ -262,15 +319,20 @@ impl<'a> FieldValueGenerator<'a> {
                                             .to_string(),
                                     );
                                 } else {
+                                    // The field's validators cover a newtype
+                                    // its `Option` holds, as they cover the field.
                                     work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: inner_type,
-                                        ..ctx.clone()
+                                        chained: ctx.chained,
+                                        ..ctx.part(inner_type, |declared| match declared {
+                                            FieldType::Option(held) => Some(&**held),
+                                            _ => None,
+                                        })
                                     }));
                                 }
                             }
                             FieldType::Vec(inner_type) => {
                                 let (lo, hi) =
-                                    validator_gen::array_count_range(&ctx.field.validators, 2, 9);
+                                    validator_gen::array_count_range(&ctx.validators, 2, 9);
                                 // A list of values holding a link with nothing to
                                 // point at stays empty.
                                 let count = if self.mockmaker.has_unfillable_link(inner_type) {
@@ -282,19 +344,25 @@ impl<'a> FieldValueGenerator<'a> {
                                 };
                                 work_stack.push(WorkItem::AssembleVec { count });
                                 for _ in 0..count {
-                                    work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: inner_type,
-                                        ..ctx.clone()
-                                    }));
+                                    work_stack.push(WorkItem::Generate(ctx.part(
+                                        inner_type,
+                                        |declared| match declared {
+                                            FieldType::Vec(item) => Some(&**item),
+                                            _ => None,
+                                        },
+                                    )));
                                 }
                             }
                             FieldType::Tuple(types) => {
                                 work_stack.push(WorkItem::AssembleTuple { count: types.len() });
-                                for inner_type in types.iter().rev() {
-                                    work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: inner_type,
-                                        ..ctx.clone()
-                                    }));
+                                for (position, inner_type) in types.iter().enumerate().rev() {
+                                    work_stack.push(WorkItem::Generate(ctx.part(
+                                        inner_type,
+                                        |declared| match declared {
+                                            FieldType::Tuple(items) => items.get(position),
+                                            _ => None,
+                                        },
+                                    )));
                                 }
                             }
                             FieldType::Struct(fields) => {
@@ -302,14 +370,20 @@ impl<'a> FieldValueGenerator<'a> {
                                     fields.iter().map(|(name, _)| name.clone()).collect();
                                 work_stack.push(WorkItem::AssembleStruct { field_names });
 
-                                for (nested_field_name, ftype) in fields.iter().rev() {
+                                for (position, (nested_field_name, ftype)) in
+                                    fields.iter().enumerate().rev()
+                                {
                                     work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: ftype,
                                         field_path: Rc::from(format!(
                                             "{}.{nested_field_name}",
                                             ctx.field_path
                                         )),
-                                        ..ctx.clone()
+                                        ..ctx.part(ftype, |declared| match declared {
+                                            FieldType::Struct(members) => {
+                                                members.get(position).map(|(_, member)| member)
+                                            }
+                                            _ => None,
+                                        })
                                     }));
                                 }
                             }
@@ -318,14 +392,22 @@ impl<'a> FieldValueGenerator<'a> {
                                 let count = rng.random_range(0..3);
                                 work_stack.push(WorkItem::AssembleMap { count });
                                 for _ in 0..count {
-                                    work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: value_ft,
-                                        ..ctx.clone()
-                                    }));
-                                    work_stack.push(WorkItem::Generate(Frame {
-                                        field_type: key_ft,
-                                        ..ctx.clone()
-                                    }));
+                                    work_stack.push(WorkItem::Generate(ctx.part(
+                                        value_ft,
+                                        |declared| match declared {
+                                            FieldType::HashMap(_, value)
+                                            | FieldType::BTreeMap(_, value) => Some(&**value),
+                                            _ => None,
+                                        },
+                                    )));
+                                    work_stack.push(WorkItem::Generate(ctx.part(
+                                        key_ft,
+                                        |declared| match declared {
+                                            FieldType::HashMap(key, _)
+                                            | FieldType::BTreeMap(key, _) => Some(&**key),
+                                            _ => None,
+                                        },
+                                    )));
                                 }
                             }
                             FieldType::RecordLink(inner_type) => {
@@ -474,13 +556,13 @@ impl<'a> FieldValueGenerator<'a> {
                                         &ctx.field_path,
                                         &mut rng,
                                     )?);
-                                } else if let Some(struct_config) = self
-                                    .mockmaker
-                                    .objects
-                                    .get(type_name)
-                                    .or_else(|| self.mockmaker.objects.get(&snake_case_name))
+                                } else if let Some((object_name, struct_config)) =
+                                    self.mockmaker.objects.get_key_value(type_name).or_else(|| {
+                                        self.mockmaker.objects.get_key_value(&snake_case_name)
+                                    })
                                 {
                                     let struct_config = struct_config.effective();
+                                    let owner = FieldOwner::Object(object_name.clone());
                                     let field_names: Vec<String> = struct_config
                                         .fields
                                         .iter()
@@ -490,28 +572,37 @@ impl<'a> FieldValueGenerator<'a> {
 
                                     let visited_types = ctx.inside(type_name);
                                     for struct_field in struct_config.fields.iter().rev() {
-                                        work_stack.push(WorkItem::Generate(Frame {
-                                            field: struct_field,
-                                            field_type: &struct_field.field_type,
-                                            field_path: Rc::from(format!(
+                                        work_stack.push(WorkItem::Generate(Frame::field(
+                                            struct_field,
+                                            ctx.table_config,
+                                            Rc::from(format!(
                                                 "{}.{}",
                                                 ctx.field_path, struct_field.field_name
                                             )),
-                                            table_config: ctx.table_config,
-                                            visited_types: visited_types.clone(),
-                                        }));
+                                            self.mockmaker
+                                                .declared
+                                                .field(&owner, &struct_field.field_name),
+                                            visited_types.clone(),
+                                        )));
                                     }
-                                } else if let Some(tagged_union) =
-                                    self.mockmaker.enums.get(type_name)
+                                } else if let Some(tagged_union) = self
+                                    .mockmaker
+                                    .enums
+                                    .get(type_name)
+                                    .map(TaggedUnion::effective)
                                 {
-                                    let variant =
-                                        tagged_union.variants.choose(&mut rng).ok_or_else(|| {
+                                    let variant = tagged_union
+                                        .variants
+                                        .choose(&mut rng)
+                                        .ok_or_else(|| {
                                             EvenframeError::mock_generation(format!(
                                                 "`{}` is the enum `{type_name}`, which has no variants",
                                                 ctx.field_path
                                             ))
-                                        })?;
-                                    let repr = &tagged_union.representation;
+                                        })?
+                                        .effective();
+                                    let repr =
+                                        variant.stored_representation(&tagged_union.representation);
                                     if let Some(ref variant_data) = variant.data {
                                         let struct_payload = match variant_data {
                                             VariantData::InlineStruct(enum_struct) => Some(enum_struct.effective()),
@@ -577,17 +668,23 @@ impl<'a> FieldValueGenerator<'a> {
                                             }
 
                                             let visited_types = ctx.inside(type_name);
+                                            let owner = FieldOwner::Variant {
+                                                enum_name: type_name.clone(),
+                                                variant: variant.name.clone(),
+                                            };
                                             for struct_field in struct_config.fields.iter().rev() {
-                                                work_stack.push(WorkItem::Generate(Frame {
-                                                    field: struct_field,
-                                                    field_type: &struct_field.field_type,
-                                                    field_path: Rc::from(format!(
+                                                work_stack.push(WorkItem::Generate(Frame::field(
+                                                    struct_field,
+                                                    ctx.table_config,
+                                                    Rc::from(format!(
                                                         "{}.{}",
                                                         ctx.field_path, struct_field.field_name
                                                     )),
-                                                    table_config: ctx.table_config,
-                                                    visited_types: visited_types.clone(),
-                                                }));
+                                                    self.mockmaker
+                                                        .declared
+                                                        .field(&owner, &struct_field.field_name),
+                                                    visited_types.clone(),
+                                                )));
                                             }
 
                                             // For adjacently tagged, push tag value after struct fields (processed first due to LIFO)
@@ -632,10 +729,81 @@ impl<'a> FieldValueGenerator<'a> {
                                                     ));
                                                 }
                                             }
-                                            work_stack.push(WorkItem::Generate(Frame {
+                                            let payload = Frame {
                                                 field_type,
+                                                declared: self
+                                                    .mockmaker
+                                                    .declared
+                                                    .payload(type_name, &variant.name),
+                                                chained: false,
                                                 ..ctx.clone()
-                                            }));
+                                            };
+                                            // Each element of the payload meets its own validators.
+                                            match (
+                                                field_type,
+                                                variant.element_validators.as_slice(),
+                                            ) {
+                                                (_, []) => {
+                                                    work_stack.push(WorkItem::Generate(payload));
+                                                }
+                                                (FieldType::Tuple(items), validators)
+                                                    if items.len() == validators.len() =>
+                                                {
+                                                    work_stack.push(WorkItem::AssembleTuple {
+                                                        count: items.len(),
+                                                    });
+                                                    for (position, (item, validators)) in items
+                                                        .iter()
+                                                        .zip(validators)
+                                                        .enumerate()
+                                                        .rev()
+                                                    {
+                                                        let checks = variant
+                                                            .element_validator_overrides
+                                                            .get(position)
+                                                            .and_then(|overrides| {
+                                                                overrides.typesync.as_deref()
+                                                            });
+                                                        work_stack.push(WorkItem::Generate(
+                                                            Frame {
+                                                                validators: checked(
+                                                                    checks, validators,
+                                                                ),
+                                                                ..payload.part(item, |declared| {
+                                                                    match declared {
+                                                                        FieldType::Tuple(
+                                                                            declared_items,
+                                                                        ) => declared_items
+                                                                            .get(position),
+                                                                        _ => None,
+                                                                    }
+                                                                })
+                                                            },
+                                                        ));
+                                                    }
+                                                }
+                                                (_, [validators]) => {
+                                                    let checks = variant
+                                                        .element_validator_overrides
+                                                        .first()
+                                                        .and_then(|overrides| {
+                                                            overrides.typesync.as_deref()
+                                                        });
+                                                    work_stack.push(WorkItem::Generate(Frame {
+                                                        validators: checked(checks, validators),
+                                                        ..payload
+                                                    }));
+                                                }
+                                                (_, validators) => {
+                                                    return Err(EvenframeError::mock_generation(
+                                                        format!(
+                                                            "`{type_name}::{}` has validators for {} elements but holds {field_type:?}",
+                                                            variant.db_name(),
+                                                            validators.len(),
+                                                        ),
+                                                    ));
+                                                }
+                                            }
                                         }
                                     } else {
                                         // Unit variant
@@ -719,6 +887,37 @@ impl<'a> FieldValueGenerator<'a> {
                 values.len()
             ))),
         }
+    }
+
+    /// Meets the newtype declared at this position, if any: the value is
+    /// stored as the newtype's inner type and must pass its validators.
+    fn meet_declared(&self, mut frame: Frame<'a>) -> Frame<'a> {
+        let Some(mut declared) = frame.declared else {
+            return frame;
+        };
+        // A present value of an optional field is generated without its `Option`.
+        if let FieldType::Option(held) = declared
+            && !matches!(frame.field_type, FieldType::Option(_))
+        {
+            declared = held;
+        }
+        frame.declared = Some(declared);
+        if let Some((inner, chain)) = self.mockmaker.declared.newtype(declared) {
+            if !frame.chained {
+                frame.validators = self
+                    .mockmaker
+                    .declared
+                    .newtype_checks(declared)
+                    .into_iter()
+                    .flatten()
+                    .chain(chain)
+                    .chain(frame.validators.iter())
+                    .cloned()
+                    .collect();
+            }
+            frame.declared = Some(inner);
+        }
+        frame
     }
 
     fn handle_format(
@@ -1049,5 +1248,130 @@ mod draw_tests {
     fn empty_pools_have_nothing_to_draw() {
         let mut rng = rand::rng();
         assert!(draw_from_pools(&[&[][..], &[][..]], &mut rng).is_none());
+    }
+}
+
+#[cfg(all(test, feature = "scan"))]
+mod newtype_tests {
+    use crate::scan::{ScanConfig, build_all_configs};
+    use crate::schemasync::{config::SchemasyncConfig, mockmake::Mockmaker};
+    use crate::types::ForeignTypeRegistry;
+    use std::fs;
+    use surrealdb::{Surreal, engine::remote::http::Client};
+    use tempfile::TempDir;
+
+    /// A newtype held directly, optionally and at every nested position the
+    /// stored type no longer names it at.
+    const SOURCE: &str = r#"
+        use evenframe::Evenframe;
+
+        #[derive(Evenframe)]
+        #[validators(StringValidator::Email)]
+        pub struct Email(String);
+
+        #[derive(Evenframe)]
+        pub struct Contact { pub emails: Vec<Email> }
+
+        #[derive(Evenframe)]
+        pub enum Reach { Mail(Email), Nowhere }
+
+        #[derive(Evenframe)]
+        pub struct Person {
+            pub id: String,
+            pub primary: Email,
+            pub backup: Option<Email>,
+            pub emails: Vec<Email>,
+            pub by_label: std::collections::BTreeMap<String, Email>,
+            pub pair: (Email, u8),
+            pub contact: Contact,
+            pub reach: Reach,
+        }
+    "#;
+
+    /// The contents of every single-quoted string in a SurrealQL literal.
+    fn strings(literal: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut characters = literal.chars();
+        while let Some(character) = characters.next() {
+            if character != '\'' {
+                continue;
+            }
+            let mut text = String::new();
+            while let Some(inner) = characters.next() {
+                match inner {
+                    '\\' => text.extend(characters.next()),
+                    '\'' => break,
+                    other => text.push(other),
+                }
+            }
+            found.push(text);
+        }
+        found
+    }
+
+    #[test]
+    fn a_mock_value_meets_the_validators_of_every_newtype_it_holds() {
+        let project = TempDir::new().unwrap();
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(project.path().join("src")).unwrap();
+        fs::write(project.path().join("src/lib.rs"), SOURCE).unwrap();
+        let types = build_all_configs(&ScanConfig {
+            scan_path: project.path().to_path_buf(),
+            ..ScanConfig::default()
+        })
+        .unwrap()
+        .into_schemasync()
+        .unwrap();
+        let db = Surreal::<Client>::init();
+        let config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+        let registry = ForeignTypeRegistry::default();
+        let mockmaker = Mockmaker::new(
+            &db,
+            &types.tables,
+            &types.objects,
+            &types.enums,
+            &types.declared,
+            &config,
+            &registry,
+        )
+        .unwrap();
+        let person = &types.tables["person"];
+        let value = |name: &str| {
+            let field = person
+                .struct_config
+                .fields
+                .iter()
+                .find(|field| field.field_name == name)
+                .unwrap();
+            mockmaker.generate_value(person, field, 0).unwrap()
+        };
+        let is_email = |text: &String| text.contains('@');
+        for _ in 0..50 {
+            let primary = value("primary");
+            assert!(strings(&primary).iter().all(is_email), "{primary}");
+            let backup = value("backup");
+            assert!(strings(&backup).iter().all(is_email), "{backup}");
+            let emails = value("emails");
+            assert!(strings(&emails).iter().all(is_email), "{emails}");
+            let by_label = value("by_label");
+            assert!(
+                strings(&by_label).iter().skip(1).step_by(2).all(is_email),
+                "{by_label}"
+            );
+            let pair = value("pair");
+            assert!(strings(&pair).iter().all(is_email), "{pair}");
+            let contact = value("contact");
+            assert!(strings(&contact).iter().all(is_email), "{contact}");
+            let reach = value("reach");
+            assert!(
+                reach == "'Nowhere'" || strings(&reach).iter().all(is_email),
+                "{reach}"
+            );
+        }
     }
 }

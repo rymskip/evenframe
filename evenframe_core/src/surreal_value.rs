@@ -11,8 +11,8 @@ pub mod __private {
     use std::marker::PhantomData;
 
     pub use surrealdb_types::{
-        Array, Error, Kind, KindLiteral, Object, SerdeWrapper, SerializationError, SurrealValue,
-        Table, Value,
+        Array, Error, Kind, KindLiteral, Number, Object, SerdeWrapper, SerializationError,
+        SurrealValue, Table, Value,
     };
 
     /// Converts a field's value with its type's own `SurrealValue`, or
@@ -67,6 +67,48 @@ pub mod __private {
         }
     }
 
+    /// The keys a struct reads, which a flattened read of it takes from the
+    /// keys its siblings left, as serde's does.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is not stored as an object of named keys",
+        label = "an internally tagged variant stores its tag beside this payload's keys",
+        note = "serde fails at runtime to write a tag beside anything but an object: hold a \
+                struct of named fields deriving Evenframe, or tag the enum adjacently"
+    )]
+    pub trait StoredKeys {
+        fn stored_keys() -> &'static [&'static str];
+    }
+
+    /// Holds only where `T` is stored as an object, which an internally tagged
+    /// variant's payload must be.
+    pub const fn stored_object<T: StoredKeys>() {}
+
+    /// The keys a flattened field of type `T` takes: a struct's own, through
+    /// the impl on `Field`; none for any other type, such as a map, which
+    /// reads the keys left without taking them.
+    pub trait Taken {
+        fn taken(&self) -> &'static [&'static str];
+    }
+
+    impl<T: StoredKeys> Taken for Field<T> {
+        fn taken(&self) -> &'static [&'static str] {
+            T::stored_keys()
+        }
+    }
+
+    impl<T> Taken for &Field<T> {
+        fn taken(&self) -> &'static [&'static str] {
+            &[]
+        }
+    }
+
+    /// Removes the keys a flattened read took.
+    pub fn take(fields: &mut BTreeMap<String, Value>, keys: &[&str]) {
+        for key in keys {
+            fields.remove(*key);
+        }
+    }
+
     pub fn error(message: String) -> Error {
         Error::serialization(message, SerializationError::Deserialization)
     }
@@ -93,12 +135,21 @@ pub mod __private {
         }
     }
 
-    /// The value under the first of `keys` present and neither NONE nor NULL.
-    /// Every one of them is taken, so none reads as an unknown key.
-    pub fn present(fields: &mut BTreeMap<String, Value>, keys: &[&str]) -> Option<Value> {
+    /// The value under the first of `keys` present and not NONE, nor NULL for
+    /// an `Option`, which reads NULL as absent as serde does. Every one of
+    /// them is taken, so none reads as an unknown key.
+    pub fn present(
+        fields: &mut BTreeMap<String, Value>,
+        keys: &[&str],
+        optional: bool,
+    ) -> Option<Value> {
         keys.iter()
             .filter_map(|key| fields.remove(*key))
-            .filter(|value| !matches!(value, Value::None | Value::Null))
+            .filter(|value| match value {
+                Value::None => false,
+                Value::Null => !optional,
+                _ => true,
+            })
             .reduce(|first, _| first)
     }
 
@@ -209,11 +260,12 @@ pub mod __private {
         object_value(fields.clone())
     }
 
-    /// A flattened field's own fields beside its siblings', or the value
-    /// under its key when it is not an object.
+    /// A flattened field's own fields beside its siblings', nothing for an
+    /// absent `Option`, or the value under its key when it is not an object.
     pub fn merge(fields: &mut BTreeMap<String, Value>, key: &str, value: Value) {
         match value {
             Value::Object(object) => fields.extend(object.into_inner()),
+            Value::None => {}
             other => {
                 fields.insert(key.to_owned(), other);
             }

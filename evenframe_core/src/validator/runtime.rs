@@ -1,6 +1,7 @@
 //! Entry points for the validation the `Evenframe` derive generates. Each
 //! validator family is bound by a trait, so a validator on a field type it
-//! cannot apply to is a compile error rather than a silent pass.
+//! cannot apply to is a compile error rather than a silent pass. A newtype
+//! meets each bound its inner type meets.
 
 use super::bounds::{self, Decimal};
 use super::keywords;
@@ -44,18 +45,88 @@ fn bound<T>(parsed: Result<T, String>) -> Result<T, Rejection> {
     parsed.map_err(Rejection)
 }
 
+// ----- Newtypes --------------------------------------------------------------
+
+/// A struct serde writes as its one field's value. The derive implements it,
+/// so a validator on a field holding the newtype checks the value inside.
+pub trait Newtype {
+    type Inner;
+    fn inner(&self) -> &Self::Inner;
+}
+
+/// Rewriting and building a newtype's value, which skips the newtype's own
+/// validators, so generated code checks the newtype again afterwards.
+#[doc(hidden)]
+pub trait NewtypeParts: Newtype + Sized {
+    fn inner_mut(&mut self) -> &mut Self::Inner;
+    fn from_inner(inner: Self::Inner) -> Self;
+}
+
 // ----- Strings ---------------------------------------------------------------
 
+/// Text a [`StringValidator`] checks.
+pub trait StringValue {
+    fn text(&self) -> &str;
+}
+
+impl StringValue for str {
+    fn text(&self) -> &str {
+        self
+    }
+}
+
+impl StringValue for String {
+    fn text(&self) -> &str {
+        self
+    }
+}
+
+impl<N: Newtype> StringValue for N
+where
+    N::Inner: StringValue,
+{
+    fn text(&self) -> &str {
+        self.inner().text()
+    }
+}
+
+/// Text a string transform rewrites.
+pub trait StringTarget {
+    fn text_mut(&mut self) -> &mut String;
+}
+
+impl StringTarget for String {
+    fn text_mut(&mut self) -> &mut String {
+        self
+    }
+}
+
+impl<N: NewtypeParts> StringTarget for N
+where
+    N::Inner: StringTarget,
+{
+    fn text_mut(&mut self) -> &mut String {
+        self.inner_mut().text_mut()
+    }
+}
+
 /// Applies a string check.
-pub fn check_string(value: &str, validator: &StringValidator) -> Result<(), Rejection> {
-    require(validator.accepts(value), || validator.expectation())
+pub fn check_string<S: StringValue + ?Sized>(
+    value: &S,
+    validator: &StringValidator,
+) -> Result<(), Rejection> {
+    require(validator.accepts(value.text()), || validator.expectation())
 }
 
 /// Applies a string transform in place.
-pub fn transform_string(value: &mut String, validator: &StringValidator) -> Result<(), Rejection> {
+pub fn transform_string<S: StringTarget + ?Sized>(
+    value: &mut S,
+    validator: &StringValidator,
+) -> Result<(), Rejection> {
     match validator.rule() {
         StringRule::Transform(transform) => {
-            *value = transform.apply(value);
+            let text = value.text_mut();
+            *text = transform.apply(text);
             Ok(())
         }
         StringRule::Check | StringRule::Parse(_) | StringRule::Carrier => {
@@ -92,6 +163,15 @@ impl FromSafeInteger for f64 {
     }
 }
 
+impl<N: NewtypeParts> FromSafeInteger for N
+where
+    N::Inner: FromSafeInteger,
+{
+    fn from_safe_integer(value: i64) -> Option<Self> {
+        N::Inner::from_safe_integer(value).map(N::from_inner)
+    }
+}
+
 /// A type `string.numeric.parse` can produce.
 pub trait FromNumeric: Sized {
     fn from_numeric(text: &str) -> Option<Self>;
@@ -106,6 +186,15 @@ impl FromNumeric for f64 {
 impl FromNumeric for f32 {
     fn from_numeric(text: &str) -> Option<Self> {
         keywords::parse_numeric(text).and_then(|_| text.parse().ok())
+    }
+}
+
+impl<N: NewtypeParts> FromNumeric for N
+where
+    N::Inner: FromNumeric,
+{
+    fn from_numeric(text: &str) -> Option<Self> {
+        N::Inner::from_numeric(text).map(N::from_inner)
     }
 }
 
@@ -129,6 +218,35 @@ impl FromInstant for DateTime<FixedOffset> {
 impl FromInstant for NaiveDateTime {
     fn from_instant(instant: DateTime<Utc>) -> Self {
         instant.naive_utc()
+    }
+}
+
+impl<N: NewtypeParts> FromInstant for N
+where
+    N::Inner: FromInstant,
+{
+    fn from_instant(instant: DateTime<Utc>) -> Self {
+        N::from_inner(N::Inner::from_instant(instant))
+    }
+}
+
+/// A type `string.url.parse` can produce.
+pub trait FromUrl: Sized {
+    fn from_url(url: url::Url) -> Self;
+}
+
+impl FromUrl for url::Url {
+    fn from_url(url: url::Url) -> Self {
+        url
+    }
+}
+
+impl<N: NewtypeParts> FromUrl for N
+where
+    N::Inner: FromUrl,
+{
+    fn from_url(url: url::Url) -> Self {
+        N::from_inner(N::Inner::from_url(url))
     }
 }
 
@@ -171,8 +289,10 @@ pub fn parse_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, Reject
     serde_json::from_str(raw).map_err(|error| Rejection(format!("must be a JSON string ({error})")))
 }
 
-pub fn parse_url(raw: &str) -> Result<url::Url, Rejection> {
-    url::Url::parse(raw).map_err(|error| Rejection(format!("must be a URL string ({error})")))
+pub fn parse_url<T: FromUrl>(raw: &str) -> Result<T, Rejection> {
+    url::Url::parse(raw)
+        .map(T::from_url)
+        .map_err(|error| Rejection(format!("must be a URL string ({error})")))
 }
 
 impl StringParse {
@@ -231,6 +351,18 @@ impl NumberValue for f32 {
     }
     fn is_integer(&self) -> bool {
         self.is_finite() && self.fract() == 0.0
+    }
+}
+
+impl<N: Newtype> NumberValue for N
+where
+    N::Inner: NumberValue,
+{
+    fn as_f64(&self) -> f64 {
+        self.inner().as_f64()
+    }
+    fn is_integer(&self) -> bool {
+        self.inner().is_integer()
     }
 }
 
@@ -337,6 +469,15 @@ impl<K, V, S> ItemCount for HashMap<K, V, S> {
     }
 }
 
+impl<N: Newtype> ItemCount for N
+where
+    N::Inner: ItemCount,
+{
+    fn item_count(&self) -> usize {
+        self.inner().item_count()
+    }
+}
+
 pub fn check_items<C: ItemCount + ?Sized>(
     value: &C,
     validator: &ArrayValidator,
@@ -391,6 +532,15 @@ impl InstantValue for str {
 impl InstantValue for String {
     fn instant(&self) -> Option<DateTime<Utc>> {
         keywords::parse_date(self)
+    }
+}
+
+impl<N: Newtype> InstantValue for N
+where
+    N::Inner: InstantValue,
+{
+    fn instant(&self) -> Option<DateTime<Utc>> {
+        self.inner().instant()
     }
 }
 
@@ -461,6 +611,15 @@ impl BigIntValue for str {
 impl BigIntValue for String {
     fn big_int(&self) -> Option<i128> {
         self.parse().ok()
+    }
+}
+
+impl<N: Newtype> BigIntValue for N
+where
+    N::Inner: BigIntValue,
+{
+    fn big_int(&self) -> Option<i128> {
+        self.inner().big_int()
     }
 }
 
@@ -537,6 +696,15 @@ macro_rules! integer_decimal_value {
 integer_decimal_value!(
     i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
 );
+
+impl<N: Newtype> DecimalValue for N
+where
+    N::Inner: DecimalValue,
+{
+    fn decimal_text(&self) -> Cow<'_, str> {
+        self.inner().decimal_text()
+    }
+}
 
 pub fn check_decimal<D: DecimalValue + ?Sized>(
     value: &D,
@@ -630,6 +798,15 @@ impl DurationValue for str {
 impl DurationValue for String {
     fn nanos(&self) -> Option<i128> {
         super::parse_duration_to_nanos(self)
+    }
+}
+
+impl<N: Newtype> DurationValue for N
+where
+    N::Inner: DurationValue,
+{
+    fn nanos(&self) -> Option<i128> {
+        self.inner().nanos()
     }
 }
 

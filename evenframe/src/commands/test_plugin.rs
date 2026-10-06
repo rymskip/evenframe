@@ -3,11 +3,11 @@
 
 use crate::cli::TestPluginArgs;
 use crate::scan_cache::build_and_record;
-use evenframe_core::scan::{ScanConfig, filter_for_typesync, merge_tables_and_objects};
+use evenframe_core::scan::{ScanConfig, merge_tables_and_objects};
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
-    types::{ForeignTypeRegistry, StructConfig, TaggedUnion},
+    types::{AllConfigs, ForeignTypeRegistry, NewtypeConfig, StructConfig, TaggedUnion},
     typesync::{macroforge::HelperModule, type_index::TypeIndex},
 };
 use std::collections::BTreeMap;
@@ -17,8 +17,12 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
     let config = EvenframeConfig::new_offline()?;
     let build_config = ScanConfig::from_config(&config);
 
-    let (enums, tables, objects) = build_and_record(&build_config)?;
-    let (enums, tables, objects) = filter_for_typesync(&enums, &tables, &objects);
+    let AllConfigs {
+        enums,
+        tables,
+        objects,
+        newtypes,
+    } = build_and_record(&build_config)?.for_typesync()?;
     let structs = merge_tables_and_objects(tables, objects);
 
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
@@ -59,6 +63,7 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
             &mut helpers,
+            None,
         )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
         if !helpers.is_empty() {
@@ -113,6 +118,50 @@ pub async fn run(args: TestPluginArgs) -> Result<()> {
             evenframe_core::typesync::config::ArrayStyle::default(),
             &registry,
             &mut helpers,
+            None,
+        )?;
+        entry["generated_typesync"] = serde_json::Value::String(generated);
+        if !helpers.is_empty() {
+            entry["generated_helpers"] = serde_json::Value::String(helpers.content());
+        }
+
+        results.push(entry);
+    }
+
+    for (name, newtype) in newtypes.iter().filter(|(_, newtype)| !newtype.resolve_only) {
+        if let Some(ref filter) = args.type_name
+            && !name.contains(filter)
+        {
+            continue;
+        }
+
+        let has_override = newtype.output_override.is_some();
+        if args.changed_only && !has_override {
+            continue;
+        }
+
+        let mut entry = serde_json::json!({
+            "name": name,
+            "kind": "Newtype",
+            "has_override": has_override,
+        });
+
+        if let Some(ref overridden) = newtype.output_override {
+            entry["override_derives"] = serde_json::json!(overridden.macroforge_derives);
+            entry["override_annotations"] = serde_json::json!(overridden.annotations);
+        }
+
+        let empty_structs: BTreeMap<String, StructConfig> = BTreeMap::new();
+        let empty_enums: BTreeMap<String, TaggedUnion> = BTreeMap::new();
+        let single_newtype: BTreeMap<String, NewtypeConfig> =
+            BTreeMap::from([(name.clone(), newtype.clone())]);
+        let mut helpers = HelperModule::new("./helpers".to_owned());
+        let generated = evenframe_core::typesync::macroforge::generate_macroforge_type_string(
+            &TypeIndex::with_newtypes(&empty_structs, &empty_enums, &single_newtype)?,
+            evenframe_core::typesync::config::ArrayStyle::default(),
+            &registry,
+            &mut helpers,
+            None,
         )?;
         entry["generated_typesync"] = serde_json::Value::String(generated);
         if !helpers.is_empty() {

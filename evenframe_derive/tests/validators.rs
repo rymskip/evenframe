@@ -246,3 +246,84 @@ fn validate_checks_a_built_value_and_everything_it_holds() {
     };
     assert!(valid.validate().is_ok());
 }
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+#[serde(tag = "variant")]
+pub enum Contact {
+    Company {
+        #[validators(StringValidator::Trim, StringValidator::NonEmpty)]
+        company_name: String,
+    },
+    Person {
+        #[validators(StringValidator::NonEmpty)]
+        first_name: String,
+        #[validators(StringValidator::MinLength(2))]
+        nickname: Option<String>,
+    },
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Account {
+    #[validators(StringValidator::NonEmpty)]
+    pub handle: String,
+    pub contact: Contact,
+}
+
+#[test]
+fn enum_variant_fields_are_read_through_their_validators() {
+    let company = serde_json::from_value::<Contact>(serde_json::json!({
+        "variant": "Company",
+        "company_name": "  Acme  ",
+    }))
+    .unwrap();
+    assert!(
+        matches!(&company, Contact::Company { company_name } if company_name == "Acme"),
+        "{company:?}"
+    );
+
+    let blank = serde_json::from_value::<Contact>(serde_json::json!({
+        "variant": "Company",
+        "company_name": "   ",
+    }))
+    .unwrap_err();
+    assert!(
+        blank.to_string().starts_with("Company.company_name: "),
+        "{blank}"
+    );
+
+    let nested = serde_json::from_value::<Account>(serde_json::json!({
+        "handle": "acme",
+        "contact": { "variant": "Person", "first_name": "", "nickname": "x" },
+    }))
+    .unwrap_err();
+    assert!(nested.to_string().contains("Person.first_name"), "{nested}");
+
+    let unknown = serde_json::from_value::<Contact>(serde_json::json!({ "variant": "Unknown" }));
+    assert!(matches!(unknown, Ok(Contact::Unknown)), "{unknown:?}");
+}
+
+#[test]
+fn validate_checks_a_built_enum_variant() {
+    use evenframe::validator::validate::Validate;
+
+    let person = Contact::Person {
+        first_name: String::new(),
+        nickname: Some("x".to_owned()),
+    };
+    let paths: Vec<String> = person
+        .validate()
+        .unwrap_err()
+        .errors()
+        .iter()
+        .map(|failure| failure.path.clone())
+        .collect();
+    assert_eq!(paths, ["Person.first_name", "Person.nickname"]);
+
+    let named = Contact::Person {
+        first_name: "Ada".to_owned(),
+        nickname: None,
+    };
+    assert!(named.validate().is_ok());
+    assert!(Contact::Unknown.validate().is_ok());
+}

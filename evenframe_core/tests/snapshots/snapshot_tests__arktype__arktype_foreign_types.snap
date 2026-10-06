@@ -7,9 +7,9 @@ export const bindings = scope({
 Appointment: {
   id: 'string',
   title: 'string',
-  scheduled_at: 'string',
+  scheduledAt: 'string',
   duration: 'number',
-  cancelled_at: [['string', '|', 'undefined'], '|', 'null']
+  cancelledAt: [['string', '|', 'undefined'], '|', 'null']
 },
 
 });
@@ -19,9 +19,9 @@ const exported = bindings.export();
 export const defaultAppointment: Appointment = {
 id: "",
 title: "",
-scheduled_at: "",
+scheduledAt: "",
 duration: 0,
-cancelled_at: null
+cancelledAt: null
 };
 
 export type Appointment = typeof exported.Appointment.infer;

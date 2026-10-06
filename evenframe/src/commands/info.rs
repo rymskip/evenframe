@@ -191,9 +191,10 @@ struct SchemaSummary {
 impl SchemaSummary {
     fn build() -> Result<Self> {
         let build_config = ScanConfig::discover()?;
-        let (enums, tables, objects) = build_and_record(&build_config)?;
+        let configs = build_and_record(&build_config)?;
         Ok(Self {
-            tables: tables
+            tables: configs
+                .tables
                 .into_iter()
                 .map(|(name, table)| TableSummary {
                     name,
@@ -203,8 +204,8 @@ impl SchemaSummary {
                     mock_config: table.mock_generation_config.is_some(),
                 })
                 .collect(),
-            objects: objects.len(),
-            enums: enums.len(),
+            objects: configs.objects.len(),
+            enums: configs.enums.len(),
         })
     }
 

@@ -6,8 +6,8 @@ export const bindings = scope({
 
 /** Severity levels for log output */LogLevel: [[[['===', "Debug"], '|', ['===', "Info"]], '|', ['===', "Warn"]], '|', ['===', "Error"]],
 /** Application configuration settings */Config: {
-  /** The API key used for authentication */  api_key: 'string',
-  /** Request timeout in milliseconds */  timeout_ms: 'number'
+  /** The API key used for authentication */  apiKey: 'string',
+  /** Request timeout in milliseconds */  timeoutMs: 'number'
 },
 
 });
@@ -15,8 +15,8 @@ export const bindings = scope({
 const exported = bindings.export();
 
 export const defaultConfig: Config = {
-api_key: "",
-timeout_ms: 0
+apiKey: "",
+timeoutMs: 0
 };
 
 export type LogLevel = typeof exported.LogLevel.infer;

@@ -2,7 +2,9 @@
 //! parameters filled in, and the imports they need.
 
 use crate::config::{ForeignTypeConfig, RECORD_ID, RECORD_LINK, TsImport};
-use crate::types::{FieldType, ForeignTypeRegistry, StructConfig, TaggedUnion, VariantData};
+use crate::types::{
+    FieldType, ForeignTypeRegistry, NewtypeConfig, StructConfig, TaggedUnion, VariantData,
+};
 use crate::typesync::config::OutputKind;
 use crate::typesync::type_index::TypeIndex;
 use crate::{EvenframeError, Result};
@@ -76,6 +78,7 @@ pub fn foreign_types_used<'a>(
     let mut walker = Walker {
         structs: index.structs(),
         enums: index.enums(),
+        newtypes: index.newtypes(),
         registry,
         reading,
         visited: BTreeSet::new(),
@@ -93,12 +96,19 @@ pub fn foreign_types_used<'a>(
             walker.variants(tagged_union);
         }
     }
+    for (name, newtype) in index.named_newtypes() {
+        if !newtype.resolve_only && wanted.contains(name.as_str()) {
+            walker.visited.insert(name.clone());
+            walker.field_type(&newtype.inner);
+        }
+    }
     walker.used
 }
 
 struct Walker<'a, 'b> {
     structs: &'b BTreeMap<String, StructConfig>,
     enums: &'b BTreeMap<String, TaggedUnion>,
+    newtypes: &'b BTreeMap<String, NewtypeConfig>,
     registry: &'a ForeignTypeRegistry,
     reading: &'b Reading,
     visited: BTreeSet<String>,
@@ -156,6 +166,12 @@ impl Walker<'_, '_> {
                     self.enums.get(name).or_else(|| self.enums.get(&pascal))
                 {
                     self.variants(tagged_union);
+                } else if let Some(newtype) = self
+                    .newtypes
+                    .get(name)
+                    .or_else(|| self.newtypes.get(&pascal))
+                {
+                    self.field_type(&newtype.inner);
                 }
             }
             _ => {}

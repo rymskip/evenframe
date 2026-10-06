@@ -1,0 +1,46 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Payload {
+    PayloadClick,
+    PayloadClose
+}
+
+table Audit {
+    created_by: string;
+}
+
+table Event {
+    at: string;
+    payload: Payload;
+}
+
+table Geo {
+    lat: double;
+    lon: double;
+}
+
+table Post {
+    title: string;
+    created_by: string;
+    lat: double = null;
+    lon: double = null;
+}
+
+table Settings {
+    theme: string;
+    rest: [SettingsRestEntry];
+}
+
+table PayloadClick {
+    x: int32;
+}
+
+table PayloadClose {
+}
+
+table SettingsRestEntry {
+    key: string (key);
+    value: int32;
+}

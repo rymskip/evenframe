@@ -6,7 +6,7 @@ expression: output
 export interface Appointment {
   id: string;
   title: string;
-  scheduled_at: string;
+  scheduledAt: string;
   duration: number;
-  cancelled_at: string | null;
+  cancelledAt: string | null;
 }

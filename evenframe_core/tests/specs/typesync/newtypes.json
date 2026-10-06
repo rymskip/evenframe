@@ -1,0 +1,73 @@
+{
+  "description": "Newtypes: branded over a primitive (with Macroforge derives), over another newtype, over an enum, behind a parse morph, without validators, and the tuple and unit shapes, held directly, optionally, in a Vec, as a map key, and behind a field's transform and parse morph",
+  "structs": {
+    "Profile": {
+      "struct_name": "Profile",
+      "fields": [
+        { "field_name": "name", "field_type": { "Other": "NonEmptyString" }, "validators": [], "always_regenerate": false },
+        { "field_name": "nickname", "field_type": { "Option": { "Other": "NonEmptyString" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "handles", "field_type": { "Vec": { "Other": "Handle" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "visits", "field_type": { "HashMap": [{ "Other": "NonEmptyString" }, { "Other": "Count" }] }, "validators": [], "always_regenerate": false },
+        { "field_name": "label", "field_type": { "Other": "Label" }, "validators": [], "always_regenerate": false },
+        { "field_name": "position", "field_type": { "Other": "Pair" }, "validators": [], "always_regenerate": false },
+        { "field_name": "marker", "field_type": { "Other": "Marker" }, "validators": [], "always_regenerate": false },
+        { "field_name": "status", "field_type": { "Other": "StatusCode" }, "validators": [], "always_regenerate": false },
+        { "field_name": "title", "field_type": { "Other": "NonEmptyString" }, "validators": [{ "StringValidator": "Trim" }], "always_regenerate": false },
+        { "field_name": "age", "field_type": { "Other": "Age" }, "validators": [{ "StringValidator": "IntegerParse" }], "always_regenerate": false }
+      ],
+      "validators": []
+    }
+  },
+  "enums": {
+    "Status": {
+      "enum_name": "Status",
+      "variants": [
+        { "name": "Active" },
+        { "name": "Inactive" }
+      ]
+    }
+  },
+  "newtypes": {
+    "NonEmptyString": {
+      "name": "NonEmptyString",
+      "inner": "String",
+      "validators": [{ "StringValidator": "NonEmpty" }],
+      "macroforge_derives": ["Encode", "Decode"]
+    },
+    "Handle": {
+      "name": "Handle",
+      "inner": { "Other": "NonEmptyString" },
+      "validators": [{ "StringValidator": "Trim" }, { "StringValidator": "Lower" }]
+    },
+    "Count": {
+      "name": "Count",
+      "inner": "I64",
+      "validators": [
+        { "StringValidator": "IntegerParse" },
+        { "NumberValidator": { "GreaterThanOrEqualTo": 0.0 } }
+      ]
+    },
+    "Label": {
+      "name": "Label",
+      "inner": "String"
+    },
+    "StatusCode": {
+      "name": "StatusCode",
+      "inner": { "Other": "Status" }
+    },
+    "Pair": {
+      "name": "Pair",
+      "inner": { "Tuple": ["String", "U32"] },
+      "kind": "Alias"
+    },
+    "Age": {
+      "name": "Age",
+      "inner": "U8"
+    },
+    "Marker": {
+      "name": "Marker",
+      "inner": "Unit",
+      "kind": "Alias"
+    }
+  }
+}

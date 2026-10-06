@@ -2,7 +2,7 @@
 
 use crate::cli::{Cli, GenerateArgs, TypesyncArgs};
 use crate::scan_cache::build_and_record;
-use evenframe_core::scan::{ScanConfig, filter_for_schemasync};
+use evenframe_core::scan::ScanConfig;
 use evenframe_core::{
     config::EvenframeConfig,
     error::Result,
@@ -25,7 +25,7 @@ pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
     info!("Starting Evenframe code generation");
     let config = EvenframeConfig::new()?;
     let build_config = ScanConfig::from_config(&config);
-    let (enums, tables, objects) = build_and_record(&build_config)?;
+    let configs = build_and_record(&build_config)?;
 
     if args.skip_typesync {
         debug!("Skipping typesync phase");
@@ -37,17 +37,14 @@ pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
             skip: None,
             per_file: false,
         };
-        super::typesync::generate(cli, typesync_args, &config, &enums, &tables, &objects)?;
+        super::typesync::generate(cli, typesync_args, &config, &configs)?;
     }
 
     if args.skip_schemasync {
         debug!("Skipping schemasync phase");
     } else {
-        let (enums, tables, objects) = filter_for_schemasync(enums, tables, objects);
         super::schemasync::run_schemasync(
-            &enums,
-            &tables,
-            &objects,
+            &configs.into_schemasync()?,
             ConnectionOverrides::default(),
             MockOverrides {
                 skip_mocks: args.no_mocks,

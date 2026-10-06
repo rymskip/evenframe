@@ -1,6 +1,0 @@
-error: serde writes this as "fullName" but reads "name"; evenframe needs one name for both, so use #[serde(rename = "...")] with #[serde(alias = "...")] instead
- --> tests/ui/fail/naming_split_rename.rs:6:5
-  |
-6 | /     #[serde(rename(serialize = "fullName", deserialize = "name"))]
-7 | |     pub name: String,
-  | |____________________^

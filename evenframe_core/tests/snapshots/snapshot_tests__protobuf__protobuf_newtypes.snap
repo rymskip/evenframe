@@ -1,0 +1,30 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_ACTIVE = 1;
+    STATUS_INACTIVE = 2;
+}
+
+message Profile {
+    message Position {
+        string item_0 = 1;
+        uint32 item_1 = 2;
+    }
+    message Marker {
+    }
+    string name = 1;
+    optional string nickname = 2;
+    repeated string handles = 3;
+    map<string, int64> visits = 4;
+    string label = 5;
+    Position position = 6;
+    Marker marker = 7;
+    .Status status = 8;
+    string title = 9;
+    uint32 age = 10;
+}

@@ -1,5 +1,5 @@
 //! Writes a synthetic evenframe project for timing the scan, typesync,
-//! schemasync and mockmake paths at a size the playground does not reach.
+//! schemasync and mockmake paths at a size the testground does not reach.
 //!
 //! Each module holds `types` groups of four types: a table with formatted
 //! fields, validators and links into the previous module, an embedded

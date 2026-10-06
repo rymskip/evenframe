@@ -4,7 +4,7 @@
 
 use crate::dependency::{RecursionInfo, dependency_map, recursion_of};
 use crate::error::{EvenframeError, Result};
-use crate::types::{StructConfig, TaggedUnion};
+use crate::types::{FieldType, NewtypeConfig, StructConfig, TaggedUnion};
 use crate::typesync::file_grouping::{FileOutputPlan, compute_file_grouping};
 use convert_case::{Case, Casing};
 use petgraph::algo::toposort;
@@ -12,9 +12,15 @@ use petgraph::graphmap::DiGraphMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
+/// No newtypes, for an index built from structs and enums alone.
+static NO_NEWTYPES: BTreeMap<String, NewtypeConfig> = BTreeMap::new();
+
 pub struct TypeIndex<'a> {
     structs: &'a BTreeMap<String, StructConfig>,
     enums: &'a BTreeMap<String, TaggedUnion>,
+    newtypes: &'a BTreeMap<String, NewtypeConfig>,
+    /// PascalCase name to the newtype by that name.
+    newtype_by_name: BTreeMap<String, &'a NewtypeConfig>,
     /// Every struct with its PascalCase name, in map order.
     named_structs: Vec<(String, &'a StructConfig)>,
     /// Every enum with its PascalCase name, in map order.
@@ -43,6 +49,14 @@ impl<'a> TypeIndex<'a> {
     pub fn new(
         structs: &'a BTreeMap<String, StructConfig>,
         enums: &'a BTreeMap<String, TaggedUnion>,
+    ) -> Result<Self> {
+        Self::with_newtypes(structs, enums, &NO_NEWTYPES)
+    }
+
+    pub fn with_newtypes(
+        structs: &'a BTreeMap<String, StructConfig>,
+        enums: &'a BTreeMap<String, TaggedUnion>,
+        newtypes: &'a BTreeMap<String, NewtypeConfig>,
     ) -> Result<Self> {
         let mut named_structs = Vec::with_capacity(structs.len());
         let mut named_enums = Vec::with_capacity(enums.len());
@@ -80,8 +94,17 @@ impl<'a> TypeIndex<'a> {
                 .push(tagged_union);
             named_enums.push((name, tagged_union));
         }
+        let mut newtype_by_name = BTreeMap::new();
+        for newtype in newtypes.values() {
+            let name = newtype.name.to_case(Case::Pascal);
+            if !newtype.resolve_only {
+                emitted.insert(name.clone());
+            }
+            effective_names.insert(name.clone());
+            newtype_by_name.entry(name).or_insert(newtype);
+        }
 
-        let deps = dependency_map(structs, enums);
+        let deps = dependency_map(structs, enums, newtypes);
         let recursion = recursion_of(&deps);
         let ordered = definition_order(&deps, &recursion)?;
         let position = ordered
@@ -92,6 +115,8 @@ impl<'a> TypeIndex<'a> {
         Ok(Self {
             structs,
             enums,
+            newtypes,
+            newtype_by_name,
             named_structs,
             named_enums,
             struct_by_name,
@@ -113,6 +138,39 @@ impl<'a> TypeIndex<'a> {
 
     pub fn enums(&self) -> &'a BTreeMap<String, TaggedUnion> {
         self.enums
+    }
+
+    pub fn newtypes(&self) -> &'a BTreeMap<String, NewtypeConfig> {
+        self.newtypes
+    }
+
+    /// Every newtype with its PascalCase name, in name order.
+    pub fn named_newtypes(&self) -> impl Iterator<Item = (&String, &'a NewtypeConfig)> {
+        self.newtype_by_name
+            .iter()
+            .map(|(name, newtype)| (name, *newtype))
+    }
+
+    /// The newtype a field naming `name` refers to.
+    pub fn newtype_named(&self, name: &str) -> Option<&'a NewtypeConfig> {
+        named(&self.newtype_by_name, name).copied()
+    }
+
+    /// The type a value of `field_type` is written as: the inner type of the
+    /// newtype it names, through any newtype that holds another.
+    pub fn underlying<'t>(&'t self, field_type: &'t FieldType) -> &'t FieldType {
+        let mut current = field_type;
+        // A chain longer than the newtypes there are has come back on itself.
+        for _ in 0..=self.newtype_by_name.len() {
+            match current {
+                FieldType::Other(name) => match self.newtype_named(name) {
+                    Some(newtype) => current = &newtype.inner,
+                    None => return current,
+                },
+                _ => return current,
+            }
+        }
+        current
     }
 
     /// Every struct with its PascalCase name, in map order.
@@ -151,9 +209,13 @@ impl<'a> TypeIndex<'a> {
         named(&self.enum_by_effective_name, name).copied()
     }
 
-    /// Every type's PascalCase name: the structs', then the enums'.
+    /// Every type's PascalCase name: the structs', the enums', then the
+    /// newtypes'.
     pub fn names(&self) -> impl Iterator<Item = &String> {
-        self.struct_by_name.keys().chain(self.enum_by_name.keys())
+        self.struct_by_name
+            .keys()
+            .chain(self.enum_by_name.keys())
+            .chain(self.newtype_by_name.keys())
     }
 
     /// The PascalCase names of every type that is emitted.

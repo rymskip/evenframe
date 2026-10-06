@@ -1,0 +1,20 @@
+[package]
+name = "derive_check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "The derive in a crate that only derives, built without features and with metadata"
+
+[features]
+metadata = ["evenframe/metadata"]
+surrealdb-types = ["evenframe/surrealdb-types"]
+
+[dependencies]
+evenframe = { path = "../../evenframe", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

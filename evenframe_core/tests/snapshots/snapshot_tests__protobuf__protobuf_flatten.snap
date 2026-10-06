@@ -1,0 +1,43 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Payload {
+    message Click {
+        int32 x = 1;
+    }
+    message Close {
+    }
+    oneof variant {
+        Click click = 1;
+        Close close = 2;
+    }
+}
+
+message Audit {
+    string created_by = 1;
+}
+
+message Event {
+    string at = 1;
+    .Payload payload = 2;
+}
+
+message Geo {
+    double lat = 1;
+    double lon = 2;
+}
+
+message Post {
+    string title = 1;
+    string created_by = 2;
+    optional double lat = 3;
+    optional double lon = 4;
+}
+
+message Settings {
+    string theme = 1;
+    map<string, int32> rest = 2;
+}

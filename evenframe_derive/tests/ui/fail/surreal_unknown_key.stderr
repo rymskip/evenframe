@@ -1,0 +1,5 @@
+error: #[surreal(serialize_with)] does not apply to a named field; it takes rename, default, wrap, flatten, skip
+ --> tests/ui/fail/surreal_unknown_key.rs:6:15
+  |
+6 |     #[surreal(serialize_with = "write_name")]
+  |               ^^^^^^^^^^^^^^

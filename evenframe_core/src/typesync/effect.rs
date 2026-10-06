@@ -2,7 +2,7 @@ use crate::config::fill;
 use crate::config::{EffectMapping, ForeignTypeConfig};
 use crate::error::{EvenframeError, Result};
 use crate::types::{
-    EnumRepresentation, FieldType, StructConfig, StructField, TaggedUnion, VariantData,
+    EnumRepresentation, FieldType, NewtypeKind, StructConfig, StructField, TaggedUnion, VariantData,
 };
 use crate::typesync::config::OutputKind;
 use crate::typesync::doc_comment::format_jsdoc;
@@ -173,7 +173,7 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                 .map(|variant| {
                     enum_variant_to_schema(
                         variant,
-                        &tagged_union.representation,
+                        variant.serde_representation(&tagged_union.representation),
                         name,
                         &to_schema,
                         &self.defined,
@@ -188,7 +188,60 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
             )
             .map_err(write_failed)?;
             self.encoded
-                .push_str(&encoded_alias_for_enum(tagged_union, registry)?);
+                .push_str(&encoded_alias_for_enum(tagged_union, index, registry)?);
+        } else if let Some(struct_config) = index.struct_named(name)
+            && struct_config
+                .fields
+                .iter()
+                .any(|field| field.effective().wire.serde_flatten)
+        {
+            // A class keeps only its own fields, so a struct whose keys are
+            // partly known only from a value is a plain schema.
+            if let Some(doc) = &struct_config.doccom {
+                self.classes.push_str(&format_jsdoc(doc, ""));
+            }
+            let mut entries = Vec::new();
+            let mut held_values = Vec::new();
+            let mut record_values = Vec::new();
+            let mut extensions = Vec::new();
+            for field in struct_config.fields.iter().map(StructField::effective) {
+                let schema = to_schema(&field.field_type, name, &self.defined)?;
+                if field.wire.serde_flatten {
+                    match field.field_type.flattened_map_value() {
+                        Some(value) => record_values.push(to_schema(value, name, &self.defined)?),
+                        None => extensions.push(schema),
+                    }
+                    continue;
+                }
+                entries.push(field_schema_entry(field, index, |field_type| {
+                    to_schema(field_type, name, &self.defined)
+                })?);
+                held_values.push(schema);
+            }
+            let record = if record_values.is_empty() {
+                String::new()
+            } else {
+                // A key of the map may share an object with every named field.
+                let values: Vec<String> = record_values.into_iter().chain(held_values).collect();
+                format!(
+                    ", Schema.Record({{ key: Schema.String, value: Schema.Union({}) }})",
+                    values.join(", ")
+                )
+            };
+            let schema = extensions.into_iter().fold(
+                format!("Schema.Struct({{ {} }}{record})", entries.join(", ")),
+                |schema, held| format!("Schema.extend({schema}, {held})"),
+            );
+            writeln!(
+                self.classes,
+                "export const {name} = {schema}.annotations({{ identifier: `{name}` }});\nexport type {name} = typeof {name}.Type;\n"
+            )
+            .map_err(write_failed)?;
+            self.encoded.push_str(&encoded_interface_for_struct(
+                struct_config,
+                index,
+                registry,
+            )?);
         } else if let Some(struct_config) = index.struct_named(name) {
             if let Some(doc) = &struct_config.doccom {
                 self.classes.push_str(&format_jsdoc(doc, ""));
@@ -198,11 +251,16 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                 "export class {name} extends Schema.Class<{name}>(\"{name}\")( {{ "
             )
             .map_err(write_failed)?;
-            for (position, field) in struct_config.fields.iter().enumerate() {
+            for (position, field) in struct_config
+                .fields
+                .iter()
+                .map(StructField::effective)
+                .enumerate()
+            {
                 if let Some(doc) = &field.doccom {
                     self.classes.push_str(&format_jsdoc(doc, "  "));
                 }
-                let entry = field_schema_entry(field, |field_type| {
+                let entry = field_schema_entry(field, index, |field_type| {
                     to_schema(field_type, name, &self.defined)
                 })?;
                 let separator = if position + 1 == struct_config.fields.len() {
@@ -213,8 +271,45 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                 writeln!(self.classes, "  {entry}{separator}").map_err(write_failed)?;
             }
             self.classes.push_str("}) {[key: string]: unknown}\n\n");
-            self.encoded
-                .push_str(&encoded_interface_for_struct(struct_config, registry)?);
+            self.encoded.push_str(&encoded_interface_for_struct(
+                struct_config,
+                index,
+                registry,
+            )?);
+        } else if let Some(newtype) = index.newtype_named(name) {
+            if let Some(doc) = &newtype.doccom {
+                self.classes.push_str(&format_jsdoc(doc, ""));
+            }
+            let schema = renewed(
+                apply_validators_to_schema(
+                    payload_schema(&newtype.inner, &newtype.element_validators, name, |held| {
+                        to_schema(held, name, &self.defined)
+                    })?,
+                    index.underlying(&newtype.inner),
+                    &newtype.validators,
+                    name,
+                )?,
+                &newtype.inner,
+                &newtype.validators,
+                index,
+                |field_type| to_schema(field_type, name, &self.defined),
+            )?;
+            let brand = match newtype.kind {
+                NewtypeKind::Branded => format!(".pipe(Schema.brand({}))", string_literal(name)?),
+                NewtypeKind::Alias => String::new(),
+            };
+            writeln!(
+                self.classes,
+                "export const {name} = {schema}{brand}.annotations({{ identifier: `{name}` }});"
+            )
+            .map_err(write_failed)?;
+            let encoded = if parses_text(&newtype.validators) {
+                "string".to_owned()
+            } else {
+                encoded_payload(&newtype.inner, &newtype.element_validators, index, registry)?
+            };
+            writeln!(self.encoded, "export type {name}Encoded = {encoded};\n")
+                .map_err(write_failed)?;
         } else {
             self.defined.emitted.insert(name.to_string());
             return Ok(());
@@ -238,42 +333,81 @@ fn write_failed(error: std::fmt::Error) -> EvenframeError {
 /// A struct field as an `...Encoded` entry, `readonly name: type;`.
 fn encoded_field_entry(
     field: &StructField,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
-    let encoded = match (&field.field_type, parses_string_input(field)) {
-        (FieldType::Option(_), true) => "string | null | undefined".to_owned(),
-        (_, true) => "string".to_owned(),
-        (field_type, false) => field_type_to_ts_encoded(field_type, registry)?,
-    };
+    let field = field.effective();
     let optional = if field.wire.serde_optional { "?" } else { "" };
     Ok(format!(
-        "readonly {}{optional}: {encoded};",
-        object_key(field.serde_name())?
+        "readonly {}{optional}: {};",
+        object_key(&field.ts_name())?,
+        encoded_field_type(field, index, registry)?
     ))
 }
 
-/// Generates an `...Encoded` TypeScript interface for a given struct.
+/// The encoded TypeScript type of a field's value.
+fn encoded_field_type(
+    field: &StructField,
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    Ok(match (&field.field_type, parses_string_input(field)) {
+        (FieldType::Option(_), true) => "string | null | undefined".to_owned(),
+        (_, true) => "string".to_owned(),
+        (field_type, false) => field_type_to_ts_encoded(field_type, index, registry)?,
+    })
+}
+
+/// Generates an `...Encoded` TypeScript type for a given struct: an interface,
+/// with an index signature for a flattened map, or an intersection with what
+/// any other flattened field holds.
 fn encoded_interface_for_struct(
     struct_config: &StructConfig,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     let name = struct_config.struct_name.to_case(Case::Pascal);
-    let body = struct_config
-        .fields
-        .iter()
-        .map(|field| Ok(format!("  {}", encoded_field_entry(field, registry)?)))
-        .collect::<Result<Vec<_>>>()?
-        .join("\n");
-
-    Ok(format!(
-        "export interface {}Encoded {{\n{}\n}}\n\n",
-        name, body
-    ))
+    let mut entries = Vec::new();
+    let mut held_values = Vec::new();
+    let mut index_values = Vec::new();
+    let mut intersections = Vec::new();
+    for field in struct_config.fields.iter().map(StructField::effective) {
+        if field.wire.serde_flatten {
+            match field.field_type.flattened_map_value() {
+                Some(value) => index_values.push(field_type_to_ts_encoded(value, index, registry)?),
+                None => intersections.push(field_type_to_ts_encoded(
+                    &field.field_type,
+                    index,
+                    registry,
+                )?),
+            }
+            continue;
+        }
+        entries.push(format!(
+            "  {}",
+            encoded_field_entry(field, index, registry)?
+        ));
+        held_values.push(encoded_field_type(field, index, registry)?);
+    }
+    if !index_values.is_empty() {
+        let values: Vec<String> = index_values.into_iter().chain(held_values).collect();
+        entries.push(format!("  readonly [key: string]: {};", values.join(" | ")));
+    }
+    let body = entries.join("\n");
+    Ok(if intersections.is_empty() {
+        format!("export interface {name}Encoded {{\n{body}\n}}\n\n")
+    } else {
+        format!(
+            "export type {name}Encoded = {{\n{body}\n}} & {};\n\n",
+            intersections.join(" & ")
+        )
+    })
 }
 
 /// Generates an `...Encoded` TypeScript type alias for a given enum/union.
 fn encoded_alias_for_enum(
     en: &TaggedUnion,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     tracing::trace!(enum_name = %en.enum_name, "Creating encoded alias for enum");
@@ -281,7 +415,14 @@ fn encoded_alias_for_enum(
     let body = en
         .variants
         .iter()
-        .map(|v| enum_variant_to_encoded(v, &en.representation, registry))
+        .map(|variant| {
+            enum_variant_to_encoded(
+                variant,
+                variant.serde_representation(&en.representation),
+                index,
+                registry,
+            )
+        })
         .collect::<Result<Vec<_>>>()?
         .join(" | ");
     Ok(format!("export type {}Encoded = {};\n\n", name, body))
@@ -293,9 +434,11 @@ fn encoded_alias_for_enum(
 /// required field reports a missing value by its title.
 fn field_schema_entry(
     field: &StructField,
+    index: &TypeIndex,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
-    let schema = validated_field_schema(field, schema_of)?;
+    let field = field.effective();
+    let schema = validated_field_schema(field, index, schema_of)?;
     // An absent key decodes to `None`, so only a non-Option key needs marking.
     let entry = if matches!(field.field_type, FieldType::Option(_)) {
         schema
@@ -310,7 +453,7 @@ fn field_schema_entry(
             ))
         )
     };
-    Ok(format!("{}: {entry}", object_key(field.serde_name())?))
+    Ok(format!("{}: {entry}", object_key(&field.ts_name())?))
 }
 
 /// Converts a single enum variant into its Effect Schema representation,
@@ -338,15 +481,15 @@ where
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
                 format!("Schema.Struct({{ {} }})", tag_entry(tag)?)
             }
-            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-                format!("Schema.Literal({name})")
-            }
+            EnumRepresentation::ExternallyTagged => format!("Schema.Literal({name})"),
+            // serde writes an untagged unit variant as null.
+            EnumRepresentation::Untagged => "Schema.Null".to_owned(),
         });
     };
     let fields_schema = |fields: &[StructField], tag: Option<&str>| -> Result<String> {
         let mut entries: Vec<String> = tag.map(tag_entry).transpose()?.into_iter().collect();
         for field in fields {
-            entries.push(field_schema_entry(field, |field_type| {
+            entries.push(field_schema_entry(field, index, |field_type| {
                 to_schema(field_type, enum_name, defined)
             })?);
         }
@@ -363,7 +506,9 @@ where
         },
         VariantData::DataStructureRef(field_type) => match tag {
             Some(tag) => return fields_schema(held_struct_fields(field_type, index)?, Some(tag)),
-            None => to_schema(field_type, enum_name, defined)?,
+            None => payload_schema(field_type, &v.element_validators, v.serde_name(), |held| {
+                to_schema(held, enum_name, defined)
+            })?,
         },
     };
     Ok(match repr {
@@ -389,6 +534,7 @@ where
 fn enum_variant_to_encoded(
     v: &crate::types::Variant,
     repr: &EnumRepresentation,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     let name = string_literal(v.serde_name())?;
@@ -400,7 +546,8 @@ fn enum_variant_to_encoded(
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
                 format!("{{ {} }}", tag_entry(tag)?)
             }
-            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => name,
+            EnumRepresentation::ExternallyTagged => name,
+            EnumRepresentation::Untagged => "null".to_owned(),
         });
     };
     let payload = match data {
@@ -408,7 +555,7 @@ fn enum_variant_to_encoded(
             let entries = inline
                 .fields
                 .iter()
-                .map(|field| encoded_field_entry(field, registry))
+                .map(|field| encoded_field_entry(field, index, registry))
                 .collect::<Result<Vec<String>>>()?;
             if let EnumRepresentation::InternallyTagged { tag } = repr {
                 return Ok(format!("{{ {} {} }}", tag_entry(tag)?, entries.join(" ")));
@@ -416,7 +563,7 @@ fn enum_variant_to_encoded(
             format!("{{ {} }}", entries.join(" "))
         }
         VariantData::DataStructureRef(field_type) => {
-            let payload = field_type_to_ts_encoded(field_type, registry)?;
+            let payload = encoded_payload(field_type, &v.element_validators, index, registry)?;
             // serde writes the tag into the struct the variant holds.
             if let EnumRepresentation::InternallyTagged { tag } = repr {
                 return Ok(format!("({{ {} }} & {payload})", tag_entry(tag)?));
@@ -598,8 +745,8 @@ fn field_type_to_effect_schema(
                 }
                 FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
                     work_stack.push(WorkItem::AssembleMap {
-                        key: map_key_schema(k, registry)?,
-                        finite_keys: MapKey::require(k)?.is_finite(registry),
+                        key: map_key_schema(index.underlying(k), registry)?,
+                        finite_keys: MapKey::require(index.underlying(k))?.is_finite(registry),
                     });
                     work_stack.push(WorkItem::Generate(v));
                 }
@@ -695,6 +842,7 @@ fn field_type_to_effect_schema(
 /// Converts a `FieldType` into its corresponding raw TypeScript type for the `...Encoded` interface.
 fn field_type_to_ts_encoded(
     ft: &FieldType,
+    index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     enum WorkItem<'a> {
@@ -722,6 +870,7 @@ fn field_type_to_ts_encoded(
                     FieldType::Unit => value_stack.push("null".to_string()),
                     FieldType::Duration => value_stack.push(field_type_to_ts_encoded(
                         &FieldType::serde_duration(),
+                        index,
                         registry,
                     )?),
                     FieldType::F32
@@ -764,8 +913,8 @@ fn field_type_to_ts_encoded(
                     }
                     FieldType::HashMap(k, v) | FieldType::BTreeMap(k, v) => {
                         work_stack.push(WorkItem::AssembleMap {
-                            key: map_key_encoded(k, registry)?,
-                            finite_keys: MapKey::require(k)?.is_finite(registry),
+                            key: map_key_encoded(index.underlying(k), registry)?,
+                            finite_keys: MapKey::require(index.underlying(k))?.is_finite(registry),
                         });
                         work_stack.push(WorkItem::Generate(v));
                     }
@@ -847,32 +996,133 @@ fn field_type_to_ts_encoded(
 /// they go on the inner schema before it is wrapped.
 fn validated_field_schema(
     field: &StructField,
+    index: &TypeIndex,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
+    let validated = |field_type: &FieldType| {
+        renewed(
+            apply_validators_to_schema(
+                schema_of(field_type)?,
+                field_type,
+                &field.validators,
+                &field.field_name,
+            )?,
+            field_type,
+            &field.validators,
+            index,
+            &schema_of,
+        )
+    };
     match &field.field_type {
         FieldType::Option(inner) if !field.validators.is_empty() => Ok(format!(
             "Schema.OptionFromNullishOr({}, null)",
-            apply_validators_to_schema(
-                schema_of(inner)?,
-                inner,
-                &field.validators,
-                &field.field_name
-            )?
+            validated(inner)?
         )),
-        field_type => apply_validators_to_schema(
-            schema_of(field_type)?,
-            field_type,
-            &field.validators,
-            &field.field_name,
-        ),
+        field_type => validated(field_type),
+    }
+}
+
+/// `schema`, composed back into the newtype `value_type` names once a
+/// validator rewrote the value, which checks the newtype again and keeps its
+/// brand, as the Rust deserializer does.
+fn renewed(
+    schema: String,
+    value_type: &FieldType,
+    validators: &[Validator],
+    index: &TypeIndex,
+    schema_of: impl Fn(&FieldType) -> Result<String>,
+) -> Result<String> {
+    match value_type {
+        FieldType::Other(name)
+            if validators.iter().any(Validator::rewrites)
+                && index.newtype_named(name).is_some() =>
+        {
+            Ok(format!(
+                "{schema}.pipe(Schema.compose({}))",
+                schema_of(value_type)?
+            ))
+        }
+        _ => Ok(schema),
     }
 }
 
 /// Whether a field is read through a parse morph, so its encoded form is a
 /// string whatever its Rust type.
 fn parses_string_input(field: &StructField) -> bool {
+    parses_text(&field.validators)
+}
+
+/// The encoded type of a payload, each element read through a parse morph
+/// written as text.
+fn encoded_payload(
+    field_type: &FieldType,
+    element_validators: &[Vec<Validator>],
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    let encoded = |held: &FieldType, validators: &[Validator]| {
+        if parses_text(validators) {
+            Ok("string".to_owned())
+        } else {
+            field_type_to_ts_encoded(held, index, registry)
+        }
+    };
+    match (field_type, element_validators) {
+        (FieldType::Tuple(items), validators)
+            if !validators.is_empty() && items.len() == validators.len() =>
+        {
+            let elements = items
+                .iter()
+                .zip(validators)
+                .map(|(item, validators)| encoded(item, validators))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("readonly [{}]", elements.join(", ")))
+        }
+        (single, [validators]) => encoded(single, validators),
+        _ => field_type_to_ts_encoded(field_type, index, registry),
+    }
+}
+
+/// A tuple payload with each element's validators applied, or a newtype
+/// payload with its one element's.
+fn payload_schema(
+    field_type: &FieldType,
+    element_validators: &[Vec<Validator>],
+    owner: &str,
+    schema_of: impl Fn(&FieldType) -> Result<String>,
+) -> Result<String> {
+    match (field_type, element_validators) {
+        (_, []) => schema_of(field_type),
+        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+            let elements = items
+                .iter()
+                .zip(validators)
+                .enumerate()
+                .map(|(position, (item, validators))| {
+                    apply_validators_to_schema(
+                        schema_of(item)?,
+                        item,
+                        validators,
+                        &format!("{owner}.{position}"),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("Schema.Tuple({})", elements.join(", ")))
+        }
+        (single, [validators]) => {
+            apply_validators_to_schema(schema_of(single)?, single, validators, owner)
+        }
+        (_, validators) => Err(EvenframeError::config(format!(
+            "`{owner}` has validators for {} elements but holds {field_type:?}",
+            validators.len()
+        ))),
+    }
+}
+
+/// Whether `validators` start with a parse morph, which reads the value from text.
+fn parses_text(validators: &[Validator]) -> bool {
     matches!(
-        field.validators.first(),
+        validators.first(),
         Some(Validator::StringValidator(validator))
             if matches!(validator.rule(), StringRule::Parse(_))
     )
@@ -957,9 +1207,9 @@ fn apply_validators_to_schema(
                     }
                 )],
                 StringRule::Check => match js_checks::string_check(sv)? {
-                    Some(JsCheck::Pattern(source)) => vec![format!(
-                        "Schema.pattern(new RegExp({}), {})",
-                        string_literal(&source)?,
+                    Some(JsCheck::Pattern { source, flags }) => vec![format!(
+                        "Schema.pattern({}, {})",
+                        js_checks::regexp(&source, &flags)?,
                         expected(&sv.expectation())
                     )],
                     Some(JsCheck::Predicate(predicate)) => vec![format!(
@@ -1308,72 +1558,46 @@ mod tests {
         Validator, apply_validators_to_schema,
     };
 
-    /// A struct whose fields serde names four ways: as written, renamed, by a
-    /// name that is no identifier, and as a key it may leave out.
-    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
-        use crate::types::{StructConfig, StructField, Wire};
-        let field = |name: &str, wire: Wire| StructField {
-            field_name: name.to_owned(),
-            field_type: FieldType::String,
-            wire,
-            ..Default::default()
-        };
-        let renamed = |name: &str| Wire {
-            serde: Some(name.to_owned()),
-            ..Wire::default()
-        };
-        let fields = vec![
-            field("first_name", Wire::default()),
-            field("last_name", renamed("lastName")),
-            field("zip_code", renamed("zip-code")),
-            field(
-                "nickname",
-                Wire {
-                    serde_optional: true,
-                    ..Wire::default()
-                },
-            ),
-        ];
-        std::collections::BTreeMap::from([(
-            "Person".to_owned(),
-            StructConfig {
-                struct_name: "Person".to_owned(),
-                fields,
-                ..Default::default()
-            },
-        )])
-    }
-
     #[test]
-    fn fields_are_keyed_as_serde_writes_them() {
-        let structs = wire_named_structs();
-        let output = super::generate_effect_schema_string(
-            &crate::typesync::type_index::TypeIndex::new(
-                &structs,
-                &std::collections::BTreeMap::new(),
+    fn fields_follow_ts_policy_and_explicit_serde_names() {
+        use crate::typesync::config::TsNames;
+        use crate::typesync::naming::{apply_struct, wire_named_structs};
+        for (policy, first_name) in [
+            (TsNames::Default, "firstName"),
+            (TsNames::RespectSerde, "first_name"),
+        ] {
+            let mut structs = wire_named_structs();
+            for struct_config in structs.values_mut() {
+                apply_struct(struct_config, policy).expect("apply TS naming policy");
+            }
+            let output = super::generate_effect_schema_string(
+                &crate::typesync::type_index::TypeIndex::new(
+                    &structs,
+                    &std::collections::BTreeMap::new(),
+                )
+                .unwrap(),
+                false,
+                &crate::types::ForeignTypeRegistry::default(),
             )
-            .unwrap(),
-            false,
-            &crate::types::ForeignTypeRegistry::default(),
-        )
-        .unwrap();
-        assert!(
-            output.contains("first_name: Schema.propertySignature"),
-            "{output}"
-        );
-        assert!(
-            output.contains("lastName: Schema.propertySignature"),
-            "{output}"
-        );
-        assert!(
-            output.contains("\"zip-code\": Schema.propertySignature"),
-            "{output}"
-        );
-        assert!(
-            output.contains("nickname: Schema.optional(Schema.String)"),
-            "{output}"
-        );
-        assert!(output.contains("readonly nickname?: string;"), "{output}");
+            .unwrap();
+            assert!(
+                output.contains(&format!("{first_name}: Schema.propertySignature")),
+                "{output}"
+            );
+            assert!(
+                output.contains("lastName: Schema.propertySignature"),
+                "{output}"
+            );
+            assert!(
+                output.contains("\"zip-code\": Schema.propertySignature"),
+                "{output}"
+            );
+            assert!(
+                output.contains("nickname: Schema.optional(Schema.String)"),
+                "{output}"
+            );
+            assert!(output.contains("readonly nickname?: string;"), "{output}");
+        }
     }
 
     #[test]

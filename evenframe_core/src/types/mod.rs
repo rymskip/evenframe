@@ -1,5 +1,7 @@
+mod all_configs;
 mod field_type;
 pub mod foreign_type_registry;
+mod newtype;
 #[cfg(feature = "surrealdb-types")]
 mod record_id;
 #[cfg(feature = "surrealdb-types")]
@@ -14,11 +16,12 @@ use crate::{
 use crate::{
     schemasync::mockmake::format::Format,
     schemasync::{DefineConfig, EdgeConfig},
-    validator::Validator,
+    validator::{Validator, ValidatorOverrides},
 };
-#[cfg(feature = "schemadump")]
+pub use all_configs::{AllConfigs, SchemasyncTypes};
 use convert_case::{Case, Casing};
 pub use foreign_type_registry::ForeignTypeRegistry;
+pub use newtype::{DeclaredTypes, FieldOwner, NewtypeConfig, NewtypeKind, desugar_newtypes};
 #[cfg(feature = "surrealdb-types")]
 pub use record_link::RecordLink;
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,16 @@ impl Pipeline {
 
     pub fn includes_schemasync(&self) -> bool {
         matches!(self, Pipeline::Both | Pipeline::Schemasync)
+    }
+
+    /// The part of the pipeline that is typesync, if any.
+    pub fn typesync_part(self) -> Option<Pipeline> {
+        self.includes_typesync().then_some(Pipeline::Typesync)
+    }
+
+    /// The part of the pipeline that is schemasync, if any.
+    pub fn schemasync_part(self) -> Option<Pipeline> {
+        self.includes_schemasync().then_some(Pipeline::Schemasync)
     }
 }
 
@@ -70,10 +83,29 @@ pub enum EnumRepresentation {
     Untagged,
 }
 
-/// How a field or variant appears outside Rust: serde names it in JSON and
-/// TypeScript, SurrealValue in the database. A `None` name is the Rust name.
+impl quote::ToTokens for EnumRepresentation {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let path = quote::quote! { ::evenframe::types::EnumRepresentation };
+        tokens.extend(match self {
+            EnumRepresentation::ExternallyTagged => quote::quote! { #path::ExternallyTagged },
+            EnumRepresentation::InternallyTagged { tag } => {
+                quote::quote! { #path::InternallyTagged { tag: #tag.to_owned() } }
+            }
+            EnumRepresentation::AdjacentlyTagged { tag, content } => quote::quote! {
+                #path::AdjacentlyTagged { tag: #tag.to_owned(), content: #content.to_owned() }
+            },
+            EnumRepresentation::Untagged => quote::quote! { #path::Untagged },
+        });
+    }
+}
+
+/// Names outside Rust: serde in JSON, TypeScript in generated outputs,
+/// and SurrealValue in the database.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Wire {
+    /// An explicit TypeScript name, or the configured serde fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typescript: Option<String>,
     #[serde(default)]
     pub serde: Option<String>,
     #[serde(default)]
@@ -81,9 +113,114 @@ pub struct Wire {
     /// Serde neither writes nor reads it, so JSON never carries it.
     #[serde(default)]
     pub serde_skipped: bool,
-    /// Serde leaves the key out under `skip_serializing_if`.
+    /// The JSON may lack the key: serde leaves it out under
+    /// `skip_serializing_if`, or skips it in one direction only.
     #[serde(default)]
     pub serde_optional: bool,
+    /// A variant's `#[serde(untagged)]`: serde writes its payload bare,
+    /// whatever its enum's representation, and reads it after every tagged
+    /// variant.
+    #[serde(default)]
+    pub serde_untagged: bool,
+    /// A field's `#[serde(flatten)]`: serde writes what it holds beside its
+    /// siblings rather than under its own key.
+    #[serde(default)]
+    pub serde_flatten: bool,
+    #[serde(default)]
+    pub storage: Storage,
+}
+
+/// How the database stores an item, where that differs from serde's JSON:
+/// serde's shape, overridden by the item's `#[surreal(...)]` keys.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Storage {
+    /// A field never written to the database, so the schema defines nothing
+    /// for it; a variant stored as NONE.
+    #[serde(default)]
+    pub skipped: bool,
+    /// A field stored beside its siblings, by serde's or `#[surreal]`'s
+    /// flatten.
+    #[serde(default)]
+    pub flatten: bool,
+    /// A field stored through serde, in a shape the schema does not describe:
+    /// `#[surreal(wrap)]`, or serde's `with`.
+    #[serde(default)]
+    pub opaque: bool,
+    /// Each element of a tuple variant stored through serde.
+    #[serde(default)]
+    pub opaque_elements: Vec<bool>,
+    /// A variant stored as its enum's `#[surreal]` representation says, in
+    /// place of serde's.
+    #[serde(default)]
+    pub representation: Option<EnumRepresentation>,
+    /// A unit variant stored as this SurrealQL literal, by `#[surreal(value)]`
+    /// or, for an untagged one, serde's null.
+    #[serde(default)]
+    pub value: Option<String>,
+    /// A unit variant read for any value no other variant reads.
+    #[serde(default)]
+    pub other: bool,
+    /// A tuple variant of one element stored as an array.
+    #[serde(default)]
+    pub tuple: bool,
+    /// When an adjacently tagged variant's content key is stored.
+    #[serde(default)]
+    pub content: ContentStorage,
+}
+
+/// When an adjacently tagged variant's content key is stored.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ContentStorage {
+    #[default]
+    Always,
+    /// Left out when `#[surreal(skip_content_if)]` holds for the content.
+    Sometimes,
+    /// Never, by `#[surreal(skip_content)]`.
+    Never,
+}
+
+impl quote::ToTokens for Storage {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let Storage {
+            skipped,
+            flatten,
+            opaque,
+            opaque_elements,
+            representation,
+            value,
+            other,
+            tuple,
+            content,
+        } = self;
+        let representation = match representation {
+            Some(representation) => quote::quote! { ::std::option::Option::Some(#representation) },
+            None => quote::quote! { ::std::option::Option::None },
+        };
+        let value = match value {
+            Some(value) => quote::quote! { ::std::option::Option::Some(#value.to_owned()) },
+            None => quote::quote! { ::std::option::Option::None },
+        };
+        let content = match content {
+            ContentStorage::Always => quote::quote! { ::evenframe::types::ContentStorage::Always },
+            ContentStorage::Sometimes => {
+                quote::quote! { ::evenframe::types::ContentStorage::Sometimes }
+            }
+            ContentStorage::Never => quote::quote! { ::evenframe::types::ContentStorage::Never },
+        };
+        tokens.extend(quote::quote! {
+            ::evenframe::types::Storage {
+                skipped: #skipped,
+                flatten: #flatten,
+                opaque: #opaque,
+                opaque_elements: vec![#(#opaque_elements),*],
+                representation: #representation,
+                value: #value,
+                other: #other,
+                tuple: #tuple,
+                content: #content,
+            }
+        });
+    }
 }
 
 impl quote::ToTokens for Wire {
@@ -93,15 +230,23 @@ impl quote::ToTokens for Wire {
             None => quote::quote! { None },
         };
         let serde = optional(&self.serde);
+        let typescript = optional(&self.typescript);
         let surreal = optional(&self.surreal);
         let serde_skipped = self.serde_skipped;
         let serde_optional = self.serde_optional;
+        let serde_untagged = self.serde_untagged;
+        let serde_flatten = self.serde_flatten;
+        let storage = &self.storage;
         tokens.extend(quote::quote! {
             ::evenframe::types::Wire {
+                typescript: #typescript,
                 serde: #serde,
                 surreal: #surreal,
                 serde_skipped: #serde_skipped,
                 serde_optional: #serde_optional,
+                serde_untagged: #serde_untagged,
+                serde_flatten: #serde_flatten,
+                storage: #storage,
             }
         });
     }
@@ -154,6 +299,12 @@ pub struct Variant {
     /// variant is flagged, the first declared variant is used.
     #[serde(default)]
     pub is_default: bool,
+    /// A tuple variant's validators, one list per element of its payload.
+    #[serde(default)]
+    pub element_validators: Vec<Vec<Validator>>,
+    /// Lists replacing each element's validators in one pipeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub element_validator_overrides: Vec<ValidatorOverrides>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +342,9 @@ pub struct StructField {
     pub define_config: Option<DefineConfig>,
     pub format: Option<Format>,
     pub validators: Vec<Validator>,
+    /// Lists replacing `validators` in one pipeline.
+    #[serde(default, skip_serializing_if = "ValidatorOverrides::is_empty")]
+    pub validator_overrides: ValidatorOverrides,
     pub always_regenerate: bool,
     #[serde(default)]
     pub doccom: Option<String>,
@@ -230,9 +384,22 @@ impl StructField {
             .map_or(self, Self::effective)
     }
 
-    /// The field's key in serde's JSON and the generated TypeScript.
+    /// The field's key in serde's JSON.
     pub fn serde_name(&self) -> &str {
         self.wire.serde.as_deref().unwrap_or(&self.field_name)
+    }
+
+    /// The generated key, with camelCase as the fallback.
+    pub fn ts_name(&self) -> std::borrow::Cow<'_, str> {
+        match self
+            .wire
+            .typescript
+            .as_deref()
+            .or(self.wire.serde.as_deref())
+        {
+            Some(name) => std::borrow::Cow::Borrowed(name),
+            None => std::borrow::Cow::Owned(self.field_name.to_case(Case::Camel)),
+        }
     }
 
     /// The field's key in the database, as SurrealValue writes it.
@@ -367,16 +534,96 @@ impl StructField {
         #[derive(Debug)]
         enum WorkItem<'a> {
             Process(&'a FieldType),
+            /// A struct field's value: its type, or any for one stored
+            /// through serde.
+            ProcessField(&'a StructField),
             PushString(String),
             AssembleOption,
             AssembleVec,
             AssembleMap,
-            AssembleTuple { count: usize },
-            AssembleStruct { count: usize, names: Vec<String> },
-            AssembleEnum { count: usize },
-            WrapInVariantKey { variant_name: String },
-            EnterStructScope { name: String },
-            LeaveStructScope { name: String },
+            AssembleTuple {
+                count: usize,
+            },
+            AssembleStruct {
+                count: usize,
+                names: Vec<String>,
+            },
+            AssembleEnum {
+                count: usize,
+            },
+            WrapInVariantKey {
+                variant_name: String,
+            },
+            EnterStructScope {
+                name: String,
+            },
+            LeaveStructScope {
+                name: String,
+            },
+        }
+
+        /// The work items a tuple variant's payload pushes: its element, or
+        /// each of several, as `#[surreal(tuple)]` and `#[surreal(wrap)]`
+        /// store them, in the order they are pushed.
+        fn payload_items<'a>(payload: &'a FieldType, storage: &Storage) -> Vec<WorkItem<'a>> {
+            let element = |item: &'a FieldType, position: usize| match storage
+                .opaque_elements
+                .get(position)
+            {
+                Some(true) => WorkItem::PushString("any".to_owned()),
+                _ => WorkItem::Process(item),
+            };
+            match payload {
+                FieldType::Tuple(items) if storage.opaque_elements.contains(&true) => {
+                    let mut pushed = vec![WorkItem::AssembleTuple { count: items.len() }];
+                    pushed.extend(
+                        items
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .map(|(position, item)| element(item, position)),
+                    );
+                    pushed
+                }
+                single if storage.tuple => {
+                    vec![WorkItem::AssembleTuple { count: 1 }, element(single, 0)]
+                }
+                single => vec![element(single, 0)],
+            }
+        }
+
+        /// The work items an adjacently tagged variant pushes: its tag, and
+        /// its content as `#[surreal(skip_content)]` stores it, from the
+        /// payload's own `content_items`, in the order they are pushed.
+        fn adjacent_items<'a>(
+            tag: &str,
+            content: &str,
+            variant_name: &str,
+            storage: &Storage,
+            content_items: Vec<WorkItem<'a>>,
+        ) -> Vec<WorkItem<'a>> {
+            let tag_value = WorkItem::PushString(format!("\"{variant_name}\""));
+            match storage.content {
+                ContentStorage::Never => vec![
+                    WorkItem::AssembleStruct {
+                        count: 1,
+                        names: vec![tag.to_owned()],
+                    },
+                    tag_value,
+                ],
+                ContentStorage::Sometimes | ContentStorage::Always => {
+                    let mut pushed = vec![WorkItem::AssembleStruct {
+                        count: 2,
+                        names: vec![tag.to_owned(), content.to_owned()],
+                    }];
+                    if storage.content == ContentStorage::Sometimes {
+                        pushed.push(WorkItem::AssembleOption);
+                    }
+                    pushed.extend(content_items);
+                    pushed.push(tag_value);
+                    pushed
+                }
+            }
         }
 
         let convert_type_iteratively =
@@ -489,18 +736,36 @@ impl StructField {
 
                                         for variant in enum_def.variants.iter().rev() {
                                             let variant = variant.effective();
+                                            let storage = &variant.wire.storage;
+                                            // A variant serde skips is stored as NONE.
+                                            if storage.skipped {
+                                                work_stack
+                                                    .push(WorkItem::PushString("none".to_owned()));
+                                                continue;
+                                            }
+                                            // An untagged unit variant is stored as its literal.
+                                            if let Some(literal) = &storage.value {
+                                                work_stack.push(WorkItem::PushString(
+                                                    match literal.as_str() {
+                                                        "NULL" => "null".to_owned(),
+                                                        "NONE" => "none".to_owned(),
+                                                        literal => literal.to_owned(),
+                                                    },
+                                                ));
+                                                continue;
+                                            }
                                             if let Some(data) = &variant.data {
                                                 match data {
                                                     VariantData::InlineStruct(s) => {
                                                         let struct_config = s.effective();
-                                                        match &enum_def.representation {
+                                                        match variant.stored_representation(&enum_def.representation) {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: { fields } }
                                                             work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
                                                             let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
+                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
                                                             }
                                                         }
                                                         EnumRepresentation::InternallyTagged { tag } => {
@@ -509,54 +774,41 @@ impl StructField {
                                                             names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
+                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
                                                             }
                                                             work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
                                                         }
                                                         EnumRepresentation::AdjacentlyTagged { tag, content } => {
                                                             // { tag: "VariantName", content: { fields } }
                                                             let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
-                                                            work_stack.push(WorkItem::AssembleStruct {
-                                                                count: 2,
-                                                                names: vec![tag.clone(), content.clone()],
-                                                            });
-                                                            // content value (inner struct)
-                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
-                                                            for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
-                                                            }
-                                                            // tag value
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
+                                                            let mut content_items = vec![WorkItem::AssembleStruct { count: struct_config.fields.len(), names }];
+                                                            content_items.extend(struct_config.fields.iter().rev().map(|field| WorkItem::ProcessField(field.effective())));
+                                                            work_stack.extend(adjacent_items(tag, content, variant.db_name(), storage, content_items));
                                                         }
                                                         EnumRepresentation::Untagged => {
                                                             // { fields } (no wrapping)
                                                             let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
                                                             for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::Process(&field.effective().field_type));
+                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
                                                             }
                                                         }
                                                     }
                                                     }
                                                     VariantData::DataStructureRef(ft) => {
-                                                        match &enum_def.representation {
+                                                        match variant.stored_representation(&enum_def.representation) {
                                                         EnumRepresentation::ExternallyTagged => {
                                                             // { VariantName: value }
                                                             work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
-                                                            work_stack.push(WorkItem::Process(ft));
+                                                            work_stack.extend(payload_items(ft, storage));
                                                         }
                                                         EnumRepresentation::AdjacentlyTagged { tag, content } => {
                                                             // { tag: "VariantName", content: value }
-                                                            work_stack.push(WorkItem::AssembleStruct {
-                                                                count: 2,
-                                                                names: vec![tag.clone(), content.clone()],
-                                                            });
-                                                            work_stack.push(WorkItem::Process(ft));
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
+                                                            work_stack.extend(adjacent_items(tag, content, variant.db_name(), storage, payload_items(ft, storage)));
                                                         }
                                                         EnumRepresentation::Untagged => {
                                                             // value (no wrapping)
-                                                            work_stack.push(WorkItem::Process(ft));
+                                                            work_stack.extend(payload_items(ft, storage));
                                                         }
                                                          EnumRepresentation::InternallyTagged { tag } => {
                                                              let struct_config = match ft {
@@ -570,7 +822,7 @@ impl StructField {
                                                              names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
                                                              work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
                                                              for field in struct_config.fields.iter().rev() {
-                                                                 work_stack.push(WorkItem::Process(&field.effective().field_type));
+                                                                 work_stack.push(WorkItem::ProcessField(field.effective()));
                                                              }
                                                              work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
                                                          }
@@ -579,7 +831,9 @@ impl StructField {
                                                 }
                                             } else {
                                                 // Unit variant
-                                                match &enum_def.representation {
+                                                match variant
+                                                    .stored_representation(&enum_def.representation)
+                                                {
                                                     EnumRepresentation::InternallyTagged {
                                                         tag,
                                                     } => {
@@ -634,7 +888,10 @@ impl StructField {
                                                 None,
                                             ));
                                         } else {
-                                            if visited_types.contains(name) {
+                                            // A struct holding itself, or keys known
+                                            // only from a value, is any object.
+                                            if visited_types.contains(name) || app_struct.is_open()
+                                            {
                                                 value_stack.push((
                                                     "object".to_string(),
                                                     false,
@@ -655,8 +912,8 @@ impl StructField {
                                                 names,
                                             });
                                             for field in app_struct.fields.iter().rev() {
-                                                work_stack.push(WorkItem::Process(
-                                                    &field.effective().field_type,
+                                                work_stack.push(WorkItem::ProcessField(
+                                                    field.effective(),
                                                 ));
                                             }
                                             work_stack.push(WorkItem::EnterStructScope {
@@ -676,6 +933,13 @@ impl StructField {
                                         value_stack.push((name.clone(), false, None));
                                     }
                                 }
+                            }
+                        }
+                        WorkItem::ProcessField(field) => {
+                            if field.wire.storage.opaque {
+                                value_stack.push(("any".to_string(), false, None));
+                            } else {
+                                work_stack.push(WorkItem::Process(&field.field_type));
                             }
                         }
                         WorkItem::PushString(s) => {
@@ -874,16 +1138,31 @@ impl StructField {
                 ("".to_string(), false, None)
             } else if let Some(ref data_type) = def.data_type {
                 (data_type.clone(), false, None)
+            } else if self.wire.storage.opaque {
+                ("any".to_string(), false, None)
             } else {
                 convert_type_iteratively(&self.field_type)?
             }
+        } else if self.wire.storage.opaque {
+            ("any".to_string(), false, None)
         } else {
             convert_type_iteratively(&self.field_type)?
         };
 
-        if let Some(ref def) = self.define_config
-            && def.flexible.unwrap_or(false)
-        {
+        // A struct with keys known only from a value is any object, which
+        // keeps its keys only on a flexible field.
+        let flexible = self
+            .define_config
+            .as_ref()
+            .is_some_and(|def| def.flexible.unwrap_or(false))
+            || holds_open_struct(
+                &self.field_type,
+                enums,
+                app_structs,
+                persistable_structs,
+                &mut HashSet::new(),
+            );
+        if flexible {
             stmt.push_str(" FLEXIBLE");
         }
 
@@ -1012,7 +1291,94 @@ pub struct StructConfig {
     pub raw_attributes: BTreeMap<String, Vec<String>>,
 }
 
+/// Whether a value of `field_type` holds, below any link to a table, a struct
+/// with keys known only from a value, which the schema stores as any object.
+#[cfg(feature = "schemadump")]
+fn holds_open_struct(
+    field_type: &FieldType,
+    enums: &BTreeMap<String, TaggedUnion>,
+    app_structs: &BTreeMap<String, StructConfig>,
+    persistable_structs: &BTreeMap<String, TableConfig>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    let holds = |held: &FieldType, visited: &mut HashSet<String>| {
+        holds_open_struct(held, enums, app_structs, persistable_structs, visited)
+    };
+    match field_type {
+        FieldType::Option(inner) | FieldType::Vec(inner) => holds(inner, visited),
+        FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
+            holds(key, visited) || holds(value, visited)
+        }
+        FieldType::Tuple(items) => items.iter().any(|item| holds(item, visited)),
+        FieldType::Struct(members) => members.iter().any(|(_, member)| holds(member, visited)),
+        FieldType::Other(name) => {
+            if !visited.insert(name.clone()) {
+                return false;
+            }
+            // A table held by value is stored as a link to its record, as the
+            // schema's types write it.
+            if let Some(app_struct) = app_structs.get(name).map(StructConfig::effective) {
+                if persistable_structs.contains_key(&app_struct.struct_name.to_case(Case::Snake)) {
+                    return false;
+                }
+                return app_struct.is_open()
+                    || app_struct
+                        .fields
+                        .iter()
+                        .any(|field| holds(&field.effective().field_type, visited));
+            }
+            if persistable_structs.contains_key(&name.to_case(Case::Snake)) {
+                return false;
+            }
+            enums.get(name).is_some_and(|tagged_union| {
+                tagged_union.effective().variants.iter().any(|variant| {
+                    match &variant.effective().data {
+                        Some(VariantData::InlineStruct(inline)) => inline
+                            .effective()
+                            .fields
+                            .iter()
+                            .any(|field| holds(&field.effective().field_type, visited)),
+                        Some(VariantData::DataStructureRef(held)) => holds(held, visited),
+                        None => false,
+                    }
+                })
+            })
+        }
+        FieldType::RecordLink(_)
+        | FieldType::String
+        | FieldType::Char
+        | FieldType::Bool
+        | FieldType::Unit
+        | FieldType::F32
+        | FieldType::F64
+        | FieldType::I8
+        | FieldType::I16
+        | FieldType::I32
+        | FieldType::I64
+        | FieldType::I128
+        | FieldType::Isize
+        | FieldType::U8
+        | FieldType::U16
+        | FieldType::U32
+        | FieldType::U64
+        | FieldType::U128
+        | FieldType::Usize
+        | FieldType::Duration => false,
+    }
+}
+
 impl StructConfig {
+    /// Whether the database holds keys beside the struct's own that are known
+    /// only from a value: those of a flattened map or enum. A flattened
+    /// struct's fields are put in its place by the pipeline views, so only
+    /// these remain flattened.
+    pub fn is_open(&self) -> bool {
+        self.effective()
+            .fields
+            .iter()
+            .any(|field| field.effective().wire.storage.flatten)
+    }
+
     /// Resolve `output_override` recursively. Every consumer that reads a
     /// `StructConfig` should call this first: `output_override` is a literal
     /// replacement, applied uniformly across all consumers.
@@ -1038,6 +1404,32 @@ impl Variant {
         self.output_override
             .as_deref()
             .map_or(self, Self::effective)
+    }
+
+    /// How the database stores this variant: as its enum's `#[surreal]`
+    /// representation says, else as serde writes it.
+    pub fn stored_representation<'a>(
+        &'a self,
+        enum_representation: &'a EnumRepresentation,
+    ) -> &'a EnumRepresentation {
+        self.wire
+            .storage
+            .representation
+            .as_ref()
+            .unwrap_or_else(|| self.serde_representation(enum_representation))
+    }
+
+    /// How serde writes this variant: bare under its own
+    /// `#[serde(untagged)]`, else as its enum writes every variant.
+    pub fn serde_representation<'a>(
+        &self,
+        enum_representation: &'a EnumRepresentation,
+    ) -> &'a EnumRepresentation {
+        if self.wire.serde_untagged {
+            &EnumRepresentation::Untagged
+        } else {
+            enum_representation
+        }
     }
 
     /// The variant's name in serde's JSON and the generated TypeScript.
@@ -1167,6 +1559,8 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_validators: Vec::new(),
+                    element_validator_overrides: Vec::new(),
                 },
                 Variant {
                     name: "Inactive".to_string(),
@@ -1177,6 +1571,8 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_validators: Vec::new(),
+                    element_validator_overrides: Vec::new(),
                 },
             ],
             representation: EnumRepresentation::default(),
@@ -1206,6 +1602,8 @@ mod tests {
                 output_override: None,
                 raw_attributes: BTreeMap::new(),
                 is_default: false,
+                element_validators: Vec::new(),
+                element_validator_overrides: Vec::new(),
             }],
             representation: EnumRepresentation::default(),
             doccom: None,
@@ -1268,6 +1666,8 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         };
         assert!(v.data.is_none());
     }
@@ -1283,6 +1683,8 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         };
         assert!(matches!(
             v.data,
@@ -1314,6 +1716,8 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         };
         assert!(matches!(v.data, Some(VariantData::InlineStruct(_))));
     }
@@ -1426,6 +1830,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
         let f2 = f1.clone();
         assert_eq!(f1, f2);
@@ -1471,6 +1876,7 @@ mod tests {
                     unique: false,
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
+                    validator_overrides: Default::default(),
                 },
                 StructField {
                     field_name: "age".to_string(),
@@ -1486,6 +1892,7 @@ mod tests {
                     unique: false,
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
+                    validator_overrides: Default::default(),
                 },
             ],
             validators: vec![],
@@ -1674,6 +2081,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
         assert_eq!(field.validators.len(), 1);
     }
@@ -1781,6 +2189,8 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         };
         let aliased = Variant {
             name: "Aliased".to_string(),
@@ -1791,6 +2201,8 @@ mod tests {
             output_override: Some(Box::new(real_variant)),
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_validators: Vec::new(),
+            element_validator_overrides: Vec::new(),
         };
         assert_eq!(aliased.effective().name, "Real");
     }
@@ -1832,6 +2244,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         // Synthetic struct: PartialUser overrides to User
@@ -1931,6 +2344,7 @@ mod tests {
             unique: false,
             output_override: None,
             raw_attributes: BTreeMap::new(),
+            validator_overrides: Default::default(),
         };
 
         let stmt = field

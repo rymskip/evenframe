@@ -40,6 +40,16 @@ pub enum FieldType {
 pub const STD_DURATION_PATHS: [&str; 2] = ["std::time::Duration", "core::time::Duration"];
 
 impl FieldType {
+    /// The value type of a map, or of an `Option` of one: what each key holds
+    /// when serde writes the map's keys beside a struct's own.
+    pub fn flattened_map_value(&self) -> Option<&FieldType> {
+        match self {
+            FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => Some(value),
+            FieldType::Option(inner) => inner.flattened_map_value(),
+            _ => None,
+        }
+    }
+
     /// The shape serde writes a `std::time::Duration` in: its whole seconds
     /// and the nanoseconds past them.
     pub fn serde_duration() -> FieldType {

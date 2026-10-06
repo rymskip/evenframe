@@ -1,0 +1,26 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+union Shape {
+    ShapeCircle,
+    ShapeTag,
+    ShapeCode
+}
+
+table ShapeCircle {
+    value: double;
+}
+
+table ShapeTagValue {
+    item_0: string;
+    item_1: uint8;
+}
+
+table ShapeTag {
+    value: ShapeTagValue;
+}
+
+table ShapeCode {
+    value: string;
+}

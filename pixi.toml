@@ -36,7 +36,7 @@ bench-fixture = "cargo run -p tooling -- bench-fixture"
 # NOT a pixi dependency here (no public conda package); it's expected from a
 # global install.
 rustup = "*"
-cargo-insta = ">=1.48.0,<2"
+cargo-insta = ">=1.49.0,<2"
 libprotobuf = ">=7.36.2,<8"
 flatbuffers = ">=25.12.19,<26"
 deno = ">=2.9.5,<2.10"

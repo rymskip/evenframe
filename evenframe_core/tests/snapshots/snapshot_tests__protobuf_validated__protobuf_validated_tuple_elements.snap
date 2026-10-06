@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Shape {
+    message Tag {
+        string item_0 = 1;
+        uint32 item_1 = 2;
+    }
+    oneof variant {
+        double circle = 1;
+        Tag tag = 2;
+        string code = 3;
+    }
+}

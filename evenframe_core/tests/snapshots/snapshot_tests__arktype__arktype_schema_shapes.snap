@@ -13,24 +13,24 @@ Place: {
   name: 'string'
 },
 Shapes: {
-  maybe_tags: [[['string', '[]'], '|', 'undefined'], '|', 'null'],
+  maybeTags: [[['string', '[]'], '|', 'undefined'], '|', 'null'],
   matrix: [['number', '[]'], '[]'],
   gaps: [[['number', '|', 'undefined'], '|', 'null'], '[]'],
-  tri_state: [[[['boolean', '|', 'undefined'], '|', 'null'], '|', 'undefined'], '|', 'null'],
-  maybe_count: [['number', '|', 'undefined'], '|', 'null'],
-  lists_by_name: { '+': 'reject', "[string]": ['string', '[]'] },
-  optional_by_name: { '+': 'reject', "[string]": [['number', '|', 'undefined'], '|', 'null'] },
-  maps_by_name: { '+': 'reject', "[string]": { '+': 'reject', "[string.integer]": 'boolean' } },
+  triState: [[[['boolean', '|', 'undefined'], '|', 'null'], '|', 'undefined'], '|', 'null'],
+  maybeCount: [['number', '|', 'undefined'], '|', 'null'],
+  listsByName: { '+': 'reject', "[string]": ['string', '[]'] },
+  optionalByName: { '+': 'reject', "[string]": [['number', '|', 'undefined'], '|', 'null'] },
+  mapsByName: { '+': 'reject', "[string]": { '+': 'reject', "[string.integer]": 'boolean' } },
   pair: ['string', 'number'],
   pairs: [['number', 'number'], '[]'],
   corner: { x: 'number', y: 'number' },
   nothing: 'null',
   huge: 'number',
-  huge_by_id: { '+': 'reject', "[string.integer]": 'string' },
+  hugeById: { '+': 'reject', "[string.integer]": 'string' },
   event: 'Event',
   events: ['Event', '[]'],
-  last_event: [['Event', '|', 'undefined'], '|', 'null'],
-  events_by_name: { '+': 'reject', "[string]": 'Event' }
+  lastEvent: [['Event', '|', 'undefined'], '|', 'null'],
+  eventsByName: { '+': 'reject', "[string]": 'Event' }
 },
 
 });
@@ -45,24 +45,24 @@ export const defaultPlace: Place = {
 name: ""
 };
 export const defaultShapes: Shapes = {
-maybe_tags: null,
+maybeTags: null,
 matrix: [],
 gaps: [],
-tri_state: null,
-maybe_count: null,
-lists_by_name: {},
-optional_by_name: {},
-maps_by_name: {},
+triState: null,
+maybeCount: null,
+listsByName: {},
+optionalByName: {},
+mapsByName: {},
 pair: ["", 0],
 pairs: [],
 corner: { x: 0, y: 0 },
 nothing: null,
 huge: 0,
-huge_by_id: {},
+hugeById: {},
 event: "Opened",
 events: [],
-last_event: null,
-events_by_name: {}
+lastEvent: null,
+eventsByName: {}
 };
 
 export type Event = typeof exported.Event.infer;

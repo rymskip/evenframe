@@ -1,14 +1,16 @@
 use crate::PipelineKind;
+use crate::deserialization_impl::{CheckedVariant, generate_enum_deserialize};
 use crate::surreal_value_impl::{Mode, enum_surreal_value};
-use crate::validate_impl::enum_validate;
+use crate::validate_impl::{CheckedField, enum_validate};
 use evenframe_core::{
     derive::{
-        attributes::{
-            parse_annotation_attributes, parse_macroforge_derive_attribute, parse_rust_derives,
-        },
+        attributes::parse_rust_derives,
         naming,
+        schemasync_attributes::{parse_validator_overrides, refuse_container_validator_overrides},
+        typesync_attributes::{Position, TypesyncAttributes},
+        validator_parser::{FieldValidators, parse_element_validators, parse_field_validators},
     },
-    types::{EnumRepresentation, FieldType, PathNames},
+    types::{FieldType, PathNames},
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -20,15 +22,15 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
     if let Data::Enum(ref data_enum) = input.data {
         let enum_name = ident.to_string();
 
-        // Parse enum-level macroforge_derive attribute
-        let macroforge_derives = match parse_macroforge_derive_attribute(&input.attrs) {
-            Ok(derives) => derives,
-            Err(err) => return err.to_compile_error(),
-        };
-
-        // Parse enum-level annotation attributes
-        let enum_annotations = match parse_annotation_attributes(&input.attrs) {
-            Ok(annotations) => annotations,
+        if let Err(err) = refuse_container_validator_overrides(&input.attrs) {
+            return err.to_compile_error();
+        }
+        let TypesyncAttributes {
+            macroforge_derives,
+            annotations: enum_annotations,
+            ..
+        } = match TypesyncAttributes::parse(&input.attrs, Position::Container) {
+            Ok(typesync) => typesync,
             Err(err) => return err.to_compile_error(),
         };
 
@@ -40,37 +42,26 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             Err(err) => return err.to_compile_error(),
         };
 
-        let representation_tokens = match &wire.representation {
-            EnumRepresentation::ExternallyTagged => {
-                quote! { EnumRepresentation::ExternallyTagged }
-            }
-            EnumRepresentation::InternallyTagged { tag } => {
-                quote! { EnumRepresentation::InternallyTagged { tag: #tag.to_string() } }
-            }
-            EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                quote! { EnumRepresentation::AdjacentlyTagged { tag: #tag.to_string(), content: #content.to_string() } }
-            }
-            EnumRepresentation::Untagged => {
-                quote! { EnumRepresentation::Untagged }
-            }
-        };
+        let representation_tokens = &wire.representation;
 
         let pipeline_tokens = pipeline.to_tokens();
 
         let mut variant_tokens = Vec::new();
 
         for (variant, variant_wire) in data_enum.variants.iter().zip(&wire.variants) {
-            // serde never writes a skipped variant or field, as the scanner
-            // drops them too.
-            if variant_wire.wire.serde_skipped {
-                continue;
-            }
             let variant_name = naming::unraw(&variant.ident);
             let variant_wire_tokens = &variant_wire.wire;
 
-            // Parse variant-level annotation attributes
-            let variant_annotations = match parse_annotation_attributes(&variant.attrs) {
-                Ok(annotations) => annotations,
+            let variant_position = match variant.fields {
+                Fields::Named(_) => Position::StructVariant,
+                Fields::Unnamed(_) | Fields::Unit => Position::Variant,
+            };
+            let TypesyncAttributes {
+                macroforge_derives: variant_macroforge_derives,
+                annotations: variant_annotations,
+                ..
+            } = match TypesyncAttributes::parse(&variant.attrs, variant_position) {
+                Ok(typesync) => typesync,
                 Err(err) => return err.to_compile_error(),
             };
 
@@ -90,33 +81,40 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                 }
                 Fields::Named(fields) => {
                     // Named fields - create an inline struct
-                    let struct_fields: Vec<_> = fields
-                        .named
-                        .iter()
-                        .zip(&variant_wire.fields)
-                        .filter(|(_, field_wire)| !field_wire.serde_skipped)
-                        .filter_map(|(field, field_wire)| {
-                            let field_name = naming::unraw(field.ident.as_ref()?);
-                            let field_type = FieldType::parse_syn_ty(&field.ty);
-                            Some(quote! {
-                                StructField {
-                                    field_name: #field_name.to_string(),
-                                    field_type: #field_type,
-                                    wire: #field_wire,
-                                    edge_config: None,
-                                    define_config: None,
-                                    format: None,
-                                    validators: vec![],
-                                    always_regenerate: false,
-                                    doccom: None,
-                                    annotations: vec![],
-                                    unique: false,
-                                    output_override: None,
-                                    raw_attributes: std::collections::BTreeMap::new(),
-                                }
-                            })
-                        })
-                        .collect();
+                    let mut struct_fields = Vec::new();
+                    for (field, field_wire) in fields.named.iter().zip(&variant_wire.fields) {
+                        let Some(member) = field.ident.as_ref() else {
+                            continue;
+                        };
+                        let field_name = naming::unraw(member);
+                        let field_type = FieldType::parse_syn_ty(&field.ty);
+                        let validators = match parse_field_validators(&field.attrs) {
+                            Ok(validators) => validators.config_tokens(),
+                            Err(err) => return err.to_compile_error(),
+                        };
+                        let validator_overrides = match parse_validator_overrides(&field.attrs) {
+                            Ok(overrides) => overrides,
+                            Err(err) => return err.to_compile_error(),
+                        };
+                        struct_fields.push(quote! {
+                            StructField {
+                                field_name: #field_name.to_string(),
+                                field_type: #field_type,
+                                wire: #field_wire,
+                                edge_config: None,
+                                define_config: None,
+                                format: None,
+                                validators: vec![#(#validators),*],
+                                validator_overrides: #validator_overrides,
+                                always_regenerate: false,
+                                doccom: None,
+                                annotations: vec![],
+                                unique: false,
+                                output_override: None,
+                                raw_attributes: std::collections::BTreeMap::new(),
+                            }
+                        });
+                    }
 
                     let pipeline_tokens_inner = pipeline.to_tokens();
                     quote! {
@@ -125,7 +123,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                             fields: vec![#(#struct_fields),*],
                             validators: vec![],
                             doccom: None,
-                            macroforge_derives: vec![],
+                            macroforge_derives: vec![#(#variant_macroforge_derives.to_string()),*],
                             annotations: vec![],
                             pipeline: #pipeline_tokens_inner,
                             rust_derives: vec![],
@@ -142,6 +140,11 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             } else {
                 quote! { vec![#(#variant_annotations.to_string()),*] }
             };
+            let (element_validators_tokens, element_validator_overrides_tokens) =
+                match element_validator_tokens(&variant.fields) {
+                    Ok(tokens) => tokens,
+                    Err(err) => return err.to_compile_error(),
+                };
 
             variant_tokens.push(quote! {
                 Variant {
@@ -153,6 +156,8 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     output_override: None,
                     raw_attributes: std::collections::BTreeMap::new(),
                     is_default: #is_default_variant,
+                    element_validators: #element_validators_tokens,
+                    element_validator_overrides: #element_validator_overrides_tokens,
                 }
             });
         }
@@ -177,6 +182,85 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             Err(err) => return err.to_compile_error(),
         };
 
+        // Each variant's fields' validators, in field order, for the validated
+        // deserializer.
+        let variant_validators = match data_enum
+            .variants
+            .iter()
+            .map(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .map(|field| parse_field_validators(&field.attrs))
+                    .collect::<syn::Result<Vec<FieldValidators>>>()
+            })
+            .collect::<syn::Result<Vec<_>>>()
+        {
+            Ok(validators) => validators,
+            Err(err) => return err.to_compile_error(),
+        };
+        let deserialize_impl = if variant_validators
+            .iter()
+            .flatten()
+            .any(|validators| !validators.is_empty())
+        {
+            let checked_variants: Vec<CheckedVariant> = data_enum
+                .variants
+                .iter()
+                .zip(&wire.variants)
+                .zip(&variant_validators)
+                .map(|((variant, variant_wire), validators)| {
+                    let variant_name = variant_wire
+                        .wire
+                        .serde
+                        .clone()
+                        .unwrap_or_else(|| naming::unraw(&variant.ident));
+                    let fields = match &variant.fields {
+                        Fields::Named(named) => named
+                            .named
+                            .iter()
+                            .zip(&variant_wire.fields)
+                            .zip(validators)
+                            .enumerate()
+                            .map(|(position, ((field, field_wire), validators))| {
+                                let field_name = field_wire.serde.clone().unwrap_or_else(|| {
+                                    field.ident.as_ref().map(naming::unraw).unwrap_or_default()
+                                });
+                                CheckedField::new(
+                                    field,
+                                    position,
+                                    format!("{variant_name}.{field_name}"),
+                                    validators,
+                                )
+                            })
+                            .collect(),
+                        Fields::Unnamed(unnamed) => unnamed
+                            .unnamed
+                            .iter()
+                            .zip(validators)
+                            .enumerate()
+                            .map(|(position, (field, validators))| {
+                                CheckedField::new(
+                                    field,
+                                    position,
+                                    format!("{variant_name}.{position}"),
+                                    validators,
+                                )
+                            })
+                            .collect(),
+                        Fields::Unit => Vec::new(),
+                    };
+                    CheckedVariant { variant, fields }
+                })
+                .collect();
+            match generate_enum_deserialize(&input, &checked_variants) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            }
+        } else {
+            TokenStream::new()
+        };
+
         let surreal_value_impl = if pipeline.reaches_database() {
             match enum_surreal_value(&input, &wire, Mode::Stored) {
                 Ok(tokens) => tokens,
@@ -186,12 +270,9 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             TokenStream::new()
         };
 
-        quote! {
-            #validate_impl
-
-            #surreal_value_impl
-
-            ::evenframe::__metadata! {
+        let metadata_gate = crate::metadata::gate(
+            &input,
+            quote! {
                 const _: () = {
                     use ::evenframe::types::{TaggedUnion, Variant, VariantData, StructConfig, StructField, FieldType, EnumRepresentation, Pipeline};
                     use ::evenframe::traits::EvenframeTaggedUnion;
@@ -219,7 +300,16 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
 
                     #registry_submission
                 };
-            }
+            },
+        );
+        quote! {
+            #validate_impl
+
+            #deserialize_impl
+
+            #surreal_value_impl
+
+            #metadata_gate
         }
     } else {
         syn::Error::new(
@@ -228,4 +318,23 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
         )
         .to_compile_error()
     }
+}
+
+/// A tuple payload's validators and their overrides, one entry per element,
+/// or none when no element has any, as the scanner records them.
+pub(crate) fn element_validator_tokens(fields: &Fields) -> syn::Result<(TokenStream, TokenStream)> {
+    let Fields::Unnamed(unnamed) = fields else {
+        return Ok((
+            quote! { ::std::vec::Vec::new() },
+            quote! { ::std::vec::Vec::new() },
+        ));
+    };
+    let (validators, overrides) = parse_element_validators(&unnamed.unnamed)?;
+    let validators = validators
+        .iter()
+        .map(|element| quote! { vec![#(#element),*] });
+    Ok((
+        quote! { vec![#(#validators),*] },
+        quote! { vec![#(#overrides),*] },
+    ))
 }

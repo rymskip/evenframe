@@ -171,7 +171,7 @@ impl Rewrite<'_, '_> {
                 continue;
             };
             let name = variant.db_name();
-            let branch = match &union.representation {
+            let branch = match variant.stored_representation(&union.representation) {
                 EnumRepresentation::ExternallyTagged => {
                     let key = surql_ident(name);
                     let at = format!("{place}.{key}");

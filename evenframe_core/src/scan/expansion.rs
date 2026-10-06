@@ -35,7 +35,7 @@ use tracing::{debug, trace, warn};
 
 /// Current manifest schema version. Bump when the on-disk format changes in
 /// an incompatible way; loads of older versions fall back to an empty cache.
-pub const MANIFEST_VERSION: u32 = 6;
+pub const MANIFEST_VERSION: u32 = 9;
 
 /// Top-level cache manifest, one per crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]

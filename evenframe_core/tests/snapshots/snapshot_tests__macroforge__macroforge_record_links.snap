@@ -15,5 +15,5 @@ export interface Post {
   id: string;
   title: string;
   author: RecordLink<Author>;
-  related_posts: RecordLink<Post>[];
+  relatedPosts: RecordLink<Post>[];
 }

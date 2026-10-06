@@ -3,9 +3,10 @@
 
 use crate::config::RECORD_ID;
 use crate::error::{EvenframeError, Result};
-use crate::types::{EnumRepresentation, FieldType, TaggedUnion, VariantData};
+use crate::types::{EnumRepresentation, FieldType, NewtypeKind, TaggedUnion, VariantData};
 use crate::typesync::js_checks::{object_key, string_literal};
 use crate::typesync::type_index::TypeIndex;
+use convert_case::{Case, Casing};
 use tracing::{debug, trace};
 
 pub fn field_type_to_default_value(
@@ -132,6 +133,18 @@ pub fn field_type_to_default_value(
                 return enum_default(enum_schema, index, registry);
             }
 
+            // A newtype defaults to its inner value, which a branded type only
+            // accepts once cast to it.
+            if let Some(newtype) = index.newtype_named(name) {
+                let inner = field_type_to_default_value(&newtype.inner, index, registry)?;
+                return Ok(match newtype.kind {
+                    NewtypeKind::Branded => {
+                        format!("({inner} as {})", name.to_case(Case::Pascal))
+                    }
+                    NewtypeKind::Alias => inner,
+                });
+            }
+
             if let Some(struct_config) = index.struct_named(name) {
                 debug!(
                     "Found struct {} with {} fields",
@@ -170,14 +183,16 @@ fn enum_default(
             ))
         })?;
     let name = string_literal(variant.serde_name())?;
-    let representation = &enum_schema.representation;
+    let representation = variant.serde_representation(&enum_schema.representation);
     let Some(data) = &variant.data else {
         return Ok(match representation {
             EnumRepresentation::InternallyTagged { tag }
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
                 format!("{{ {}: {name} }}", object_key(tag)?)
             }
-            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => name,
+            EnumRepresentation::ExternallyTagged => name,
+            // serde writes an untagged unit variant as null.
+            EnumRepresentation::Untagged => "null".to_owned(),
         });
     };
     let payload = match data {
@@ -219,12 +234,19 @@ fn struct_default_entries(
 ) -> Result<Vec<String>> {
     fields
         .iter()
+        .map(crate::types::StructField::effective)
+        .filter(|field| {
+            !field.wire.serde_flatten || field.field_type.flattened_map_value().is_none()
+        })
         .map(|field| {
-            Ok(format!(
-                "{}: {}",
-                object_key(field.serde_name())?,
-                field_type_to_default_value(&field.field_type, index, registry)?
-            ))
+            let value = field_type_to_default_value(&field.field_type, index, registry)?;
+            // A flattened field's keys sit beside its siblings; an empty map
+            // adds none.
+            Ok(if field.wire.serde_flatten {
+                format!("...{value}")
+            } else {
+                format!("{}: {value}", object_key(&field.ts_name())?)
+            })
         })
         .collect()
 }
@@ -264,7 +286,7 @@ mod tests {
                 { "name": "Admin", "data": null },
                 { "name": "Member", "data": null, "is_default": true }
             ],
-            "representation": "Untagged"
+            "representation": "ExternallyTagged"
         }))
         .unwrap();
         let enums = BTreeMap::from([("Role".to_string(), role)]);

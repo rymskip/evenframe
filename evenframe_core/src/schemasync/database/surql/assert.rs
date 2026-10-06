@@ -1,3 +1,4 @@
+use crate::schemasync::format::Format;
 use crate::validator::keywords::{self, NormalForm};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
@@ -160,6 +161,14 @@ fn string_assertion(
             "{value_var} = \"{}\"",
             escape_surql_string(literal)
         )),
+        StringValidator::RegexLiteral(Format::Custom(custom)) if custom.flags().is_some() => {
+            error!(
+                "the JavaScript pattern `{}` reached the schema, which runs Rust's engine; \
+                 #[typesync(validators(...))] never applies to schemasync",
+                custom.as_str()
+            );
+            None
+        }
         StringValidator::RegexLiteral(format) => Some(matches(value_var, &format.pattern())),
         StringValidator::Length(bound) => match bounds::length(bound) {
             Ok(length) => Some(format!("string::len({value_var}) = {length}")),

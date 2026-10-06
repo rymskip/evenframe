@@ -7,14 +7,19 @@ use std::fmt;
 /// One field that failed a validator, at its path in serde's names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldError {
-    /// `email`, `address.city`, `items[2].name` or `tags["key"]`.
+    /// `email`, `address.city`, `items[2].name` or `tags["key"]`; empty when
+    /// the value itself failed, as a newtype's own validators do.
     pub path: String,
     pub message: String,
 }
 
 impl fmt::Display for FieldError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.path, self.message)
+        if self.path.is_empty() {
+            formatter.write_str(&self.message)
+        } else {
+            write!(formatter, "{}: {}", self.path, self.message)
+        }
     }
 }
 
@@ -45,12 +50,14 @@ impl ValidationErrors {
     }
 
     /// Adds `nested`'s failures under `prefix`, the path of the value that
-    /// holds them.
+    /// holds them. An empty path on either side is the value itself.
     pub fn nest(&mut self, prefix: &str, nested: ValidationErrors) {
         self.errors
             .extend(nested.errors.into_iter().map(|error| FieldError {
-                path: if error.path.starts_with('[') {
+                path: if prefix.is_empty() || error.path.starts_with('[') {
                     format!("{prefix}{}", error.path)
+                } else if error.path.is_empty() {
+                    prefix.to_owned()
                 } else {
                     format!("{prefix}.{}", error.path)
                 },
@@ -201,5 +208,29 @@ mod tests {
         let tags = BTreeMap::from([("first", Named(""))]);
         let error = tags.validate().expect_err("the entry fails");
         assert_eq!(error.errors()[0].path, "[\"first\"].name");
+    }
+
+    #[test]
+    fn a_value_that_fails_itself_is_reported_at_its_holder() {
+        let mut own = ValidationErrors::new();
+        own.push("", "must be a non-empty string");
+        assert_eq!(own.to_string(), "must be a non-empty string");
+
+        let mut outer = ValidationErrors::new();
+        outer.nest("name", own.clone());
+        assert_eq!(outer.errors()[0].path, "name");
+        assert_eq!(outer.to_string(), "name: must be a non-empty string");
+
+        let mut items = ValidationErrors::new();
+        items.nest("[2]", own);
+        let mut list = ValidationErrors::new();
+        list.nest("tags", items);
+        assert_eq!(list.errors()[0].path, "tags[2]");
+
+        let mut field = ValidationErrors::new();
+        field.push("name", "must be a non-empty string");
+        let mut transparent = ValidationErrors::new();
+        transparent.nest("", field);
+        assert_eq!(transparent.errors()[0].path, "name");
     }
 }

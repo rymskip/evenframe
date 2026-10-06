@@ -102,7 +102,8 @@ full_refresh_mode = false
 # file per type), barrel_file, file_naming, file_extension, array_style and
 # import_extension. A single-file output can rename its file with file = "...".
 # macroforge imports each derive it does not provide from the package named in
-# macros = { Derive = "package" }.
+# macros = { Derive = "package" }, and default_derives = [...] sets the derives
+# of a type with none of its own.
 outputs = [
   { kind = "arktype", dir = "./src/generated/arktype" },
   # { kind = "effect", dir = "./src/generated/effect" },
@@ -110,6 +111,9 @@ outputs = [
   # { kind = "flatbuffers", dir = "./schemas/flatbuffers", namespace = "com.example.app" },
   # { kind = "protobuf", dir = "./schemas/protobuf", package = "com.example.app", import_validate = false },
 ]
+# TypeScript fields are camelCase unless an Evenframe or serde attribute names
+# them; "respect_serde" keeps serde's names instead.
+# ts_names = "respect_serde"
 "#
     .to_string()
 }

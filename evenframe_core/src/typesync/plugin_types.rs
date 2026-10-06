@@ -1,20 +1,20 @@
 //! Serde types for output rule WASM plugin communication.
 //!
-//! A plugin receives the full `StructConfig`, `TableConfig` or
-//! `TaggedUnion` the host holds for the type it processes, so it can read
+//! A plugin receives the full `StructConfig`, `TableConfig`, `TaggedUnion`
+//! or `NewtypeConfig` the host holds for the type it processes, so it can read
 //! anything about it (events, relations, per-field `define_config`, variant
 //! representations) rather than a lossy summary. The plugin crate
 //! (`evenframe_plugin`) reads them as `serde_json::Value` maps, so plugins
 //! don't pull in `evenframe_core`.
 
 use crate::schemasync::table::TableConfig;
-use crate::types::{StructConfig, TaggedUnion};
+use crate::types::{NewtypeConfig, StructConfig, TaggedUnion};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Full context for an output rule plugin call: what kind of type the
-/// plugin is looking at (an object struct, a table-backed struct or a
-/// tagged union) and the complete config the host has for it.
+/// plugin is looking at (an object struct, a table-backed struct, a tagged
+/// union or a newtype) and the complete config the host has for it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum OutputRulePluginInput<'a> {
@@ -40,6 +40,13 @@ pub enum OutputRulePluginInput<'a> {
         pipeline: String,
         generator: String,
         config: &'a TaggedUnion,
+    },
+    /// A struct serde writes as another type: a single-field tuple struct, a
+    /// transparent struct, a multi-field tuple struct or a unit struct.
+    Newtype {
+        pipeline: String,
+        generator: String,
+        config: &'a NewtypeConfig,
     },
 }
 

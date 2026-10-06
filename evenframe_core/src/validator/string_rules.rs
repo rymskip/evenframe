@@ -157,6 +157,9 @@ impl StringValidator {
             StringValidator::UuidV7 => keywords::is_uuid_version(value, 7),
             StringValidator::UuidV8 => keywords::is_uuid_version(value, 8),
             StringValidator::Literal(literal) => value == literal,
+            StringValidator::RegexLiteral(Format::Custom(custom)) if custom.flags().is_some() => {
+                javascript_is_match(custom.as_str(), custom.flags().unwrap_or_default(), value)
+            }
             StringValidator::RegexLiteral(format) => format_regex(format).is_match(value),
             StringValidator::Length(bound) => match bounds::length(bound) {
                 Ok(length) => keywords::js_length(value) == length,
@@ -351,6 +354,38 @@ fn first_unit_is<I: Iterator<Item = char>>(value: &str, map: impl Fn(char) -> I)
 
 static FORMAT_REGEXES: LazyLock<Mutex<HashMap<Format, Arc<Regex>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Each typesync-only pattern by its source and flags, `None` for one that
+/// does not compile.
+type JavaScriptRegexes = HashMap<(String, String), Option<Arc<regress::Regex>>>;
+
+static JAVASCRIPT_REGEXES: LazyLock<Mutex<JavaScriptRegexes>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether `value` matches a typesync-only pattern as JavaScript's `test`
+/// would, compiled once per process. The pattern was checked when its
+/// attribute was parsed, so one that does not compile is logged and matches
+/// nothing.
+fn javascript_is_match(source: &str, flags: &str, value: &str) -> bool {
+    let regex = {
+        let mut cache = JAVASCRIPT_REGEXES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache
+            .entry((source.to_owned(), flags.to_owned()))
+            .or_insert_with(|| match regress::Regex::with_flags(source, flags) {
+                Ok(regex) => Some(Arc::new(regex)),
+                Err(error) => {
+                    tracing::error!(
+                        "the JavaScript pattern /{source}/{flags} does not compile: {error}"
+                    );
+                    None
+                }
+            })
+            .clone()
+    };
+    regex.is_some_and(|regex| regex.find(value).is_some())
+}
 
 /// The compiled regex for `format`, compiled once per process.
 pub fn format_regex(format: &Format) -> Arc<Regex> {

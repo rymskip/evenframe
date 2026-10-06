@@ -4,13 +4,23 @@ use crate::{
     schemasync::mockmake::unique::{PlannedRecord, PlannedValue},
     schemasync::mockmake::{Mockmaker, TableMocks, field_value::FieldValueGenerator},
     schemasync::table::{TableConfig, surql_ident},
-    types::{FieldType, StructField},
+    types::{EnumRepresentation, FieldType, StructField, TaggedUnion, VariantData},
 };
+use rand::{RngExt, seq::IndexedRandom};
 use std::fmt::Write;
 use tracing::{debug, info};
 
 fn write_failed(error: std::fmt::Error) -> EvenframeError {
     EvenframeError::mock_generation(format!("writing mock statements failed: {error}"))
+}
+
+/// A SurrealQL object literal of `values`.
+fn object_literal(values: &[(String, PlannedValue)]) -> String {
+    let entries: Vec<String> = values
+        .iter()
+        .map(|(name, value)| format!("{}: {}", surql_ident(name), value.literal()))
+        .collect();
+    format!("{{ {} }}", entries.join(", "))
 }
 
 /// `records` grouped so each group's `INSERT` statement, with `overhead`
@@ -129,18 +139,22 @@ impl Mockmaker<'_> {
                 self.plugin_record_id(table_name, table, position, default_id, ids.len())?;
             #[cfg(not(feature = "wasm-plugins"))]
             let record_id = default_id.clone();
-            let values = table
+            let mut values = Vec::new();
+            for field in table
                 .struct_config
                 .fields
                 .iter()
                 .filter(|field| field.is_mock_written())
-                .map(|field| {
-                    Ok((
+            {
+                if field.effective().wire.serde_flatten {
+                    values.extend(self.flattened_values(table, field, position)?);
+                } else {
+                    values.push((
                         field.db_name().to_owned(),
                         PlannedValue::Set(self.generate_value(table, field, position)?),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
+                    ));
+                }
+            }
             records.push(PlannedRecord {
                 id: record_id,
                 position,
@@ -185,10 +199,140 @@ impl Mockmaker<'_> {
         self.generate_value(table, &present, position)
     }
 
+    /// The keys a flattened field writes beside the record's own: none for a
+    /// map, which may be empty, or an absent `Option`, and for an enum one
+    /// variant's keys as its representation writes them.
+    fn flattened_values(
+        &self,
+        table: &TableConfig,
+        field: &StructField,
+        position: usize,
+    ) -> Result<Vec<(String, PlannedValue)>> {
+        let mut rng = rand::rng();
+        let held = match &field.field_type {
+            FieldType::Option(_) if rng.random_bool(0.5) => return Ok(Vec::new()),
+            FieldType::Option(inner) => inner.as_ref(),
+            held => held,
+        };
+        let FieldType::Other(name) = held else {
+            return Ok(Vec::new());
+        };
+        let Some(tagged_union) = self.enums.get(name).map(TaggedUnion::effective) else {
+            return Ok(Vec::new());
+        };
+        // A unit variant leaves keys beside the record's only under a tag.
+        let candidates: Vec<_> = tagged_union
+            .variants
+            .iter()
+            .map(|variant| variant.effective())
+            .filter(|variant| {
+                variant.data.is_some()
+                    || matches!(
+                        variant.stored_representation(&tagged_union.representation),
+                        EnumRepresentation::InternallyTagged { .. }
+                            | EnumRepresentation::AdjacentlyTagged { .. }
+                    )
+            })
+            .collect();
+        let variant = candidates.choose(&mut rng).ok_or_else(|| {
+            EvenframeError::mock_generation(format!(
+                "`{}.{}` flattens the enum `{name}`, none of whose variants serde writes as keys \
+                 beside others",
+                table.table_name, field.field_name
+            ))
+        })?;
+        let tag_value = PlannedValue::Set(format!("'{}'", variant.db_name()));
+        let value_of = |field_type: &FieldType| {
+            self.generate_value(
+                table,
+                &StructField {
+                    field_name: field.field_name.clone(),
+                    field_type: field_type.clone(),
+                    ..StructField::default()
+                },
+                position,
+            )
+        };
+        let payload_fields = |data: &VariantData| -> Result<Vec<(String, PlannedValue)>> {
+            let fields: &[StructField] = match data {
+                VariantData::InlineStruct(inline) => &inline.effective().fields,
+                VariantData::DataStructureRef(FieldType::Other(held)) => self
+                    .objects
+                    .get(held)
+                    .map(|object| object.effective().fields.as_slice())
+                    .ok_or_else(|| self.not_an_object(table, field, name))?,
+                VariantData::DataStructureRef(_) => {
+                    return Err(self.not_an_object(table, field, name));
+                }
+            };
+            fields
+                .iter()
+                .map(StructField::effective)
+                .filter(|held_field| held_field.is_mock_written())
+                .map(|held_field| {
+                    Ok((
+                        held_field.db_name().to_owned(),
+                        PlannedValue::Set(self.generate_value(table, held_field, position)?),
+                    ))
+                })
+                .collect()
+        };
+        let payload_value = |data: &VariantData| -> Result<String> {
+            match data {
+                VariantData::InlineStruct(_) => Ok(object_literal(&payload_fields(data)?)),
+                VariantData::DataStructureRef(field_type) => value_of(field_type),
+            }
+        };
+        Ok(
+            match (
+                variant.stored_representation(&tagged_union.representation),
+                &variant.data,
+            ) {
+                (EnumRepresentation::ExternallyTagged, Some(data)) => {
+                    vec![(
+                        variant.db_name().to_owned(),
+                        PlannedValue::Set(payload_value(data)?),
+                    )]
+                }
+                (EnumRepresentation::InternallyTagged { tag }, data) => {
+                    let mut values = vec![(tag.clone(), tag_value)];
+                    if let Some(data) = data {
+                        values.extend(payload_fields(data)?);
+                    }
+                    values
+                }
+                (EnumRepresentation::AdjacentlyTagged { tag, content }, data) => {
+                    let mut values = vec![(tag.clone(), tag_value)];
+                    if let Some(data) = data {
+                        values.push((content.clone(), PlannedValue::Set(payload_value(data)?)));
+                    }
+                    values
+                }
+                (EnumRepresentation::Untagged, Some(data)) => payload_fields(data)?,
+                (EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged, None) => {
+                    Vec::new()
+                }
+            },
+        )
+    }
+
+    fn not_an_object(
+        &self,
+        table: &TableConfig,
+        field: &StructField,
+        name: &str,
+    ) -> EvenframeError {
+        EvenframeError::mock_generation(format!(
+            "`{}.{}` flattens the enum `{name}`, whose variant holds no struct for serde to \
+             write beside other keys",
+            table.table_name, field.field_name
+        ))
+    }
+
     /// The rewritten values of the existing record at `position` in the id
     /// pool. SET replaces a value whole, where MERGE would keep an object's
-    /// stale keys. An optional field that is unset stays unset, and a removed
-    /// field (typed `Unit`) is set to NONE, which unsets it.
+    /// stale keys. An optional field that is unset stays unset, and a field
+    /// the table no longer has is set to NONE, which unsets it.
     fn rewrite_values(
         &self,
         table: &TableConfig,
@@ -201,7 +345,14 @@ impl Mockmaker<'_> {
             // A relation's endpoints are fixed once it exists.
             .filter(|field| table.relation.is_none() || !matches!(field.db_name(), "in" | "out"))
             .map(|field| {
+                let removed = !table
+                    .effective()
+                    .struct_config
+                    .fields
+                    .iter()
+                    .any(|kept| kept.db_name() == field.db_name());
                 let value = match &field.field_type {
+                    _ if removed => PlannedValue::Set("NONE".to_owned()),
                     // A present value is rewritten with a present one,
                     // unless no present value can be generated.
                     FieldType::Option(inner) if !self.has_unfillable_link(inner) => {
@@ -286,5 +437,101 @@ mod tests {
         let chunks = insert_chunks(&records, 40);
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[1].len(), 1);
+    }
+}
+
+#[cfg(all(test, feature = "scan"))]
+mod flatten_tests {
+    use crate::scan::{ScanConfig, build_all_configs};
+    use crate::schemasync::{config::SchemasyncConfig, mockmake::Mockmaker};
+    use crate::types::ForeignTypeRegistry;
+    use std::fs;
+    use surrealdb::{Surreal, engine::remote::http::Client};
+    use tempfile::TempDir;
+
+    const SOURCE: &str = r#"
+        use evenframe::Evenframe;
+        use std::collections::HashMap;
+
+        #[derive(Evenframe)]
+        #[serde(tag = "kind")]
+        pub enum Payload { Click { x: i32 }, Close }
+
+        #[derive(Evenframe)]
+        pub struct Event {
+            pub id: String,
+            pub at: String,
+            #[serde(flatten)]
+            pub payload: Payload,
+            #[serde(flatten)]
+            pub extra: HashMap<String, String>,
+        }
+    "#;
+
+    #[test]
+    fn a_flattened_enum_writes_a_variants_keys_beside_the_records() {
+        let project = TempDir::new().unwrap();
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(project.path().join("src")).unwrap();
+        fs::write(project.path().join("src/lib.rs"), SOURCE).unwrap();
+        let types = build_all_configs(&ScanConfig {
+            scan_path: project.path().to_path_buf(),
+            ..ScanConfig::default()
+        })
+        .unwrap()
+        .into_schemasync()
+        .unwrap();
+        let db = Surreal::<Client>::init();
+        let config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+        let registry = ForeignTypeRegistry::default();
+        let mockmaker = Mockmaker::new(
+            &db,
+            &types.tables,
+            &types.objects,
+            &types.enums,
+            &types.declared,
+            &config,
+            &registry,
+        )
+        .unwrap();
+        let event = &types.tables["event"];
+        let field = |name: &str| {
+            event
+                .struct_config
+                .fields
+                .iter()
+                .find(|field| field.field_name == name)
+                .unwrap()
+        };
+        for _ in 0..20 {
+            let keys: Vec<(String, String)> = mockmaker
+                .flattened_values(event, field("payload"), 0)
+                .unwrap()
+                .into_iter()
+                .map(|(key, value)| (key, value.literal().to_owned()))
+                .collect();
+            match keys.as_slice() {
+                [(tag, close)] => assert_eq!((tag.as_str(), close.as_str()), ("kind", "'Close'")),
+                [(tag, click), (x, _)] => {
+                    assert_eq!(
+                        (tag.as_str(), click.as_str(), x.as_str()),
+                        ("kind", "'Click'", "x")
+                    );
+                }
+                other => panic!("unexpected keys {other:?}"),
+            }
+            assert!(
+                mockmaker
+                    .flattened_values(event, field("extra"), 0)
+                    .unwrap()
+                    .is_empty(),
+                "a flattened map adds no keys"
+            );
+        }
     }
 }

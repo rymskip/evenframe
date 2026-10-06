@@ -24,7 +24,7 @@ use evenframe_core::schemasync::database::surql::remove::{
     generate_remove_analyzer_statements, generate_remove_index_statements,
 };
 use evenframe_core::schemasync::dump::{schema_surql, tables_surql};
-use evenframe_core::types::ForeignTypeRegistry;
+use evenframe_core::types::{AllConfigs, ForeignTypeRegistry};
 use std::collections::BTreeMap;
 use std::fs;
 use surrealdb::Surreal;
@@ -85,8 +85,9 @@ fn scan(source: &str) -> BTreeMap<String, TableConfig> {
         scan_path: tmp.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
-    tables
+    build_all_configs(&config)
+        .expect("build_all_configs")
+        .tables
 }
 
 fn define_statements(tables: &BTreeMap<String, TableConfig>) -> String {
@@ -594,7 +595,12 @@ async fn indexes_on_nested_paths_serve_searches() {
         scan_path: tmp.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (enums, tables, objects) = build_all_configs(&config).expect("build_all_configs");
+    let AllConfigs {
+        enums,
+        tables,
+        objects,
+        ..
+    } = build_all_configs(&config).expect("build_all_configs");
     let surql = tables_surql(
         &tables,
         &objects,

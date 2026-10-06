@@ -1,5 +1,6 @@
 // Always compiled: EvenframeConfig and the mock plugins use these.
 pub mod config;
+pub mod naming;
 pub mod plugin_types;
 
 #[cfg(feature = "arktype")]

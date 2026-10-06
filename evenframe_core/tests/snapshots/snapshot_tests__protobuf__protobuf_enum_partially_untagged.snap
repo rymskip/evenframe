@@ -1,0 +1,25 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Contact {
+    message Nobody {
+    }
+    oneof variant {
+        .Phone phone = 1;
+        Nobody nobody = 2;
+        string email = 3;
+        .Postal postal = 4;
+    }
+}
+
+message Phone {
+    string number = 1;
+}
+
+message Postal {
+    string street = 1;
+    string city = 2;
+}

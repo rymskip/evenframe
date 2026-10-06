@@ -43,9 +43,11 @@ EvenframeConfig {
             lint: LintConfig {
                 silence_unverifiable_annotations: false,
             },
+            warn_schemaless: false,
         },
     ),
     typesync: TypesyncConfig {
+        ts_names: Default,
         outputs: [
             TypesyncOutput {
                 kind: Arktype,
@@ -63,6 +65,7 @@ EvenframeConfig {
                 package: None,
                 import_validate: false,
                 macros: {},
+                default_derives: None,
             },
         ],
         collision_strategy: Error,

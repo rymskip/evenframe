@@ -1,0 +1,5 @@
+error: cannot find attribute `macroforge_derive` in this scope
+ --> tests/ui/fail/macroforge_derive_attribute.rs:5:3
+  |
+5 | #[macroforge_derive(Default)]
+  |   ^^^^^^^^^^^^^^^^^

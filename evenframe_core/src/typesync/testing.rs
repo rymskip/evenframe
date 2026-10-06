@@ -78,6 +78,7 @@ pub fn generate_struct_with_override(
         crate::typesync::config::ArrayStyle::default(),
         &registry,
         &mut crate::typesync::macroforge::HelperModule::new("./helpers".to_owned()),
+        None,
     )
     .expect("the macroforge output generates");
     GeneratedOutput {
@@ -114,6 +115,7 @@ pub fn generate_enum_with_override(
         crate::typesync::config::ArrayStyle::default(),
         &registry,
         &mut crate::typesync::macroforge::HelperModule::new("./helpers".to_owned()),
+        None,
     )
     .expect("the macroforge output generates");
     GeneratedOutput {
@@ -137,6 +139,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         unique: false,
         output_override: None,
         raw_attributes: BTreeMap::new(),
+        validator_overrides: Default::default(),
     }
 }
 
@@ -163,10 +166,10 @@ mod tests {
                 "Default".into(),
                 "Encode".into(),
                 "Decode".into(),
-                "Gigaform".into(),
-                "Overview".into(),
+                "Form".into(),
+                "Listing".into(),
             ],
-            annotations: vec!["@overview({ dataName: \"site\" })".into()],
+            annotations: vec!["@listing({ dataName: \"site\" })".into()],
             pipeline: crate::types::Pipeline::Both,
             rust_derives: vec![],
             output_override: None,
@@ -185,8 +188,8 @@ mod tests {
 
         // Override is rendered (not skipped), with its own annotations and derives.
         output.assert_contains("export interface Site");
-        output.assert_contains("@overview");
-        output.assert_contains("Gigaform");
+        output.assert_contains("@listing");
+        output.assert_contains("Form");
         // Original fields do not bleed through: the override has fields: vec![].
         output.assert_not_contains("id: string");
         output.assert_not_contains("name: string");
@@ -196,7 +199,7 @@ mod tests {
     fn field_override_preserves_declaration() {
         let mut field_overrides: BTreeMap<String, Box<StructField>> = BTreeMap::new();
         let mut email_override = test_field("email", crate::types::FieldType::String);
-        email_override.annotations = vec!["@textController({ label: \"Email\" })".into()];
+        email_override.annotations = vec!["@input({ label: \"Email\" })".into()];
         field_overrides.insert("email".to_string(), Box::new(email_override));
 
         let output = generate_struct_with_override(
@@ -206,7 +209,7 @@ mod tests {
             vec![test_field("email", crate::types::FieldType::String)],
         );
 
-        output.assert_contains("@textController");
+        output.assert_contains("@input");
         output.assert_contains("email: string");
     }
 

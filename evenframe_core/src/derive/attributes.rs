@@ -10,7 +10,11 @@ use tracing::{debug, error, info, trace};
 use crate::{
     schemasync::{
         Bm25, Direction, EdgeConfig, IndexConfig, IndexKind, VectorDistance, VectorType,
-        mockmake::{MockGenerationConfig, coordinate::Coordination, format::Format},
+        mockmake::{
+            MockGenerationConfig,
+            coordinate::Coordination,
+            format::{CustomPattern, Format, PatternDialect},
+        },
     },
     types::EnumRepresentation,
 };
@@ -1317,52 +1321,6 @@ pub fn parse_doccom_attribute(attrs: &[Attribute]) -> Result<Option<String>, syn
     Ok(None)
 }
 
-pub fn parse_macroforge_derive_attribute(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
-    for attr in attrs {
-        if attr.path().is_ident("macroforge_derive") {
-            let result: Result<syn::punctuated::Punctuated<Meta, syn::Token![,]>, _> =
-                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
-
-            match result {
-                Ok(metas) => {
-                    let mut derives = Vec::new();
-                    for meta in metas {
-                        match meta {
-                            Meta::Path(path) => {
-                                if let Some(ident) = path.get_ident() {
-                                    derives.push(ident.to_string());
-                                } else {
-                                    return Err(syn::Error::new(
-                                        path.span(),
-                                        "Expected a simple identifier in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
-                                    ));
-                                }
-                            }
-                            _ => {
-                                return Err(syn::Error::new(
-                                    meta.span(),
-                                    "Expected bare identifiers in macroforge_derive.\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
-                                ));
-                            }
-                        }
-                    }
-                    return Ok(derives);
-                }
-                Err(err) => {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        format!(
-                            "Failed to parse macroforge_derive attribute: {}\n\nExample: #[macroforge_derive(Default, Encode, Decode)]",
-                            err
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(Vec::new())
-}
-
 /// Extract all derive names from `#[derive(...)]` attributes.
 ///
 /// Returns identifiers like `["Serialize", "Clone", "Debug", "Evenframe"]`.
@@ -1386,37 +1344,6 @@ pub fn parse_rust_derives(attrs: &[Attribute]) -> Vec<String> {
         }
     }
     derives
-}
-
-pub fn parse_annotation_attributes(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
-    let mut annotations = Vec::new();
-
-    for attr in attrs {
-        if attr.path().is_ident("annotation") {
-            let lit: LitStr = attr.parse_args().map_err(|e| {
-                syn::Error::new(
-                    attr.span(),
-                    format!(
-                        "Failed to parse annotation attribute: {}\n\nExpected usage: #[annotation(\"@decorator({{{{ key: \\\"value\\\" }}}})\")]",
-                        e
-                    ),
-                )
-            })?;
-
-            let value = lit.value();
-
-            if value.trim().is_empty() {
-                return Err(syn::Error::new(
-                    lit.span(),
-                    "Annotation cannot be empty.\n\nExample: #[annotation(\"@default\")]",
-                ));
-            }
-
-            annotations.push(value);
-        }
-    }
-
-    Ok(annotations)
 }
 
 pub fn parse_serde_enum_representation(
@@ -1476,94 +1403,7 @@ pub fn parse_serde_enum_representation(
 pub fn parse_format_attribute(
     attrs: &[Attribute],
 ) -> Result<Option<proc_macro2::TokenStream>, syn::Error> {
-    use syn::{Expr, ExprCall, ExprPath, Path, PathSegment};
-
-    info!(
-        "Starting format attribute parsing for {} attributes",
-        attrs.len()
-    );
-    for attr in attrs {
-        if attr.path().is_ident("format") {
-            debug!("Found format attribute");
-            // Parse the attribute content as an expression
-            let expr: syn::Expr = attr.parse_args()
-                .map_err(|e| syn::Error::new(
-                    attr.span(),
-                    format!("Failed to parse format attribute: {}\n\nExamples:\n#[format(DateTime)]\n#[format(Url(\"example.com\"))]", e)
-                ))?;
-
-            // Transform the expression to add Format:: prefix if needed
-            let format_expr = match &expr {
-                // If it's just an identifier like DateTime, convert to Format::DateTime
-                Expr::Path(path_expr) if path_expr.path.segments.len() == 1 => {
-                    let variant = &path_expr.path.segments[0];
-                    let mut segments = syn::punctuated::Punctuated::new();
-                    segments.push(PathSegment::from(syn::Ident::new("Format", variant.span())));
-                    segments.push(variant.clone());
-                    Expr::Path(ExprPath {
-                        attrs: vec![],
-                        qself: None,
-                        path: Path {
-                            leading_colon: None,
-                            segments,
-                        },
-                    })
-                }
-                // If it's a call like Url("domain"), convert to Format::Url("domain")
-                Expr::Call(call_expr) => {
-                    if let Expr::Path(path_expr) = &*call_expr.func {
-                        if path_expr.path.segments.len() == 1 {
-                            let variant = &path_expr.path.segments[0];
-                            let mut segments = syn::punctuated::Punctuated::new();
-                            segments
-                                .push(PathSegment::from(syn::Ident::new("Format", variant.span())));
-                            segments.push(variant.clone());
-                            Expr::Call(ExprCall {
-                                attrs: call_expr.attrs.clone(),
-                                func: Box::new(Expr::Path(ExprPath {
-                                    attrs: vec![],
-                                    qself: None,
-                                    path: Path {
-                                        leading_colon: None,
-                                        segments,
-                                    },
-                                })),
-                                paren_token: call_expr.paren_token,
-                                args: call_expr.args.clone(),
-                            })
-                        } else {
-                            expr.clone()
-                        }
-                    } else {
-                        expr.clone()
-                    }
-                }
-                // Otherwise keep as is
-                _ => expr.clone(),
-            };
-
-            // Use the TryFrom implementation to parse the Format
-            match Format::try_from(&format_expr) {
-                Ok(format) => {
-                    debug!("Successfully parsed format: {:?}", format);
-                    // Since Format implements ToTokens, we can just quote it directly
-                    return Ok(Some(quote! { #format }));
-                }
-                Err(e) => {
-                    error!("Failed to parse format expression: {}", e);
-                    return Err(syn::Error::new(
-                        expr.span(),
-                        format!(
-                            "{}\n\nValid formats:\n- Simple: DateTime, Date, Time, Currency, Percentage, Phone, Email, FirstName, LastName, CompanyName, PhoneNumber, ColorHex, JwtToken, Oklch, PostalCode\n- With parameter: Url(\"domain.com\")",
-                            e
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    debug!("No format attribute found");
-    Ok(None)
+    Ok(parse_format_attribute_bin(attrs)?.map(|format| quote! { #format }))
 }
 
 pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<Format>, syn::Error> {
@@ -1635,9 +1475,14 @@ pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<Format>,
 
             // Use the TryFrom implementation to parse the Format
             match Format::try_from(&format_expr) {
+                Ok(Format::Custom(custom)) => {
+                    // Mock data generates from it in Rust's engine alone.
+                    return CustomPattern::parse(custom.as_str(), PatternDialect::Rust)
+                        .map(|custom| Some(Format::Custom(custom)))
+                        .map_err(|message| syn::Error::new(expr.span(), message));
+                }
                 Ok(format) => {
                     debug!("Successfully parsed format: {:?}", format);
-                    // Since Format implements ToTokens, we can just quote it directly
                     return Ok(Some(format));
                 }
                 Err(e) => {

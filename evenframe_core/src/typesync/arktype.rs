@@ -37,9 +37,9 @@ fn variant_to_arktype(
             | EnumRepresentation::AdjacentlyTagged { tag, .. } => {
                 format!("{{ {} }}", tag_entry(tag)?)
             }
-            EnumRepresentation::ExternallyTagged | EnumRepresentation::Untagged => {
-                format!("['===', {name}]")
-            }
+            EnumRepresentation::ExternallyTagged => format!("['===', {name}]"),
+            // serde writes an untagged unit variant as null.
+            EnumRepresentation::Untagged => "'null'".to_owned(),
         });
     };
     let payload = match variant_data {
@@ -53,9 +53,14 @@ fn variant_to_arktype(
             }
             format!("{{ {} }}", entries.join(", "))
         }
-        VariantData::DataStructureRef(field_type) => {
-            field_type_to_arktype(field_type, index, registry)?
-        }
+        VariantData::DataStructureRef(field_type) => payload_arktype(
+            field_type,
+            &variant.element_validators,
+            variant.serde_name(),
+            index,
+            registry,
+            helpers,
+        )?,
     };
     Ok(match representation {
         EnumRepresentation::ExternallyTagged => {
@@ -76,6 +81,47 @@ fn variant_to_arktype(
     })
 }
 
+/// A tuple payload with each element's validators applied, or a newtype
+/// payload with its one element's.
+fn payload_arktype(
+    field_type: &FieldType,
+    element_validators: &[Vec<Validator>],
+    owner: &str,
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+    helpers: &mut Helpers,
+) -> Result<String> {
+    match (field_type, element_validators) {
+        (_, []) => field_type_to_arktype(field_type, index, registry),
+        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+            let elements = items
+                .iter()
+                .zip(validators)
+                .enumerate()
+                .map(|(position, (item, validators))| {
+                    validated_arktype(
+                        field_type_to_arktype(item, index, registry)?,
+                        validators,
+                        &format!("{owner}.{position}"),
+                        helpers,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("[{}]", elements.join(", ")))
+        }
+        (single, [validators]) => validated_arktype(
+            field_type_to_arktype(single, index, registry)?,
+            validators,
+            owner,
+            helpers,
+        ),
+        (_, validators) => Err(EvenframeError::config(format!(
+            "`{owner}` has validators for {} elements but holds {field_type:?}",
+            validators.len()
+        ))),
+    }
+}
+
 /// A struct's fields as ArkType object entries, validators applied.
 fn struct_field_entries(
     fields: &[StructField],
@@ -85,6 +131,7 @@ fn struct_field_entries(
 ) -> Result<Vec<String>> {
     fields
         .iter()
+        .map(StructField::effective)
         .map(|field| {
             Ok(format!(
                 "{}: {}",
@@ -95,12 +142,12 @@ fn struct_field_entries(
         .collect()
 }
 
-/// A field's key as serde writes it; ArkType marks an optional key with `?`.
+/// A TypeScript field key; ArkType marks an optional key with `?`.
 fn field_key(field: &StructField) -> Result<String> {
     if field.wire.serde_optional {
-        string_literal(&format!("{}?", field.serde_name()))
+        string_literal(&format!("{}?", field.ts_name()))
     } else {
-        object_key(field.serde_name())
+        object_key(&field.ts_name())
     }
 }
 
@@ -217,7 +264,7 @@ fn map_to_arktype(
             .map(|name| Ok(format!("{}: {value}", string_literal(&format!("{name}?"))?)))
             .collect()
     };
-    let entries = match MapKey::require(key)? {
+    let entries = match MapKey::require(index.underlying(key))? {
         MapKey::Text => index_signature("string")?,
         MapKey::Bool => optional(&mut BOOL_KEYS.into_iter())?,
         MapKey::Char => index_signature(&format!("/{ONE_CHARACTER}/"))?,
@@ -311,7 +358,7 @@ pub fn generate_arktype_type_string(
             // respecting the serde enum representation.
             let item_str = variant_to_arktype(
                 variant,
-                &schema_enum.representation,
+                variant.serde_representation(&schema_enum.representation),
                 index,
                 registry,
                 &mut helpers,
@@ -355,42 +402,91 @@ pub fn generate_arktype_type_string(
             scope_output.push_str(&format_jsdoc(doc, ""));
         }
 
-        scope_output.push_str(&format!("{}: {{\n", type_name));
-        defaults_output.push_str(&format!(
-            "export const default{}: {} = {{\n",
-            type_name, type_name
-        ));
-
-        for (position, field) in struct_config.fields.iter().enumerate() {
-            // Write field doc comment if present
-            if let Some(ref doc) = field.doccom {
-                scope_output.push_str(&format_jsdoc(doc, "  "));
+        let mut entries = Vec::new();
+        let mut defaults = Vec::new();
+        let mut held_values = Vec::new();
+        let mut index_values = Vec::new();
+        let mut intersections = Vec::new();
+        for field in struct_config.fields.iter().map(StructField::effective) {
+            if field.wire.serde_flatten {
+                // serde writes what the field holds beside its siblings.
+                match field.field_type.flattened_map_value() {
+                    Some(value) => {
+                        index_values.push(field_type_to_arktype(value, index, registry)?)
+                    }
+                    None => {
+                        intersections.push(field_type_to_arktype(
+                            &field.field_type,
+                            index,
+                            registry,
+                        )?);
+                        defaults.push(format!(
+                            "...{}",
+                            field_type_to_default_value(&field.field_type, index, registry)?
+                        ));
+                    }
+                }
+                continue;
             }
-
-            scope_output.push_str(&format!(
-                "  {}: {}",
-                field_key(field)?,
-                field_arktype(field, index, registry, &mut helpers)?
-            ));
-            defaults_output.push_str(&format!(
+            let doc = field
+                .doccom
+                .as_ref()
+                .map(|doc| format_jsdoc(doc, "  "))
+                .unwrap_or_default();
+            let definition = field_arktype(field, index, registry, &mut helpers)?;
+            held_values.push(definition.clone());
+            entries.push(format!("{doc}  {}: {definition}", field_key(field)?));
+            defaults.push(format!(
                 "{}: {}",
-                object_key(field.serde_name())?,
+                object_key(&field.ts_name())?,
                 field_type_to_default_value(&field.field_type, index, registry)?
             ));
-            // Add a comma if it's not the last field
-            if position + 1 < struct_config.fields.len() {
-                scope_output.push_str(",\n");
-                defaults_output.push_str(",\n");
-            } else {
-                scope_output.push('\n');
-            }
         }
-
-        scope_output.push_str("},\n");
-        defaults_output.push_str("\n};\n");
+        if !index_values.is_empty() {
+            // A key of the map may share an object with every named field, so
+            // its value admits theirs too.
+            let values = index_values
+                .into_iter()
+                .chain(held_values)
+                .reduce(|union, value| format!("[{union}, '|', {value}]"))
+                .unwrap_or_default();
+            entries.push(format!("  \"[string]\": {values}"));
+        }
+        let object = if entries.is_empty() {
+            "{\n}".to_owned()
+        } else {
+            format!("{{\n{}\n}}", entries.join(",\n"))
+        };
+        let definition = intersections.into_iter().fold(object, |definition, held| {
+            format!("[{definition}, '&', {held}]")
+        });
+        scope_output.push_str(&format!("{type_name}: {definition},\n"));
+        defaults_output.push_str(&format!(
+            "export const default{type_name}: {type_name} = {{\n{}\n}};\n",
+            defaults.join(",\n")
+        ));
         types_output.push_str(&format!(
             "export type {} = typeof exported.{}.infer;\n",
             type_name, type_name
+        ));
+    }
+
+    for (type_name, newtype) in index.named_newtypes() {
+        if newtype.resolve_only {
+            continue;
+        }
+        if let Some(ref doc) = newtype.doccom {
+            scope_output.push_str(&format_jsdoc(doc, ""));
+        }
+        scope_output.push_str(&newtype_entries(
+            type_name,
+            newtype,
+            index,
+            registry,
+            &mut helpers,
+        )?);
+        types_output.push_str(&format!(
+            "export type {type_name} = typeof exported.{type_name}.infer;\n"
         ));
     }
     scope_output.push_str("\n});\n\n");
@@ -411,6 +507,58 @@ pub fn generate_arktype_type_string(
         "Arktype type string generation complete"
     );
     Ok(output)
+}
+
+/// The suffix of the private scope alias that holds a newtype's value before
+/// it is branded. Scope keys are PascalCase type names, which never hold `__`.
+const NEWTYPE_VALUE_SUFFIX: &str = "__value";
+
+/// A newtype's scope entries. ArkType brands only in string syntax, so a
+/// newtype whose value is not a plain string definition is defined under a
+/// private alias and branded by name.
+fn newtype_entries(
+    type_name: &str,
+    newtype: &crate::types::NewtypeConfig,
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+    helpers: &mut Helpers,
+) -> Result<String> {
+    let inner = payload_arktype(
+        &newtype.inner,
+        &newtype.element_validators,
+        type_name,
+        index,
+        registry,
+        helpers,
+    )?;
+    let value = renewed(
+        validated_arktype(inner, &newtype.validators, type_name, helpers)?,
+        &newtype.inner,
+        &newtype.validators,
+        index,
+        registry,
+    )?;
+    if newtype.kind == crate::types::NewtypeKind::Alias {
+        return Ok(format!("{type_name}: {value},\n"));
+    }
+    let plain = value
+        .strip_prefix('\'')
+        .and_then(|definition| definition.strip_suffix('\''))
+        .filter(|definition| !definition.contains(['\'', '#']));
+    Ok(match plain {
+        Some(definition) => format!(
+            "{type_name}: {},\n",
+            string_literal(&format!("{definition}#{type_name}"))?
+        ),
+        None => {
+            let private = format!("{type_name}{NEWTYPE_VALUE_SUFFIX}");
+            format!(
+                "{}: {value},\n{type_name}: {},\n",
+                string_literal(&format!("#{private}"))?,
+                string_literal(&format!("{private}#{type_name}"))?
+            )
+        }
+    })
 }
 
 // ----- Validators ------------------------------------------------------------
@@ -438,11 +586,17 @@ fn field_arktype(
     helpers: &mut Helpers,
 ) -> Result<String> {
     let validated = |field_type: &FieldType, helpers: &mut Helpers| {
-        validated_arktype(
-            field_type_to_arktype(field_type, index, registry)?,
+        renewed(
+            validated_arktype(
+                field_type_to_arktype(field_type, index, registry)?,
+                &field.validators,
+                &field.field_name,
+                helpers,
+            )?,
+            field_type,
             &field.validators,
-            &field.field_name,
-            helpers,
+            index,
+            registry,
         )
     };
     match &field.field_type {
@@ -451,6 +605,30 @@ fn field_arktype(
             validated(inner, helpers)?
         )),
         field_type => validated(field_type, helpers),
+    }
+}
+
+/// `definition`, piped back into the newtype `value_type` names once a
+/// validator rewrote the value, which checks the newtype again and keeps its
+/// brand, as the Rust deserializer does.
+fn renewed(
+    definition: String,
+    value_type: &FieldType,
+    validators: &[Validator],
+    index: &TypeIndex,
+    registry: &crate::types::ForeignTypeRegistry,
+) -> Result<String> {
+    match value_type {
+        FieldType::Other(name)
+            if validators.iter().any(Validator::rewrites)
+                && index.newtype_named(name).is_some() =>
+        {
+            Ok(format!(
+                "[{definition}, '|>', {}]",
+                field_type_to_arktype(value_type, index, registry)?
+            ))
+        }
+        _ => Ok(definition),
     }
 }
 
@@ -530,9 +708,7 @@ fn string_step(validator: &StringValidator) -> Result<Step> {
         return Ok(Step::Type(format!("'{keyword}'")));
     }
     Ok(match js_checks::string_check(validator)? {
-        Some(JsCheck::Pattern(source)) => {
-            Step::Type(format!("new RegExp({})", string_literal(&source)?))
-        }
+        Some(JsCheck::Pattern { source, flags }) => Step::Type(js_checks::regexp(&source, &flags)?),
         Some(JsCheck::Predicate(predicate)) => Step::Narrow(predicate),
         Some(JsCheck::Length(LengthCheck::Exactly(length))) => {
             Step::Type(format!("'string == {length}'"))
@@ -648,54 +824,31 @@ mod tests {
     use crate::types::ForeignTypeRegistry;
     use std::collections::BTreeMap;
 
-    /// A struct whose fields serde names four ways: as written, renamed, by a
-    /// name that is no identifier, and as a key it may leave out.
-    fn wire_named_structs() -> std::collections::BTreeMap<String, crate::types::StructConfig> {
-        use crate::types::{StructConfig, StructField, Wire};
-        let field = |name: &str, wire: Wire| StructField {
-            field_name: name.to_owned(),
-            field_type: FieldType::String,
-            wire,
-            ..Default::default()
-        };
-        let renamed = |name: &str| Wire {
-            serde: Some(name.to_owned()),
-            ..Wire::default()
-        };
-        let fields = vec![
-            field("first_name", Wire::default()),
-            field("last_name", renamed("lastName")),
-            field("zip_code", renamed("zip-code")),
-            field(
-                "nickname",
-                Wire {
-                    serde_optional: true,
-                    ..Wire::default()
-                },
-            ),
-        ];
-        std::collections::BTreeMap::from([(
-            "Person".to_owned(),
-            StructConfig {
-                struct_name: "Person".to_owned(),
-                fields,
-                ..Default::default()
-            },
-        )])
-    }
-
     #[test]
-    fn fields_are_keyed_as_serde_writes_them() {
-        let structs = wire_named_structs();
-        let output = super::generate_arktype_type_string(
-            &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
-            &ForeignTypeRegistry::default(),
-        )
-        .unwrap();
-        assert!(output.contains("  first_name: 'string'"), "{output}");
-        assert!(output.contains("  lastName: 'string'"), "{output}");
-        assert!(output.contains("  \"zip-code\": 'string'"), "{output}");
-        assert!(output.contains("  \"nickname?\": 'string'"), "{output}");
+    fn fields_follow_ts_policy_and_explicit_serde_names() {
+        use crate::typesync::config::TsNames;
+        use crate::typesync::naming::{apply_struct, wire_named_structs};
+        for (policy, first_name) in [
+            (TsNames::Default, "firstName"),
+            (TsNames::RespectSerde, "first_name"),
+        ] {
+            let mut structs = wire_named_structs();
+            for struct_config in structs.values_mut() {
+                apply_struct(struct_config, policy).expect("apply TS naming policy");
+            }
+            let output = super::generate_arktype_type_string(
+                &TypeIndex::new(&structs, &BTreeMap::new()).unwrap(),
+                &ForeignTypeRegistry::default(),
+            )
+            .unwrap();
+            assert!(
+                output.contains(&format!("  {first_name}: 'string'")),
+                "{output}"
+            );
+            assert!(output.contains("  lastName: 'string'"), "{output}");
+            assert!(output.contains("  \"zip-code\": 'string'"), "{output}");
+            assert!(output.contains("  \"nickname?\": 'string'"), "{output}");
+        }
     }
 
     #[test]

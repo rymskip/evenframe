@@ -15,6 +15,7 @@ Address: {
 },
 Comment: {
   body: 'string',
+  author: 'AuthorId',
   replies: ['Reply', '[]']
 },
 Reply: {
@@ -31,19 +32,25 @@ Section: {
 },
 Author: {
   id: 'string',
-  name: 'string',
+  name: 'NonEmptyString',
   home: 'Address'
 },
 Post: {
   id: 'string',
   title: 'string',
   author: ['Author', "|", RecordIdCodec.ark],
-  read_time: { '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' },
+  editor: 'AuthorId',
+  subtitle: [['NonEmptyString', '|', 'undefined'], '|', 'null'],
+  tags: ['NonEmptyString', '[]'],
+  readTime: { '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' },
   status: 'Status',
   location: 'Address',
   outline: [['Section', '|', 'undefined'], '|', 'null'],
   comments: ['Comment', '[]']
 },
+AuthorId: "string#AuthorId",
+"#NonEmptyString__value": ['string', '&', 'string >= 1'],
+NonEmptyString: "NonEmptyString__value#NonEmptyString",
 
 });
 
@@ -55,6 +62,7 @@ city: null
 };
 export const defaultComment: Comment = {
 body: "",
+author: ("" as AuthorId),
 replies: []
 };
 export const defaultReply: Reply = {
@@ -71,14 +79,17 @@ children: []
 };
 export const defaultAuthor: Author = {
 id: "",
-name: "",
+name: ("" as NonEmptyString),
 home: { street: "", city: null }
 };
 export const defaultPost: Post = {
 id: "",
 title: "",
 author: RecordIdCodec.empty,
-read_time: { secs: 0, nanos: 0 },
+editor: ("" as AuthorId),
+subtitle: null,
+tags: [],
+readTime: { secs: 0, nanos: 0 },
 status: "Draft",
 location: { street: "", city: null },
 outline: null,
@@ -93,6 +104,8 @@ export type Scheduled = typeof exported.Scheduled.infer;
 export type Section = typeof exported.Section.infer;
 export type Author = typeof exported.Author.infer;
 export type Post = typeof exported.Post.infer;
+export type AuthorId = typeof exported.AuthorId.infer;
+export type NonEmptyString = typeof exported.NonEmptyString.infer;
 
 export const validator = exported;
 
@@ -111,8 +124,10 @@ export class Section extends Schema.Class<Section>("Section")( {
   children: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Section, SectionEncoded> => Section).annotations({ identifier: `SectionRef` }))).annotations({ missingMessage: () => `'Children' is required` })
 }) {[key: string]: unknown}
 
+export const AuthorId = Schema.String.pipe(Schema.brand("AuthorId")).annotations({ identifier: `AuthorId` });
 export class Comment extends Schema.Class<Comment>("Comment")( { 
   body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
+  author: Schema.propertySignature(AuthorId).annotations({ missingMessage: () => `'Author' is required` }),
   replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
 }) {[key: string]: unknown}
 
@@ -121,6 +136,7 @@ export class Reply extends Schema.Class<Reply>("Reply")( {
   thread: Schema.propertySignature(Schema.Array(Comment)).annotations({ missingMessage: () => `'Thread' is required` })
 }) {[key: string]: unknown}
 
+export const NonEmptyString = Schema.String.pipe(Schema.minLength(1, { message: () => `'Non Empty String' must be at least 1 characters long` })).pipe(Schema.brand("NonEmptyString")).annotations({ identifier: `NonEmptyString` });
 export class Address extends Schema.Class<Address>("Address")( { 
   street: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Street' is required` }),
   city: Schema.OptionFromNullishOr(Schema.String, null)
@@ -128,7 +144,7 @@ export class Address extends Schema.Class<Address>("Address")( {
 
 export class Author extends Schema.Class<Author>("Author")( { 
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
-  name: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Name' is required` }),
+  name: Schema.propertySignature(NonEmptyString).annotations({ missingMessage: () => `'Name' is required` }),
   home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
 }) {[key: string]: unknown}
 
@@ -136,7 +152,10 @@ export class Post extends Schema.Class<Post>("Post")( {
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
   author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
-  read_time: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
+  editor: Schema.propertySignature(AuthorId).annotations({ missingMessage: () => `'Editor' is required` }),
+  subtitle: Schema.OptionFromNullishOr(NonEmptyString, null),
+  tags: Schema.propertySignature(Schema.Array(NonEmptyString)).annotations({ missingMessage: () => `'Tags' is required` }),
+  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -156,8 +175,11 @@ export interface SectionEncoded {
   readonly children: ReadonlyArray<SectionEncoded>;
 }
 
+export type AuthorIdEncoded = string;
+
 export interface CommentEncoded {
   readonly body: string;
+  readonly author: AuthorIdEncoded;
   readonly replies: ReadonlyArray<ReplyEncoded>;
 }
 
@@ -166,6 +188,8 @@ export interface ReplyEncoded {
   readonly thread: ReadonlyArray<CommentEncoded>;
 }
 
+export type NonEmptyStringEncoded = string;
+
 export interface AddressEncoded {
   readonly street: string;
   readonly city: string | null | undefined;
@@ -173,7 +197,7 @@ export interface AddressEncoded {
 
 export interface AuthorEncoded {
   readonly id: string;
-  readonly name: string;
+  readonly name: NonEmptyStringEncoded;
   readonly home: AddressEncoded;
 }
 
@@ -181,7 +205,10 @@ export interface PostEncoded {
   readonly id: string;
   readonly title: string;
   readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
-  readonly read_time: {
+  readonly editor: AuthorIdEncoded;
+  readonly subtitle: NonEmptyStringEncoded | null | undefined;
+  readonly tags: ReadonlyArray<NonEmptyStringEncoded>;
+  readonly readTime: {
   readonly secs: number;
   readonly nanos: number;
 };
@@ -208,10 +235,30 @@ export interface AddressEncoded {
 }
 
 
+=== 2-effect/author-id.ts
+import { Schema } from "effect";
+
+export const AuthorId = Schema.String.pipe(Schema.brand("AuthorId")).annotations({ identifier: `AuthorId` });
+export type AuthorIdType = typeof AuthorId.Type;
+
+export type AuthorIdEncoded = string;
+
+
+=== 2-effect/non-empty-string.ts
+import { Schema } from "effect";
+
+export const NonEmptyString = Schema.String.pipe(Schema.minLength(1, { message: () => `'Non Empty String' must be at least 1 characters long` })).pipe(Schema.brand("NonEmptyString")).annotations({ identifier: `NonEmptyString` });
+export type NonEmptyStringType = typeof NonEmptyString.Type;
+
+export type NonEmptyStringEncoded = string;
+
+
 === 2-effect/post.ts
 import { Schema } from "effect";
 import { RecordIdCodec } from '../record-id.ts';
 import { Address, type AddressEncoded } from './address';
+import { AuthorId, type AuthorIdEncoded } from './author-id';
+import { NonEmptyString, type NonEmptyStringEncoded } from './non-empty-string';
 import { Section, type SectionEncoded } from './section';
 
 export class Scheduled extends Schema.Class<Scheduled>("Scheduled")( { 
@@ -224,6 +271,7 @@ export const Status = Schema.Union(Schema.Literal("Draft"), Schema.Struct({ Sche
 export type StatusType = typeof Status.Type;
 export class Comment extends Schema.Class<Comment>("Comment")( { 
   body: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Body' is required` }),
+  author: Schema.propertySignature(AuthorId).annotations({ missingMessage: () => `'Author' is required` }),
   replies: Schema.propertySignature(Schema.Array(Schema.suspend((): Schema.Schema<Reply, ReplyEncoded> => Reply).annotations({ identifier: `ReplyRef` }))).annotations({ missingMessage: () => `'Replies' is required` })
 }) {[key: string]: unknown}
 
@@ -236,7 +284,7 @@ export class Reply extends Schema.Class<Reply>("Reply")( {
 export type ReplyType = typeof Reply.Type;
 export class Author extends Schema.Class<Author>("Author")( { 
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
-  name: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Name' is required` }),
+  name: Schema.propertySignature(NonEmptyString).annotations({ missingMessage: () => `'Name' is required` }),
   home: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Home' is required` })
 }) {[key: string]: unknown}
 
@@ -245,7 +293,10 @@ export class Post extends Schema.Class<Post>("Post")( {
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
   author: Schema.propertySignature(Schema.Union(RecordIdCodec.schema, Author)).annotations({ missingMessage: () => `'Author' is required` }),
-  read_time: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
+  editor: Schema.propertySignature(AuthorId).annotations({ missingMessage: () => `'Editor' is required` }),
+  subtitle: Schema.OptionFromNullishOr(NonEmptyString, null),
+  tags: Schema.propertySignature(Schema.Array(NonEmptyString)).annotations({ missingMessage: () => `'Tags' is required` }),
+  readTime: Schema.propertySignature(Schema.Struct({ secs: Schema.Number.pipe(Schema.int(), Schema.nonNegative()), nanos: Schema.Number.pipe(Schema.int(), Schema.between(0, 999999999)) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Read Time' is required` }),
   status: Schema.propertySignature(Status).annotations({ missingMessage: () => `'Status' is required` }),
   location: Schema.propertySignature(Address).annotations({ missingMessage: () => `'Location' is required` }),
   outline: Schema.OptionFromNullishOr(Section, null),
@@ -263,6 +314,7 @@ export type StatusEncoded = "Draft" | { readonly Scheduled: ScheduledEncoded } |
 
 export interface CommentEncoded {
   readonly body: string;
+  readonly author: AuthorIdEncoded;
   readonly replies: ReadonlyArray<ReplyEncoded>;
 }
 
@@ -273,7 +325,7 @@ export interface ReplyEncoded {
 
 export interface AuthorEncoded {
   readonly id: string;
-  readonly name: string;
+  readonly name: NonEmptyStringEncoded;
   readonly home: AddressEncoded;
 }
 
@@ -281,7 +333,10 @@ export interface PostEncoded {
   readonly id: string;
   readonly title: string;
   readonly author: Schema.Schema.Encoded<typeof RecordIdCodec.schema> | AuthorEncoded;
-  readonly read_time: {
+  readonly editor: AuthorIdEncoded;
+  readonly subtitle: NonEmptyStringEncoded | null | undefined;
+  readonly tags: ReadonlyArray<NonEmptyStringEncoded>;
+  readonly readTime: {
   readonly secs: number;
   readonly nanos: number;
 };
@@ -322,13 +377,14 @@ export interface Address {
 /** @derive(Decode) */
 export interface Author {
   id: string;
-  name: string;
+  name: NonEmptyString;
   home: Address;
 }
 
 /** @derive(Decode) */
 export interface Comment {
   body: string;
+  author: AuthorId;
   replies: Reply[];
 }
 
@@ -337,7 +393,10 @@ export interface Post {
   id: string;
   title: string;
   author: RecordLink<Author>;
-  read_time: { secs: number; nanos: number };
+  editor: AuthorId;
+  subtitle: NonEmptyString | null;
+  tags: NonEmptyString[];
+  readTime: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;
@@ -369,6 +428,11 @@ export type Status =
 	| { Scheduled: Scheduled }
 	| { Archived: string };
 
+export type AuthorId = $Newtype<string>;
+
+/** @endec({ validate: ["nonEmpty"] }) */
+export type NonEmptyString = $Newtype<string>;
+
 === 4-macroforge/address.ts
 /** @derive(Decode) */
 export interface Address {
@@ -376,21 +440,31 @@ export interface Address {
   city: string | null;
 }
 
+=== 4-macroforge/author-id.ts
+export type AuthorId = $Newtype<string>;
+
+=== 4-macroforge/non-empty-string.ts
+/** @endec({ validate: ["nonEmpty"] }) */
+export type NonEmptyString = $Newtype<string>;
+
 === 4-macroforge/post.ts
 import type { RecordLink } from './record-link';
 import type { Address } from './address';
+import type { AuthorId } from './author-id';
+import type { NonEmptyString } from './non-empty-string';
 import type { Section } from './section';
 
 /** @derive(Decode) */
 export interface Author {
   id: string;
-  name: string;
+  name: NonEmptyString;
   home: Address;
 }
 
 /** @derive(Decode) */
 export interface Comment {
   body: string;
+  author: AuthorId;
   replies: Reply[];
 }
 
@@ -399,7 +473,10 @@ export interface Post {
   id: string;
   title: string;
   author: RecordLink<Author>;
-  read_time: { secs: number; nanos: number };
+  editor: AuthorId;
+  subtitle: NonEmptyString | null;
+  tags: NonEmptyString[];
+  readTime: { secs: number; nanos: number };
   status: Status;
   location: Address;
   outline: Section | null;

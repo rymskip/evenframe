@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The fallback naming policy for TypeScript fields without explicit naming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TsNames {
+    /// Camel-case fields unless Evenframe or serde explicitly names them.
+    #[default]
+    Default,
+    /// Keep serde's names, including unchanged Rust names.
+    RespectSerde,
+}
+
 /// Whether to emit all types into a single file or split into per-type files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +235,10 @@ pub struct TypesyncOutput {
     /// keyed by derive name (macroforge).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub macros: BTreeMap<String, String>,
+    /// The derives a type with none of its own gets (macroforge). Unset, a
+    /// struct or enum gets `Decode` and a newtype none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_derives: Option<Vec<String>>,
 }
 
 /// An output as written, with its file settings inline. Spelled out rather
@@ -249,6 +264,8 @@ struct TypesyncOutputToml {
     import_validate: bool,
     #[serde(default)]
     macros: BTreeMap<String, String>,
+    #[serde(default)]
+    default_derives: Option<Vec<String>>,
 }
 
 impl From<TypesyncOutputToml> for TypesyncOutput {
@@ -270,6 +287,7 @@ impl From<TypesyncOutputToml> for TypesyncOutput {
             package: toml.package,
             import_validate: toml.import_validate,
             macros: toml.macros,
+            default_derives: toml.default_derives,
         }
     }
 }
@@ -286,6 +304,7 @@ impl TypesyncOutput {
             package: None,
             import_validate: false,
             macros: BTreeMap::new(),
+            default_derives: None,
         }
     }
 
@@ -324,6 +343,11 @@ impl TypesyncOutput {
                 "`macros` only applies to macroforge outputs, not `{kind}`"
             ));
         }
+        if self.default_derives.is_some() && kind != OutputKind::Macroforge {
+            return Err(format!(
+                "`default_derives` only applies to macroforge outputs, not `{kind}`"
+            ));
+        }
         Ok(())
     }
 }
@@ -332,6 +356,8 @@ impl TypesyncOutput {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(try_from = "TypesyncToml")]
 pub struct TypesyncConfig {
+    /// How fields without an explicit TS or serde name are named.
+    pub ts_names: TsNames,
     /// Every configured output, from `output` (one) or `outputs` (several).
     pub outputs: Vec<TypesyncOutput>,
     /// How to handle type name collisions across different source files.
@@ -344,6 +370,8 @@ pub struct TypesyncConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TypesyncToml {
+    #[serde(default)]
+    ts_names: TsNames,
     output: Option<TypesyncOutput>,
     #[serde(default)]
     outputs: Vec<TypesyncOutput>,
@@ -368,6 +396,7 @@ impl TryFrom<TypesyncToml> for TypesyncConfig {
             output.validate()?;
         }
         Ok(Self {
+            ts_names: toml.ts_names,
             outputs,
             collision_strategy: toml.collision_strategy,
             struct_variants: toml.struct_variants,

@@ -2,9 +2,9 @@
 source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
-export const Value = Schema.Union(Schema.String, Schema.Number, Schema.Boolean, Schema.Literal("Nothing")).annotations({ identifier: `Value` });
+export const Value = Schema.Union(Schema.String, Schema.Number, Schema.Boolean, Schema.Null).annotations({ identifier: `Value` });
 
-export type ValueEncoded = string | number | boolean | "Nothing";
+export type ValueEncoded = string | number | boolean | null;
 
 
 export type ValueType = typeof Value.Type;

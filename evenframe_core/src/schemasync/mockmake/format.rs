@@ -39,40 +39,148 @@ fn generate_date_range_pattern(days: i64) -> String {
     pattern
 }
 
-/// A user-provided pattern for [`Format::Custom`], checked to be a valid
-/// regex when it is created.
+/// A user-provided pattern for [`Format::Custom`]. Where it is written
+/// decides the syntax it may use: `#[validators(...)]` runs it in Rust and in
+/// JavaScript, `#[schemasync(validators(...))]` and `#[format(...)]` only in
+/// Rust's engine, and `#[typesync(validators(...))]` only in JavaScript's, as
+/// a regex literal whose flags it keeps.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct CustomPattern(String);
+#[serde(try_from = "CustomPatternWire", into = "CustomPatternWire")]
+pub struct CustomPattern {
+    source: String,
+    /// The JavaScript flags of a typesync-only pattern, which no other engine
+    /// reads.
+    flags: Option<String>,
+}
+
+/// Which engines a pattern runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatternDialect {
+    /// Rust's `regex` and JavaScript's `RegExp` alike.
+    Portable,
+    /// Rust's `regex` alone: the schema's `string::matches` and mock data.
+    Rust,
+    /// JavaScript's `RegExp` alone, written as a regex literal.
+    JavaScript,
+}
+
+/// The flags a typesync-only pattern may carry. `g` and `y` make `test`
+/// stateful, so a validator would pass and fail the same value in turn.
+const JAVASCRIPT_FLAGS: &str = "imsuv";
 
 impl CustomPattern {
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.source
+    }
+
+    /// The JavaScript flags of a typesync-only pattern.
+    pub fn flags(&self) -> Option<&str> {
+        self.flags.as_deref()
     }
 
     /// A pattern already checked where its attribute was parsed. Only
     /// derive output calls this.
     #[doc(hidden)]
-    pub fn checked(pattern: &str) -> Self {
-        Self(pattern.to_string())
+    pub fn checked(source: &str, flags: Option<&str>) -> Self {
+        Self {
+            source: source.to_owned(),
+            flags: flags.map(str::to_owned),
+        }
+    }
+
+    /// `written`, the pattern as its attribute spells it, checked for the
+    /// engines it runs in.
+    pub fn parse(written: &str, dialect: PatternDialect) -> Result<Self, String> {
+        match dialect {
+            PatternDialect::Portable => {
+                crate::validator::portable_regex::check(written).map_err(|message| {
+                    format!(
+                        "this pattern runs in Rust and in JavaScript, so it must read the same \
+                         in both: {message}"
+                    )
+                })?;
+                Ok(Self::checked(written, None))
+            }
+            PatternDialect::Rust => {
+                Regex::new(written).map_err(|error| format!("not a valid regex: {error}"))?;
+                Ok(Self::checked(written, None))
+            }
+            PatternDialect::JavaScript => {
+                let (source, flags) = written
+                    .strip_prefix('/')
+                    .and_then(|rest| rest.rsplit_once('/'))
+                    .ok_or_else(|| {
+                        format!(
+                            "a typesync pattern is a JavaScript regex literal, such as \
+                             \"/^[a-z]+$/u\", not `{written}`"
+                        )
+                    })?;
+                check_javascript(source, flags)?;
+                Ok(Self::checked(source, Some(flags)))
+            }
+        }
     }
 }
 
-impl TryFrom<String> for CustomPattern {
-    type Error = regex::Error;
+/// Checks a JavaScript regex literal's `source` and `flags` as a browser
+/// would read them.
+fn check_javascript(source: &str, flags: &str) -> Result<(), String> {
+    for (position, flag) in flags.char_indices() {
+        if !JAVASCRIPT_FLAGS.contains(flag) {
+            return Err(format!(
+                "the flag `{flag}` is not one a validator can use: write `i`, `m`, `s`, and \
+                 `u` or `v`"
+            ));
+        }
+        if flags[..position].contains(flag) {
+            return Err(format!("the flag `{flag}` is given twice"));
+        }
+    }
+    if flags.contains('u') && flags.contains('v') {
+        return Err("the flags `u` and `v` cannot both apply".to_owned());
+    }
+    regress::Regex::with_flags(source, flags)
+        .map(|_| ())
+        .map_err(|error| format!("not a valid JavaScript regex: {error}"))
+}
 
-    fn try_from(pattern: String) -> Result<Self, Self::Error> {
-        Regex::new(&pattern)?;
-        Ok(Self(pattern))
+/// How a pattern is stored outside the derive: a string for one every
+/// engine reads, its source and flags for a JavaScript literal.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum CustomPatternWire {
+    Plain(String),
+    JavaScript { source: String, flags: String },
+}
+
+impl TryFrom<CustomPatternWire> for CustomPattern {
+    type Error = String;
+
+    fn try_from(wire: CustomPatternWire) -> Result<Self, Self::Error> {
+        match wire {
+            CustomPatternWire::Plain(source) => Self::parse(&source, PatternDialect::Rust),
+            CustomPatternWire::JavaScript { source, flags } => {
+                check_javascript(&source, &flags)?;
+                Ok(Self::checked(&source, Some(&flags)))
+            }
+        }
     }
 }
 
-impl From<CustomPattern> for String {
+impl From<CustomPattern> for CustomPatternWire {
     fn from(pattern: CustomPattern) -> Self {
-        pattern.0
+        match pattern.flags {
+            Some(flags) => CustomPatternWire::JavaScript {
+                source: pattern.source,
+                flags,
+            },
+            None => CustomPatternWire::Plain(pattern.source),
+        }
     }
 }
 
+/// Reads the literal as written; the attribute's parser checks it for the
+/// engines it runs in.
 impl TryFrom<&syn::Expr> for CustomPattern {
     type Error = syn::Error;
 
@@ -87,9 +195,7 @@ impl TryFrom<&syn::Expr> for CustomPattern {
                 "a custom format takes a regex pattern string literal",
             ));
         };
-        Self::try_from(literal.value()).map_err(|error| {
-            syn::Error::new_spanned(expr, format!("invalid custom format pattern: {error}"))
-        })
+        Ok(Self::checked(&literal.value(), None))
     }
 }
 
@@ -286,7 +392,7 @@ impl Format {
                 r"^(202[0-9])-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):(00|15|30|45):[0-5][0-9]Z$"
             }
             Format::Date => r"^(202[0-9])-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
-            Format::Time => r"^\d{2}:\d{2}:\d{2}$",
+            Format::Time => r"^[0-9]{2}:[0-9]{2}:[0-9]{2}$",
             Format::HexString(len) => {
                 return format!(r"^[0-9a-fA-F]{{{}}}$", len);
             }
@@ -294,47 +400,49 @@ impl Format {
                 return format!(r"^[A-Za-z0-9+/]{{{}}}$", len);
             }
             Format::JwtToken => r"^[A-Za-z0-9+/]{36}\.[A-Za-z0-9+/]{36}\.[A-Za-z0-9+/]{43}$",
-            Format::CreditCardNumber => r"^\d{4}-\d{4}-\d{4}-\d{4}$",
-            Format::SocialSecurityNumber => r"^\d{3}-\d{2}-\d{4}$",
+            Format::CreditCardNumber => r"^[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}$",
+            Format::SocialSecurityNumber => r"^[0-9]{3}-[0-9]{2}-[0-9]{4}$",
             Format::IpAddress => {
                 r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
             }
             Format::MacAddress => r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$",
             Format::ColorHex => r"^#[0-9a-fA-F]{6}$",
-            Format::Oklch => r"^oklch\(\d+(?:\.\d+)?% \d+(?:\.\d+)? \d+(?:\.\d+)?\)$",
+            Format::Oklch => {
+                r"^oklch\([0-9]+(?:\.[0-9]+)?% [0-9]+(?:\.[0-9]+)? [0-9]+(?:\.[0-9]+)?\)$"
+            }
             Format::Filename(extension) => {
                 return format!(r"^[a-z]{{8}}\.{}$", regex::escape(extension));
             }
             Format::Url(domain) => {
                 return format!(r"^https://{}/[a-z]{{8}}$", regex::escape(domain));
             }
-            Format::CurrencyAmount => r"^\$\d+\.\d{2}$",
-            Format::Percentage => r"^\d+(?:\.\d+)?%$",
-            Format::Latitude => r"^-?\d+\.\d{6}$",
-            Format::Longitude => r"^-?\d+\.\d{6}$",
+            Format::CurrencyAmount => r"^\$[0-9]+\.[0-9]{2}$",
+            Format::Percentage => r"^[0-9]+(?:\.[0-9]+)?%$",
+            Format::Latitude => r"^-?[0-9]+\.[0-9]{6}$",
+            Format::Longitude => r"^-?[0-9]+\.[0-9]{6}$",
             Format::CompanyName => {
                 r"^(Apple|Google|Microsoft|Amazon|Facebook|Tesla|Netflix|Adobe|Oracle|Intel|IBM|Cisco|Salesforce|PayPal|Spotify|Uber|Airbnb|Twitter|LinkedIn|Zoom|Slack|GitHub|Docker|Stripe|Square|Dropbox|Reddit|Pinterest|Snapchat|TikTok|Twitch|Discord|Shopify|Cloudflare|DataDog|MongoDB|Elastic|HashiCorp|GitLab|Atlassian|JetBrains|Unity|Epic Games|Valve|OpenAI|DeepMind|Anthropic|Palantir|SpaceX|Blue Origin|Boeing|Lockheed Martin|Raytheon|Northrop Grumman|General Dynamics|Honeywell|3M|Johnson & Johnson|Pfizer|Moderna|AstraZeneca|Merck|Abbott|Medtronic|Boston Scientific|Nike|Adidas|Under Armour|Lululemon|Patagonia|North Face|Columbia|REI|Walmart|Target|Costco|Home Depot|Lowes|Best Buy|GameStop|Barnes & Noble|Starbucks|McDonalds|Subway|Chipotle|Dominos|Pizza Hut|KFC|Burger King|Wendys|Dunkin|Tim Hortons|JP Morgan|Goldman Sachs|Morgan Stanley|Bank of America|Wells Fargo|Citibank|American Express|Visa|Mastercard|Discover|Capital One|Charles Schwab|Fidelity|Vanguard|BlackRock|State Street|BNY Mellon|Northern Trust|Ford|General Motors|Toyota|Honda|Tesla|Rivian|Lucid|Volkswagen|BMW|Mercedes|Audi|Porsche|Ferrari|Lamborghini|McLaren|Rolls Royce|Bentley|Aston Martin|Jaguar|Land Rover|Volvo|Mazda|Subaru|Mitsubishi|Nissan|Hyundai|Kia|Genesis|Polestar|ExxonMobil|Chevron|Shell|BP|ConocoPhillips|Marathon|Valero|Phillips 66|Occidental|Halliburton|Schlumberger|Baker Hughes|AT&T|Verizon|T-Mobile|Sprint|Comcast|Charter|Cox|CenturyLink|Frontier|Windstream|Dish|DirecTV|Coca Cola|Pepsi|Dr Pepper|Monster|Red Bull|Gatorade|Powerade|Vitamin Water|Nestle|Unilever|Procter & Gamble|Colgate|Kimberly Clark|General Mills|Kellogg|Post|Quaker|Campbell|Kraft Heinz|Mondelez|Mars|Hershey|Ferrero|Lindt|Godiva|Ghirardelli|Russell Stover|Fannie May) (Inc|LLC|Corp|Ltd|Co|Corporation|Company|Group|Holdings|Industries|Enterprises|Partners|Associates|Solutions|Technologies|Systems|Services|International|Global|Worldwide|Americas|USA|Digital|Interactive|Media|Entertainment|Financial|Healthcare|Pharmaceuticals|Biotech|Energy|Automotive|Aerospace|Defense|Retail|Hospitality|Logistics|Transportation|Communications|Telecommunications|Software|Hardware|Consulting|Advisory|Ventures|Capital|Investments|Properties|Realty|Development|Construction|Manufacturing|Engineering|Research|Analytics|Innovations|Labs|Studios|Productions|Networks|Platforms|Cloud|Mobile|Security|Data|AI|Robotics|Quantum|Nano|Micro|Macro|Mega|Ultra|Super|Hyper|Meta|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)$"
             }
-            Format::JobTitle => r"^.+$",
-            Format::StreetAddress => r"^\d+ .+$",
+            Format::JobTitle => r"^[^\n]+$",
+            Format::StreetAddress => r"^[0-9]+ [^\n]+$",
             Format::City => {
                 r"^(New York|Los Angeles|Chicago|Houston|Phoenix|Philadelphia|San Antonio|San Diego|Dallas|San Jose|Austin|Jacksonville|Fort Worth|Columbus|Charlotte|San Francisco|Indianapolis|Seattle|Denver|Washington|Boston|El Paso|Nashville|Detroit|Oklahoma City|Portland|Las Vegas|Memphis|Louisville|Baltimore|Milwaukee|Albuquerque|Tucson|Fresno|Mesa|Sacramento|Atlanta|Kansas City|Colorado Springs|Omaha|Raleigh|Miami|Long Beach|Virginia Beach|Oakland)$"
             }
             Format::State => {
                 r"^(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)$"
             }
-            Format::PostalCode => r"^\d{5}$",
+            Format::PostalCode => r"^[0-9]{5}$",
             Format::Country => {
                 r"^(United States|Canada|Mexico|United Kingdom|Germany|France|Italy|Spain|Australia|Brazil|Argentina|Japan|China|India|South Korea|Netherlands|Belgium|Switzerland|Sweden|Norway|Denmark|Finland|Poland|Austria|Greece|Portugal|Czech Republic|Hungary|Romania|Bulgaria|Croatia|Ireland|New Zealand|Singapore|Malaysia|Thailand|Indonesia|Philippines|Vietnam|Egypt|South Africa|Nigeria|Kenya|Morocco|Chile|Colombia|Peru|Venezuela|Ecuador|Uruguay)$"
             }
-            Format::LoremIpsum(_) => r"^[a-z\s]+$",
+            Format::LoremIpsum(_) => r"^[a-z ]+$",
             Format::ProductName => {
                 r"^(Premium|Deluxe|Pro|Ultra|Super|Advanced|Professional) (Widget|Gadget|Device|Tool|System|Platform|Solution)$"
             }
-            Format::ProductSku => r"^[A-Z]{3}-\d{4}$",
-            Format::Version => r"^\d+\.\d+\.\d+$",
+            Format::ProductSku => r"^[A-Z]{3}-[0-9]{4}$",
+            Format::Version => r"^[0-9]+\.[0-9]+\.[0-9]+$",
             Format::Hash => r"^[0-9a-f]{64}$",
-            Format::UserAgent => r"^Mozilla/5\.0 .+$",
+            Format::UserAgent => r"^Mozilla/5\.0 [^\n]+$",
             Format::Email => r"^[a-z]{8}@(gmail\.com|yahoo\.com|outlook\.com|company\.com)$",
             Format::FirstName => {
                 r"^(James|Mary|John|Patricia|Robert|Jennifer|Michael|Linda|William|Elizabeth|David|Barbara|Richard|Susan|Joseph|Jessica|Thomas|Sarah|Charles|Karen|Christopher|Nancy|Daniel|Lisa|Matthew|Betty|Anthony|Dorothy|Mark|Sandra|Donald|Ashley|Steven|Kimberly|Kenneth|Emily|Joshua|Michelle|Kevin|Carol|Brian|Amanda|George|Melissa|Edward|Deborah|Ronald|Stephanie|Timothy|Rebecca|Jason|Sharon|Jeffrey|Laura|Ryan|Cynthia|Jacob|Amy|Gary|Kathleen|Nicholas|Angela|Eric|Helen|Jonathan|Anna|Stephen|Brenda|Larry|Pamela|Justin|Nicole|Scott|Emma|Brandon|Samantha|Benjamin|Katherine|Samuel|Christine|Gregory|Catherine|Frank|Debra|Alexander|Rachel|Raymond|Carolyn|Patrick|Janet|Jack|Virginia|Dennis|Maria|Jerry|Heather|Tyler|Diane|Aaron|Ruth|Jose|Julie|Nathan|Olivia|Adam|Joyce|Harold|Victoria|Peter|Kelly|Henry|Christina|Zachary|Lauren|Douglas|Joan|Carl|Evelyn|Arthur|Judith|Albert|Megan|Willie|Cheryl|Austin|Martha|Jesse|Andrea|Gerald|Frances|Roger|Hannah|Keith|Jacqueline|Jeremy|Ann|Terry|Gloria|Lawrence|Jean|Sean|Kathryn|Christian|Alice|Ethan|Teresa|Bryan|Sara|Joe|Janice|Louis|Doris|Eugene|Madison|Russell|Julia|Gabriel|Grace|Bruce|Judy|Logan|Beverly|Juan|Denise|Elijah|Marilyn|Harry|Charlotte|Aaron|Marie|Willie|Abigail|Albert|Sophia|Jordan|Mia|Ralph|Isabella|Roy|Amber|Noah|Danielle|Mason|Brittany|Kyle|Rose|Francis|Diana|Russell|Natalie|Philip|Lori|Randy|Kayla|Vincent|Alexis|Billy|Lilly)$"
@@ -347,28 +455,28 @@ impl Format {
             }
             // Each gap takes at most one separator: `.`, `-`, or a single space.
             Format::PhoneNumber => {
-                r"^(\+\d{1,2}\s)?(\(\d{3}\)\s?[\.\-]?|\d{3}[\.\- ]?)\d{3}[\.\- ]?\d{4}$"
+                r"^(\+[0-9]{1,2} )?(\([0-9]{3}\) ?[\.\-]?|[0-9]{3}[\.\- ]?)[0-9]{3}[\.\- ]?[0-9]{4}$"
             }
             Format::Iso8601DurationString => {
                 // ISO 8601 duration: P[nY][nM][nW][nD][T[nH][nM][nS]]
                 // Structured as alternation to guarantee at least one component.
                 // Each branch requires one leading unit; subsequent units are optional.
                 // Time section (T) also requires at least one of H, M, or S.
-                const TIME: &str = r"(([0-1]?[0-9]|2[0-3])H([0-5]?[0-9]M)?([0-5]?[0-9](\.\d{1,3})?S)?|([0-5]?[0-9]M)([0-5]?[0-9](\.\d{1,3})?S)?|[0-5]?[0-9](\.\d{1,3})?S)";
+                const TIME: &str = r"(([0-1]?[0-9]|2[0-3])H([0-5]?[0-9]M)?([0-5]?[0-9](\.[0-9]{1,3})?S)?|([0-5]?[0-9]M)([0-5]?[0-9](\.[0-9]{1,3})?S)?|[0-5]?[0-9](\.[0-9]{1,3})?S)";
                 let pattern = [
                     r"^P(",
                     // Branch: starts with Year
-                    r"\d{1,2}Y((0?[0-9]|1[0-1])M)?(\d{1,4}W)?([0-2]?[0-9]D)?(T",
+                    r"[0-9]{1,2}Y((0?[0-9]|1[0-1])M)?([0-9]{1,4}W)?([0-2]?[0-9]D)?(T",
                     TIME,
                     r")?",
                     r"|",
                     // Branch: starts with Month
-                    r"(0?[0-9]|1[0-1])M(\d{1,4}W)?([0-2]?[0-9]D)?(T",
+                    r"(0?[0-9]|1[0-1])M([0-9]{1,4}W)?([0-2]?[0-9]D)?(T",
                     TIME,
                     r")?",
                     r"|",
                     // Branch: starts with Week
-                    r"\d{1,4}W([0-2]?[0-9]D)?(T",
+                    r"[0-9]{1,4}W([0-2]?[0-9]D)?(T",
                     TIME,
                     r")?",
                     r"|",
@@ -538,9 +646,13 @@ impl ToTokens for Format {
             },
             Format::Custom(custom) => {
                 let pattern = custom.as_str();
+                let flags = match custom.flags() {
+                    Some(flags) => quote! { ::std::option::Option::Some(#flags) },
+                    None => quote! { ::std::option::Option::None },
+                };
                 quote! {
                     ::evenframe::schemasync::format::Format::Custom(
-                        ::evenframe::schemasync::format::CustomPattern::checked(#pattern)
+                        ::evenframe::schemasync::format::CustomPattern::checked(#pattern, #flags)
                     )
                 }
             }
@@ -606,6 +718,19 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_pattern_reads_the_same_in_rust_and_javascript() {
+        use strum::IntoEnumIterator;
+        let failures: Vec<String> = Format::iter()
+            .filter_map(|format| {
+                crate::validator::portable_regex::check(&format.pattern())
+                    .err()
+                    .map(|message| format!("{format:?}: {message}"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn generated_dates_are_calendar_dates() {
         for _ in 0..2000 {
             let date = Format::Date.generate_formatted_value().unwrap();
@@ -623,12 +748,35 @@ mod tests {
     }
 
     #[test]
-    fn custom_patterns_are_checked_when_created() {
-        assert!(CustomPattern::try_from("[a-z]+".to_string()).is_ok());
-        assert!(CustomPattern::try_from("[a-z".to_string()).is_err());
-        let expr: syn::Expr = syn::parse_quote!("(unclosed");
-        assert!(CustomPattern::try_from(&expr).is_err());
+    fn custom_patterns_are_checked_for_the_engines_they_run_in() {
+        use super::PatternDialect::{JavaScript, Portable, Rust};
+        assert!(CustomPattern::parse("^[a-z]+$", Portable).is_ok());
+        assert!(CustomPattern::parse(r"^\d+$", Portable).is_err());
+        assert!(CustomPattern::parse(r"^\d+$", Rust).is_ok());
+        assert!(CustomPattern::parse("[a-z", Rust).is_err());
+        assert!(CustomPattern::parse(r"^(?<=a)b$", Rust).is_err());
+
+        let literal = CustomPattern::parse(r"/^\p{L}+(?<!-)$/u", JavaScript).expect("a literal");
+        assert_eq!(literal.as_str(), r"^\p{L}+(?<!-)$");
+        assert_eq!(literal.flags(), Some("u"));
+        for (written, expected) in [
+            ("^[a-z]+$", "regex literal"),
+            ("/[a-z/u", "not a valid JavaScript regex"),
+            ("/a/g", "`g`"),
+            ("/a/ii", "twice"),
+            ("/a/uv", "cannot both"),
+        ] {
+            let message = CustomPattern::parse(written, JavaScript).expect_err(written);
+            assert!(message.contains(expected), "{written}: {message}");
+        }
+
+        let plain: CustomPattern = serde_json::from_str("\"^[a-z]+$\"").expect("a plain pattern");
+        assert_eq!(plain.flags(), None);
         assert!(serde_json::from_str::<CustomPattern>("\"[z-a]\"").is_err());
+        let round_trip: CustomPattern =
+            serde_json::from_str(&serde_json::to_string(&literal).expect("it serializes"))
+                .expect("it reads back");
+        assert_eq!(round_trip, literal);
     }
 
     #[test]

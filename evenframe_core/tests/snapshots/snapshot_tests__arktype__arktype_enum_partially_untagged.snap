@@ -1,0 +1,30 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Contact: [[[[{ kind: ['===', "Phone"] }, '&', 'Phone'], '|', { kind: ['===', "Nobody"] }], '|', 'string'], '|', 'Postal'],
+Phone: {
+  number: 'string'
+},
+Postal: {
+  street: 'string',
+  city: 'string'
+},
+
+});
+
+const exported = bindings.export();
+
+export const defaultPhone: Phone = {
+number: ""
+};
+export const defaultPostal: Postal = {
+street: "",
+city: ""
+};
+
+export type Contact = typeof exported.Contact.infer;
+export type Phone = typeof exported.Phone.infer;
+export type Postal = typeof exported.Postal.infer;

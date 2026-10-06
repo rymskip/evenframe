@@ -1,0 +1,38 @@
+{
+  "description": "Validators on tuple elements: a tuple variant's payload property, an untagged variant's bare member, and a tuple struct's elements",
+  "structs": {},
+  "enums": {
+    "Shape": {
+      "enum_name": "Shape",
+      "variants": [
+        {
+          "name": "Circle",
+          "data": { "DataStructureRef": "F64" },
+          "element_validators": [[{ "NumberValidator": "Positive" }]]
+        },
+        {
+          "name": "Tag",
+          "data": { "DataStructureRef": { "Tuple": ["String", "U8"] } },
+          "element_validators": [
+            [{ "StringValidator": "NonEmpty" }],
+            [{ "NumberValidator": { "LessThan": 10.0 } }]
+          ]
+        },
+        {
+          "name": "Code",
+          "data": { "DataStructureRef": "String" },
+          "wire": { "serde_untagged": true },
+          "element_validators": [[{ "StringValidator": "Uppercased" }]]
+        }
+      ]
+    }
+  },
+  "newtypes": {
+    "Range": {
+      "name": "Range",
+      "inner": { "Tuple": ["I32", "String"] },
+      "kind": "Alias",
+      "element_validators": [[{ "NumberValidator": { "GreaterThanOrEqualTo": 0.0 } }], []]
+    }
+  }
+}

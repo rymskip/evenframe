@@ -11,7 +11,7 @@ export class Post extends Schema.Class<Post>("Post")( {
   id: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Id' is required` }),
   title: Schema.propertySignature(Schema.String).annotations({ missingMessage: () => `'Title' is required` }),
   author: Schema.propertySignature(Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Author)).annotations({ missingMessage: () => `'Author' is required` }),
-  related_posts: Schema.propertySignature(Schema.Array(Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Post, PostEncoded> => Post).annotations({ identifier: `PostRef` })))).annotations({ missingMessage: () => `'Related Posts' is required` })
+  relatedPosts: Schema.propertySignature(Schema.Array(Schema.Union(Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) }), Schema.suspend((): Schema.Schema<Post, PostEncoded> => Post).annotations({ identifier: `PostRef` })))).annotations({ missingMessage: () => `'Related Posts' is required` })
 }) {[key: string]: unknown}
 
 
@@ -24,7 +24,7 @@ export interface PostEncoded {
   readonly id: string;
   readonly title: string;
   readonly author: { readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | AuthorEncoded;
-  readonly related_posts: ReadonlyArray<{ readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | PostEncoded>;
+  readonly relatedPosts: ReadonlyArray<{ readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } } | PostEncoded>;
 }
 
 

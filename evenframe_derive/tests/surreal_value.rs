@@ -4,9 +4,7 @@
 use evenframe::Evenframe;
 use evenframe::config::ForeignTypeConfig;
 use evenframe::prelude::ordered_float::OrderedFloat;
-use evenframe::registry::{
-    get_all_enum_names, get_all_object_names, get_struct_config, get_table_config, get_tagged_union,
-};
+use evenframe::registry::all_configs;
 use evenframe::schemasync::dump::tables_surql;
 use evenframe::types::ForeignTypeRegistry;
 use serde::{Deserialize, Serialize};
@@ -300,20 +298,13 @@ async fn a_record_round_trips_through_the_database() {
         .await
         .expect("the namespace opens");
 
-    let table = get_table_config("Member").expect("Member is registered");
-    let tables = BTreeMap::from([("member".to_owned(), table.clone())]);
-    let objects: BTreeMap<_, _> = get_all_object_names()
-        .into_iter()
-        .filter_map(|name| Some((name.to_owned(), get_struct_config(name)?.clone())))
-        .collect();
-    let enums: BTreeMap<_, _> = get_all_enum_names()
-        .into_iter()
-        .filter_map(|name| Some((name.to_owned(), get_tagged_union(name)?.clone())))
-        .collect();
+    let types = all_configs()
+        .into_schemasync()
+        .expect("the registered types have a stored form");
     let schema = tables_surql(
-        &tables,
-        &objects,
-        &enums,
+        &types.tables,
+        &types.objects,
+        &types.enums,
         &ForeignTypeRegistry::from_config(&foreign_types()),
         false,
     )
@@ -569,4 +560,194 @@ fn kind_of_matches_the_stored_shape() {
         Amount::kind_of(),
         surrealdb::types::Kind::Either(_)
     ));
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
+pub struct Login {
+    pub id: String,
+    #[serde(rename(serialize = "userName", deserialize = "user_name"))]
+    pub user_name: String,
+    #[serde(skip_serializing, default)]
+    pub password: String,
+    #[serde(skip_deserializing)]
+    pub created: String,
+}
+
+#[test]
+fn a_field_serde_skips_one_way_is_stored_as_serde_writes_it() {
+    let login: Login = serde_json::from_str(
+        r#"{ "id": "login:ada", "user_name": "ada", "password": "pw", "created": "now" }"#,
+    )
+    .expect("serde reads the deserialize name");
+    assert_eq!(login.user_name, "ada");
+    assert_eq!(login.password, "pw");
+    assert_eq!(login.created, "", "serde never reads `created`");
+
+    let json = serde_json::to_value(&login).expect("serde writes it");
+    assert!(json.get("userName").is_some(), "{json}");
+    assert!(json.get("password").is_none(), "{json}");
+
+    let written = Login {
+        created: "now".to_owned(),
+        ..login
+    }
+    .into_value();
+    let fields = object(&written);
+    assert!(fields.contains_key("user_name"));
+    assert!(!fields.contains_key("password"), "serde never writes it");
+    assert!(fields.contains_key("created"));
+    let read = Login::from_value(written).expect("a record reads back");
+    assert_eq!(read.password, "", "a key never stored takes its default");
+    assert_eq!(
+        read.created, "",
+        "a key serde never reads takes its default"
+    );
+
+    let types = all_configs()
+        .into_schemasync()
+        .expect("the registered types have a stored form");
+    let schema = tables_surql(
+        &types.tables,
+        &types.objects,
+        &types.enums,
+        &ForeignTypeRegistry::from_config(&foreign_types()),
+        false,
+    )
+    .expect("the schema dump generates");
+    assert!(
+        schema.contains("DEFINE FIELD OVERWRITE created ON TABLE login"),
+        "{schema}"
+    );
+    assert!(!schema.contains("password"), "{schema}");
+}
+
+/// Tagged variants first, then the variants serde writes bare.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
+pub enum Contact {
+    Phone {
+        number: String,
+    },
+    Nobody,
+    #[serde(untagged)]
+    Email(String),
+    #[serde(untagged)]
+    Postal {
+        street: String,
+        city: String,
+    },
+}
+
+#[test]
+fn a_partly_untagged_enum_writes_untagged_variants_bare_and_reads_tagged_first() {
+    let contacts = [
+        Contact::Phone {
+            number: "555".to_owned(),
+        },
+        Contact::Nobody,
+        Contact::Email("ada@example.com".to_owned()),
+        Contact::Postal {
+            street: "Main".to_owned(),
+            city: "Oslo".to_owned(),
+        },
+    ];
+    for contact in &contacts {
+        let json = serde_json::to_value(contact).expect("serde writes it");
+        let read: Contact = serde_json::from_value(json).expect("serde reads it back");
+        assert_eq!(&read, contact);
+        assert_eq!(
+            &Contact::from_value(contact.clone().into_value()).expect("a record reads back"),
+            contact
+        );
+    }
+    assert_eq!(
+        Contact::Email("ada@example.com".to_owned()).into_value(),
+        Value::String("ada@example.com".to_owned())
+    );
+    assert_eq!(
+        Contact::Nobody.into_value(),
+        Value::String("Nobody".to_owned())
+    );
+    let phone = Contact::Phone {
+        number: "555".to_owned(),
+    }
+    .into_value();
+    assert!(object(&phone).contains_key("Phone"));
+    let postal = Contact::Postal {
+        street: "Main".to_owned(),
+        city: "Oslo".to_owned(),
+    }
+    .into_value();
+    assert!(object(&postal).contains_key("street"));
+
+    // A tagged form that fails is reported with every untagged attempt.
+    let error = Contact::from_value(Value::from_t(7_i64)).expect_err("no variant reads 7");
+    assert!(
+        error.to_string().contains("matches none of its variants"),
+        "{error}"
+    );
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
+pub struct Stamp {
+    pub by: String,
+}
+
+/// A struct, an Option of one and a map written beside the struct's own keys.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
+pub struct Note {
+    pub text: String,
+    #[serde(flatten)]
+    pub stamp: Stamp,
+    #[serde(flatten)]
+    pub place: Option<Address>,
+    #[serde(flatten)]
+    pub tags: BTreeMap<String, String>,
+}
+
+#[test]
+fn a_flattened_field_is_stored_beside_its_siblings_as_serde_writes_it() {
+    let note = Note {
+        text: "hi".to_owned(),
+        stamp: Stamp {
+            by: "ada".to_owned(),
+        },
+        place: Some(Address {
+            city: "Oslo".to_owned(),
+            zip: None,
+        }),
+        tags: BTreeMap::from([("mood".to_owned(), "calm".to_owned())]),
+    };
+    let json = serde_json::to_value(&note).expect("serde writes it");
+    assert_eq!(json["by"], "ada");
+    assert_eq!(json["city"], "Oslo");
+    assert_eq!(json["mood"], "calm");
+    assert_eq!(
+        serde_json::from_value::<Note>(json).expect("serde reads it back"),
+        note
+    );
+
+    let written = note.clone().into_value();
+    let fields = object(&written);
+    assert!(fields.contains_key("by"));
+    assert!(fields.contains_key("city"));
+    assert!(fields.contains_key("mood"));
+    // The map reads only the keys the flattened structs before it left.
+    assert_eq!(
+        Note::from_value(written).expect("a record reads back"),
+        note
+    );
+
+    let unplaced = Note {
+        place: None,
+        ..note
+    };
+    let written = unplaced.clone().into_value();
+    assert!(
+        !object(&written).contains_key("city"),
+        "an absent Option adds no keys"
+    );
+    assert_eq!(
+        Note::from_value(written).expect("an absent Option reads back"),
+        unplaced
+    );
 }

@@ -10,10 +10,11 @@
 
 #![cfg(all(feature = "schemasync", feature = "scan"))]
 
-use evenframe_core::scan::{AllConfigs, ScanConfig, build_all_configs};
+use evenframe_core::scan::{ScanConfig, build_all_configs};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::remove::generate_remove_index_statements;
+use evenframe_core::types::AllConfigs;
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
 use std::fs;
@@ -66,7 +67,9 @@ fn scanner_threads_struct_level_index_into_define_statements() {
         ..ScanConfig::default()
     };
 
-    let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
+    let tables = build_all_configs(&config)
+        .expect("build_all_configs")
+        .tables;
 
     let table = tables
         .get("reaction")
@@ -193,8 +196,11 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         scan_path: tmp_before.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (_e1, before_tables, before_objects) =
-        build_all_configs(&before_cfg).expect("build before");
+    let AllConfigs {
+        tables: before_tables,
+        objects: before_objects,
+        ..
+    } = build_all_configs(&before_cfg).expect("build before");
     let before_schema = SchemaDefinition::from_table_configs(&before_tables, &before_objects, true)
         .expect("schema before");
 
@@ -229,7 +235,11 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         scan_path: tmp_after.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (_e2, after_tables, after_objects) = build_all_configs(&after_cfg).expect("build after");
+    let AllConfigs {
+        tables: after_tables,
+        objects: after_objects,
+        ..
+    } = build_all_configs(&after_cfg).expect("build after");
     let after_schema = SchemaDefinition::from_table_configs(&after_tables, &after_objects, true)
         .expect("schema after");
 
@@ -307,7 +317,9 @@ fn scanner_collects_field_level_indexes() {
         scan_path: tmp.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
+    let tables = build_all_configs(&config)
+        .expect("build_all_configs")
+        .tables;
     let names: Vec<String> = tables["post"]
         .indexes
         .iter()
@@ -350,7 +362,9 @@ fn named_field_unique_replaces_default_unique_index() {
         scan_path: tmp.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let (_enums, tables, _objects) = build_all_configs(&config).expect("build_all_configs");
+    let tables = build_all_configs(&config)
+        .expect("build_all_configs")
+        .tables;
     let account = &tables["account"];
     assert!(
         account
@@ -443,7 +457,9 @@ fn scanner_rejects_any_index_inside_an_optional_field() {
 
 #[test]
 fn scanner_accepts_struct_level_indexes_on_nested_paths() {
-    let (_enums, tables, objects) = scan_single_file(
+    let AllConfigs {
+        tables, objects, ..
+    } = scan_single_file(
         "scanner_nested_path_fixture",
         r#"
             #[derive(Evenframe)]
@@ -537,7 +553,9 @@ fn scanner_rejects_two_indexes_of_a_kind_on_one_field() {
 
 #[test]
 fn nested_index_paths_name_each_field_as_the_database_stores_it() {
-    let (_enums, tables, objects) = scan_single_file(
+    let AllConfigs {
+        tables, objects, ..
+    } = scan_single_file(
         "scanner_renamed_nested_path_fixture",
         r#"
             #[derive(Evenframe)]

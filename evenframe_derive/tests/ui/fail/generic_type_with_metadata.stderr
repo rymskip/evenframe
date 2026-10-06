@@ -1,0 +1,5 @@
+error: a registry entry names one concrete type, so `Page` cannot have generic parameters in a build with evenframe's `metadata` feature
+ --> tests/ui/fail/generic_type_with_metadata.rs:6:17
+  |
+6 | pub struct Page<T> {
+  |                 ^

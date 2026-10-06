@@ -22,7 +22,7 @@ evenframe_core = { version = "0.6.0", path = "../evenframe_core", default-featur
 
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
-syn = { version = "3.0.5", features = ["full"] }
+syn = { version = "3.0.6", features = ["full"] }
 
 
 [dev-dependencies]
@@ -30,7 +30,7 @@ trybuild = "1.0"
 proptest = "1.11"
 pretty_assertions = "1.4"
 evenframe = { path = "../evenframe", default-features = false, features = ["metadata", "schemasync"] }
-surrealdb = { version = "3.2.4", features = ["kv-mem"] }
+surrealdb = { version = "3.3.0", features = ["kv-mem"] }
 tokio = { workspace = true }
 linkme = "0.3"
 serde = { version = "1.0.229", features = ["derive"] }

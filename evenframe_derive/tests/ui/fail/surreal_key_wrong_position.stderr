@@ -1,0 +1,5 @@
+error: #[surreal(tag)] does not apply to a struct; it takes crate, rename, rename_all, default
+ --> tests/ui/fail/surreal_key_wrong_position.rs:5:11
+  |
+5 | #[surreal(tag = "kind")]
+  |           ^^^
