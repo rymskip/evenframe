@@ -9,7 +9,7 @@ use crate::error::EvenframeError;
 #[cfg(feature = "mockmake")]
 use crate::schemasync::mockmake::field_value::FieldValueGenerator;
 #[cfg(feature = "mockmake")]
-use crate::schemasync::mockmake::{Mockmaker, format::Format};
+use crate::schemasync::mockmake::{Mockmaker, format::Format, mock_format::MockFormat};
 #[cfg(feature = "mockmake")]
 use crate::types::{FieldType, StructField};
 #[cfg(feature = "mockmake")]
@@ -144,8 +144,10 @@ pub(crate) enum DateKind {
 #[cfg(feature = "mockmake")]
 pub(crate) fn date_kind(field: &StructField) -> Option<DateKind> {
     match field.format {
-        Some(Format::Date) => return Some(DateKind::Date),
-        Some(Format::DateTime | Format::DateWithinDays(_) | Format::AppointmentDateTime) => {
+        Some(MockFormat::Format(Format::Date)) => return Some(DateKind::Date),
+        Some(MockFormat::Format(
+            Format::DateTime | Format::DateWithinDays(_) | Format::AppointmentDateTime,
+        )) => {
             return Some(DateKind::DateTime);
         }
         _ => {}
@@ -455,7 +457,7 @@ impl Mockmaker<'_> {
         // Assign values to fields, but handle rounding carefully for percentages
         let is_percentage = fields
             .iter()
-            .any(|field| matches!(field.format, Some(Format::Percentage)));
+            .any(|field| matches!(field.format, Some(MockFormat::Format(Format::Percentage))));
 
         if is_percentage {
             // Round all but the last value, which takes the rest, so the
@@ -480,7 +482,9 @@ impl Mockmaker<'_> {
                 // so the declared field type decides the shape: numeric fields
                 // get a bare number, string fields a quoted "$…" literal.
                 let formatted_value = match &field.format {
-                    Some(Format::CurrencyAmount) if !field.field_type.is_numeric() => {
+                    Some(MockFormat::Format(Format::CurrencyAmount))
+                        if !field.field_type.is_numeric() =>
+                    {
                         format!("'${:.2}'", value)
                     }
                     _ => format!("{:.2}", value),
@@ -986,7 +990,10 @@ impl Coordination {
                                     }
 
                                     // Ideally should have Email format
-                                    if !matches!(&source_field.1.format, Some(Format::Email)) {
+                                    if !matches!(
+                                        &source_field.1.format,
+                                        Some(MockFormat::Format(Format::Email))
+                                    ) {
                                         tracing::warn!(
                                             "Field '{}' used for email extraction but doesn't have Email format",
                                             source_name
@@ -1645,15 +1652,15 @@ pub const PRODUCT_CATALOG: &[(&str, &str, f64, &str)] = &[
 #[cfg(all(test, feature = "mockmake"))]
 mod tests {
     use super::{
-        CoherentDataset, FieldType, Format, Mockmaker, StructField, coordinated_literal,
-        literal_to_raw,
+        CoherentDataset, FieldType, Format, MockFormat, Mockmaker, StructField,
+        coordinated_literal, literal_to_raw,
     };
 
     fn field(field_type: FieldType, format: Option<Format>) -> StructField {
         StructField {
             field_name: "f".to_string(),
             field_type,
-            format,
+            format: format.map(MockFormat::Format),
             ..Default::default()
         }
     }

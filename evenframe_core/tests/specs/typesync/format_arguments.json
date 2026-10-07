@@ -1,0 +1,39 @@
+{
+  "description": "Text validators given formats: a password holding a character of each class, a path starting with a slug, text endings, and a whole-value format",
+  "structs": {
+    "Account": {
+      "struct_name": "Account",
+      "fields": [
+        {
+          "field_name": "password",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": { "MinLength": 8 } },
+            { "StringValidator": { "MaxLength": 32 } },
+            { "StringValidator": { "Includes": { "Format": "Uppercase" } } },
+            { "StringValidator": { "Includes": { "Format": "Lowercase" } } },
+            { "StringValidator": { "Includes": { "Format": "Digit" } } },
+            { "StringValidator": { "Includes": { "Format": "Symbol" } } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "handle",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": { "StartsWith": { "Format": "Slug" } } },
+            { "StringValidator": { "EndsWith": "-team" } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "home",
+          "field_type": "String",
+          "validators": [{ "StringValidator": { "RegexLiteral": "RelativePath" } }],
+          "always_regenerate": false
+        }
+      ]
+    }
+  },
+  "enums": {}
+}

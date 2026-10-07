@@ -2,14 +2,20 @@ use crate::{
     error::EvenframeError,
     schemasync::TableConfig,
     schemasync::mockmake::Mockmaker,
-    schemasync::mockmake::format::Format,
     schemasync::mockmake::validator_gen,
-    schemasync::table::surql_ident,
+    schemasync::mockmake::{
+        format::Format,
+        mock_format::{DurationRange, MockFormat},
+    },
+    schemasync::table::{surql_ident, surql_string_literal},
     types::{
         EnumRepresentation, FieldOwner, FieldType, ForeignTypeRegistry, StructConfig, StructField,
         TaggedUnion, VariantData,
     },
-    validator::{MockValue, Validator},
+    validator::{
+        MockValue, Validator, ValueRules,
+        morph::{ArrayMorph, Morph},
+    },
 };
 use bon::Builder;
 #[cfg(feature = "mockmake")]
@@ -30,6 +36,9 @@ struct Frame<'a> {
     /// newtype declared at this position, and the TypeScript outputs' where
     /// they differ, listed first so the schema's own pattern seeds a string.
     validators: Rc<[Validator]>,
+    /// The morphs the value has been through, which apply at this position
+    /// alone: a part of the value has none of its own.
+    morphs: Rc<[Morph]>,
     /// The type declared at this position, where the stored type replaced a
     /// newtype somewhere in the field.
     declared: Option<&'a FieldType>,
@@ -81,6 +90,7 @@ impl<'a> Frame<'a> {
             field_type,
             declared: self.declared.and_then(part),
             chained: false,
+            morphs: Rc::default(),
             ..self.clone()
         }
     }
@@ -101,12 +111,44 @@ impl<'a> Frame<'a> {
                 field.validator_overrides.typesync.as_deref(),
                 &field.validators,
             ),
+            morphs: Rc::from(field.morphs.as_slice()),
             declared,
             chained: true,
             field_path,
             visited_types,
         }
     }
+}
+
+/// The morphs of a tuple variant's element at `position`.
+fn element_morphs(variant: &crate::types::Variant, position: usize) -> Rc<[Morph]> {
+    variant
+        .element_morphs
+        .get(position)
+        .map_or_else(Rc::default, |morphs| Rc::from(morphs.as_slice()))
+}
+
+/// `items`, the literals of a list's elements, sorted and deduplicated as its
+/// morphs say. A literal compares as the number or the text it writes.
+fn morphed_items(mut items: Vec<String>, morphs: &[Morph]) -> Vec<String> {
+    for morph in morphs {
+        match morph {
+            Morph::ArrayMorph(ArrayMorph::Unique) => {
+                let mut seen = std::collections::BTreeSet::new();
+                items.retain(|item| seen.insert(item.clone()));
+            }
+            Morph::ArrayMorph(ArrayMorph::Sort) => {
+                items.sort_by(
+                    |left, right| match (left.parse::<f64>(), right.parse::<f64>()) {
+                        (Ok(left), Ok(right)) => left.total_cmp(&right),
+                        _ => left.cmp(right),
+                    },
+                );
+            }
+            Morph::StringMorph(_) | Morph::NumberMorph(_) => {}
+        }
+    }
+    items
 }
 
 /// A value's validators: the TypeScript outputs' `checks` where they differ,
@@ -137,6 +179,8 @@ enum WorkItem<'a> {
     Generate(Frame<'a>),
     AssembleVec {
         count: usize,
+        /// The list's morphs, which sort and deduplicate its items.
+        morphs: Rc<[Morph]>,
     },
     AssembleTuple {
         count: usize,
@@ -250,24 +294,36 @@ impl<'a> FieldValueGenerator<'a> {
                     ) {
                         value_stack.push(coordinated_value.to_string());
                     } else if let Some(format) = &ctx.field.format {
-                        value_stack.push(self.handle_format(
-                            format,
-                            ctx.field_type,
-                            &ctx.validators,
-                            location,
-                        )?);
+                        value_stack.push(match format {
+                            MockFormat::Format(format) => self.handle_format(
+                                format,
+                                ctx.field_type,
+                                ValueRules::new(&ctx.morphs, &ctx.validators),
+                                location,
+                            )?,
+                            MockFormat::DurationNs(range) => duration_in_range(
+                                range,
+                                ctx.field_type,
+                                &ctx.validators,
+                                location,
+                                &mut rng,
+                            )?,
+                        });
                     } else if let Some(value) = validator_gen::generate_with_validators(
                         ctx.field_type,
-                        &ctx.validators,
+                        ValueRules::new(&ctx.morphs, &ctx.validators),
                         &mut rng,
                     ) {
                         value_stack.push(value);
                     } else {
                         match ctx.field_type {
-                            FieldType::String => value_stack
-                                .push(generate_string_with_retry(&ctx.validators, location)?),
-                            FieldType::Char => value_stack
-                                .push(format!("'{}'", rng.random_range(32u8..=126u8) as char)),
+                            FieldType::String => value_stack.push(generate_string_with_retry(
+                                ValueRules::new(&ctx.morphs, &ctx.validators),
+                                location,
+                            )?),
+                            FieldType::Char => value_stack.push(surql_string_literal(
+                                &char::from(rng.random_range(32u8..=126u8)).to_string(),
+                            )),
                             FieldType::Bool => {
                                 value_stack.push(format!("{}", rng.random_bool(0.5)))
                             }
@@ -285,9 +341,13 @@ impl<'a> FieldValueGenerator<'a> {
                                     rng.random_range(0..validator_gen::DAY_NANOS),
                                 ));
                             }
-                            FieldType::F32 | FieldType::F64 => value_stack.push(
-                                generate_float_with_retry(&ctx.validators, location, &mut rng)?,
-                            ),
+                            FieldType::F32 | FieldType::F64 => {
+                                value_stack.push(generate_float_with_retry(
+                                    ValueRules::new(&ctx.morphs, &ctx.validators),
+                                    location,
+                                    &mut rng,
+                                )?)
+                            }
                             FieldType::I8
                             | FieldType::I16
                             | FieldType::I32
@@ -301,7 +361,7 @@ impl<'a> FieldValueGenerator<'a> {
                             | FieldType::U128
                             | FieldType::Usize => value_stack.push(generate_integer_with_retry(
                                 ctx.field_type,
-                                &ctx.validators,
+                                ValueRules::new(&ctx.morphs, &ctx.validators),
                                 location,
                                 &mut rng,
                             )?),
@@ -323,6 +383,7 @@ impl<'a> FieldValueGenerator<'a> {
                                     // its `Option` holds, as they cover the field.
                                     work_stack.push(WorkItem::Generate(Frame {
                                         chained: ctx.chained,
+                                        morphs: ctx.morphs.clone(),
                                         ..ctx.part(inner_type, |declared| match declared {
                                             FieldType::Option(held) => Some(&**held),
                                             _ => None,
@@ -330,6 +391,28 @@ impl<'a> FieldValueGenerator<'a> {
                                     }));
                                 }
                             }
+                            // The database holds the value the text writes,
+                            // which the field's morphs and validators reach.
+                            FieldType::FromText(kind) => {
+                                work_stack.push(WorkItem::Generate(Frame {
+                                    chained: ctx.chained,
+                                    morphs: ctx.morphs.clone(),
+                                    ..ctx.part(kind.value_type(), |_| None)
+                                }));
+                            }
+                            FieldType::JsonText(inner_type) => {
+                                work_stack.push(WorkItem::Generate(Frame {
+                                    chained: ctx.chained,
+                                    morphs: ctx.morphs.clone(),
+                                    ..ctx.part(inner_type, |declared| match declared {
+                                        FieldType::JsonText(held) => Some(&**held),
+                                        _ => None,
+                                    })
+                                }));
+                            }
+                            FieldType::IsoDate | FieldType::EpochMillis => value_stack.push(
+                                format!("d'{}'", Format::DateTime.generate_formatted_value()?),
+                            ),
                             FieldType::Vec(inner_type) => {
                                 let (lo, hi) =
                                     validator_gen::array_count_range(&ctx.validators, 2, 9);
@@ -342,7 +425,10 @@ impl<'a> FieldValueGenerator<'a> {
                                 } else {
                                     rng.random_range(lo..=hi)
                                 };
-                                work_stack.push(WorkItem::AssembleVec { count });
+                                work_stack.push(WorkItem::AssembleVec {
+                                    count,
+                                    morphs: ctx.morphs.clone(),
+                                });
                                 for _ in 0..count {
                                     work_stack.push(WorkItem::Generate(ctx.part(
                                         inner_type,
@@ -521,8 +607,9 @@ impl<'a> FieldValueGenerator<'a> {
                                         }
                                         _ => {
                                             if let Ok(fmt) = strategy.parse::<Format>() {
-                                                let val = fmt.generate_formatted_value()?;
-                                                value_stack.push(format!("'{}'", val));
+                                                value_stack.push(surql_string_literal(
+                                                    &fmt.generate_formatted_value()?,
+                                                ));
                                                 continue;
                                             }
                                             // Fall through to existing Other logic
@@ -736,6 +823,7 @@ impl<'a> FieldValueGenerator<'a> {
                                                     .declared
                                                     .payload(type_name, &variant.name),
                                                 chained: false,
+                                                morphs: Rc::default(),
                                                 ..ctx.clone()
                                             };
                                             // Each element of the payload meets its own validators.
@@ -769,6 +857,9 @@ impl<'a> FieldValueGenerator<'a> {
                                                                 validators: checked(
                                                                     checks, validators,
                                                                 ),
+                                                                morphs: element_morphs(
+                                                                    variant, position,
+                                                                ),
                                                                 ..payload.part(item, |declared| {
                                                                     match declared {
                                                                         FieldType::Tuple(
@@ -791,6 +882,7 @@ impl<'a> FieldValueGenerator<'a> {
                                                         });
                                                     work_stack.push(WorkItem::Generate(Frame {
                                                         validators: checked(checks, validators),
+                                                        morphs: element_morphs(variant, 0),
                                                         ..payload
                                                     }));
                                                 }
@@ -834,7 +926,11 @@ impl<'a> FieldValueGenerator<'a> {
                         }
                     }
                 }
-                WorkItem::AssembleVec { count } | WorkItem::AssembleTuple { count } => {
+                WorkItem::AssembleVec { count, morphs } => {
+                    let items = morphed_items(take_last(&mut value_stack, count)?, &morphs);
+                    value_stack.push(format!("[{}]", items.join(", ")));
+                }
+                WorkItem::AssembleTuple { count } => {
                     let items = take_last(&mut value_stack, count)?;
                     value_stack.push(format!("[{}]", items.join(", ")));
                 }
@@ -904,6 +1000,14 @@ impl<'a> FieldValueGenerator<'a> {
         frame.declared = Some(declared);
         if let Some((inner, chain)) = self.mockmaker.declared.newtype(declared) {
             if !frame.chained {
+                frame.morphs = self
+                    .mockmaker
+                    .declared
+                    .newtype_morphs(declared)
+                    .iter()
+                    .chain(frame.morphs.iter())
+                    .cloned()
+                    .collect();
                 frame.validators = self
                     .mockmaker
                     .declared
@@ -924,9 +1028,10 @@ impl<'a> FieldValueGenerator<'a> {
         &self,
         format: &Format,
         target: &FieldType,
-        validators: &[Validator],
+        rules: ValueRules<'_>,
         location: FieldLocation<'_>,
     ) -> Result<String, EvenframeError> {
+        let validators = rules.validators;
         let mut scalar = target;
         while let FieldType::Option(inner) = scalar {
             scalar = inner;
@@ -939,8 +1044,8 @@ impl<'a> FieldValueGenerator<'a> {
         // path, falling back to a bounded bare number.
         if matches!(format, Format::CurrencyAmount | Format::Percentage) && scalar.is_numeric() {
             let mut rng = rand::rng();
-            if !validators.is_empty() {
-                return generate_scalar_with_retry(scalar, validators, location, &mut rng);
+            if !rules.is_empty() {
+                return generate_scalar_with_retry(scalar, rules, location, &mut rng);
             }
             return Ok(match format {
                 Format::CurrencyAmount => format!("{:.2}", rng.random_range(0.0..1000.0)),
@@ -948,7 +1053,11 @@ impl<'a> FieldValueGenerator<'a> {
             });
         }
 
-        let generated = format.generate_formatted_value()?;
+        let generated = if scalar.is_numeric() {
+            format.generate_formatted_value()?
+        } else {
+            validator_gen::morphed_string(format.generate_formatted_value()?, rules.morphs)
+        };
 
         // A format hint can contradict the field's validators, and the
         // validators are what the database enforces (they become ASSERT
@@ -968,24 +1077,24 @@ impl<'a> FieldValueGenerator<'a> {
                     .all(|validator| validator.matches(&MockValue::Str(&generated)))
             };
             if !satisfied {
-                return generate_scalar_with_retry(scalar, validators, location, &mut rand::rng());
+                return generate_scalar_with_retry(scalar, rules, location, &mut rand::rng());
             }
         }
 
         Ok(match format {
-            Format::CurrencyAmount | Format::Percentage => format!("'{}'", generated),
-            Format::Latitude | Format::Longitude | Format::AppointmentDurationNs => generated,
+            Format::CurrencyAmount | Format::Percentage => surql_string_literal(&generated),
+            Format::Latitude | Format::Longitude => generated,
             Format::DateTime | Format::AppointmentDateTime | Format::DateWithinDays(_) => {
                 // A Rust `String` field maps to surql TYPE string, where a
                 // d'…' datetime literal fails coercion. Only datetime-typed
                 // fields (foreign types like chrono) take the literal form.
                 if matches!(scalar, FieldType::String) {
-                    format!("'{}'", generated)
+                    surql_string_literal(&generated)
                 } else {
                     format!("d'{}'", generated)
                 }
             }
-            _ => format!("'{}'", generated),
+            _ => surql_string_literal(&generated),
         })
     }
 
@@ -1094,6 +1203,36 @@ fn unsatisfied(location: FieldLocation<'_>, validators: &[Validator]) -> Evenfra
     ))
 }
 
+/// A duration from `range` that also meets the field's duration bounds.
+fn duration_in_range(
+    range: &DurationRange,
+    target: &FieldType,
+    validators: &[Validator],
+    location: FieldLocation<'_>,
+    rng: &mut ThreadRng,
+) -> Result<String, EvenframeError> {
+    let mut scalar = target;
+    while let FieldType::Option(inner) = scalar {
+        scalar = inner;
+    }
+    if !matches!(scalar, FieldType::Duration) {
+        return Err(EvenframeError::mock_generation(format!(
+            "`{location}` has a `duration_ns` format, which only a duration field can take, \
+             but holds {scalar:?}"
+        )));
+    }
+    for _ in 0..RETRY_ATTEMPTS {
+        let nanos = range.generate(rng);
+        if validators
+            .iter()
+            .all(|validator| validator.matches(&MockValue::DurationNanos(i128::from(nanos))))
+        {
+            return Ok(validator_gen::duration_literal(nanos));
+        }
+    }
+    Err(unsatisfied(location, validators))
+}
+
 fn disjoint_durations(location: FieldLocation<'_>, validators: &[Validator]) -> EvenframeError {
     EvenframeError::mock_generation(format!(
         "no duration for `{location}` is all of: {}. These bounds do not overlap",
@@ -1113,14 +1252,14 @@ fn describe_all(validators: &[Validator]) -> String {
 /// themselves where they can be solved and by rejection sampling otherwise.
 fn generate_scalar_with_retry(
     scalar: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
     match scalar {
-        FieldType::String => validator_gen::generate_with_validators(scalar, validators, rng)
-            .map_or_else(|| generate_string_with_retry(validators, location), Ok),
-        FieldType::F32 | FieldType::F64 => generate_float_with_retry(validators, location, rng),
+        FieldType::String => validator_gen::generate_with_validators(scalar, rules, rng)
+            .map_or_else(|| generate_string_with_retry(rules, location), Ok),
+        FieldType::F32 | FieldType::F64 => generate_float_with_retry(rules, location, rng),
         FieldType::I8
         | FieldType::I16
         | FieldType::I32
@@ -1132,8 +1271,8 @@ fn generate_scalar_with_retry(
         | FieldType::U32
         | FieldType::U64
         | FieldType::U128
-        | FieldType::Usize => generate_integer_with_retry(scalar, validators, location, rng),
-        _ => Err(unsatisfied(location, validators)),
+        | FieldType::Usize => generate_integer_with_retry(scalar, rules, location, rng),
+        _ => Err(unsatisfied(location, rules.validators)),
     }
 }
 
@@ -1155,11 +1294,12 @@ fn draw_from_pools<'p>(pools: &[&'p [String]], rng: &mut impl RngExt) -> Option<
 }
 
 fn generate_string_with_retry(
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     location: FieldLocation<'_>,
 ) -> Result<String, EvenframeError> {
+    let validators = rules.validators;
     (0..RETRY_ATTEMPTS)
-        .map(|_| Mockmaker::random_string(8))
+        .map(|_| validator_gen::morphed_string(Mockmaker::random_string(8), rules.morphs))
         .find(|candidate| {
             validators
                 .iter()
@@ -1170,20 +1310,19 @@ fn generate_string_with_retry(
 }
 
 fn generate_float_with_retry(
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
-    if validators.is_empty() {
+    let validators = rules.validators;
+    if rules.is_empty() {
         return Ok(format!("{:.2}f", rng.random_range(0.0..100.0)));
     }
     // The validator-driven generator derives its sample range from the
     // validators themselves, so constraints a fixed 0..100 loop can never
     // hit (Negative, GreaterThan(1000), …) still converge.
     for _ in 0..RETRY_ATTEMPTS {
-        if let Some(value) =
-            validator_gen::generate_with_validators(&FieldType::F64, validators, rng)
-        {
+        if let Some(value) = validator_gen::generate_with_validators(&FieldType::F64, rules, rng) {
             return Ok(value);
         }
     }
@@ -1200,18 +1339,19 @@ fn generate_float_with_retry(
 
 fn generate_integer_with_retry(
     field_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     location: FieldLocation<'_>,
     rng: &mut ThreadRng,
 ) -> Result<String, EvenframeError> {
-    if validators.is_empty() {
+    let validators = rules.validators;
+    if rules.is_empty() {
         return Ok(format!("{}", rng.random_range(0..100)));
     }
     // The validator-driven generator derives its sample range from the
     // validators themselves, so constraints a fixed 0..100 loop can never
     // hit (Negative, GreaterThan(1000), …) still converge.
     for _ in 0..RETRY_ATTEMPTS {
-        if let Some(value) = validator_gen::generate_with_validators(field_type, validators, rng) {
+        if let Some(value) = validator_gen::generate_with_validators(field_type, rules, rng) {
             return Ok(value);
         }
     }
@@ -1252,13 +1392,62 @@ mod draw_tests {
 }
 
 #[cfg(all(test, feature = "scan"))]
-mod newtype_tests {
+mod scanned_tests {
+    use crate::error::Result;
     use crate::scan::{ScanConfig, build_all_configs};
     use crate::schemasync::{config::SchemasyncConfig, mockmake::Mockmaker};
     use crate::types::ForeignTypeRegistry;
     use std::fs;
     use surrealdb::{Surreal, engine::remote::http::Client};
     use tempfile::TempDir;
+
+    /// Scans `source` as a crate's library and hands `check` a generator of
+    /// the mock value of each field of `table`, by name.
+    fn with_field_values(
+        source: &str,
+        table: &str,
+        check: impl Fn(&dyn Fn(&str) -> Result<String>),
+    ) {
+        let project = TempDir::new().unwrap();
+        fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(project.path().join("src")).unwrap();
+        fs::write(project.path().join("src/lib.rs"), source).unwrap();
+        let types = build_all_configs(&ScanConfig {
+            scan_path: project.path().to_path_buf(),
+            ..ScanConfig::default()
+        })
+        .unwrap()
+        .into_schemasync()
+        .unwrap();
+        let db = Surreal::<Client>::init();
+        let config: SchemasyncConfig =
+            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
+        let registry = ForeignTypeRegistry::default();
+        let mockmaker = Mockmaker::new(
+            &db,
+            &types.tables,
+            &types.objects,
+            &types.enums,
+            &types.declared,
+            &config,
+            &registry,
+        )
+        .unwrap();
+        let table = &types.tables[table];
+        check(&|name: &str| {
+            let field = table
+                .struct_config
+                .fields
+                .iter()
+                .find(|field| field.field_name == name)
+                .unwrap();
+            mockmaker.generate_value(table, field, 0)
+        });
+    }
 
     /// A newtype held directly, optionally and at every nested position the
     /// stored type no longer names it at.
@@ -1311,67 +1500,91 @@ mod newtype_tests {
 
     #[test]
     fn a_mock_value_meets_the_validators_of_every_newtype_it_holds() {
-        let project = TempDir::new().unwrap();
-        fs::write(
-            project.path().join("Cargo.toml"),
-            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::create_dir_all(project.path().join("src")).unwrap();
-        fs::write(project.path().join("src/lib.rs"), SOURCE).unwrap();
-        let types = build_all_configs(&ScanConfig {
-            scan_path: project.path().to_path_buf(),
-            ..ScanConfig::default()
-        })
-        .unwrap()
-        .into_schemasync()
-        .unwrap();
-        let db = Surreal::<Client>::init();
-        let config: SchemasyncConfig =
-            toml::from_str("should_generate_mocks = true\n[database]\nurl = \"x\"\n").unwrap();
-        let registry = ForeignTypeRegistry::default();
-        let mockmaker = Mockmaker::new(
-            &db,
-            &types.tables,
-            &types.objects,
-            &types.enums,
-            &types.declared,
-            &config,
-            &registry,
-        )
-        .unwrap();
-        let person = &types.tables["person"];
-        let value = |name: &str| {
-            let field = person
-                .struct_config
-                .fields
-                .iter()
-                .find(|field| field.field_name == name)
-                .unwrap();
-            mockmaker.generate_value(person, field, 0).unwrap()
-        };
-        let is_email = |text: &String| text.contains('@');
-        for _ in 0..50 {
-            let primary = value("primary");
-            assert!(strings(&primary).iter().all(is_email), "{primary}");
-            let backup = value("backup");
-            assert!(strings(&backup).iter().all(is_email), "{backup}");
-            let emails = value("emails");
-            assert!(strings(&emails).iter().all(is_email), "{emails}");
-            let by_label = value("by_label");
+        with_field_values(SOURCE, "person", |generate| {
+            let value = |name: &str| generate(name).unwrap();
+            let is_email = |text: &String| text.contains('@');
+            for _ in 0..50 {
+                let primary = value("primary");
+                assert!(strings(&primary).iter().all(is_email), "{primary}");
+                let backup = value("backup");
+                assert!(strings(&backup).iter().all(is_email), "{backup}");
+                let emails = value("emails");
+                assert!(strings(&emails).iter().all(is_email), "{emails}");
+                let by_label = value("by_label");
+                assert!(
+                    strings(&by_label).iter().skip(1).step_by(2).all(is_email),
+                    "{by_label}"
+                );
+                let pair = value("pair");
+                assert!(strings(&pair).iter().all(is_email), "{pair}");
+                let contact = value("contact");
+                assert!(strings(&contact).iter().all(is_email), "{contact}");
+                let reach = value("reach");
+                assert!(
+                    reach == "'Nowhere'" || strings(&reach).iter().all(is_email),
+                    "{reach}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn generated_text_is_one_escaped_string_literal() {
+        const NOTE: &str = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            pub struct Note {
+                pub id: String,
+                #[format(JobTitle)]
+                pub title: String,
+                pub initial: char,
+            }
+        "#;
+        with_field_values(NOTE, "note", |generate| {
+            for _ in 0..200 {
+                for name in ["title", "initial"] {
+                    let literal = generate(name).unwrap();
+                    let texts = strings(&literal);
+                    assert_eq!(texts.len(), 1, "{literal}");
+                    assert_eq!(
+                        crate::schemasync::table::surql_string_literal(&texts[0]),
+                        literal
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_duration_range_steps_from_its_start_and_formats_only_durations() {
+        const APPOINTMENT: &str = r#"
+            use evenframe::Evenframe;
+
+            #[derive(Evenframe)]
+            pub struct Appointment {
+                pub id: String,
+                #[format(duration_ns(min = "PT1H", max = "PT5H", step = "PT15M"))]
+                pub length: std::time::Duration,
+                #[format(duration_ns(min = "PT1H", max = "PT2H", step = "PT1H"))]
+                pub label: String,
+            }
+        "#;
+        let quarter_hours: Vec<String> = (0..=16u64)
+            .map(|step| {
+                super::validator_gen::duration_literal(3_600_000_000_000 + step * 900_000_000_000)
+            })
+            .collect();
+        with_field_values(APPOINTMENT, "appointment", |generate| {
+            for _ in 0..50 {
+                let length = generate("length").unwrap();
+                assert!(quarter_hours.contains(&length), "{length}");
+            }
+            let refused = generate("label").expect_err("a string has no duration");
             assert!(
-                strings(&by_label).iter().skip(1).step_by(2).all(is_email),
-                "{by_label}"
+                refused.to_string().contains("only a duration field"),
+                "{refused}"
             );
-            let pair = value("pair");
-            assert!(strings(&pair).iter().all(is_email), "{pair}");
-            let contact = value("contact");
-            assert!(strings(&contact).iter().all(is_email), "{contact}");
-            let reach = value("reach");
-            assert!(
-                reach == "'Nowhere'" || strings(&reach).iter().all(is_email),
-                "{reach}"
-            );
-        }
+        });
     }
 }

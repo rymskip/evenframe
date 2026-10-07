@@ -4,7 +4,7 @@ use crate::{
         EnumRepresentation, FieldType, Pipeline, Storage, StructConfig, StructField, TaggedUnion,
         Variant, VariantData, Wire,
     },
-    validator::{Validator, ValidatorOverrides},
+    validator::{Validator, ValidatorOverrides, morph::Morph},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,12 +18,18 @@ pub struct NewtypeConfig {
     pub inner: FieldType,
     #[serde(default)]
     pub kind: NewtypeKind,
+    /// Rewrite the inner value, before `validators` check it.
+    #[serde(default)]
+    pub morphs: Vec<Morph>,
     /// Checked on the inner value, before any validators of a field holding it.
     #[serde(default)]
     pub validators: Vec<Validator>,
     /// Lists replacing `validators` in one pipeline.
     #[serde(default, skip_serializing_if = "ValidatorOverrides::is_empty")]
     pub validator_overrides: ValidatorOverrides,
+    /// A tuple struct's morphs, one list per element.
+    #[serde(default)]
+    pub element_morphs: Vec<Vec<Morph>>,
     /// A tuple struct's validators, one list per element.
     #[serde(default)]
     pub element_validators: Vec<Vec<Validator>>,
@@ -103,6 +109,7 @@ impl NewtypeConfig {
                 output_override: None,
                 raw_attributes: BTreeMap::new(),
                 is_default: true,
+                element_morphs: self.element_morphs.clone(),
                 element_validators: self.element_validators.clone(),
                 element_validator_overrides: Vec::new(),
             }],
@@ -126,7 +133,8 @@ impl NewtypeConfig {
 /// A field typed as a newtype, or as an `Option` of one, takes the newtype's
 /// validators (the innermost newtype's first, as Rust reads them) ahead of its
 /// own. Deeper positions, such as a `Vec` of one, take the inner type alone,
-/// since the schema asserts only a field's own value. A newtype whose own
+/// and the declared type recorded for the field gives the schema and mock
+/// data the newtype's validators there. A newtype whose own
 /// `#[surreal]` keys change its stored shape becomes an enum carrying that
 /// storage instead. A newtype that holds itself has no storable form and is
 /// refused.
@@ -209,10 +217,12 @@ pub struct DeclaredTypes {
     chains: BTreeMap<String, (FieldType, Chain)>,
 }
 
-/// A newtype chain's validators, innermost first, and the TypeScript outputs'
-/// where any layer's differ, which mock data meets as well.
+/// A newtype chain's morphs and validators, innermost first, and the
+/// TypeScript outputs' validators where any layer's differ, which mock data
+/// meets as well.
 #[derive(Debug, Default, Clone, PartialEq)]
 struct Chain {
+    morphs: Vec<Morph>,
     validators: Vec<Validator>,
     checks: Option<Vec<Validator>>,
 }
@@ -229,6 +239,7 @@ impl Chain {
             checks.extend(typesync.unwrap_or(&newtype.validators).iter().cloned());
             self.checks = Some(checks);
         }
+        self.morphs.extend(newtype.morphs.iter().cloned());
         self.validators.extend(newtype.validators.iter().cloned());
         self
     }
@@ -258,6 +269,17 @@ impl DeclaredTypes {
             .map(|(inner, chain)| (inner, chain.validators.as_slice()))
     }
 
+    /// Every morph a newtype's chain applies, innermost first.
+    pub fn newtype_morphs(&self, field_type: &FieldType) -> &[Morph] {
+        match field_type {
+            FieldType::Other(name) => self
+                .chains
+                .get(name)
+                .map_or(&[], |(_, chain)| chain.morphs.as_slice()),
+            _ => &[],
+        }
+    }
+
     /// The TypeScript outputs' validators for a newtype's chain, where they
     /// differ from the schema's.
     pub fn newtype_checks(&self, field_type: &FieldType) -> Option<&[Validator]> {
@@ -265,25 +287,6 @@ impl DeclaredTypes {
             return None;
         };
         self.chains.get(name)?.1.checks.as_deref()
-    }
-
-    /// Every recorded tuple variant payload, by its enum's key and the
-    /// variant's name.
-    pub fn payloads(&self) -> impl Iterator<Item = (&str, &str, &FieldType)> {
-        self.payloads
-            .iter()
-            .map(|((enum_name, variant), field_type)| {
-                (enum_name.as_str(), variant.as_str(), field_type)
-            })
-    }
-
-    /// Every recorded field with its owner.
-    pub fn fields(&self) -> impl Iterator<Item = (&FieldOwner, &str, &FieldType)> {
-        self.fields.iter().flat_map(|(owner, fields)| {
-            fields
-                .iter()
-                .map(move |(name, field_type)| (owner, name.as_str(), field_type))
-        })
     }
 }
 
@@ -415,6 +418,16 @@ impl Desugar<'_> {
             );
             field.validator_overrides.typesync = Some(checks);
         }
+        // The newtype's morphs and checks run first, then the field's morphs,
+        // after which the newtype's checks hold again, so the stored value
+        // has been through every morph and meets every check.
+        if !chain.morphs.is_empty() {
+            field.morphs = chain
+                .morphs
+                .into_iter()
+                .chain(field.morphs.drain(..))
+                .collect();
+        }
         if !chain.validators.is_empty() {
             field.validators = chain
                 .validators
@@ -509,6 +522,9 @@ impl Desugar<'_> {
             },
             FieldType::Option(inner) => FieldType::Option(Box::new(self.nested(inner, holding)?)),
             FieldType::Vec(inner) => FieldType::Vec(Box::new(self.nested(inner, holding)?)),
+            FieldType::JsonText(inner) => {
+                FieldType::JsonText(Box::new(self.nested(inner, holding)?))
+            }
             FieldType::HashMap(key, value) => FieldType::HashMap(
                 Box::new(self.nested(key, holding)?),
                 Box::new(self.nested(value, holding)?),
@@ -549,7 +565,10 @@ impl Desugar<'_> {
             | FieldType::U64
             | FieldType::U128
             | FieldType::Usize
-            | FieldType::Duration => field_type.clone(),
+            | FieldType::Duration
+            | FieldType::FromText(_)
+            | FieldType::IsoDate
+            | FieldType::EpochMillis => field_type.clone(),
         })
     }
 }

@@ -2,6 +2,7 @@ mod bench_fixture;
 mod bump;
 mod generated;
 mod glob_imports;
+mod verify;
 
 use clap::{Parser, Subcommand};
 use std::process::{Command, ExitCode, Stdio};
@@ -46,11 +47,22 @@ enum Cmd {
         action: SnapshotAction,
     },
 
-    /// Run full verification: fmt, clippy, and all tests
+    /// Run full verification: fmt, clippy, and all tests. Each run keeps
+    /// its progress in `.verify/`.
     Verify {
         /// Stop on the first failure instead of running all steps
         #[arg(long)]
         fail_fast: bool,
+
+        /// Resume a run, by id or else the latest, running every step that
+        /// did not pass
+        #[arg(long, value_name = "ID", conflicts_with = "pipeline")]
+        resume: Option<Option<String>>,
+
+        /// The steps to run, in order, comma separated (every step when
+        /// left out)
+        #[arg(long, value_enum, value_delimiter = ',')]
+        pipeline: Vec<verify::Step>,
     },
 
     /// Bump the version of every published crate, repin dependencies on
@@ -102,7 +114,17 @@ fn main() -> ExitCode {
             extra,
         } => cmd_test(snapshot, e2e, derive, &features, &extra),
         Cmd::Snapshot { action } => cmd_snapshot(action),
-        Cmd::Verify { fail_fast } => cmd_verify(fail_fast),
+        Cmd::Verify {
+            fail_fast,
+            resume,
+            pipeline,
+        } => verify::cmd_verify(
+            match resume {
+                Some(id) => verify::Source::Resume(id),
+                None => verify::Source::Pipeline(pipeline),
+            },
+            fail_fast,
+        ),
         Cmd::Bump { level } => bump::cmd_bump(level),
         Cmd::BenchFixture {
             out,
@@ -213,162 +235,6 @@ fn cmd_snapshot(action: SnapshotAction) -> bool {
                 c.args(["insta", "accept"]);
             })
         }
-    }
-}
-
-type VerifyStep = (&'static str, Box<dyn Fn() -> bool>);
-
-fn cmd_verify(fail_fast: bool) -> bool {
-    let steps: Vec<VerifyStep> = vec![
-        ("glob imports", Box::new(glob_imports::check)),
-        (
-            "fmt",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["fmt", "--all", "--", "--check"]);
-                })
-            }),
-        ),
-        (
-            "clippy (all features, all targets)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args([
-                        "clippy",
-                        "--workspace",
-                        "--all-targets",
-                        "--all-features",
-                        "--",
-                        "-D",
-                        "warnings",
-                    ]);
-                })
-            }),
-        ),
-        (
-            "fmt (testground)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["fmt", "--all", "--", "--check"])
-                        .current_dir(testground_dir());
-                })
-            }),
-        ),
-        (
-            "clippy (testground, all features, all targets)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args([
-                        "clippy",
-                        "--all-targets",
-                        "--all-features",
-                        "--",
-                        "-D",
-                        "warnings",
-                    ])
-                    .current_dir(testground_dir());
-                })
-            }),
-        ),
-        (
-            "evenframe_core unit tests (full)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["test", "-p", "evenframe_core", "--features", "full"]);
-                })
-            }),
-        ),
-        (
-            "snapshot tests (typesync-all)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args([
-                        "test",
-                        "-p",
-                        "evenframe_core",
-                        "--features",
-                        "typesync-all",
-                        "--test",
-                        "snapshot_tests",
-                    ]);
-                })
-            }),
-        ),
-        (
-            "generated output (deno, protoc, flatc)",
-            Box::new(generated::check),
-        ),
-        (
-            "evenframe CLI tests",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["test", "-p", "evenframe"]);
-                })
-            }),
-        ),
-        (
-            "derive trybuild tests",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["test", "-p", "evenframe_derive"]);
-                })
-            }),
-        ),
-        (
-            "derive without features, then with metadata, then with SurrealValue",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["test", "-p", "derive_check"]);
-                }) && run("cargo", |c| {
-                    c.args(["test", "-p", "derive_check", "--features", "metadata"]);
-                }) && run("cargo", |c| {
-                    c.args([
-                        "test",
-                        "-p",
-                        "derive_check",
-                        "--features",
-                        "surrealdb-types",
-                    ]);
-                })
-            }),
-        ),
-        (
-            "e2e tests (testground, all features)",
-            Box::new(|| {
-                run("cargo", |c| {
-                    c.args(["test", "--all-features"])
-                        .current_dir(testground_dir());
-                })
-            }),
-        ),
-    ];
-
-    let mut failed: Vec<&str> = Vec::new();
-
-    for (label, step) in &steps {
-        header(label);
-        if !step() {
-            failed.push(label);
-            if fail_fast {
-                eprintln!("\n=== verify failed (--fail-fast) ===");
-                return false;
-            }
-        }
-    }
-
-    if failed.is_empty() {
-        println!("\n=== all checks passed ===");
-        true
-    } else {
-        eprintln!(
-            "\n=== verify failed ({}/{} steps) ===",
-            failed.len(),
-            steps.len()
-        );
-        for label in &failed {
-            eprintln!("  FAIL: {label}");
-        }
-        false
     }
 }
 

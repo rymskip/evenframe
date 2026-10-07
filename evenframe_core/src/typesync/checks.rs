@@ -299,9 +299,10 @@ fn collect<'a>(
         FieldType::Struct(fields) => fields
             .iter()
             .for_each(|(_, field)| collect(field, names, keys)),
-        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
-            collect(inner, names, keys)
-        }
+        FieldType::Option(inner)
+        | FieldType::Vec(inner)
+        | FieldType::RecordLink(inner)
+        | FieldType::JsonText(inner) => collect(inner, names, keys),
         FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
             keys.push(key);
             collect(key, names, keys);
@@ -328,7 +329,10 @@ fn collect<'a>(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize
-        | FieldType::Duration => {}
+        | FieldType::Duration
+        | FieldType::FromText(_)
+        | FieldType::IsoDate
+        | FieldType::EpochMillis => {}
     }
 }
 

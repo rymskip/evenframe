@@ -5,16 +5,14 @@
       "struct_name": "Audit",
       "fields": [
         { "field_name": "created_by", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "Geo": {
       "struct_name": "Geo",
       "fields": [
         { "field_name": "lat", "field_type": "F64", "validators": [], "always_regenerate": false },
         { "field_name": "lon", "field_type": "F64", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "Post": {
       "struct_name": "Post",
@@ -22,24 +20,21 @@
         { "field_name": "title", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "audit", "field_type": { "Other": "Audit" }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } },
         { "field_name": "geo", "field_type": { "Option": { "Other": "Geo" } }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
-      ],
-      "validators": []
+      ]
     },
     "Settings": {
       "struct_name": "Settings",
       "fields": [
         { "field_name": "theme", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "rest", "field_type": { "HashMap": ["String", "I32"] }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
-      ],
-      "validators": []
+      ]
     },
     "Event": {
       "struct_name": "Event",
       "fields": [
         { "field_name": "at", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "payload", "field_type": { "Other": "Payload" }, "validators": [], "always_regenerate": false, "wire": { "serde_flatten": true } }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {
@@ -53,8 +48,7 @@
               "struct_name": "Click",
               "fields": [
                 { "field_name": "x", "field_type": "I32", "validators": [], "always_regenerate": false }
-              ],
-              "validators": []
+              ]
             }
           }
         },

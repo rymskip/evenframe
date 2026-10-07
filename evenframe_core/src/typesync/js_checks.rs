@@ -4,7 +4,11 @@
 
 use crate::error::{EvenframeError, Result};
 use crate::schemasync::format::Format;
+use crate::types::FieldType;
+use crate::typesync::type_index::TypeIndex;
 use crate::validator::keywords::{self, NormalForm};
+use crate::validator::morph::{ArrayMorph, Morph, NumberMorph};
+use crate::validator::text_pattern::{Anchoring, TextPattern};
 use crate::validator::{BigDecimalValidator, DurationValidator, StringValidator};
 use crate::validator::{bounds, runtime};
 
@@ -101,8 +105,30 @@ fn normalized(form: NormalForm) -> JsCheck {
     JsCheck::Predicate(format!("value.normalize(\"{}\") === value", form.name()))
 }
 
+/// Looking for `pattern` where `anchoring` says: a string method for text,
+/// a regex for a format, which neither library checks natively.
+fn text_check(pattern: &TextPattern, anchoring: Anchoring) -> Result<JsCheck> {
+    Ok(match pattern {
+        TextPattern::Text(text) => {
+            let method = match anchoring {
+                Anchoring::Start => "startsWith",
+                Anchoring::End => "endsWith",
+                Anchoring::Anywhere => "includes",
+            };
+            JsCheck::Predicate(format!("value.{method}({})", string_literal(text)?))
+        }
+        TextPattern::Format(_) => {
+            let (source, flags) = pattern.regex(anchoring);
+            JsCheck::Pattern {
+                source,
+                flags: flags.unwrap_or_default().to_owned(),
+            }
+        }
+    })
+}
+
 /// The JavaScript form of a string check, or `None` for a validator that is
-/// not a check (a transform, a parse or a carrier).
+/// checks nothing (`String`, which every string meets).
 pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
     let check = match validator {
         StringValidator::Alpha => pattern(keywords::ALPHA),
@@ -138,10 +164,10 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
                 .to_owned(),
         ),
         StringValidator::LowerPreformatted => pattern(keywords::LOWER),
-        StringValidator::NormalizeNFCPreformatted => normalized(NormalForm::Nfc),
-        StringValidator::NormalizeNFDPreformatted => normalized(NormalForm::Nfd),
-        StringValidator::NormalizeNFKCPreformatted => normalized(NormalForm::Nfkc),
-        StringValidator::NormalizeNFKDPreformatted => normalized(NormalForm::Nfkd),
+        StringValidator::NormalizeNfcPreformatted => normalized(NormalForm::Nfc),
+        StringValidator::NormalizeNfdPreformatted => normalized(NormalForm::Nfd),
+        StringValidator::NormalizeNfkcPreformatted => normalized(NormalForm::Nfkc),
+        StringValidator::NormalizeNfkdPreformatted => normalized(NormalForm::Nfkd),
         StringValidator::Numeric => pattern(keywords::NUMERIC),
         StringValidator::Regex => JsCheck::Predicate(
             "(() => { try { new RegExp(value); return true; } catch { return false; } })()"
@@ -174,15 +200,9 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::MinLength(length) => JsCheck::Length(LengthCheck::AtLeast(*length)),
         StringValidator::MaxLength(length) => JsCheck::Length(LengthCheck::AtMost(*length)),
         StringValidator::NonEmpty => JsCheck::Length(LengthCheck::AtLeast(1)),
-        StringValidator::StartsWith(prefix) => {
-            JsCheck::Predicate(format!("value.startsWith({})", string_literal(prefix)?))
-        }
-        StringValidator::EndsWith(suffix) => {
-            JsCheck::Predicate(format!("value.endsWith({})", string_literal(suffix)?))
-        }
-        StringValidator::Includes(substring) => {
-            JsCheck::Predicate(format!("value.includes({})", string_literal(substring)?))
-        }
+        StringValidator::StartsWith(pattern) => text_check(pattern, Anchoring::Start)?,
+        StringValidator::EndsWith(pattern) => text_check(pattern, Anchoring::End)?,
+        StringValidator::Includes(pattern) => text_check(pattern, Anchoring::Anywhere)?,
         StringValidator::Trimmed => JsCheck::Predicate("value.trim() === value".to_owned()),
         StringValidator::Lowercased => {
             JsCheck::Predicate("value.toLowerCase() === value".to_owned())
@@ -196,24 +216,7 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::Uncapitalized => {
             JsCheck::Predicate("value[0]?.toLowerCase() === value[0]".to_owned())
         }
-        StringValidator::String
-        | StringValidator::StringEmbedded(_)
-        | StringValidator::Capitalize
-        | StringValidator::Lower
-        | StringValidator::Upper
-        | StringValidator::Trim
-        | StringValidator::Normalize
-        | StringValidator::NormalizeNFC
-        | StringValidator::NormalizeNFD
-        | StringValidator::NormalizeNFKC
-        | StringValidator::NormalizeNFKD
-        | StringValidator::IntegerParse
-        | StringValidator::NumericParse
-        | StringValidator::DateParse
-        | StringValidator::DateIsoParse
-        | StringValidator::DateEpochParse
-        | StringValidator::JsonParse
-        | StringValidator::UrlParse => return Ok(None),
+        StringValidator::String => return Ok(None),
     };
     Ok(Some(check))
 }
@@ -315,3 +318,158 @@ return typeof value.secs === \"number\" && typeof value.nanos === \"number\" ? B
 const text = String(value); if (!/^(?:\\d+(?:ns|us|µs|ms|s|m|h|d|w|y))+$/.test(text)) return null; \
 const units: Record<string, bigint> = { ns: 1n, us: 1000n, \"µs\": 1000n, ms: 1000000n, s: 1000000000n, m: 60000000000n, h: 3600000000000n, d: 86400000000000n, w: 604800000000000n, y: 31536000000000000n }; \
 let total = 0n; for (const [, amount, unit] of text.matchAll(/(\\d+)(ns|us|µs|ms|s|m|h|d|w|y)/g)) total += BigInt(amount) * units[unit]; return total; };\n";
+
+// ----- Morphs ----------------------------------------------------------------
+
+/// The helper functions a set of morphs needs in scope.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MorphHelpers {
+    /// [`COMPARE_DECIMAL`], for a clamp of decimal text.
+    pub compare_decimal: bool,
+    /// [`COMPARE_CODE_POINTS`], for sorting text as Rust orders it.
+    pub compare_code_points: bool,
+}
+
+/// Orders strings by code point, as Rust's `str` does, where JavaScript's `<`
+/// orders UTF-16 units.
+pub const COMPARE_CODE_POINTS: &str = "const compareCodePoints = (left: string, right: string): number => { \
+const a = Array.from(left, (character) => character.codePointAt(0) ?? 0); \
+const b = Array.from(right, (character) => character.codePointAt(0) ?? 0); \
+for (let index = 0; index < Math.min(a.length, b.length); index++) { if (a[index] !== b[index]) return a[index] - b[index]; } \
+return a.length - b.length; };\n";
+
+/// What a value is, for the morphs that depend on it.
+enum MorphTarget {
+    Text,
+    Integer,
+    Float,
+    Boolean,
+    Character,
+    Other,
+}
+
+fn morph_target(value_type: &FieldType) -> MorphTarget {
+    match value_type {
+        FieldType::String => MorphTarget::Text,
+        FieldType::Char => MorphTarget::Character,
+        FieldType::Bool => MorphTarget::Boolean,
+        FieldType::F32 | FieldType::F64 => MorphTarget::Float,
+        FieldType::I8
+        | FieldType::I16
+        | FieldType::I32
+        | FieldType::I64
+        | FieldType::I128
+        | FieldType::Isize
+        | FieldType::U8
+        | FieldType::U16
+        | FieldType::U32
+        | FieldType::U64
+        | FieldType::U128
+        | FieldType::Usize => MorphTarget::Integer,
+        _ => MorphTarget::Other,
+    }
+}
+
+/// The TypeScript type of the `value` a morph rewrites, for a value of
+/// `value_type` beneath any newtypes and `Option`.
+pub fn morph_parameter(value_type: &FieldType, index: &TypeIndex) -> String {
+    match (morph_target(value_type), value_type) {
+        (MorphTarget::Text | MorphTarget::Character, _) => "string".to_owned(),
+        (MorphTarget::Integer | MorphTarget::Float, _) => "number".to_owned(),
+        (MorphTarget::Boolean, _) => "boolean".to_owned(),
+        (MorphTarget::Other, FieldType::Vec(element)) => {
+            format!("{}[]", morph_parameter(index.underlying(element), index))
+        }
+        (MorphTarget::Other, _) => "unknown".to_owned(),
+    }
+}
+
+/// The JavaScript expression `morph` rewrites `value` to, for a value of
+/// `value_type` beneath any newtypes and `Option`. A morph the type cannot
+/// take is refused, as the Rust derive refuses it.
+pub fn morph_expression(
+    morph: &Morph,
+    value_type: &FieldType,
+    index: &TypeIndex,
+    helpers: &mut MorphHelpers,
+) -> Result<String> {
+    let refuse = |what: &str| {
+        Err(EvenframeError::config(format!(
+            "{} applies to {what}, not to {value_type:?}",
+            morph.describe()
+        )))
+    };
+    morph.check_bounds().map_err(EvenframeError::config)?;
+    match morph {
+        Morph::StringMorph(string_morph) => match morph_target(value_type) {
+            MorphTarget::Text => Ok(string_morph.javascript()),
+            _ => refuse("a string"),
+        },
+        Morph::NumberMorph(NumberMorph::Round(places)) => match morph_target(value_type) {
+            MorphTarget::Float => {
+                let factor = format!("1e{places}");
+                Ok(format!("Math.round(value * {factor}) / {factor}"))
+            }
+            _ => refuse("an f64"),
+        },
+        Morph::NumberMorph(NumberMorph::Clamp(min, max)) => {
+            let min = bounds::decimal(min).map_err(EvenframeError::config)?;
+            let max = bounds::decimal(max).map_err(EvenframeError::config)?;
+            match morph_target(value_type) {
+                MorphTarget::Integer
+                    if [&min, &max]
+                        .iter()
+                        .any(|bound| bound.to_string().contains('.')) =>
+                {
+                    Err(EvenframeError::config(format!(
+                        "{} has a fractional bound, so it cannot bound an integer",
+                        morph.describe()
+                    )))
+                }
+                MorphTarget::Integer | MorphTarget::Float => {
+                    Ok(format!("Math.min(Math.max(value, {min}), {max})"))
+                }
+                MorphTarget::Text => {
+                    helpers.compare_decimal = true;
+                    let (min, max) = (
+                        string_literal(&min.to_string())?,
+                        string_literal(&max.to_string())?,
+                    );
+                    Ok(format!(
+                        "compareDecimal(value, {min}) < 0 ? {min} : compareDecimal(value, {max}) > 0 ? {max} : value"
+                    ))
+                }
+                MorphTarget::Boolean | MorphTarget::Character | MorphTarget::Other => {
+                    refuse("a number, a bigint or decimal text")
+                }
+            }
+        }
+        Morph::ArrayMorph(array_morph) => {
+            let FieldType::Vec(element) = value_type else {
+                return refuse("a list");
+            };
+            let element = morph_target(index.underlying(element));
+            match (array_morph, element) {
+                (ArrayMorph::Sort, MorphTarget::Text | MorphTarget::Character) => {
+                    helpers.compare_code_points = true;
+                    Ok("[...value].sort(compareCodePoints)".to_owned())
+                }
+                (ArrayMorph::Sort, MorphTarget::Integer | MorphTarget::Boolean) => Ok(
+                    "[...value].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))"
+                        .to_owned(),
+                ),
+                (
+                    ArrayMorph::Unique,
+                    MorphTarget::Text
+                    | MorphTarget::Character
+                    | MorphTarget::Integer
+                    | MorphTarget::Boolean,
+                ) => Ok("[...new Set(value)]".to_owned()),
+                (
+                    ArrayMorph::Sort | ArrayMorph::Unique,
+                    MorphTarget::Float | MorphTarget::Other,
+                ) => refuse("a list of strings, characters, integers or booleans"),
+            }
+        }
+    }
+}

@@ -31,13 +31,10 @@
 //! Named structs referenced by enum variants ([`VariantData::DataStructureRef`])
 //! are registered in `objects` and covered by the object walk; they are not
 //! reported a second time from the enum walk.
-//!
-//! A second pass reports newtypes with validators held below a field's own
-//! value, such as in a `Vec`, whose validators the schema does not assert.
 
 use crate::schemasync::define_config::DefineConfig;
 use crate::schemasync::table::TableConfig;
-use crate::types::{DeclaredTypes, FieldType, StructConfig, TaggedUnion, VariantData};
+use crate::types::{StructConfig, TaggedUnion, VariantData};
 use convert_case::{Case, Casing};
 use std::collections::BTreeMap;
 
@@ -216,90 +213,6 @@ pub fn lint_discarded_field_annotations(
     findings
 }
 
-/// A newtype with validators held inside a field rather than as the field's
-/// own value. The schema asserts only a field's own value, so the database
-/// accepts a value failing these validators, which a read then rejects.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnassertedNewtype {
-    /// The field, as `owner.field`, or the variant, as `Enum::Variant`.
-    pub location: String,
-    pub newtype: String,
-}
-
-/// Every newtype with validators that a field holds below its own value.
-pub fn lint_unasserted_newtypes(declared: &DeclaredTypes) -> Vec<UnassertedNewtype> {
-    let mut findings = Vec::new();
-    for (owner, field_name, field_type) in declared.fields() {
-        let location = format!("{owner}.{field_name}");
-        unasserted(declared, field_type, true, &location, &mut findings);
-    }
-    for (enum_name, variant, payload) in declared.payloads() {
-        let location = format!("{enum_name}::{variant}");
-        unasserted(declared, payload, false, &location, &mut findings);
-    }
-    findings
-}
-
-/// Records each newtype with validators in `field_type`, other than a
-/// field's own value (`own`) or an `Option` of it.
-fn unasserted(
-    declared: &DeclaredTypes,
-    field_type: &FieldType,
-    own: bool,
-    location: &str,
-    findings: &mut Vec<UnassertedNewtype>,
-) {
-    match field_type {
-        FieldType::Other(name) => {
-            if let Some((inner, validators)) = declared.newtype(field_type) {
-                if !own && !validators.is_empty() {
-                    findings.push(UnassertedNewtype {
-                        location: location.to_owned(),
-                        newtype: name.clone(),
-                    });
-                }
-                unasserted(declared, inner, false, location, findings);
-            }
-        }
-        FieldType::Option(inner) => unasserted(declared, inner, own, location, findings),
-        FieldType::Vec(inner) => unasserted(declared, inner, false, location, findings),
-        FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
-            unasserted(declared, key, false, location, findings);
-            unasserted(declared, value, false, location, findings);
-        }
-        FieldType::Tuple(items) => {
-            for item in items {
-                unasserted(declared, item, false, location, findings);
-            }
-        }
-        FieldType::Struct(members) => {
-            for (_, member) in members {
-                unasserted(declared, member, false, location, findings);
-            }
-        }
-        FieldType::RecordLink(_)
-        | FieldType::String
-        | FieldType::Char
-        | FieldType::Bool
-        | FieldType::Unit
-        | FieldType::F32
-        | FieldType::F64
-        | FieldType::I8
-        | FieldType::I16
-        | FieldType::I32
-        | FieldType::I64
-        | FieldType::I128
-        | FieldType::Isize
-        | FieldType::U8
-        | FieldType::U16
-        | FieldType::U32
-        | FieldType::U64
-        | FieldType::U128
-        | FieldType::Usize
-        | FieldType::Duration => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -380,6 +293,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         }

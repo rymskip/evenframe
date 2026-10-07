@@ -9,8 +9,7 @@
         { "field_name": "scheduled_at", "field_type": { "Other": "DateTime" }, "validators": [], "always_regenerate": false },
         { "field_name": "duration", "field_type": { "Other": "Duration" }, "validators": [], "always_regenerate": false },
         { "field_name": "cancelled_at", "field_type": { "Option": { "Other": "DateTime" } }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {},
@@ -18,7 +17,6 @@
     "DateTime": {
       "rust_type_names": ["DateTime", "chrono::DateTime"],
       "arktype": { "type": "'string'" },
-      "default_value_ts": "\"\"",
       "effect": { "type": "Schema.String", "encoded": "string" },
       "protobuf": "string",
       "flatbuffers": "string",
@@ -27,7 +25,6 @@
     "Duration": {
       "rust_type_names": ["Duration", "std::time::Duration"],
       "arktype": { "type": "'number'" },
-      "default_value_ts": "0",
       "effect": { "type": "Schema.Number", "encoded": "number" },
       "protobuf": "int64",
       "flatbuffers": "int64",

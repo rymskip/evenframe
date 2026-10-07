@@ -426,9 +426,7 @@ fn schema() -> String {
         .into_schemasync()
         .expect("the registered types have a stored form");
     tables_surql(
-        &types.tables,
-        &types.objects,
-        &types.enums,
+        &types,
         &ForeignTypeRegistry::from_config(&BTreeMap::from([(
             "RecordId".to_owned(),
             ForeignTypeConfig {

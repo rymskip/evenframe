@@ -16,11 +16,4 @@ Timer: {
 
 const exported = bindings.export();
 
-export const defaultTimer: Timer = {
-id: "",
-limit: { secs: 0, nanos: 0 },
-grace: null,
-laps: []
-};
-
 export type Timer = typeof exported.Timer.infer;

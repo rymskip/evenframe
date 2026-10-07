@@ -2,7 +2,8 @@ use crate::config::fill;
 use crate::config::{EffectMapping, ForeignTypeConfig};
 use crate::error::{EvenframeError, Result};
 use crate::types::{
-    EnumRepresentation, FieldType, NewtypeKind, StructConfig, StructField, TaggedUnion, VariantData,
+    EnumRepresentation, FieldType, NewtypeKind, StructConfig, StructField, TaggedUnion,
+    TextFormKind, VariantData,
 };
 use crate::typesync::config::OutputKind;
 use crate::typesync::doc_comment::format_jsdoc;
@@ -13,12 +14,13 @@ use crate::typesync::js_checks::{
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
 use crate::validator::keywords;
-use crate::validator::string_rules::{StringParse, StringRule, StringTransform};
+use crate::validator::morph::{Morph, StringMorph};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-    NumberValidator, StringValidator, Validator, bounds,
+    NumberValidator, StringValidator, Validator, ValueRules, bounds,
 };
 use convert_case::{Case, Casing};
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use tracing;
@@ -58,6 +60,7 @@ pub fn generate_effect_schema_string(
         emitter.emit(name, false)?;
     }
 
+    let helpers = emitter.helpers();
     let EffectEmitter {
         classes,
         types,
@@ -65,9 +68,9 @@ pub fn generate_effect_schema_string(
         ..
     } = emitter;
     let result = if print_types {
-        format!("{classes}\n{encoded}\n{types}")
+        format!("{helpers}{classes}\n{encoded}\n{types}")
     } else {
-        format!("{classes}\n{encoded}")
+        format!("{helpers}{classes}\n{encoded}")
     };
     tracing::info!(
         output_length = result.len(),
@@ -99,7 +102,12 @@ pub fn generate_effect_schema_for_types(
             emitter.emit(name, true)?;
         }
     }
-    Ok(format!("{}\n{}", emitter.classes, emitter.encoded))
+    Ok(format!(
+        "{}{}\n{}",
+        emitter.helpers(),
+        emitter.classes,
+        emitter.encoded
+    ))
 }
 
 /// The types a reference can name directly rather than through
@@ -135,9 +143,24 @@ struct EffectEmitter<'i, 'a, 's> {
     classes: String,
     types: String,
     encoded: String,
+    /// The helper functions the morphs written so far call.
+    morph_helpers: Cell<js_checks::MorphHelpers>,
 }
 
 impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
+    /// The helper functions the written schemas call, declared ahead of them.
+    fn helpers(&self) -> String {
+        let used = self.morph_helpers.get();
+        let mut helpers = String::new();
+        if used.compare_decimal {
+            helpers.push_str(js_checks::COMPARE_DECIMAL);
+        }
+        if used.compare_code_points {
+            helpers.push_str(js_checks::COMPARE_CODE_POINTS);
+        }
+        helpers
+    }
+
     fn new(
         index: &'i TypeIndex<'a>,
         registry: &'i crate::types::ForeignTypeRegistry,
@@ -148,6 +171,7 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
             registry,
             defined,
             classes: String::new(),
+            morph_helpers: Cell::default(),
             types: String::new(),
             encoded: String::new(),
         }
@@ -178,6 +202,7 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                         &to_schema,
                         &self.defined,
                         index,
+                        &self.morph_helpers,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -213,9 +238,12 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                     }
                     continue;
                 }
-                entries.push(field_schema_entry(field, index, |field_type| {
-                    to_schema(field_type, name, &self.defined)
-                })?);
+                entries.push(field_schema_entry(
+                    field,
+                    index,
+                    &self.morph_helpers,
+                    |field_type| to_schema(field_type, name, &self.defined),
+                )?);
                 held_values.push(schema);
             }
             let record = if record_values.is_empty() {
@@ -260,7 +288,7 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                 if let Some(doc) = &field.doccom {
                     self.classes.push_str(&format_jsdoc(doc, "  "));
                 }
-                let entry = field_schema_entry(field, index, |field_type| {
+                let entry = field_schema_entry(field, index, &self.morph_helpers, |field_type| {
                     to_schema(field_type, name, &self.defined)
                 })?;
                 let separator = if position + 1 == struct_config.fields.len() {
@@ -280,17 +308,25 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
             if let Some(doc) = &newtype.doccom {
                 self.classes.push_str(&format_jsdoc(doc, ""));
             }
+            let rules = ValueRules::new(&newtype.morphs, &newtype.validators);
             let schema = renewed(
                 apply_validators_to_schema(
-                    payload_schema(&newtype.inner, &newtype.element_validators, name, |held| {
-                        to_schema(held, name, &self.defined)
-                    })?,
-                    index.underlying(&newtype.inner),
-                    &newtype.validators,
+                    payload_schema(
+                        &newtype.inner,
+                        &ValueRules::elements(&newtype.element_morphs, &newtype.element_validators),
+                        name,
+                        index,
+                        &self.morph_helpers,
+                        |held| to_schema(held, name, &self.defined),
+                    )?,
+                    &newtype.inner,
+                    rules,
                     name,
+                    index,
+                    &self.morph_helpers,
                 )?,
                 &newtype.inner,
-                &newtype.validators,
+                rules,
                 index,
                 |field_type| to_schema(field_type, name, &self.defined),
             )?;
@@ -303,11 +339,7 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
                 "export const {name} = {schema}{brand}.annotations({{ identifier: `{name}` }});"
             )
             .map_err(write_failed)?;
-            let encoded = if parses_text(&newtype.validators) {
-                "string".to_owned()
-            } else {
-                encoded_payload(&newtype.inner, &newtype.element_validators, index, registry)?
-            };
+            let encoded = field_type_to_ts_encoded(&newtype.inner, index, registry)?;
             writeln!(self.encoded, "export type {name}Encoded = {encoded};\n")
                 .map_err(write_failed)?;
         } else {
@@ -351,11 +383,7 @@ fn encoded_field_type(
     index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
-    Ok(match (&field.field_type, parses_string_input(field)) {
-        (FieldType::Option(_), true) => "string | null | undefined".to_owned(),
-        (_, true) => "string".to_owned(),
-        (field_type, false) => field_type_to_ts_encoded(field_type, index, registry)?,
-    })
+    field_type_to_ts_encoded(&field.field_type, index, registry)
 }
 
 /// Generates an `...Encoded` TypeScript type for a given struct: an interface,
@@ -435,10 +463,11 @@ fn encoded_alias_for_enum(
 fn field_schema_entry(
     field: &StructField,
     index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
     let field = field.effective();
-    let schema = validated_field_schema(field, index, schema_of)?;
+    let schema = validated_field_schema(field, index, helpers, schema_of)?;
     // An absent key decodes to `None`, so only a non-Option key needs marking.
     let entry = if matches!(field.field_type, FieldType::Option(_)) {
         schema
@@ -467,6 +496,7 @@ fn enum_variant_to_schema<F>(
     to_schema: &F,
     defined: &Defined,
     index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
 ) -> Result<String>
 where
     F: Fn(&FieldType, &str, &Defined) -> Result<String>,
@@ -489,7 +519,7 @@ where
     let fields_schema = |fields: &[StructField], tag: Option<&str>| -> Result<String> {
         let mut entries: Vec<String> = tag.map(tag_entry).transpose()?.into_iter().collect();
         for field in fields {
-            entries.push(field_schema_entry(field, index, |field_type| {
+            entries.push(field_schema_entry(field, index, helpers, |field_type| {
                 to_schema(field_type, enum_name, defined)
             })?);
         }
@@ -506,9 +536,14 @@ where
         },
         VariantData::DataStructureRef(field_type) => match tag {
             Some(tag) => return fields_schema(held_struct_fields(field_type, index)?, Some(tag)),
-            None => payload_schema(field_type, &v.element_validators, v.serde_name(), |held| {
-                to_schema(held, enum_name, defined)
-            })?,
+            None => payload_schema(
+                field_type,
+                &ValueRules::elements(&v.element_morphs, &v.element_validators),
+                v.serde_name(),
+                index,
+                helpers,
+                |held| to_schema(held, enum_name, defined),
+            )?,
         },
     };
     Ok(match repr {
@@ -563,7 +598,7 @@ fn enum_variant_to_encoded(
             format!("{{ {} }}", entries.join(" "))
         }
         VariantData::DataStructureRef(field_type) => {
-            let payload = encoded_payload(field_type, &v.element_validators, index, registry)?;
+            let payload = field_type_to_ts_encoded(field_type, index, registry)?;
             // serde writes the tag into the struct the variant holds.
             if let EnumRepresentation::InternallyTagged { tag } = repr {
                 return Ok(format!("({{ {} }} & {payload})", tag_entry(tag)?));
@@ -684,6 +719,7 @@ fn field_type_to_effect_schema(
         AssembleStruct { field_names: Vec<String> },
         AssembleRecordLink,
         AssembleMap { key: String, finite_keys: bool },
+        AssembleJsonText,
     }
 
     let mut work_stack: Vec<WorkItem> = Vec::new();
@@ -717,6 +753,16 @@ fn field_type_to_effect_schema(
                 | FieldType::U64
                 | FieldType::U128
                 | FieldType::Usize => value_stack.push("Schema.Number".to_string()),
+                FieldType::FromText(kind) => value_stack.push(from_text_schema(*kind)?),
+                FieldType::IsoDate => value_stack.push(format!(
+                    "Schema.String.pipe({}).pipe(Schema.compose(Schema.Date))",
+                    text_pattern(keywords::ISO_8601, "an ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date")?
+                )),
+                FieldType::EpochMillis => value_stack.push(epoch_millis_schema()?),
+                FieldType::JsonText(i) => {
+                    work_stack.push(WorkItem::AssembleJsonText);
+                    work_stack.push(WorkItem::Generate(i));
+                }
                 FieldType::Option(i) => {
                     work_stack.push(WorkItem::AssembleOption);
                     work_stack.push(WorkItem::Generate(i));
@@ -784,6 +830,10 @@ fn field_type_to_effect_schema(
             WorkItem::AssembleOption => {
                 let inner = value_stack.pop().unwrap();
                 value_stack.push(format!("Schema.OptionFromNullishOr({}, null)", inner));
+            }
+            WorkItem::AssembleJsonText => {
+                let inner = value_stack.pop().unwrap();
+                value_stack.push(format!("Schema.parseJson({inner})"));
             }
             WorkItem::AssembleVec => {
                 let inner = value_stack.pop().unwrap();
@@ -873,6 +923,11 @@ fn field_type_to_ts_encoded(
                         index,
                         registry,
                     )?),
+                    // A text form is written as text.
+                    FieldType::FromText(_)
+                    | FieldType::JsonText(_)
+                    | FieldType::IsoDate
+                    | FieldType::EpochMillis => value_stack.push("string".to_string()),
                     FieldType::F32
                     | FieldType::F64
                     | FieldType::I8
@@ -997,24 +1052,28 @@ fn field_type_to_ts_encoded(
 fn validated_field_schema(
     field: &StructField,
     index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
+    let rules = ValueRules::new(&field.morphs, &field.validators);
     let validated = |field_type: &FieldType| {
         renewed(
             apply_validators_to_schema(
                 schema_of(field_type)?,
                 field_type,
-                &field.validators,
+                rules,
                 &field.field_name,
+                index,
+                helpers,
             )?,
             field_type,
-            &field.validators,
+            rules,
             index,
             &schema_of,
         )
     };
     match &field.field_type {
-        FieldType::Option(inner) if !field.validators.is_empty() => Ok(format!(
+        FieldType::Option(inner) if !rules.is_empty() => Ok(format!(
             "Schema.OptionFromNullishOr({}, null)",
             validated(inner)?
         )),
@@ -1028,58 +1087,15 @@ fn validated_field_schema(
 fn renewed(
     schema: String,
     value_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     index: &TypeIndex,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
     match value_type {
-        FieldType::Other(name)
-            if validators.iter().any(Validator::rewrites)
-                && index.newtype_named(name).is_some() =>
-        {
-            Ok(format!(
-                "{schema}.pipe(Schema.compose({}))",
-                schema_of(value_type)?
-            ))
-        }
+        FieldType::Other(name) if rules.rewrites() && index.newtype_named(name).is_some() => Ok(
+            format!("{schema}.pipe(Schema.compose({}))", schema_of(value_type)?),
+        ),
         _ => Ok(schema),
-    }
-}
-
-/// Whether a field is read through a parse morph, so its encoded form is a
-/// string whatever its Rust type.
-fn parses_string_input(field: &StructField) -> bool {
-    parses_text(&field.validators)
-}
-
-/// The encoded type of a payload, each element read through a parse morph
-/// written as text.
-fn encoded_payload(
-    field_type: &FieldType,
-    element_validators: &[Vec<Validator>],
-    index: &TypeIndex,
-    registry: &crate::types::ForeignTypeRegistry,
-) -> Result<String> {
-    let encoded = |held: &FieldType, validators: &[Validator]| {
-        if parses_text(validators) {
-            Ok("string".to_owned())
-        } else {
-            field_type_to_ts_encoded(held, index, registry)
-        }
-    };
-    match (field_type, element_validators) {
-        (FieldType::Tuple(items), validators)
-            if !validators.is_empty() && items.len() == validators.len() =>
-        {
-            let elements = items
-                .iter()
-                .zip(validators)
-                .map(|(item, validators)| encoded(item, validators))
-                .collect::<Result<Vec<_>>>()?;
-            Ok(format!("readonly [{}]", elements.join(", ")))
-        }
-        (single, [validators]) => encoded(single, validators),
-        _ => field_type_to_ts_encoded(field_type, index, registry),
     }
 }
 
@@ -1087,55 +1103,141 @@ fn encoded_payload(
 /// payload with its one element's.
 fn payload_schema(
     field_type: &FieldType,
-    element_validators: &[Vec<Validator>],
+    elements: &[ValueRules<'_>],
     owner: &str,
+    index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
-    match (field_type, element_validators) {
+    match (field_type, elements) {
         (_, []) => schema_of(field_type),
-        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+        (FieldType::Tuple(items), rules) if items.len() == rules.len() => {
             let elements = items
                 .iter()
-                .zip(validators)
+                .zip(rules)
                 .enumerate()
-                .map(|(position, (item, validators))| {
+                .map(|(position, (item, rules))| {
                     apply_validators_to_schema(
                         schema_of(item)?,
                         item,
-                        validators,
+                        *rules,
                         &format!("{owner}.{position}"),
+                        index,
+                        helpers,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(format!("Schema.Tuple({})", elements.join(", ")))
         }
-        (single, [validators]) => {
-            apply_validators_to_schema(schema_of(single)?, single, validators, owner)
+        (single, [rules]) => {
+            apply_validators_to_schema(schema_of(single)?, single, *rules, owner, index, helpers)
         }
-        (_, validators) => Err(EvenframeError::config(format!(
+        (_, rules) => Err(EvenframeError::config(format!(
             "`{owner}` has validators for {} elements but holds {field_type:?}",
-            validators.len()
+            rules.len()
         ))),
     }
 }
 
-/// Whether `validators` start with a parse morph, which reads the value from text.
-fn parses_text(validators: &[Validator]) -> bool {
-    matches!(
-        validators.first(),
-        Some(Validator::StringValidator(validator))
-            if matches!(validator.rule(), StringRule::Parse(_))
-    )
+/// `schema` rewritten by `morph`: Effect's own transformation where it has
+/// one, else a transformation of the value's type, that of `base` before any
+/// morph, into itself.
+fn morphed_schema(
+    schema: String,
+    base: &str,
+    morph: &Morph,
+    value_type: &FieldType,
+    field_name: &str,
+    index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
+) -> Result<String> {
+    let native = match morph {
+        Morph::StringMorph(StringMorph::Trim) => Some("Schema.Trim"),
+        Morph::StringMorph(StringMorph::Lower) => Some("Schema.Lowercase"),
+        Morph::StringMorph(StringMorph::Upper) => Some("Schema.Uppercase"),
+        Morph::StringMorph(StringMorph::Capitalize) => Some("Schema.Capitalize"),
+        Morph::StringMorph(_) | Morph::NumberMorph(_) | Morph::ArrayMorph(_) => None,
+    };
+    if let Some(native) = native {
+        return Ok(format!("{schema}.pipe(Schema.compose({native}))"));
+    }
+    let mut used = helpers.get();
+    let expression = js_checks::morph_expression(morph, value_type, index, &mut used)
+        .map_err(|error| EvenframeError::config(format!("field '{field_name}': {error}")))?;
+    helpers.set(used);
+    let transformation = |from: &str, to: &str| {
+        format!(
+            "Schema.transform({from}, {to}, {{ strict: true, decode: (value) => {expression}, encode: (value) => value }})"
+        )
+    };
+    let value_schema = match value_type {
+        FieldType::String => "Schema.String".to_owned(),
+        FieldType::Vec(_) => format!("Schema.typeSchema({base})"),
+        _ => "Schema.Number".to_owned(),
+    };
+    Ok(format!(
+        "{schema}.pipe(Schema.compose({}))",
+        transformation(&value_schema, &value_schema)
+    ))
 }
 
-/// `schema` with `validators` applied in order. A parse morph replaces the
-/// schema with one that decodes a string into the field's type.
+/// `Schema.pattern` over `source`, failing with `expectation`.
+fn text_pattern(source: &str, expectation: &str) -> Result<String> {
+    Ok(format!(
+        "Schema.pattern(new RegExp({}), {{ message: () => {} }})",
+        string_literal(source)?,
+        string_literal(&format!("must be {expectation}"))?
+    ))
+}
+
+/// The schema reading `FromText` of `kind` from its text, as the Rust read
+/// parses it.
+fn from_text_schema(kind: TextFormKind) -> Result<String> {
+    if kind == TextFormKind::Url {
+        return Ok("Schema.URL".to_owned());
+    }
+    if !kind.is_integer() {
+        return Ok(format!(
+            "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString))",
+            text_pattern(keywords::NUMERIC, "a well-formed numeric string")?
+        ));
+    }
+    let (min, max) = kind
+        .integer_range()
+        .unwrap_or((-keywords::MAX_SAFE_INTEGER, keywords::MAX_SAFE_INTEGER));
+    Ok(format!(
+        "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between({min}, {max}, {{ message: () => {} }}))",
+        text_pattern(keywords::INTEGER, "a well-formed integer string")?,
+        string_literal(&format!("must be an integer from {min} to {max}"))?
+    ))
+}
+
+/// The schema reading an instant from text of epoch milliseconds.
+fn epoch_millis_schema() -> Result<String> {
+    let Some(JsCheck::Predicate(predicate)) = js_checks::string_check(&StringValidator::DateEpoch)?
+    else {
+        return Err(EvenframeError::config(
+            "the epoch check is a predicate".to_owned(),
+        ));
+    };
+    Ok(format!(
+        "Schema.String.pipe(Schema.filter((value) => {predicate}, {{ message: () => {} }})).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber))",
+        string_literal("must be an integer string representing a safe Unix timestamp")?
+    ))
+}
+
+/// `schema` rewritten by `rules`' morphs, then with its validators applied in
+/// order.
 fn apply_validators_to_schema(
     schema: String,
     field_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     field_name: &str,
+    index: &TypeIndex,
+    helpers: &Cell<js_checks::MorphHelpers>,
 ) -> Result<String> {
+    let field_type = index.underlying(field_type);
+    let validators = rules.validators;
     let title = field_name.to_case(Case::Title);
     let message = |rule: &str| {
         format!(
@@ -1144,92 +1246,39 @@ fn apply_validators_to_schema(
         )
     };
     let expected = |expectation: &str| message(&format!("must be {expectation}"));
-    let pattern = |source: &str, expectation: &str| -> Result<String> {
-        Ok(format!(
-            "Schema.pattern(new RegExp({}), {})",
-            string_literal(source)?,
-            expected(expectation)
-        ))
-    };
-
     bounds::check_validators(validators)
         .map_err(|problem| EvenframeError::config(format!("field '{field_name}': {problem}")))?;
-    let mut result = schema;
+    let mut result = schema.clone();
+    for morph in rules.morphs {
+        result = morphed_schema(
+            result, &schema, morph, field_type, field_name, index, helpers,
+        )?;
+    }
     for validator in validators {
         let filters: Vec<String> = match validator {
-            Validator::StringValidator(sv) => match sv.rule() {
-                StringRule::Carrier => continue,
-                StringRule::Parse(parse) => {
-                    let input = expected(sv.description());
-                    result = match parse {
-                        StringParse::Integer => format!(
-                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between({}, {}, {input}))",
-                            pattern(keywords::INTEGER, sv.description())?,
-                            -keywords::MAX_SAFE_INTEGER,
-                            keywords::MAX_SAFE_INTEGER
-                        ),
-                        StringParse::Numeric => format!(
-                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.NumberFromString))",
-                            pattern(keywords::NUMERIC, sv.description())?
-                        ),
-                        StringParse::Date => "Schema.Date".to_owned(),
-                        StringParse::DateIso => format!(
-                            "Schema.String.pipe({}).pipe(Schema.compose(Schema.Date))",
-                            pattern(keywords::ISO_8601, sv.description())?
-                        ),
-                        StringParse::DateEpoch => {
-                            let check = js_checks::string_check(&StringValidator::DateEpoch)?;
-                            let Some(JsCheck::Predicate(predicate)) = check else {
-                                return Err(EvenframeError::config(
-                                    "the epoch check is a predicate".to_owned(),
-                                ));
-                            };
-                            format!(
-                                "Schema.String.pipe(Schema.filter((value) => {predicate}, {input})).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber))"
-                            )
-                        }
-                        StringParse::Json => format!("Schema.parseJson({result})"),
-                        StringParse::Url => "Schema.URL".to_owned(),
-                    };
-                    continue;
-                }
-                StringRule::Transform(transform) => vec![format!(
-                    "Schema.compose({})",
-                    match transform {
-                        StringTransform::Lower => "Schema.Lowercase".to_owned(),
-                        StringTransform::Upper => "Schema.Uppercase".to_owned(),
-                        StringTransform::Trim => "Schema.Trim".to_owned(),
-                        StringTransform::Capitalize => "Schema.Capitalize".to_owned(),
-                        StringTransform::Normalize(form) => format!(
-                            "Schema.transform(Schema.String, Schema.String, {{ strict: true, decode: (s) => s.normalize(\"{}\"), encode: (s) => s }})",
-                            form.name()
-                        ),
-                    }
+            Validator::StringValidator(sv) => match js_checks::string_check(sv)? {
+                Some(JsCheck::Pattern { source, flags }) => vec![format!(
+                    "Schema.pattern({}, {})",
+                    js_checks::regexp(&source, &flags)?,
+                    expected(&sv.expectation())
                 )],
-                StringRule::Check => match js_checks::string_check(sv)? {
-                    Some(JsCheck::Pattern { source, flags }) => vec![format!(
-                        "Schema.pattern({}, {})",
-                        js_checks::regexp(&source, &flags)?,
-                        expected(&sv.expectation())
-                    )],
-                    Some(JsCheck::Predicate(predicate)) => vec![format!(
-                        "Schema.filter((value) => {predicate}, {})",
-                        expected(&sv.expectation())
-                    )],
-                    Some(JsCheck::Length(LengthCheck::Exactly(length))) => vec![format!(
-                        "Schema.length({length}, {})",
-                        message(&format!("must be exactly {length} characters long"))
-                    )],
-                    Some(JsCheck::Length(LengthCheck::AtLeast(length))) => vec![format!(
-                        "Schema.minLength({length}, {})",
-                        message(&format!("must be at least {length} characters long"))
-                    )],
-                    Some(JsCheck::Length(LengthCheck::AtMost(length))) => vec![format!(
-                        "Schema.maxLength({length}, {})",
-                        message(&format!("must be at most {length} characters long"))
-                    )],
-                    None => continue,
-                },
+                Some(JsCheck::Predicate(predicate)) => vec![format!(
+                    "Schema.filter((value) => {predicate}, {})",
+                    expected(&sv.expectation())
+                )],
+                Some(JsCheck::Length(LengthCheck::Exactly(length))) => vec![format!(
+                    "Schema.length({length}, {})",
+                    message(&format!("must be exactly {length} characters long"))
+                )],
+                Some(JsCheck::Length(LengthCheck::AtLeast(length))) => vec![format!(
+                    "Schema.minLength({length}, {})",
+                    message(&format!("must be at least {length} characters long"))
+                )],
+                Some(JsCheck::Length(LengthCheck::AtMost(length))) => vec![format!(
+                    "Schema.maxLength({length}, {})",
+                    message(&format!("must be at most {length} characters long"))
+                )],
+                None => continue,
             },
 
             Validator::NumberValidator(nv) => match nv {
@@ -1262,7 +1311,7 @@ fn apply_validators_to_schema(
                 NumberValidator::Int => {
                     vec![format!("Schema.int({})", message("must be an integer"))]
                 }
-                NumberValidator::NonNaN => {
+                NumberValidator::NonNan => {
                     vec![format!("Schema.nonNaN({})", message("must not be NaN"))]
                 }
                 NumberValidator::Finite => {
@@ -1609,11 +1658,19 @@ mod tests {
             Validator::BigDecimalValidator(BigDecimalValidator::LessThanBigDecimal("1e5".into())),
         ];
         for validator in validators {
+            let (structs, enums) = (
+                std::collections::BTreeMap::new(),
+                std::collections::BTreeMap::new(),
+            );
+            let index = crate::typesync::type_index::TypeIndex::new(&structs, &enums)
+                .expect("an empty index");
             let result = apply_validators_to_schema(
                 "Schema.String".into(),
                 &FieldType::String,
-                std::slice::from_ref(&validator),
+                crate::validator::ValueRules::new(&[], std::slice::from_ref(&validator)),
                 "field",
+                &index,
+                &std::cell::Cell::default(),
             );
             assert!(result.is_err(), "{validator:?} was accepted");
         }

@@ -45,7 +45,8 @@ pub struct User {
     pub id: String,
     #[validators(email)]
     pub email: String,
-    #[validators(trim, non_empty, max_length = 80)]
+    #[morphs(trim)]
+    #[validators(non_empty, max_length = 80)]
     pub name: String,
 }
 ```
@@ -69,11 +70,49 @@ with a value as `max_length = 80` or `between = (0.0, 100.0)`. A name two kinds
 of validator share takes the kind, as in `string_validator(min_length = 3)`,
 and the path form, `StringValidator::MaxLength(80)`, reads the same.
 
-A struct whose fields carry `#[validators(...)]` also gets a generated
-`serde::Deserialize`: serde reads the input under the struct's own
-`#[serde(...)]` attributes, then every field's validators run, and every field
-that fails is reported in one error. Do not derive `Deserialize` on such a
-struct yourself. Every derived type also implements
+`#[morphs(...)]` rewrites a value into canonical form before its validators
+check it, keeping its type:
+
+| Morph | Applies to | Does |
+|---|---|---|
+| `trim` | `String` | removes leading and trailing whitespace |
+| `collapse_whitespace` | `String` | turns each run of whitespace into one space |
+| `lower`, `upper` | `String` | changes case |
+| `capitalize` | `String` | upper-cases the first character |
+| `normalize`, `normalize_nfc`, `normalize_nfd`, `normalize_nfkc`, `normalize_nfkd` | `String` | Unicode normalization (`normalize` is NFC) |
+| `round = 2` | `f64` | rounds to that many decimal places, halves up, as `Math.round` does |
+| `clamp = ("0", "100")` | integers, `f64`, decimal text in a `String` | pulls the value into the range |
+| `sort` | `Vec` of strings, characters, integers or booleans | orders the elements, strings by code point |
+| `unique` | `Vec` of strings, characters, integers or booleans | drops elements equal to an earlier one |
+
+Morphs run in the order written, all before the validators, in the Rust read
+and in every TypeScript output (Macroforge's `@endec({ normalize: [...] })`).
+The schema stores the rewritten value and asserts only the validators. A morph
+on a type it does not apply to is a compile error, and one written inside
+`#[validators(...)]` is refused with the place it belongs.
+
+A value written as text is a type, so it reads and writes the same way:
+
+| Type | Written as | Holds |
+|---|---|---|
+| `FromText<T>` | `"42"`, `"0.5"`, `"https://…"` | an integer within JavaScript's safe range, an `f32`/`f64`, or a `url::Url` |
+| `IsoDate` | `"2024-02-29T10:15:00.000Z"` | a `DateTime<Utc>` |
+| `EpochMillis` | `"1709201700000"` | a `DateTime<Utc>` |
+| `JsonText<T>` | `"[1,2]"` | any `T`, read from and written as JSON |
+
+Each parses exactly what ArkType's and Effect's parses accept (`FromText<u8>`
+refuses `"300"` and `"007"`), and serializes back to the same text. Validators
+and morphs on the field reach the parsed value, the database stores it as its
+own type (`int`, `float`, `datetime`, or `T`'s), and the TypeScript outputs
+decode the text: ArkType's `string.integer.parse` and the like, Effect's
+`NumberFromString` and `parseJson`, and Macroforge's `@endec({ as: ... })`
+codecs (`DisplayFromStr`, `DateFromString`, `JsonString`, ...).
+
+A struct whose fields carry `#[validators(...)]` or `#[morphs(...)]` also gets
+a generated `serde::Deserialize`: serde reads the input under the struct's own
+`#[serde(...)]` attributes, then every field's morphs and validators run, and
+every field that fails is reported in one error. Do not derive `Deserialize`
+on such a struct yourself. Every derived type also implements
 `evenframe::validator::validate::Validate`, whose `validate()` checks a value
 built in code, and every value nested in it, the same way. Neither needs
 `metadata`: without it the derive emits only these and the `EvenframeTable`
@@ -109,10 +148,17 @@ concrete type.
 
 The TypeScript outputs brand a newtype (ArkType and Effect brands,
 Macroforge's `$Newtype<T>`), so a plain string is not one. The schema stores
-it as its inner type and asserts its validators on a field holding it directly
-or in an `Option`. One held deeper, such as `tags` above, is checked when read
-but not asserted, and schemasync warns about it. A tuple struct of several
-fields is written as an array and a unit struct as null, as serde writes them.
+it as its inner type and asserts its validators wherever the value holds it:
+the field itself, an `Option`, each element of `tags` above, a map's keys and
+values, a tuple's items, an embedded struct's fields, a tagged enum's payload
+under its tag and an untagged one's where serde would read the value as that
+variant. A struct holding itself, and an untagged variant after one whose
+shape SurrealQL cannot state (such as `Maybe(Option<T>)`), cannot be followed
+or told apart, so validators there are checked when read but not asserted,
+and schemasync warns about each one. The fallback `DEFAULT` of a field whose
+zero value fails a check is left out, so the field is required. A
+tuple struct of several fields is written as an array and a unit struct as
+null, as serde writes them.
 
 A validator runs in three places: the Rust read, the schema's `ASSERT`, and
 every TypeScript output. A custom pattern,
@@ -121,6 +167,28 @@ Rust's `regex` and JavaScript's `RegExp` read the same way: no `\d`, `\w`,
 `\s`, `\b`, `\p{...}`, `.`, inline flags or class set operations, and a
 negated class only directly under `*` or `+`. Anything else is a compile error
 naming the portable form, such as `[0-9]` for `\d`.
+
+`starts_with`, `ends_with` and `includes` take text in quotes or a format,
+so a password reads `includes = format(uppercase)` rather than a hand-written
+pattern. The validator anchors the format's pattern where it looks: a custom
+pattern there may not anchor itself with `^` or `$`. Besides the mock-data
+formats, `uppercase`, `lowercase`, `digit` and `symbol` (ASCII punctuation)
+match one character, and `relative_path` and `slug` match a URL path such as
+`/a/b` and a slug such as `my-post-1`.
+
+```rust
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Signup {
+    pub id: String,
+    #[validators(
+        min_length = 8,
+        includes = format(uppercase),
+        includes = format(digit),
+        includes = format(symbol)
+    )]
+    pub password: String,
+}
+```
 
 Where one pipeline needs something the others cannot read, an override
 replaces a field's, tuple element's or newtype's `#[validators(...)]` there:
@@ -170,8 +238,7 @@ With the `surrealdb-types` feature, every derived type also implements the
 SurrealDB SDK's `SurrealValue` in the shape evenframe's schema defines: fields
 under their database names (`#[surreal(rename...)]`), enums in serde's
 representation, a missing field taking serde's default, and a read that runs
-the field's parse morphs and transforms before validating, as serde's read
-does. Rows read with `response.take::<Vec<T>>(n)` and bound with
+the field's morphs before validating, as serde's read does. Rows read with `response.take::<Vec<T>>(n)` and bound with
 `into_value()` need no JSON round trip. A field whose type has no
 `SurrealValue` converts through serde. A Rust `Option` is stored as
 `option<T>` with NONE by default. Set `[schemasync] option_none = "null"` to
@@ -356,6 +423,13 @@ changed, one transaction per table. Existing records are kept, trimmed or
 regenerated to each table's mock count, and links between records stay
 valid.
 
+A field's `#[format(...)]` shapes its mock values: a `Format` such as
+`#[format(Email)]` or `#[format(Url("example.com"))]` generates values its
+pattern matches, and a duration field takes a range in steps,
+`#[format(duration_ns(min = "PT1H", max = "PT5H", step = "PT15M"))]`. The
+bounds are ISO 8601 durations of a fixed length, so years and months are
+refused, and the step must divide the range.
+
 #### Plugins
 
 Plugins are WebAssembly modules, written in Rust with the `evenframe_plugin`
@@ -440,7 +514,7 @@ a compile error, where serde would fail when writing it.
 A type from another crate, such as `chrono::DateTime` or
 `rust_decimal::Decimal`, is described once under `[general.foreign_types]`:
 its database type, its type in each output with the import it needs, its
-default value, and how mock data generates it.
+schema default, and how mock data generates it.
 
 ```toml
 [general.foreign_types.DateTime]
@@ -449,7 +523,6 @@ ignore_generic_params = true
 surrealdb = "datetime"
 arktype = { type = "'string.date.iso'" }
 effect = { type = "Schema.DateTimeUtc", encoded = "string" }
-default_value_ts = "new Date().toISOString()"
 default_value_surql = "time::now()"
 mock_strategy = "datetime"
 ```
@@ -473,7 +546,6 @@ surrealdb = "record"
 arktype = { type = "RecordIdCodec.ark", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
 effect = { type = "RecordIdCodec.schema", encoded = "Schema.Schema.Encoded<typeof RecordIdCodec.schema>", import = { from = "../record-id.ts", name = "RecordIdCodec", type_only = false } }
 macroforge = { type = "RecordIdEncoded", import = { from = "../record-id.ts", name = "RecordIdEncoded" } }
-default_value_ts = "RecordIdCodec.empty"
 ```
 
 A `RecordLink` entry instead replaces the whole link in the outputs it maps,
@@ -499,6 +571,36 @@ with `{0}` for the linked type.
 | `wasm-plugins` | The plugin runtime. |
 | `cli` (default) | Everything the `evenframe` binary needs. |
 | `full` | Every feature. |
+
+## Upgrading to 0.6
+
+- Transforms are morphs: `trim`, `lower`, `upper`, `capitalize` and the
+  `normalize` forms move from `#[validators(...)]` to `#[morphs(...)]`, which
+  run before every validator rather than in the order written among them.
+  The `StringValidator::Trim`-style path forms are gone.
+- The parse validators are types: `integer_parse` and `numeric_parse` become a
+  `FromText<T>` field, `url_parse` a `FromText<url::Url>`, `date_iso_parse` an
+  `IsoDate`, `date_epoch_parse` an `EpochMillis`, and `json_parse` a
+  `JsonText<T>`. The loose `date_parse` is gone, since `Date.parse`'s
+  formats do not round-trip. A text form's parse error is serde's, reported
+  as the read stops, rather than collected with the validators' failures.
+- `#[validators(...)]` on a struct of named fields, an enum or a tuple struct
+  of several fields is refused: put it on the field, tuple element or newtype
+  it checks.
+- `starts_with`, `ends_with` and `includes` take a `TextPattern`, text or a
+  format, so a path form such as `StringValidator::Includes("x".to_owned())`
+  becomes `StringValidator::Includes("x".into())`. An invalid format is
+  described by name in error messages rather than by its Rust debug form.
+- The ArkType output no longer writes a `default{Type}` object beside each
+  struct, and a foreign type's `default_value_ts` is gone: remove it from
+  `[general.foreign_types]`, which refuses unknown keys.
+- `#[format(AppointmentDurationNs)]` is
+  `#[format(duration_ns(min = "PT1H", max = "PT5H", step = "PT15M"))]`, and a
+  field's `format` is a `MockFormat`, which wraps a `Format` in
+  `MockFormat::Format`.
+- `StringValidator::NormalizeNFCPreformatted` and its NFD, NFKC and NFKD twins
+  are `NormalizeNfcPreformatted` and so on, and `NumberValidator::NonNaN` is
+  `NonNan`, whose attribute name is `non_nan` rather than `non_na_n`.
 
 ## License
 

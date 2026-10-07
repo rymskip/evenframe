@@ -1,0 +1,22 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Import {
+    count: int64 (validate: "greaterThanOrEqualTo(0)");
+    level: uint8;
+    ratio: double = null;
+    source: string;
+    started: int64;
+    finished: int64 = null;
+    settings: [string];
+    sizes: [uint32];
+    totals: [ImportTotalsEntry];
+}
+
+table ImportTotalsEntry {
+    key: string (key);
+    value: int32;
+}

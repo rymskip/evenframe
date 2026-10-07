@@ -8,6 +8,7 @@ use crate::schemasync::format::Format;
 use crate::types::{FieldType, StructConfig, StructField, TaggedUnion, VariantData};
 use crate::typesync::doc_comment::format_triple_slash;
 use crate::typesync::map_key::MapKey;
+use crate::validator::text_pattern::{Anchoring, TextPattern};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -82,6 +83,7 @@ pub fn generate_flatbuffers_schema_string(
             .collect(),
         definitions: Vec::new(),
         uses_validate: false,
+        uses_normalize: false,
     };
 
     let mut body = String::new();
@@ -106,7 +108,13 @@ pub fn generate_flatbuffers_schema_string(
         output.push_str(&format!("namespace {};\n\n", ns));
     }
     if fbs.uses_validate {
-        output.push_str("attribute \"validate\";\n\n");
+        output.push_str("attribute \"validate\";\n");
+    }
+    if fbs.uses_normalize {
+        output.push_str("attribute \"normalize\";\n");
+    }
+    if fbs.uses_validate || fbs.uses_normalize {
+        output.push('\n');
     }
     output.push_str(&body);
     for definition in &fbs.definitions {
@@ -145,6 +153,7 @@ struct Fbs<'a> {
     scalar_enums: BTreeSet<String>,
     definitions: Vec<String>,
     uses_validate: bool,
+    uses_normalize: bool,
 }
 
 impl Fbs<'_> {
@@ -183,10 +192,29 @@ impl Fbs<'_> {
                 "    {}",
                 fbs_field.declaration(&field.field_name.to_case(Case::Snake))
             ));
+            let mut attributes = Vec::new();
             let validators = collect_validators_for_field(&field.validators);
             if !validators.is_empty() {
                 self.uses_validate = true;
-                output.push_str(&format!(" (validate: \"{validators}\")"));
+                attributes.push(format!("validate: \"{validators}\""));
+            }
+            if !field.morphs.is_empty() {
+                let steps = field
+                    .morphs
+                    .iter()
+                    .map(|morph| morph.endec_step().map(|step| escape_for_fbs(&step)))
+                    .collect::<std::result::Result<Vec<_>, String>>()
+                    .map_err(|problem| {
+                        EvenframeError::type_sync(format!(
+                            "field `{}`: {problem}",
+                            field.field_name
+                        ))
+                    })?;
+                self.uses_normalize = true;
+                attributes.push(format!("normalize: \"{}\"", steps.join(", ")));
+            }
+            if !attributes.is_empty() {
+                output.push_str(&format!(" ({})", attributes.join(", ")));
             }
             output.push_str(";\n");
         }
@@ -281,6 +309,11 @@ impl Fbs<'_> {
             }
             FieldType::Duration => self.value(&FieldType::serde_duration(), hint)?,
             FieldType::RecordLink(inner) => self.value(inner, hint)?,
+            // A text form is held as the value its text writes, and an
+            // instant as its epoch milliseconds.
+            FieldType::FromText(kind) => self.value(kind.value_type(), hint)?,
+            FieldType::JsonText(inner) => self.value(inner, hint)?,
+            FieldType::IsoDate | FieldType::EpochMillis => "int64".to_string(),
             FieldType::Other(type_name) => match self.registry.lookup(type_name) {
                 Some(foreign) if !foreign.flatbuffers.is_empty() => foreign.flatbuffers.clone(),
                 _ => type_name.to_case(Case::Pascal),
@@ -391,7 +424,7 @@ fn collect_validators_for_field(validators: &[Validator]) -> String {
 }
 
 /// Convert a Validator to its FlatBuffers attribute string representation.
-/// Unlike macroforge, this includes ALL validators (including transformations).
+/// Unlike macroforge, this includes the parse validators.
 fn validator_to_flatbuffers_string(validator: &Validator) -> Option<String> {
     match validator {
         Validator::StringValidator(sv) => string_validator_to_flatbuffers(sv),
@@ -461,36 +494,21 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         }
         StringValidator::Uncapitalized => Some("uncapitalized".to_string()),
 
-        // Transformation validators (INCLUDED per requirements)
-        StringValidator::Capitalize => Some("capitalize".to_string()),
-        StringValidator::Lower => Some("lower".to_string()),
-        StringValidator::Upper => Some("upper".to_string()),
-        StringValidator::Trim => Some("trim".to_string()),
-        StringValidator::Normalize => Some("normalize".to_string()),
-        StringValidator::NormalizeNFC => Some("normalizeNFC".to_string()),
-        StringValidator::NormalizeNFD => Some("normalizeNFD".to_string()),
-        StringValidator::NormalizeNFKC => Some("normalizeNFKC".to_string()),
-        StringValidator::NormalizeNFKD => Some("normalizeNFKD".to_string()),
-        StringValidator::NormalizeNFCPreformatted => Some("normalizedNFC".to_string()),
-        StringValidator::NormalizeNFDPreformatted => Some("normalizedNFD".to_string()),
-        StringValidator::NormalizeNFKCPreformatted => Some("normalizedNFKC".to_string()),
-        StringValidator::NormalizeNFKDPreformatted => Some("normalizedNFKD".to_string()),
+        StringValidator::NormalizeNfcPreformatted => Some("normalizedNFC".to_string()),
+        StringValidator::NormalizeNfdPreformatted => Some("normalizedNFD".to_string()),
+        StringValidator::NormalizeNfkcPreformatted => Some("normalizedNFKC".to_string()),
+        StringValidator::NormalizeNfkdPreformatted => Some("normalizedNFKD".to_string()),
 
-        // Parse validators (INCLUDED per requirements)
-        StringValidator::DateParse => Some("dateParse".to_string()),
-        StringValidator::DateEpochParse => Some("dateEpochParse".to_string()),
-        StringValidator::DateIsoParse => Some("dateIsoParse".to_string()),
-        StringValidator::IntegerParse => Some("integerParse".to_string()),
-        StringValidator::NumericParse => Some("numericParse".to_string()),
-        StringValidator::JsonParse => Some("jsonParse".to_string()),
-        StringValidator::UrlParse => Some("urlParse".to_string()),
-
-        // Substring validators
-        StringValidator::StartsWith(s) => {
-            Some(format!("startsWith(\\\"{}\\\")", escape_for_fbs(s)))
+        // Substring validators, a format argument as its anchored pattern
+        StringValidator::StartsWith(pattern) => {
+            Some(text_argument("startsWith", pattern, Anchoring::Start))
         }
-        StringValidator::EndsWith(s) => Some(format!("endsWith(\\\"{}\\\")", escape_for_fbs(s))),
-        StringValidator::Includes(s) => Some(format!("includes(\\\"{}\\\")", escape_for_fbs(s))),
+        StringValidator::EndsWith(pattern) => {
+            Some(text_argument("endsWith", pattern, Anchoring::End))
+        }
+        StringValidator::Includes(pattern) => {
+            Some(text_argument("includes", pattern, Anchoring::Anywhere))
+        }
 
         // Pattern validators
         StringValidator::RegexLiteral(Format::Custom(custom))
@@ -507,9 +525,21 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
             escape_for_fbs(&format.pattern())
         )),
         StringValidator::Literal(s) => Some(format!("literal(\\\"{}\\\")", escape_for_fbs(s))),
+    }
+}
 
-        // Special cases - skip internal validators
-        StringValidator::StringEmbedded(_) => None,
+/// A text validator's attribute: `name("text")`, or a format's pattern.
+fn text_argument(name: &str, pattern: &TextPattern, anchoring: Anchoring) -> String {
+    match pattern {
+        TextPattern::Text(text) => format!("{name}(\\\"{}\\\")", escape_for_fbs(text)),
+        TextPattern::Format(_) => match pattern.regex(anchoring) {
+            (source, Some(flags)) if !flags.is_empty() => format!(
+                "pattern(\\\"{}\\\", \\\"{}\\\")",
+                escape_for_fbs(&source),
+                escape_for_fbs(flags)
+            ),
+            (source, _) => format!("pattern(\\\"{}\\\")", escape_for_fbs(&source)),
+        },
     }
 }
 
@@ -517,7 +547,7 @@ fn number_validator_to_flatbuffers(nv: &NumberValidator) -> Option<String> {
     match nv {
         NumberValidator::Int => Some("int".to_string()),
         NumberValidator::Finite => Some("finite".to_string()),
-        NumberValidator::NonNaN => Some("nonNaN".to_string()),
+        NumberValidator::NonNan => Some("nonNaN".to_string()),
         NumberValidator::Positive => Some("positive".to_string()),
         NumberValidator::Negative => Some("negative".to_string()),
         NumberValidator::NonPositive => Some("nonPositive".to_string()),
@@ -688,29 +718,6 @@ mod tests {
     }
 
     #[test]
-    fn test_transformation_validators_included() {
-        // Unlike macroforge, transformations ARE included in FlatBuffers
-        assert_eq!(
-            validator_to_flatbuffers_string(&Validator::StringValidator(StringValidator::Lower)),
-            Some("lower".to_string())
-        );
-        assert_eq!(
-            validator_to_flatbuffers_string(&Validator::StringValidator(StringValidator::Upper)),
-            Some("upper".to_string())
-        );
-        assert_eq!(
-            validator_to_flatbuffers_string(&Validator::StringValidator(StringValidator::Trim)),
-            Some("trim".to_string())
-        );
-        assert_eq!(
-            validator_to_flatbuffers_string(&Validator::StringValidator(
-                StringValidator::Capitalize
-            )),
-            Some("capitalize".to_string())
-        );
-    }
-
-    #[test]
     fn test_number_validators_to_flatbuffers() {
         assert_eq!(
             validator_to_flatbuffers_string(&Validator::NumberValidator(NumberValidator::Int)),
@@ -758,6 +765,7 @@ mod tests {
             scalar_enums: BTreeSet::from(["Role".to_string()]),
             definitions: Vec::new(),
             uses_validate: false,
+            uses_normalize: false,
         }
     }
 
@@ -932,7 +940,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -988,6 +995,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -1000,6 +1008,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -1012,6 +1021,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -1089,7 +1099,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -1116,6 +1125,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -1128,6 +1138,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },

@@ -1,0 +1,5 @@
+error: Failed to parse format attribute for field 'term': `P1M` counts years or months, whose length depends on the calendar: write it in weeks, days, hours, minutes and seconds
+ --> tests/ui/fail/duration_range_calendar_length.rs:8:32
+  |
+8 |     #[format(duration_ns(min = "P1M", max = "P12M", step = "P1M"))]
+  |                                ^^^^^

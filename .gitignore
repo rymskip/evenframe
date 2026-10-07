@@ -13,3 +13,5 @@ CLAUDE.md
 **/scheduled_tasks.lock
 # The scan cache is local, rewritten by every scan
 **/.evenframe/cache.json
+# The progress of each verify run
+/.verify

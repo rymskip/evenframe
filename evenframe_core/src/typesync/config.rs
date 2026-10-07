@@ -156,10 +156,7 @@ impl OutputKind {
     ) -> Vec<&'static str> {
         let written = |value: &str| !value.trim().is_empty();
         let required: Vec<(&'static str, bool)> = match self {
-            OutputKind::Arktype => vec![
-                ("arktype", foreign.arktype.is_some()),
-                ("default_value_ts", written(&foreign.default_value_ts)),
-            ],
+            OutputKind::Arktype => vec![("arktype", foreign.arktype.is_some())],
             OutputKind::Effect => vec![("effect", foreign.effect.is_some())],
             OutputKind::Macroforge => vec![("macroforge", foreign.macroforge.is_some())],
             OutputKind::Flatbuffers => vec![("flatbuffers", written(&foreign.flatbuffers))],

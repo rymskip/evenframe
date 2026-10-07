@@ -1,0 +1,15 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Reading {
+    string label = 1;
+    optional string email = 2;
+    double level = 3;
+    uint32 rating = 4;
+    string price = 5;
+    repeated string tags = 6;
+    repeated int32 scores = 7;
+}

@@ -5,148 +5,53 @@
 use super::StringValidator;
 use super::bounds;
 use super::keywords::{self, NormalForm};
+use super::text_pattern::{Anchoring, TextPattern};
 use crate::schemasync::mockmake::format::Format;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
-/// A morph that rewrites a string and keeps it a string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringTransform {
-    Lower,
-    Upper,
-    Trim,
-    Capitalize,
-    Normalize(NormalForm),
-}
-
-impl StringTransform {
-    pub fn apply(self, value: &str) -> String {
-        match self {
-            StringTransform::Lower => value.to_lowercase(),
-            StringTransform::Upper => value.to_uppercase(),
-            StringTransform::Trim => keywords::trim(value).to_owned(),
-            StringTransform::Capitalize => keywords::capitalize(value),
-            StringTransform::Normalize(form) => keywords::normalize(value, form),
-        }
-    }
-}
-
-/// A morph that parses a string into the field's own type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringParse {
-    Integer,
-    Numeric,
-    Date,
-    DateIso,
-    DateEpoch,
-    Json,
-    Url,
-}
-
-/// The role a string validator plays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringRule {
-    /// Accepts or rejects the value.
-    Check,
-    /// Rewrites the value.
-    Transform(StringTransform),
-    /// Reads a string and parses it into the field's type.
-    Parse(StringParse),
-    /// Carries text with no per-value meaning.
-    Carrier,
-}
-
 impl StringValidator {
-    pub fn rule(&self) -> StringRule {
-        match self {
-            StringValidator::Capitalize => StringRule::Transform(StringTransform::Capitalize),
-            StringValidator::Lower => StringRule::Transform(StringTransform::Lower),
-            StringValidator::Upper => StringRule::Transform(StringTransform::Upper),
-            StringValidator::Trim => StringRule::Transform(StringTransform::Trim),
-            StringValidator::Normalize | StringValidator::NormalizeNFC => {
-                StringRule::Transform(StringTransform::Normalize(NormalForm::Nfc))
-            }
-            StringValidator::NormalizeNFD => {
-                StringRule::Transform(StringTransform::Normalize(NormalForm::Nfd))
-            }
-            StringValidator::NormalizeNFKC => {
-                StringRule::Transform(StringTransform::Normalize(NormalForm::Nfkc))
-            }
-            StringValidator::NormalizeNFKD => {
-                StringRule::Transform(StringTransform::Normalize(NormalForm::Nfkd))
-            }
-            StringValidator::IntegerParse => StringRule::Parse(StringParse::Integer),
-            StringValidator::NumericParse => StringRule::Parse(StringParse::Numeric),
-            StringValidator::DateParse => StringRule::Parse(StringParse::Date),
-            StringValidator::DateIsoParse => StringRule::Parse(StringParse::DateIso),
-            StringValidator::DateEpochParse => StringRule::Parse(StringParse::DateEpoch),
-            StringValidator::JsonParse => StringRule::Parse(StringParse::Json),
-            StringValidator::UrlParse => StringRule::Parse(StringParse::Url),
-            StringValidator::StringEmbedded(_) => StringRule::Carrier,
-            _ => StringRule::Check,
-        }
-    }
-
-    /// Whether `value` is an input this validator accepts. A transform
-    /// accepts any string; a parse accepts the strings it can parse.
+    /// Whether `value` is an input this validator accepts.
     pub fn accepts(&self, value: &str) -> bool {
         match self {
-            StringValidator::String
-            | StringValidator::StringEmbedded(_)
-            | StringValidator::Capitalize
-            | StringValidator::Lower
-            | StringValidator::Upper
-            | StringValidator::Trim
-            | StringValidator::Normalize
-            | StringValidator::NormalizeNFC
-            | StringValidator::NormalizeNFD
-            | StringValidator::NormalizeNFKC
-            | StringValidator::NormalizeNFKD => true,
+            StringValidator::String => true,
             StringValidator::Alpha => keywords::is_alpha(value),
             StringValidator::Alphanumeric => keywords::is_alphanumeric(value),
             StringValidator::Base64 => keywords::is_base64(value),
             StringValidator::Base64Url => keywords::is_base64_url(value),
             StringValidator::CapitalizePreformatted => keywords::is_capitalized(value),
             StringValidator::CreditCard => keywords::is_credit_card(value),
-            StringValidator::Date | StringValidator::DateParse => keywords::is_parsable_date(value),
-            StringValidator::DateEpoch | StringValidator::DateEpochParse => {
-                keywords::is_epoch(value)
-            }
+            StringValidator::Date => keywords::is_parsable_date(value),
+            StringValidator::DateEpoch => keywords::is_epoch(value),
             StringValidator::DateIso => keywords::is_iso_8601(value),
-            StringValidator::DateIsoParse => {
-                keywords::is_iso_8601(value) && keywords::is_parsable_date(value)
-            }
             StringValidator::Digits => keywords::is_digits(value),
             StringValidator::Email => keywords::is_email(value),
             StringValidator::Hex => keywords::is_hex(value),
             StringValidator::Integer => keywords::is_integer(value),
-            StringValidator::IntegerParse => keywords::parse_safe_integer(value).is_some(),
             StringValidator::Ip => keywords::is_ip(value),
             StringValidator::IpV4 => keywords::is_ipv4(value),
             StringValidator::IpV6 => keywords::is_ipv6(value),
             StringValidator::Json => keywords::is_json(value),
-            StringValidator::JsonParse => !value.is_empty() && keywords::is_json(value),
             StringValidator::LowerPreformatted => keywords::is_lower(value),
-            StringValidator::NormalizeNFCPreformatted => {
+            StringValidator::NormalizeNfcPreformatted => {
                 keywords::is_normalized(value, NormalForm::Nfc)
             }
-            StringValidator::NormalizeNFDPreformatted => {
+            StringValidator::NormalizeNfdPreformatted => {
                 keywords::is_normalized(value, NormalForm::Nfd)
             }
-            StringValidator::NormalizeNFKCPreformatted => {
+            StringValidator::NormalizeNfkcPreformatted => {
                 keywords::is_normalized(value, NormalForm::Nfkc)
             }
-            StringValidator::NormalizeNFKDPreformatted => {
+            StringValidator::NormalizeNfkdPreformatted => {
                 keywords::is_normalized(value, NormalForm::Nfkd)
             }
             StringValidator::Numeric => keywords::is_numeric(value),
-            StringValidator::NumericParse => keywords::parse_numeric(value).is_some(),
             StringValidator::Regex => keywords::is_regex(value),
             StringValidator::Semver => keywords::is_semver(value),
             StringValidator::TrimPreformatted => keywords::is_trimmed(value),
             StringValidator::UpperPreformatted => keywords::is_upper(value),
-            StringValidator::Url | StringValidator::UrlParse => keywords::is_url(value),
+            StringValidator::Url => keywords::is_url(value),
             StringValidator::Uuid => keywords::is_uuid(value),
             StringValidator::UuidV1 => keywords::is_uuid_version(value, 1),
             StringValidator::UuidV2 => keywords::is_uuid_version(value, 2),
@@ -171,9 +76,9 @@ impl StringValidator {
             StringValidator::MinLength(length) => keywords::js_length(value) >= *length,
             StringValidator::MaxLength(length) => keywords::js_length(value) <= *length,
             StringValidator::NonEmpty => !value.is_empty(),
-            StringValidator::StartsWith(prefix) => value.starts_with(prefix.as_str()),
-            StringValidator::EndsWith(suffix) => value.ends_with(suffix.as_str()),
-            StringValidator::Includes(substring) => value.contains(substring.as_str()),
+            StringValidator::StartsWith(pattern) => text_holds(pattern, Anchoring::Start, value),
+            StringValidator::EndsWith(pattern) => text_holds(pattern, Anchoring::End, value),
+            StringValidator::Includes(pattern) => text_holds(pattern, Anchoring::Anywhere, value),
             StringValidator::Trimmed => keywords::trim(value) == value,
             StringValidator::Lowercased => value.to_lowercase() == value,
             StringValidator::Uppercased => value.to_uppercase() == value,
@@ -182,26 +87,23 @@ impl StringValidator {
         }
     }
 
-    /// Whether a stored value satisfies this validator. A stored value has
-    /// already been transformed, so it is its own transform.
-    pub fn holds_for(&self, value: &str) -> bool {
-        match self.rule() {
-            StringRule::Transform(transform) => transform.apply(value) == value,
-            StringRule::Check | StringRule::Parse(_) | StringRule::Carrier => self.accepts(value),
-        }
-    }
-
     /// Why `value` fails this validator, worded as what was expected.
     pub fn expectation(&self) -> String {
         match self {
             StringValidator::Literal(literal) => format!("exactly \"{literal}\""),
-            StringValidator::RegexLiteral(format) => format!("a value in the {format:?} format"),
+            StringValidator::RegexLiteral(format) => format.description(),
             StringValidator::Length(bound) => format!("exactly {bound} characters"),
             StringValidator::MinLength(length) => format!("at least {length} characters"),
             StringValidator::MaxLength(length) => format!("at most {length} characters"),
-            StringValidator::StartsWith(prefix) => format!("a value starting with \"{prefix}\""),
-            StringValidator::EndsWith(suffix) => format!("a value ending with \"{suffix}\""),
-            StringValidator::Includes(substring) => format!("a value containing \"{substring}\""),
+            StringValidator::StartsWith(pattern) => {
+                format!("a value starting with {}", pattern.describe())
+            }
+            StringValidator::EndsWith(pattern) => {
+                format!("a value ending with {}", pattern.describe())
+            }
+            StringValidator::Includes(pattern) => {
+                format!("a value containing {}", pattern.describe())
+            }
             other => other.description().to_owned(),
         }
     }
@@ -213,46 +115,30 @@ impl StringValidator {
             StringValidator::Alphanumeric => "string.alphanumeric",
             StringValidator::Base64 => "string.base64",
             StringValidator::Base64Url => "string.base64.url",
-            StringValidator::Capitalize => "string.capitalize",
             StringValidator::CapitalizePreformatted => "string.capitalize.preformatted",
             StringValidator::CreditCard => "string.creditCard",
             StringValidator::Date => "string.date",
             StringValidator::DateEpoch => "string.date.epoch",
-            StringValidator::DateEpochParse => "string.date.epoch.parse",
             StringValidator::DateIso => "string.date.iso",
-            StringValidator::DateIsoParse => "string.date.iso.parse",
-            StringValidator::DateParse => "string.date.parse",
             StringValidator::Digits => "string.digits",
             StringValidator::Email => "string.email",
             StringValidator::Hex => "string.hex",
             StringValidator::Integer => "string.integer",
-            StringValidator::IntegerParse => "string.integer.parse",
             StringValidator::Ip => "string.ip",
             StringValidator::IpV4 => "string.ip.v4",
             StringValidator::IpV6 => "string.ip.v6",
             StringValidator::Json => "string.json",
-            StringValidator::JsonParse => "string.json.parse",
-            StringValidator::Lower => "string.lower",
             StringValidator::LowerPreformatted => "string.lower.preformatted",
-            StringValidator::Normalize => "string.normalize",
-            StringValidator::NormalizeNFC => "string.normalize.NFC",
-            StringValidator::NormalizeNFCPreformatted => "string.normalize.NFC.preformatted",
-            StringValidator::NormalizeNFD => "string.normalize.NFD",
-            StringValidator::NormalizeNFDPreformatted => "string.normalize.NFD.preformatted",
-            StringValidator::NormalizeNFKC => "string.normalize.NFKC",
-            StringValidator::NormalizeNFKCPreformatted => "string.normalize.NFKC.preformatted",
-            StringValidator::NormalizeNFKD => "string.normalize.NFKD",
-            StringValidator::NormalizeNFKDPreformatted => "string.normalize.NFKD.preformatted",
+            StringValidator::NormalizeNfcPreformatted => "string.normalize.NFC.preformatted",
+            StringValidator::NormalizeNfdPreformatted => "string.normalize.NFD.preformatted",
+            StringValidator::NormalizeNfkcPreformatted => "string.normalize.NFKC.preformatted",
+            StringValidator::NormalizeNfkdPreformatted => "string.normalize.NFKD.preformatted",
             StringValidator::Numeric => "string.numeric",
-            StringValidator::NumericParse => "string.numeric.parse",
             StringValidator::Regex => "string.regex",
             StringValidator::Semver => "string.semver",
-            StringValidator::Trim => "string.trim",
             StringValidator::TrimPreformatted => "string.trim.preformatted",
-            StringValidator::Upper => "string.upper",
             StringValidator::UpperPreformatted => "string.upper.preformatted",
             StringValidator::Url => "string.url",
-            StringValidator::UrlParse => "string.url.parse",
             StringValidator::Uuid => "string.uuid",
             StringValidator::UuidV1 => "string.uuid.v1",
             StringValidator::UuidV2 => "string.uuid.v2",
@@ -269,54 +155,35 @@ impl StringValidator {
     /// ArkType's description of the keyword, or Effect's for its filters.
     pub fn description(&self) -> &'static str {
         match self {
-            StringValidator::String | StringValidator::StringEmbedded(_) => "a string",
+            StringValidator::String => "a string",
             StringValidator::Alpha => "only letters",
             StringValidator::Alphanumeric => "only letters and digits 0-9",
             StringValidator::Base64 => "base64-encoded",
             StringValidator::Base64Url => "base64url-encoded",
-            StringValidator::Capitalize | StringValidator::CapitalizePreformatted => "capitalized",
+            StringValidator::CapitalizePreformatted => "capitalized",
             StringValidator::CreditCard => "a credit card number",
-            StringValidator::Date | StringValidator::DateParse => "a parsable date",
-            StringValidator::DateEpoch | StringValidator::DateEpochParse => {
-                "an integer string representing a safe Unix timestamp"
-            }
-            StringValidator::DateIso | StringValidator::DateIsoParse => {
-                "an ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date"
-            }
+            StringValidator::Date => "a parsable date",
+            StringValidator::DateEpoch => "an integer string representing a safe Unix timestamp",
+            StringValidator::DateIso => "an ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date",
             StringValidator::Digits => "only digits 0-9",
             StringValidator::Email => "an email address",
             StringValidator::Hex => "hex characters only",
             StringValidator::Integer => "a well-formed integer string",
-            StringValidator::IntegerParse => {
-                "an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER"
-            }
             StringValidator::Ip => "an IP address",
             StringValidator::IpV4 => "an IPv4 address",
             StringValidator::IpV6 => "an IPv6 address",
-            StringValidator::Json | StringValidator::JsonParse => "a JSON string",
-            StringValidator::Lower | StringValidator::LowerPreformatted => "only lowercase letters",
-            StringValidator::Normalize
-            | StringValidator::NormalizeNFC
-            | StringValidator::NormalizeNFCPreformatted => "NFC-normalized unicode",
-            StringValidator::NormalizeNFD | StringValidator::NormalizeNFDPreformatted => {
-                "NFD-normalized unicode"
-            }
-            StringValidator::NormalizeNFKC | StringValidator::NormalizeNFKCPreformatted => {
-                "NFKC-normalized unicode"
-            }
-            StringValidator::NormalizeNFKD | StringValidator::NormalizeNFKDPreformatted => {
-                "NFKD-normalized unicode"
-            }
-            StringValidator::Numeric | StringValidator::NumericParse => {
-                "a well-formed numeric string"
-            }
+            StringValidator::Json => "a JSON string",
+            StringValidator::LowerPreformatted => "only lowercase letters",
+            StringValidator::NormalizeNfcPreformatted => "NFC-normalized unicode",
+            StringValidator::NormalizeNfdPreformatted => "NFD-normalized unicode",
+            StringValidator::NormalizeNfkcPreformatted => "NFKC-normalized unicode",
+            StringValidator::NormalizeNfkdPreformatted => "NFKD-normalized unicode",
+            StringValidator::Numeric => "a well-formed numeric string",
             StringValidator::Regex => "a regex pattern",
             StringValidator::Semver => "a semantic version (see https://semver.org/)",
-            StringValidator::Trim
-            | StringValidator::TrimPreformatted
-            | StringValidator::Trimmed => "trimmed",
-            StringValidator::Upper | StringValidator::UpperPreformatted => "only uppercase letters",
-            StringValidator::Url | StringValidator::UrlParse => "a URL string",
+            StringValidator::TrimPreformatted | StringValidator::Trimmed => "trimmed",
+            StringValidator::UpperPreformatted => "only uppercase letters",
+            StringValidator::Url => "a URL string",
             StringValidator::Uuid => "a UUID",
             StringValidator::UuidV1 => "a UUIDv1",
             StringValidator::UuidV2 => "a UUIDv2",
@@ -350,6 +217,54 @@ fn first_unit_is<I: Iterator<Item = char>>(value: &str, map: impl Fn(char) -> I)
         Some(first) if first.len_utf16() == 1 => map(first).eq(std::iter::once(first)),
         _ => true,
     }
+}
+
+/// Whether `value` holds `pattern` where `anchoring` looks for it.
+fn text_holds(pattern: &TextPattern, anchoring: Anchoring, value: &str) -> bool {
+    match pattern {
+        TextPattern::Text(text) => match anchoring {
+            Anchoring::Start => value.starts_with(text.as_str()),
+            Anchoring::End => value.ends_with(text.as_str()),
+            Anchoring::Anywhere => value.contains(text.as_str()),
+        },
+        TextPattern::Format(Format::Custom(custom)) if custom.flags().is_some() => {
+            javascript_is_match(
+                &anchoring.anchor(custom.as_str()),
+                custom.flags().unwrap_or_default(),
+                value,
+            )
+        }
+        TextPattern::Format(format) => {
+            text_regex(format, anchoring).is_some_and(|regex| regex.is_match(value))
+        }
+    }
+}
+
+/// Each format's body as a text argument anchors it, `None` for one that
+/// does not compile.
+type TextRegexes = HashMap<(Format, Anchoring), Option<Arc<Regex>>>;
+
+static TEXT_REGEXES: LazyLock<Mutex<TextRegexes>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// `format`'s body anchored as `anchoring` says, compiled once per process. A
+/// pattern that does not compile is logged and matches nothing.
+fn text_regex(format: &Format, anchoring: Anchoring) -> Option<Arc<Regex>> {
+    let mut cache = TEXT_REGEXES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .entry((format.clone(), anchoring))
+        .or_insert_with(|| {
+            let source = anchoring.anchor(&format.body());
+            match Regex::new(&source) {
+                Ok(regex) => Some(Arc::new(regex)),
+                Err(error) => {
+                    tracing::error!("the pattern /{source}/ does not compile: {error}");
+                    None
+                }
+            }
+        })
+        .clone()
 }
 
 static FORMAT_REGEXES: LazyLock<Mutex<HashMap<Format, Arc<Regex>>>> =
@@ -401,27 +316,11 @@ pub fn format_regex(format: &Format) -> Arc<Regex> {
 
 #[cfg(test)]
 mod tests {
-    use super::{StringParse, StringRule, StringTransform, StringValidator};
+    use super::StringValidator;
 
     #[test]
-    fn morphs_are_classified() {
-        assert_eq!(
-            StringValidator::Lower.rule(),
-            StringRule::Transform(StringTransform::Lower)
-        );
-        assert_eq!(
-            StringValidator::IntegerParse.rule(),
-            StringRule::Parse(StringParse::Integer)
-        );
-        assert_eq!(StringValidator::LowerPreformatted.rule(), StringRule::Check);
-        assert_eq!(StringValidator::Email.rule(), StringRule::Check);
-    }
-
-    #[test]
-    fn stored_values_are_their_own_transform() {
-        assert!(StringValidator::Lower.holds_for("hello world"));
-        assert!(!StringValidator::Lower.holds_for("Hello"));
-        assert!(StringValidator::Lower.accepts("Hello"));
+    fn preformatted_checks_reject_what_their_morph_would_rewrite() {
+        assert!(StringValidator::LowerPreformatted.accepts("hello"));
         assert!(!StringValidator::LowerPreformatted.accepts("hello world"));
     }
 

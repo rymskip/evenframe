@@ -1,0 +1,23 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Import: {
+  count: ['string.integer.parse', '|>', 'number >= 0'],
+  level: ['string.integer.parse', '|>', '0 <= number <= 255'],
+  ratio: [['string.numeric.parse', '|', 'undefined'], '|', 'null'],
+  source: 'string.url.parse',
+  started: 'string.date.iso.parse',
+  finished: [['string.date.epoch.parse', '|', 'undefined'], '|', 'null'],
+  settings: ['string.json.parse', '|>', ['string', '[]']],
+  sizes: [['string.integer.parse', '|>', '0 <= number <= 4294967295'], '[]'],
+  totals: { '+': 'reject', "[string]": ['string.integer.parse', '|>', '-2147483648 <= number <= 2147483647'] }
+},
+
+});
+
+const exported = bindings.export();
+
+export type Import = typeof exported.Import.infer;

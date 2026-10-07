@@ -1,0 +1,27 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Reading {
+    // protoc-gen-validate cannot normalize: collapseWhitespace; trim; normalizeUnicode("NFKC")
+    string label = 1 [(validate.rules).string = {min_len: 1}];
+    // protoc-gen-validate cannot normalize: trim; lowercase
+    optional string email = 2 [(validate.rules).string = {pattern: "^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\.[A-Za-z]{2,}$"}];
+    // protoc-gen-validate cannot normalize: clamp(0, 10); round(1)
+    double level = 3;
+    // protoc-gen-validate cannot normalize: clamp(1, 5)
+    uint32 rating = 4;
+    // protoc-gen-validate cannot normalize: clamp(0, 99.5)
+    string price = 5;
+    // protoc-gen-validate cannot normalize: unique; sort
+    repeated string tags = 6 [(validate.rules).repeated = {max_items: 10}];
+    // protoc-gen-validate cannot normalize: sort
+    repeated int32 scores = 7;
+}

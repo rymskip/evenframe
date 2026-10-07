@@ -62,12 +62,9 @@ fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> StructField 
     out
 }
 
-fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
+fn field_with_validators(name: &str, ty: &str, vals: Vec<StringValidator>) -> StructField {
     let mut out = field(name, ty);
-    out.validators = vals
-        .into_iter()
-        .map(|text| Validator::StringValidator(StringValidator::StringEmbedded(text.to_string())))
-        .collect();
+    out.validators = vals.into_iter().map(Validator::StringValidator).collect();
     out
 }
 
@@ -484,9 +481,13 @@ fn heavily_validated_annotation_fires() {
             field_with_validators(
                 "email",
                 "String",
-                vec!["email", "min_length(5)", "max_length(255)"],
+                vec![
+                    StringValidator::Email,
+                    StringValidator::MinLength(5),
+                    StringValidator::MaxLength(255),
+                ],
             ),
-            field_with_validators("name", "String", vec!["min_length(1)"]),
+            field_with_validators("name", "String", vec![StringValidator::MinLength(1)]),
         ])
         .build();
     let result = transform(&mut pm, &built).unwrap();
@@ -646,7 +647,11 @@ fn kitchen_sink_everything_at_once() {
             field_with_validators(
                 "email",
                 "String",
-                vec!["email", "min_length(3)", "max_length(255)"],
+                vec![
+                    StringValidator::Email,
+                    StringValidator::MinLength(3),
+                    StringValidator::MaxLength(255),
+                ],
             ), // @heavily_validated
             field("items", "Vec<LineItem>"), // @nested_collection
             field("metadata", "LineItem"),   // struct ref

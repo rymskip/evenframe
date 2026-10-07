@@ -1,0 +1,20 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Import {
+    message Settings {
+        repeated string value = 1;
+    }
+    int64 count = 1;
+    uint32 level = 2;
+    optional double ratio = 3;
+    string source = 4;
+    int64 started = 5;
+    optional int64 finished = 6;
+    Settings settings = 7;
+    repeated uint32 sizes = 8;
+    map<string, int32> totals = 9;
+}

@@ -19,15 +19,4 @@ Signup: {
 
 const exported = bindings.export();
 
-export const defaultSignup: Signup = {
-username: "",
-code: "",
-token: "",
-banner: null,
-ratio: 0,
-level: 0,
-tags: null,
-address: ""
-};
-
 export type Signup = typeof exported.Signup.infer;

@@ -10,5 +10,4 @@ Value: [[['string', '|', 'number'], '|', 'boolean'], '|', 'null'],
 
 const exported = bindings.export();
 
-
 export type Value = typeof exported.Value.infer;

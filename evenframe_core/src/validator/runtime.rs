@@ -5,12 +5,12 @@
 
 use super::bounds::{self, Decimal};
 use super::keywords;
-use super::string_rules::{StringParse, StringRule};
+use super::morph::{StringMorph, round_to};
 use super::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator,
 };
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -90,7 +90,7 @@ where
     }
 }
 
-/// Text a string transform rewrites.
+/// Text a string morph rewrites.
 pub trait StringTarget {
     fn text_mut(&mut self) -> &mut String;
 }
@@ -118,196 +118,14 @@ pub fn check_string<S: StringValue + ?Sized>(
     require(validator.accepts(value.text()), || validator.expectation())
 }
 
-/// Applies a string transform in place.
-pub fn transform_string<S: StringTarget + ?Sized>(
+/// Applies a string morph in place.
+pub fn morph_string<S: StringTarget + ?Sized>(
     value: &mut S,
-    validator: &StringValidator,
+    morph: StringMorph,
 ) -> Result<(), Rejection> {
-    match validator.rule() {
-        StringRule::Transform(transform) => {
-            let text = value.text_mut();
-            *text = transform.apply(text);
-            Ok(())
-        }
-        StringRule::Check | StringRule::Parse(_) | StringRule::Carrier => {
-            Err(Rejection(format!("{validator:?} is not a transform")))
-        }
-    }
-}
-
-// ----- Parse morphs ----------------------------------------------------------
-
-/// A type `string.integer.parse` can produce.
-pub trait FromSafeInteger: Sized {
-    fn from_safe_integer(value: i64) -> Option<Self>;
-}
-
-macro_rules! from_safe_integer_via_try_from {
-    ($($target:ty),*) => {$(
-        impl FromSafeInteger for $target {
-            fn from_safe_integer(value: i64) -> Option<Self> {
-                <$target>::try_from(value).ok()
-            }
-        }
-    )*};
-}
-
-from_safe_integer_via_try_from!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
-);
-
-impl FromSafeInteger for f64 {
-    fn from_safe_integer(value: i64) -> Option<Self> {
-        // Every safe integer is exactly representable as an f64.
-        Some(value as f64)
-    }
-}
-
-impl<N: NewtypeParts> FromSafeInteger for N
-where
-    N::Inner: FromSafeInteger,
-{
-    fn from_safe_integer(value: i64) -> Option<Self> {
-        N::Inner::from_safe_integer(value).map(N::from_inner)
-    }
-}
-
-/// A type `string.numeric.parse` can produce.
-pub trait FromNumeric: Sized {
-    fn from_numeric(text: &str) -> Option<Self>;
-}
-
-impl FromNumeric for f64 {
-    fn from_numeric(text: &str) -> Option<Self> {
-        keywords::parse_numeric(text)
-    }
-}
-
-impl FromNumeric for f32 {
-    fn from_numeric(text: &str) -> Option<Self> {
-        keywords::parse_numeric(text).and_then(|_| text.parse().ok())
-    }
-}
-
-impl<N: NewtypeParts> FromNumeric for N
-where
-    N::Inner: FromNumeric,
-{
-    fn from_numeric(text: &str) -> Option<Self> {
-        N::Inner::from_numeric(text).map(N::from_inner)
-    }
-}
-
-/// A type the date parse morphs can produce.
-pub trait FromInstant: Sized {
-    fn from_instant(instant: DateTime<Utc>) -> Self;
-}
-
-impl FromInstant for DateTime<Utc> {
-    fn from_instant(instant: DateTime<Utc>) -> Self {
-        instant
-    }
-}
-
-impl FromInstant for DateTime<FixedOffset> {
-    fn from_instant(instant: DateTime<Utc>) -> Self {
-        instant.fixed_offset()
-    }
-}
-
-impl FromInstant for NaiveDateTime {
-    fn from_instant(instant: DateTime<Utc>) -> Self {
-        instant.naive_utc()
-    }
-}
-
-impl<N: NewtypeParts> FromInstant for N
-where
-    N::Inner: FromInstant,
-{
-    fn from_instant(instant: DateTime<Utc>) -> Self {
-        N::from_inner(N::Inner::from_instant(instant))
-    }
-}
-
-/// A type `string.url.parse` can produce.
-pub trait FromUrl: Sized {
-    fn from_url(url: url::Url) -> Self;
-}
-
-impl FromUrl for url::Url {
-    fn from_url(url: url::Url) -> Self {
-        url
-    }
-}
-
-impl<N: NewtypeParts> FromUrl for N
-where
-    N::Inner: FromUrl,
-{
-    fn from_url(url: url::Url) -> Self {
-        N::from_inner(N::Inner::from_url(url))
-    }
-}
-
-/// Reads `raw` with a parse morph.
-pub fn parse_integer<T: FromSafeInteger>(raw: &str) -> Result<T, Rejection> {
-    keywords::parse_safe_integer(raw)
-        .and_then(T::from_safe_integer)
-        .ok_or_else(|| Rejection::expected(StringValidator::IntegerParse.description()))
-}
-
-pub fn parse_numeric<T: FromNumeric>(raw: &str) -> Result<T, Rejection> {
-    T::from_numeric(raw)
-        .ok_or_else(|| Rejection::expected(StringValidator::NumericParse.description()))
-}
-
-pub fn parse_date<T: FromInstant>(raw: &str) -> Result<T, Rejection> {
-    keywords::parse_date(raw)
-        .map(T::from_instant)
-        .ok_or_else(|| Rejection::expected(StringValidator::DateParse.description()))
-}
-
-pub fn parse_date_iso<T: FromInstant>(raw: &str) -> Result<T, Rejection> {
-    require(keywords::is_iso_8601(raw), || {
-        StringValidator::DateIsoParse.description().to_owned()
-    })?;
-    parse_date(raw)
-}
-
-pub fn parse_date_epoch<T: FromInstant>(raw: &str) -> Result<T, Rejection> {
-    keywords::parse_epoch_millis(raw)
-        .and_then(|millis| Utc.timestamp_millis_opt(millis).single())
-        .map(T::from_instant)
-        .ok_or_else(|| Rejection::expected(StringValidator::DateEpochParse.description()))
-}
-
-pub fn parse_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, Rejection> {
-    if raw.is_empty() {
-        return Err(Rejection::expected("a JSON string, not an empty one"));
-    }
-    serde_json::from_str(raw).map_err(|error| Rejection(format!("must be a JSON string ({error})")))
-}
-
-pub fn parse_url<T: FromUrl>(raw: &str) -> Result<T, Rejection> {
-    url::Url::parse(raw)
-        .map(T::from_url)
-        .map_err(|error| Rejection(format!("must be a URL string ({error})")))
-}
-
-impl StringParse {
-    /// The runtime function the derive calls for this parse.
-    pub fn runtime_function(self) -> &'static str {
-        match self {
-            StringParse::Integer => "parse_integer",
-            StringParse::Numeric => "parse_numeric",
-            StringParse::Date => "parse_date",
-            StringParse::DateIso => "parse_date_iso",
-            StringParse::DateEpoch => "parse_date_epoch",
-            StringParse::Json => "parse_json",
-            StringParse::Url => "parse_url",
-        }
-    }
+    let text = value.text_mut();
+    *text = morph.apply(text);
+    Ok(())
 }
 
 // ----- Numbers ---------------------------------------------------------------
@@ -385,7 +203,7 @@ pub fn check_number<N: NumberValue + ?Sized>(
             format!("between {} and {}", start.0, end.0),
         ),
         NumberValidator::Int => (value.is_integer(), "an integer".to_owned()),
-        NumberValidator::NonNaN => (!number.is_nan(), "a number, not NaN".to_owned()),
+        NumberValidator::NonNan => (!number.is_nan(), "a number, not NaN".to_owned()),
         NumberValidator::Finite => (number.is_finite(), "a finite number".to_owned()),
         NumberValidator::Positive => (number > 0.0, "positive".to_owned()),
         NumberValidator::NonNegative => (number >= 0.0, "non-negative".to_owned()),
@@ -424,6 +242,131 @@ pub fn is_multiple_of(value: f64, divisor: f64) -> bool {
     };
     let scale = 10_f64.powi(exponent);
     ((value * scale).round() % (divisor * scale).round()) == 0.0
+}
+
+// ----- Number morphs ---------------------------------------------------------
+
+/// A number `round` rewrites, as JavaScript's `Math.round` rounds it.
+pub trait RoundTarget {
+    fn round_places(&mut self, places: u32);
+}
+
+impl RoundTarget for f64 {
+    fn round_places(&mut self, places: u32) {
+        *self = round_to(*self, places);
+    }
+}
+
+impl<N: NewtypeParts> RoundTarget for N
+where
+    N::Inner: RoundTarget,
+{
+    fn round_places(&mut self, places: u32) {
+        self.inner_mut().round_places(places);
+    }
+}
+
+/// Rounds the value to `places` decimal places.
+pub fn round_number<N: RoundTarget + ?Sized>(value: &mut N, places: u32) -> Result<(), Rejection> {
+    value.round_places(places);
+    Ok(())
+}
+
+/// A number, bigint or decimal `clamp` pulls into range, its bounds written
+/// as decimals.
+pub trait ClampTarget {
+    fn clamp_between(&mut self, min: &str, max: &str) -> Result<(), Rejection>;
+}
+
+/// `min` and `max`, refused when they are out of order.
+fn ordered_bounds<T: PartialOrd + fmt::Display>(min: T, max: T) -> Result<(T, T), Rejection> {
+    if min > max {
+        return Err(Rejection(format!(
+            "clamp's minimum {min} is above its maximum {max}"
+        )));
+    }
+    Ok((min, max))
+}
+
+/// An integer bound, refused when it has a fraction.
+fn integer_bound(bound: &str) -> Result<i128, Rejection> {
+    bound.parse().map_err(|_| {
+        Rejection(format!(
+            "clamp bound {bound} is not an integer, so it cannot bound an integer"
+        ))
+    })
+}
+
+macro_rules! integer_clamp_target {
+    ($($integer:ty),*) => {$(
+        impl ClampTarget for $integer {
+            fn clamp_between(&mut self, min: &str, max: &str) -> Result<(), Rejection> {
+                let (min, max) = ordered_bounds(integer_bound(min)?, integer_bound(max)?)?;
+                let clamped = match i128::try_from(*self) {
+                    Ok(current) if (min..=max).contains(&current) => return Ok(()),
+                    Ok(current) => current.clamp(min, max),
+                    // Only a `u128` or `usize` above `i128::MAX` fails, which
+                    // is above every bound.
+                    Err(_) => max,
+                };
+                *self = <$integer>::try_from(clamped).map_err(|_| {
+                    Rejection(format!("clamp bound {clamped} does not fit a {}", stringify!($integer)))
+                })?;
+                Ok(())
+            }
+        }
+    )*};
+}
+
+integer_clamp_target!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+
+impl ClampTarget for f64 {
+    fn clamp_between(&mut self, min: &str, max: &str) -> Result<(), Rejection> {
+        let parse = |bound: &str| {
+            bound
+                .parse::<f64>()
+                .map_err(|error| Rejection(format!("clamp bound {bound} is not a number: {error}")))
+        };
+        let (min, max) = ordered_bounds(parse(min)?, parse(max)?)?;
+        if self.is_nan() {
+            return Err(Rejection::expected("a number"));
+        }
+        *self = self.max(min).min(max);
+        Ok(())
+    }
+}
+
+/// Decimal text, compared exactly and set to the bound it passes.
+impl ClampTarget for String {
+    fn clamp_between(&mut self, min: &str, max: &str) -> Result<(), Rejection> {
+        let value = Decimal::parse(self).ok_or_else(|| Rejection::expected("a decimal number"))?;
+        if value < bound(bounds::decimal(min))? {
+            *self = min.to_owned();
+        } else if value > bound(bounds::decimal(max))? {
+            *self = max.to_owned();
+        }
+        Ok(())
+    }
+}
+
+impl<N: NewtypeParts> ClampTarget for N
+where
+    N::Inner: ClampTarget,
+{
+    fn clamp_between(&mut self, min: &str, max: &str) -> Result<(), Rejection> {
+        self.inner_mut().clamp_between(min, max)
+    }
+}
+
+/// Pulls the value into `min..=max`.
+pub fn clamp_number<N: ClampTarget + ?Sized>(
+    value: &mut N,
+    min: &str,
+    max: &str,
+) -> Result<(), Rejection> {
+    value.clamp_between(min, max)
 }
 
 // ----- Collections -----------------------------------------------------------
@@ -494,6 +437,63 @@ pub fn check_items<C: ItemCount + ?Sized>(
             require(count == *exact, || format!("exactly {exact} items"))
         }
     }
+}
+
+/// A list `sort` orders.
+pub trait SortTarget {
+    fn sort_items(&mut self);
+}
+
+impl<T: Ord> SortTarget for Vec<T> {
+    fn sort_items(&mut self) {
+        self.sort();
+    }
+}
+
+impl<N: NewtypeParts> SortTarget for N
+where
+    N::Inner: SortTarget,
+{
+    fn sort_items(&mut self) {
+        self.inner_mut().sort_items();
+    }
+}
+
+/// Orders the elements ascending.
+pub fn sort_items<A: SortTarget + ?Sized>(value: &mut A) -> Result<(), Rejection> {
+    value.sort_items();
+    Ok(())
+}
+
+/// A list `unique` drops repeats from.
+pub trait UniqueTarget {
+    fn unique_items(&mut self);
+}
+
+impl<T: Ord> UniqueTarget for Vec<T> {
+    fn unique_items(&mut self) {
+        let first: Vec<bool> = {
+            let mut seen = BTreeSet::new();
+            self.iter().map(|item| seen.insert(item)).collect()
+        };
+        let mut first = first.into_iter();
+        self.retain(|_| first.next().unwrap_or(false));
+    }
+}
+
+impl<N: NewtypeParts> UniqueTarget for N
+where
+    N::Inner: UniqueTarget,
+{
+    fn unique_items(&mut self) {
+        self.inner_mut().unique_items();
+    }
+}
+
+/// Drops every element equal to an earlier one, keeping the first.
+pub fn unique_items<A: UniqueTarget + ?Sized>(value: &mut A) -> Result<(), Rejection> {
+    value.unique_items();
+    Ok(())
 }
 
 // ----- Dates -----------------------------------------------------------------
@@ -850,34 +850,48 @@ pub fn check_duration<D: DurationValue + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BigDecimalValidator, DateTime, DateValidator, DurationValidator, NumberValidator,
-        StringValidator, TimeZone, Utc, check_date, check_decimal, check_duration, check_number,
-        decimal_places, parse_date_epoch, parse_date_iso, parse_integer, parse_json, parse_numeric,
-        transform_string,
+        BigDecimalValidator, DateValidator, DurationValidator, NumberValidator, StringMorph,
+        TimeZone, Utc, check_date, check_decimal, check_duration, check_number, clamp_number,
+        decimal_places, morph_string, round_number, sort_items, unique_items,
     };
     use ordered_float::OrderedFloat;
 
     #[test]
-    fn transforms_rewrite_in_place() {
-        let mut value = "  Mixed Case  ".to_owned();
-        transform_string(&mut value, &StringValidator::Trim).unwrap();
-        transform_string(&mut value, &StringValidator::Lower).unwrap();
-        assert_eq!(value, "mixed case");
-        assert!(transform_string(&mut value, &StringValidator::Email).is_err());
-    }
+    fn morphs_rewrite_in_place() {
+        let mut text = "  Mixed   Case  ".to_owned();
+        morph_string(&mut text, StringMorph::Trim).unwrap();
+        morph_string(&mut text, StringMorph::CollapseWhitespace).unwrap();
+        morph_string(&mut text, StringMorph::Lower).unwrap();
+        assert_eq!(text, "mixed case");
 
-    #[test]
-    fn parse_morphs_produce_the_field_type() {
-        assert_eq!(parse_integer::<i64>("42"), Ok(42));
-        assert!(parse_integer::<u8>("300").is_err());
-        assert!(parse_integer::<i64>("4.2").is_err());
-        assert_eq!(parse_numeric::<f64>(".5"), Ok(0.5));
-        let instant: DateTime<Utc> = parse_date_epoch("0").unwrap();
-        assert_eq!(instant.timestamp(), 0);
-        assert!(parse_date_iso::<DateTime<Utc>>("yesterday").is_err());
-        let list: Vec<u8> = parse_json("[1,2]").unwrap();
-        assert_eq!(list, vec![1, 2]);
-        assert!(parse_json::<Vec<u8>>("").is_err());
+        let mut number = 2.345_f64;
+        round_number(&mut number, 2).unwrap();
+        assert_eq!(number, 2.35);
+        clamp_number(&mut number, "0", "1.5").unwrap();
+        assert_eq!(number, 1.5);
+
+        let mut count = 300_u16;
+        clamp_number(&mut count, "0", "255").unwrap();
+        assert_eq!(count, 255);
+        assert!(clamp_number(&mut count, "0.5", "255").is_err());
+        let mut small = 3_u8;
+        assert!(clamp_number(&mut small, "1000", "2000").is_err());
+        let mut huge = u128::MAX;
+        clamp_number(&mut huge, "0", &i128::MAX.to_string()).unwrap();
+        assert_eq!(huge, i128::MAX.unsigned_abs());
+        let mut missing = f64::NAN;
+        assert!(clamp_number(&mut missing, "0", "1").is_err());
+        assert!(clamp_number(&mut number, "2", "1").is_err());
+
+        let mut decimal = "12.50".to_owned();
+        clamp_number(&mut decimal, "0", "10.25").unwrap();
+        assert_eq!(decimal, "10.25");
+
+        let mut items = vec![3, 1, 3, 2, 1];
+        unique_items(&mut items).unwrap();
+        assert_eq!(items, vec![3, 1, 2]);
+        sort_items(&mut items).unwrap();
+        assert_eq!(items, vec![1, 2, 3]);
     }
 
     #[test]

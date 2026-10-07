@@ -85,6 +85,46 @@ fn walk(ast: &Ast, whole_characters: bool) -> Result<(), String> {
     }
 }
 
+/// Refuses a pattern that anchors itself to the start or end of the text,
+/// for one placed inside a pattern that does its own anchoring. A word
+/// boundary is not an anchor.
+pub fn refuse_anchors(pattern: &str) -> Result<(), String> {
+    let ast = Parser::new()
+        .parse(pattern)
+        .map_err(|error| format!("not a valid regex: {error}"))?;
+    if anchors(&ast) {
+        return Err(
+            "the pattern anchors itself with `^`, `$`, `\\A` or `\\z`; the validator anchors it \
+             where it belongs, so drop them"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn anchors(ast: &Ast) -> bool {
+    match ast {
+        Ast::Assertion(assertion) => matches!(
+            assertion.kind,
+            AssertionKind::StartLine
+                | AssertionKind::EndLine
+                | AssertionKind::StartText
+                | AssertionKind::EndText
+        ),
+        Ast::Repetition(repetition) => anchors(&repetition.ast),
+        Ast::Group(group) => anchors(&group.ast),
+        Ast::Alternation(alternation) => alternation.asts.iter().any(anchors),
+        Ast::Concat(concat) => concat.asts.iter().any(anchors),
+        Ast::Empty(_)
+        | Ast::Flags(_)
+        | Ast::Literal(_)
+        | Ast::Dot(_)
+        | Ast::ClassUnicode(_)
+        | Ast::ClassPerl(_)
+        | Ast::ClassBracketed(_) => false,
+    }
+}
+
 fn check_literal(literal: &Literal) -> Result<(), String> {
     if u32::from(literal.c) > 0xFFFF {
         return Err(format!(
@@ -206,6 +246,17 @@ mod tests {
         ] {
             assert_eq!(check(pattern), Ok(()), "{pattern}");
         }
+    }
+
+    #[test]
+    fn anchors_are_refused_but_word_boundaries_are_not() {
+        use super::refuse_anchors;
+        assert!(refuse_anchors("[A-Z]").is_ok());
+        assert!(refuse_anchors(r"\bfoo\b").is_ok());
+        assert!(refuse_anchors("[$^]").is_ok());
+        assert!(refuse_anchors("^abc").is_err());
+        assert!(refuse_anchors("a(?:b|c$)").is_err());
+        assert!(refuse_anchors(r"\Aabc").is_err());
     }
 
     #[test]

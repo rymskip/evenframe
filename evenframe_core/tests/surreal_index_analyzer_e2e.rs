@@ -12,20 +12,17 @@
 #![cfg(all(feature = "schemasync", feature = "scan"))]
 
 use evenframe_core::scan::{ScanConfig, build_all_configs};
-use evenframe_core::schemasync::TableConfig;
 use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schema};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::config::{
     AccessConfig, AccessType, AccessesSource, DatabaseConfig,
 };
-use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::execute::validate_surql_response;
 use evenframe_core::schemasync::database::surql::remove::{
     generate_remove_analyzer_statements, generate_remove_index_statements,
 };
 use evenframe_core::schemasync::dump::{schema_surql, tables_surql};
-use evenframe_core::types::{AllConfigs, ForeignTypeRegistry};
-use std::collections::BTreeMap;
+use evenframe_core::types::{ForeignTypeRegistry, SchemasyncTypes};
 use std::fs;
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, Mem};
@@ -71,7 +68,7 @@ const POST_SOURCE: &str = r#"
 "#;
 
 /// Scan a one-file crate containing `source` and return its table configs.
-fn scan(source: &str) -> BTreeMap<String, TableConfig> {
+fn scan(source: &str) -> SchemasyncTypes {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
@@ -87,27 +84,12 @@ fn scan(source: &str) -> BTreeMap<String, TableConfig> {
     };
     build_all_configs(&config)
         .expect("build_all_configs")
-        .tables
+        .into_schemasync()
+        .expect("the schemasync view")
 }
 
-fn define_statements(tables: &BTreeMap<String, TableConfig>) -> String {
-    let registry = ForeignTypeRegistry::default();
-    tables
-        .iter()
-        .map(|(name, table)| {
-            generate_define_statements(
-                name,
-                table,
-                tables,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &registry,
-                true,
-            )
-            .unwrap()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn define_statements(types: &SchemasyncTypes) -> String {
+    tables_surql(types, &ForeignTypeRegistry::default(), true).unwrap()
 }
 
 async fn mem_db() -> Surreal<Db> {
@@ -502,14 +484,7 @@ async fn commented_analyzer_file_validates() {
 #[tokio::test]
 async fn full_schema_dump_applies_top_to_bottom() {
     let tables = scan(POST_SOURCE);
-    let tables_surql = tables_surql(
-        &tables,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &ForeignTypeRegistry::default(),
-        true,
-    )
-    .unwrap();
+    let tables_surql = tables_surql(&tables, &ForeignTypeRegistry::default(), true).unwrap();
 
     let mut database = DatabaseConfig::for_testing();
     database.accesses = AccessesSource::Inline(vec![
@@ -595,20 +570,11 @@ async fn indexes_on_nested_paths_serve_searches() {
         scan_path: tmp.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let AllConfigs {
-        enums,
-        tables,
-        objects,
-        ..
-    } = build_all_configs(&config).expect("build_all_configs");
-    let surql = tables_surql(
-        &tables,
-        &objects,
-        &enums,
-        &ForeignTypeRegistry::default(),
-        true,
-    )
-    .unwrap();
+    let types = build_all_configs(&config)
+        .expect("build_all_configs")
+        .into_schemasync()
+        .expect("the schemasync view");
+    let surql = tables_surql(&types, &ForeignTypeRegistry::default(), true).unwrap();
     assert!(
         surql.contains(
             "DEFINE INDEX OVERWRITE deal_first_name_search ON TABLE deal \

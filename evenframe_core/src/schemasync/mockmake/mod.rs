@@ -2,6 +2,7 @@ pub mod coordinate;
 #[cfg(feature = "mockmake")]
 pub mod field_value;
 pub mod format;
+pub mod mock_format;
 #[cfg(all(feature = "mockmake", feature = "wasm-plugins"))]
 pub mod plugin;
 pub mod plugin_types;

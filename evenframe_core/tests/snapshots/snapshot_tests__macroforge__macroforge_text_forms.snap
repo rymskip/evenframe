@@ -1,0 +1,25 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Import {
+  /** @endec({ as: "DisplayFromStr", validate: ["greaterThanOrEqualTo(0)"] }) */
+  count: number;
+  /** @endec({ as: "DisplayFromStr" }) */
+  level: number;
+  /** @endec({ as: "Option<DisplayFromStr>" }) */
+  ratio: number | null;
+  /** @endec({ as: "URLFromString" }) */
+  source: URL;
+  /** @endec({ as: "DateFromString" }) */
+  started: Date;
+  /** @endec({ as: "Option<TimestampMilliSeconds<String>>" }) */
+  finished: Date | null;
+  /** @endec({ as: "JsonString" }) */
+  settings: string[];
+  /** @endec({ as: "Array<DisplayFromStr>" }) */
+  sizes: number[];
+  /** @endec({ as: "Map<_, DisplayFromStr>" }) */
+  totals: Record<string, number>;
+}

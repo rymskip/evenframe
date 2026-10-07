@@ -1,0 +1,29 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+const compareDecimal = (left: string, right: string): number => { const parse = (text: string) => { const negative = text.startsWith("-"); const [whole, fraction = ""] = text.replace(/^-/, "").split("."); const digits = whole.replace(/^0+/, ""); const decimals = fraction.replace(/0+$/, ""); return { negative: negative && (digits !== "" || decimals !== ""), digits, decimals }; }; const magnitude = (a: { digits: string; decimals: string }, b: { digits: string; decimals: string }): number => a.digits.length !== b.digits.length ? Math.sign(a.digits.length - b.digits.length) : a.digits !== b.digits ? (a.digits < b.digits ? -1 : 1) : a.decimals.padEnd(b.decimals.length, "0") === b.decimals.padEnd(a.decimals.length, "0") ? 0 : a.decimals.padEnd(b.decimals.length, "0") < b.decimals.padEnd(a.decimals.length, "0") ? -1 : 1; const a = parse(String(left)); const b = parse(String(right)); if (a.negative !== b.negative) return a.negative ? -1 : 1; return a.negative ? magnitude(b, a) : magnitude(a, b); };
+const compareCodePoints = (left: string, right: string): number => { const a = Array.from(left, (character) => character.codePointAt(0) ?? 0); const b = Array.from(right, (character) => character.codePointAt(0) ?? 0); for (let index = 0; index < Math.min(a.length, b.length); index++) { if (a[index] !== b[index]) return a[index] - b[index]; } return a.length - b.length; };
+export class Reading extends Schema.Class<Reading>("Reading")( { 
+  label: Schema.propertySignature(Schema.String.pipe(Schema.compose(Schema.transform(Schema.String, Schema.String, { strict: true, decode: (value) => value.replace(/\s+/g, " "), encode: (value) => value }))).pipe(Schema.compose(Schema.Trim)).pipe(Schema.compose(Schema.transform(Schema.String, Schema.String, { strict: true, decode: (value) => value.normalize("NFKC"), encode: (value) => value }))).pipe(Schema.minLength(1, { message: () => `'Label' must be at least 1 characters long` }))).annotations({ missingMessage: () => `'Label' is required` }),
+  email: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.compose(Schema.Trim)).pipe(Schema.compose(Schema.Lowercase)).pipe(Schema.pattern(new RegExp("^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\.[A-Za-z]{2,}$"), { message: () => `'Email' must be an email address` })), null),
+  level: Schema.propertySignature(Schema.Number.pipe(Schema.compose(Schema.transform(Schema.Number, Schema.Number, { strict: true, decode: (value) => Math.min(Math.max(value, 0), 10), encode: (value) => value }))).pipe(Schema.compose(Schema.transform(Schema.Number, Schema.Number, { strict: true, decode: (value) => Math.round(value * 1e1) / 1e1, encode: (value) => value })))).annotations({ missingMessage: () => `'Level' is required` }),
+  rating: Schema.propertySignature(Schema.Number.pipe(Schema.compose(Schema.transform(Schema.Number, Schema.Number, { strict: true, decode: (value) => Math.min(Math.max(value, 1), 5), encode: (value) => value })))).annotations({ missingMessage: () => `'Rating' is required` }),
+  price: Schema.propertySignature(Schema.String.pipe(Schema.compose(Schema.transform(Schema.String, Schema.String, { strict: true, decode: (value) => compareDecimal(value, "0") < 0 ? "0" : compareDecimal(value, "99.5") > 0 ? "99.5" : value, encode: (value) => value })))).annotations({ missingMessage: () => `'Price' is required` }),
+  tags: Schema.propertySignature(Schema.Array(Schema.String).pipe(Schema.compose(Schema.transform(Schema.typeSchema(Schema.Array(Schema.String)), Schema.typeSchema(Schema.Array(Schema.String)), { strict: true, decode: (value) => [...new Set(value)], encode: (value) => value }))).pipe(Schema.compose(Schema.transform(Schema.typeSchema(Schema.Array(Schema.String)), Schema.typeSchema(Schema.Array(Schema.String)), { strict: true, decode: (value) => [...value].sort(compareCodePoints), encode: (value) => value }))).pipe(Schema.maxItems(10, { message: () => `'Tags' must contain at most 10 items` }))).annotations({ missingMessage: () => `'Tags' is required` }),
+  scores: Schema.propertySignature(Schema.Array(Schema.Number).pipe(Schema.compose(Schema.transform(Schema.typeSchema(Schema.Array(Schema.Number)), Schema.typeSchema(Schema.Array(Schema.Number)), { strict: true, decode: (value) => [...value].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)), encode: (value) => value })))).annotations({ missingMessage: () => `'Scores' is required` })
+}) {[key: string]: unknown}
+
+
+export interface ReadingEncoded {
+  readonly label: string;
+  readonly email: string | null | undefined;
+  readonly level: number;
+  readonly rating: number;
+  readonly price: string;
+  readonly tags: ReadonlyArray<string>;
+  readonly scores: ReadonlyArray<number>;
+}
+
+
+export type ReadingType = typeof Reading.Type;

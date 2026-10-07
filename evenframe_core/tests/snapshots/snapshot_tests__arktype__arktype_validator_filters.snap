@@ -20,14 +20,4 @@ Booking: {
 
 const exported = bindings.export();
 
-export const defaultBooking: Booking = {
-code: "",
-nickname: null,
-guests: [],
-startsOn: "",
-deposit: "0",
-sequence: "0",
-stay: "0s"
-};
-
 export type Booking = typeof exported.Booking.infer;

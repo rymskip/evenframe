@@ -19,16 +19,5 @@ Post: {
 
 const exported = bindings.export();
 
-export const defaultAuthor: Author = {
-id: "",
-name: ""
-};
-export const defaultPost: Post = {
-id: "",
-title: "",
-author: { table: "", key: { String: "" } },
-relatedPosts: []
-};
-
 export type Author = typeof exported.Author.infer;
 export type Post = typeof exported.Post.infer;

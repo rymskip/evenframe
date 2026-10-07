@@ -8,16 +8,14 @@
         { "field_name": "title", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "author", "field_type": { "RecordLink": { "Other": "Author" } }, "validators": [], "always_regenerate": false },
         { "field_name": "related_posts", "field_type": { "Vec": { "RecordLink": { "Other": "Post" } } }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "Author": {
       "struct_name": "Author",
       "fields": [
         { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "name", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {},
@@ -26,7 +24,6 @@
       "crate": "surrealdb",
       "arktype": { "type": "{ '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }" },
       "effect": { "type": "Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) })", "encoded": "{ readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } }" },
-      "default_value_ts": "{ table: \"\", key: { String: \"\" } }",
       "macroforge": { "type": "{ table: string; key: { String: string } | { Number: number } | { Uuid: string } }" },
       "protobuf": "string",
       "flatbuffers": "string"

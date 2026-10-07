@@ -10,5 +10,4 @@ Shape: [[{ type: ['===', "Circle"], radius: 'number' }, '|', { type: ['===', "Re
 
 const exported = bindings.export();
 
-
 export type Shape = typeof exported.Shape.infer;

@@ -1,5 +1,5 @@
 {
-  "description": "Newtypes: branded over a primitive (with Macroforge derives), over another newtype, over an enum, behind a parse morph, without validators, and the tuple and unit shapes, held directly, optionally, in a Vec, as a map key, and behind a field's transform and parse morph",
+  "description": "Newtypes: branded over a primitive (with Macroforge derives), over another newtype, over an enum, over a text form, without validators, and the tuple and unit shapes, held directly, optionally, in a Vec, as a map key, and behind a field's morph, beside a text-form field",
   "structs": {
     "Profile": {
       "struct_name": "Profile",
@@ -12,10 +12,9 @@
         { "field_name": "position", "field_type": { "Other": "Pair" }, "validators": [], "always_regenerate": false },
         { "field_name": "marker", "field_type": { "Other": "Marker" }, "validators": [], "always_regenerate": false },
         { "field_name": "status", "field_type": { "Other": "StatusCode" }, "validators": [], "always_regenerate": false },
-        { "field_name": "title", "field_type": { "Other": "NonEmptyString" }, "validators": [{ "StringValidator": "Trim" }], "always_regenerate": false },
-        { "field_name": "age", "field_type": { "Other": "Age" }, "validators": [{ "StringValidator": "IntegerParse" }], "always_regenerate": false }
-      ],
-      "validators": []
+        { "field_name": "title", "field_type": { "Other": "NonEmptyString" }, "morphs": [{ "StringMorph": "Trim" }], "validators": [], "always_regenerate": false },
+        { "field_name": "age", "field_type": { "FromText": "U8" }, "validators": [{ "NumberValidator": { "GreaterThanOrEqualTo": 18.0 } }], "always_regenerate": false }
+      ]
     }
   },
   "enums": {
@@ -37,15 +36,13 @@
     "Handle": {
       "name": "Handle",
       "inner": { "Other": "NonEmptyString" },
-      "validators": [{ "StringValidator": "Trim" }, { "StringValidator": "Lower" }]
+      "morphs": [{ "StringMorph": "Trim" }, { "StringMorph": "Lower" }],
+      "validators": []
     },
     "Count": {
       "name": "Count",
-      "inner": "I64",
-      "validators": [
-        { "StringValidator": "IntegerParse" },
-        { "NumberValidator": { "GreaterThanOrEqualTo": 0.0 } }
-      ]
+      "inner": { "FromText": "I64" },
+      "validators": [{ "NumberValidator": { "GreaterThanOrEqualTo": 0.0 } }]
     },
     "Label": {
       "name": "Label",
@@ -59,10 +56,6 @@
       "name": "Pair",
       "inner": { "Tuple": ["String", "U32"] },
       "kind": "Alias"
-    },
-    "Age": {
-      "name": "Age",
-      "inner": "U8"
     },
     "Marker": {
       "name": "Marker",

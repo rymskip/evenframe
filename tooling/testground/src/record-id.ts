@@ -54,6 +54,4 @@ export const RecordIdCodec = {
     Schema.instanceOf(RecordId),
     { strict: true, decode: toRecordId, encode: fromRecordId },
   ),
-  /** A record id no record has, for defaults. */
-  empty: { table: "", key: { String: "" } } satisfies RecordIdEncoded,
 };

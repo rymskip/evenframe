@@ -30,8 +30,7 @@ message Profile {
     Position position = 6;
     Marker marker = 7;
     .Status status = 8;
-    // protoc-gen-validate cannot check: trimmed
+    // protoc-gen-validate cannot normalize: trim
     string title = 9 [(validate.rules).string = {min_len: 1}];
-    // protoc-gen-validate cannot check: an integer in the range Number.MIN_SAFE_INTEGER to Number.MAX_SAFE_INTEGER
-    uint32 age = 10;
+    uint32 age = 10 [(validate.rules).uint32 = {gte: 18}];
 }

@@ -5,8 +5,7 @@
       "struct_name": "Place",
       "fields": [
         { "field_name": "name", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "Shapes": {
       "struct_name": "Shapes",
@@ -29,8 +28,7 @@
         { "field_name": "events", "field_type": { "Vec": { "Other": "Event" } }, "validators": [], "always_regenerate": false },
         { "field_name": "last_event", "field_type": { "Option": { "Other": "Event" } }, "validators": [], "always_regenerate": false },
         { "field_name": "events_by_name", "field_type": { "HashMap": ["String", { "Other": "Event" }] }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {
@@ -43,8 +41,7 @@
           "fields": [
             { "field_name": "from", "field_type": { "Other": "Place" }, "validators": [], "always_regenerate": false },
             { "field_name": "to", "field_type": { "Other": "Place" }, "validators": [], "always_regenerate": false }
-          ],
-          "validators": []
+          ]
         } } },
         { "name": "Tagged", "data": { "DataStructureRef": { "Vec": "String" } } },
         { "name": "Visited", "data": { "DataStructureRef": { "Other": "Place" } } },

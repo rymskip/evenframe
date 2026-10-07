@@ -3,6 +3,7 @@ source: evenframe_core/tests/snapshot_tests.rs
 expression: output
 ---
 attribute "validate";
+attribute "normalize";
 
 enum Status : ubyte {
     Active = 0,
@@ -18,8 +19,8 @@ table Profile {
     position: ProfilePosition;
     marker: ProfileMarker;
     status: Status;
-    title: string (validate: "nonEmpty, trim");
-    age: uint8 (validate: "integerParse");
+    title: string (validate: "nonEmpty", normalize: "trim");
+    age: uint8 (validate: "greaterThanOrEqualTo(18)");
 }
 
 table ProfileVisitsEntry {

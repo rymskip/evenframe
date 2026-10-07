@@ -1,0 +1,5 @@
+error: morphs rewrite a value: put them on a field, a tuple element or a newtype
+ --> tests/ui/fail/morphs_on_struct.rs:5:1
+  |
+5 | #[morphs(trim)]
+  | ^^^^^^^^^^^^^^^

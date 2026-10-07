@@ -10,5 +10,4 @@ Status: [[[['===', "Active"], '|', ['===', "Inactive"]], '|', ['===', "Pending"]
 
 const exported = bindings.export();
 
-
 export type Status = typeof exported.Status.infer;

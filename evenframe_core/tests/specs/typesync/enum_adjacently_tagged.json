@@ -10,8 +10,7 @@
           "fields": [
             { "field_name": "x", "field_type": "I32", "validators": [], "always_regenerate": false },
             { "field_name": "y", "field_type": "I32", "validators": [], "always_regenerate": false }
-          ],
-          "validators": []
+          ]
         }}},
         { "name": "KeyPress", "data": { "DataStructureRef": "String" } },
         { "name": "Scroll" }

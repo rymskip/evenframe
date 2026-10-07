@@ -297,11 +297,14 @@ mod surrealql {
             evenframe_core::schemasync::database::surql::define::generate_define_statements(
                 &fixture.table_name,
                 &fixture.table_config,
-                &fixture.query_details,
-                &fixture.server_only,
-                &fixture.enums,
-                &registry,
-                true,
+                &evenframe_core::schemasync::database::surql::shape::DefineContext {
+                    tables: &fixture.query_details,
+                    objects: &fixture.server_only,
+                    enums: &fixture.enums,
+                    declared: &evenframe_core::types::DeclaredTypes::default(),
+                    registry: &registry,
+                    options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+                },
             )
             .unwrap();
         let name = std::path::Path::new(spec_input_file)

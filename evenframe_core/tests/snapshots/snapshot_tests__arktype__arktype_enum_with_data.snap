@@ -18,15 +18,6 @@ InlineData: {
 
 const exported = bindings.export();
 
-export const defaultCoordinates: Coordinates = {
-lat: 0,
-lng: 0
-};
-export const defaultInlineData: InlineData = {
-label: "",
-value: 0
-};
-
 export type Location = typeof exported.Location.infer;
 export type Coordinates = typeof exported.Coordinates.infer;
 export type InlineData = typeof exported.InlineData.infer;

@@ -193,7 +193,6 @@ mod tests {
                     ..Default::default()
                 })
                 .collect(),
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],

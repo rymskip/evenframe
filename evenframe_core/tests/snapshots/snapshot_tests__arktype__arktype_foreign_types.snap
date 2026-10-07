@@ -16,12 +16,4 @@ Appointment: {
 
 const exported = bindings.export();
 
-export const defaultAppointment: Appointment = {
-id: "",
-title: "",
-scheduledAt: "",
-duration: 0,
-cancelledAt: null
-};
-
 export type Appointment = typeof exported.Appointment.infer;

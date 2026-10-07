@@ -45,8 +45,7 @@
         { "field_name": "address", "field_type": "String", "validators": [
           { "StringValidator": "Ip" }
         ], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {}

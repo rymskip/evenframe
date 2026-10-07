@@ -3,13 +3,12 @@
 //! These types represent database schemas in a provider-agnostic way,
 //! allowing comparison between code-defined schemas and database schemas.
 
-use crate::{Result, schemasync::TableConfig, schemasync::config::AccessType, types::StructConfig};
+use crate::schemasync::config::AccessType;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fmt::{self, Display, Formatter},
 };
-use tracing;
 
 /// Represents a complex object type definition
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,140 +137,4 @@ pub struct SchemaDefinition {
     pub accesses: Vec<AccessDefinition>,
     #[serde(default)]
     pub analyzers: Vec<AnalyzerDefinition>,
-}
-
-impl SchemaDefinition {
-    /// Create from TableConfig HashMap (for code-based schema generation).
-    /// `objects` holds the structs the tables embed, which index paths reach
-    /// into.
-    pub fn from_table_configs(
-        tables: &BTreeMap<String, TableConfig>,
-        objects: &BTreeMap<String, StructConfig>,
-        allow_scripting: bool,
-    ) -> Result<Self> {
-        tracing::debug!(
-            table_count = tables.len(),
-            "Creating SchemaDefinition from TableConfigs"
-        );
-        let mut schema_tables = BTreeMap::new();
-        let mut schema_edges = BTreeMap::new();
-
-        for (name, config) in tables {
-            let table_def = TableDefinition {
-                name: name.clone(),
-                schema_type: SchemaType::Schemafull,
-                fields: Self::extract_fields_from_config(config, allow_scripting)?,
-                array_wildcard_fields: BTreeMap::new(),
-                permissions: Self::extract_permissions_from_config(config),
-                indexes: config
-                    .all_indexes(name, objects)
-                    .iter()
-                    .map(|idx| IndexDefinition {
-                        name: idx.index_name(name),
-                        columns: idx.fields.clone(),
-                        unique: idx.is_unique(),
-                        definition: idx.definition_clause(),
-                    })
-                    .collect(),
-                events: config
-                    .events
-                    .iter()
-                    .map(|event| event.statement.clone())
-                    .collect(),
-            };
-
-            if config.relation.is_some() {
-                schema_edges.insert(name.clone(), table_def);
-            } else {
-                schema_tables.insert(name.clone(), table_def);
-            }
-        }
-
-        let definition = Self {
-            tables: schema_tables.clone(),
-            edges: schema_edges.clone(),
-            accesses: Vec::new(),
-            analyzers: Vec::new(),
-        };
-
-        tracing::debug!(
-            tables = definition.tables.len(),
-            edges = definition.edges.len(),
-            "SchemaDefinition created from configs"
-        );
-
-        Ok(definition)
-    }
-
-    fn extract_fields_from_config(
-        config: &TableConfig,
-        allow_scripting: bool,
-    ) -> Result<BTreeMap<String, FieldDefinition>> {
-        let mut fields = BTreeMap::new();
-
-        for field in &config.struct_config.fields {
-            // Check if field has a default value
-            let default_value = field
-                .define_config
-                .as_ref()
-                .and_then(|dc| dc.default.clone().or(dc.default_always.clone()));
-
-            // Field is required if it doesn't have a default value and isn't skipped
-            let is_required = default_value.is_none()
-                && !field
-                    .define_config
-                    .as_ref()
-                    .map(|dc| dc.should_skip)
-                    .unwrap_or(false);
-
-            let field_def = FieldDefinition {
-                name: field.db_name().to_owned(),
-                field_type: ObjectType::Simple(field.field_type.to_string()),
-                required: is_required,
-                default_value,
-                assertions: field
-                    .merged_assert(allow_scripting)
-                    .map(|a| vec![a])
-                    .unwrap_or_default(),
-                parent_array_field: None,
-                computed_expression: field
-                    .define_config
-                    .as_ref()
-                    .and_then(|dc| dc.computed.clone()),
-                comment: field
-                    .define_config
-                    .as_ref()
-                    .and_then(|dc| dc.comment.clone()),
-            };
-            fields.insert(field.db_name().to_owned(), field_def);
-        }
-
-        Ok(fields)
-    }
-
-    fn extract_permissions_from_config(config: &TableConfig) -> Option<PermissionSet> {
-        tracing::trace!("Extracting permissions from table config");
-        config.permissions.as_ref().map(|perms| PermissionSet {
-            select: perms
-                .all_permissions
-                .clone()
-                .or(perms.select_permissions.clone())
-                .unwrap_or_else(|| "FULL".to_string()),
-            create: perms
-                .all_permissions
-                .clone()
-                .or(perms.create_permissions.clone())
-                .unwrap_or_else(|| "FULL".to_string()),
-            update: perms
-                .all_permissions
-                .clone()
-                .or(perms.update_permissions.clone())
-                .unwrap_or_else(|| "FULL".to_string()),
-            delete: perms
-                .all_permissions
-                .clone()
-                .or(perms.delete_permissions.clone())
-                .unwrap_or_else(|| "FULL".to_string()),
-        })
-    }
 }

@@ -1,28 +1,23 @@
 use crate::{
     error::{EvenframeError, Result},
+    schemasync::database::surql::shape::DefineContext,
     schemasync::table::{TableConfig, surql_ident},
-    types::{StructConfig, TaggedUnion},
+    types::FieldOwner,
 };
-use std::collections::BTreeMap;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 /// The DEFINE statements for `table_name`: the table, its fields, indexes
 /// and events. Fails naming the field whose type has no definition.
 pub fn generate_define_statements(
     table_name: &str,
     table_config: &TableConfig,
-    query_details: &BTreeMap<String, TableConfig>,
-    server_only: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
-    registry: &crate::types::ForeignTypeRegistry,
-    options: impl Into<crate::schemasync::config::SurqlOptions>,
+    context: &DefineContext<'_>,
 ) -> Result<String> {
-    let options = options.into();
     info!("Generating define statements for table {table_name}");
     debug!(
-        query_details_count = query_details.len(),
-        server_only_count = server_only.len(),
-        enum_count = enums.len(),
+        table_count = context.tables.len(),
+        object_count = context.objects.len(),
+        enum_count = context.enums.len(),
         "Context sizes"
     );
     trace!("Table config: {:?}", table_config);
@@ -87,6 +82,8 @@ pub fn generate_define_statements(
     }
 
     debug!(table_name = %table_name, field_count = table_config.struct_config.fields.len(), "Processing table fields");
+    let owner = FieldOwner::Table(table_config.table_name.clone());
+    let mut unasserted = Vec::new();
     for table_field in &table_config.struct_config.fields {
         // An edge is not defined in the table itself, and a flattened
         // field's keys sit beside the record's own, under no key of its own.
@@ -96,14 +93,7 @@ pub fn generate_define_statements(
         {
             if table_field.define_config.is_some() {
                 let statement = table_field
-                    .generate_define_statement(
-                        enums,
-                        server_only,
-                        query_details,
-                        &table_name.to_string(),
-                        registry,
-                        options,
-                    )
+                    .generate_define_statement(&owner, table_name, context, &mut unasserted)
                     .map_err(|error| {
                         EvenframeError::database(format!(
                             "Cannot define field '{}' on table '{table_name}': {error}",
@@ -121,9 +111,20 @@ pub fn generate_define_statements(
         }
     }
 
+    for finding in &unasserted {
+        warn!(
+            location = %finding.location,
+            "`{}` has validators the schema cannot assert, {}: {}. The database accepts a \
+             value failing them, and reading that record back fails.",
+            finding.location,
+            finding.reason.describe(),
+            finding.validators,
+        );
+    }
+
     // Generate DEFINE INDEX statements for field-level #[unique] and
     // struct-level #[indexes(...)] entries.
-    for index in table_config.all_indexes(table_name, server_only) {
+    for index in table_config.all_indexes(table_name, context.objects) {
         debug!(
             table_name = %table_name,
             fields = ?index.fields,
@@ -159,9 +160,10 @@ pub fn generate_define_statements(
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeMap, TableConfig, generate_define_statements};
+    use super::{TableConfig, generate_define_statements};
     use crate::schemasync::{DefineConfig, EventConfig};
     use crate::types::{FieldType, StructConfig, StructField, TaggedUnion};
+    use std::collections::BTreeMap;
 
     #[test]
     fn generate_define_statements_appends_events() {
@@ -171,7 +173,6 @@ mod tests {
                 resolve_only: false,
                 struct_name: "User".to_string(),
                 fields: Vec::new(),
-                validators: Vec::new(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -198,11 +199,14 @@ mod tests {
         let statements = generate_define_statements(
             "user",
             &table_config,
-            &query_details,
-            &server_only,
-            &enums,
-            &crate::types::ForeignTypeRegistry::default(),
-            true,
+            &crate::schemasync::database::surql::shape::DefineContext {
+                tables: &query_details,
+                objects: &server_only,
+                enums: &enums,
+                declared: &crate::types::DeclaredTypes::default(),
+                registry: &crate::types::ForeignTypeRegistry::default(),
+                options: crate::schemasync::config::SurqlOptions::from(true),
+            },
         )
         .unwrap();
 
@@ -234,6 +238,7 @@ mod tests {
                 comment: None,
             }),
             format: None,
+            morphs: Vec::new(),
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
@@ -246,12 +251,17 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"user".to_string(),
-                &crate::types::ForeignTypeRegistry::default(),
-                true,
+                &crate::types::FieldOwner::Table("user".to_string()),
+                "user",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &crate::types::ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .unwrap();
 
@@ -287,6 +297,7 @@ mod tests {
                 comment: Some("Auto-uppercased name".to_string()),
             }),
             format: None,
+            morphs: Vec::new(),
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
@@ -299,12 +310,17 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"user".to_string(),
-                &crate::types::ForeignTypeRegistry::default(),
-                true,
+                &crate::types::FieldOwner::Table("user".to_string()),
+                "user",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &crate::types::ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .unwrap();
 
@@ -336,6 +352,7 @@ mod tests {
                 comment: Some("User email address".to_string()),
             }),
             format: None,
+            morphs: Vec::new(),
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
@@ -348,12 +365,17 @@ mod tests {
 
         let result = field
             .generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"user".to_string(),
-                &crate::types::ForeignTypeRegistry::default(),
-                true,
+                &crate::types::FieldOwner::Table("user".to_string()),
+                "user",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &crate::types::ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .unwrap();
 
@@ -393,6 +415,7 @@ mod tests {
                             comment: None,
                         }),
                         format: None,
+                        morphs: Vec::new(),
                         validators: Vec::new(),
                         always_regenerate: false,
                         doccom: None,
@@ -423,6 +446,7 @@ mod tests {
                             comment: None,
                         }),
                         format: None,
+                        morphs: Vec::new(),
                         validators: Vec::new(),
                         always_regenerate: false,
                         doccom: None,
@@ -433,7 +457,6 @@ mod tests {
                         validator_overrides: Default::default(),
                     },
                 ],
-                validators: Vec::new(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -457,11 +480,14 @@ mod tests {
         let statements = generate_define_statements(
             "user",
             &table_config,
-            &query_details,
-            &server_only,
-            &enums,
-            &crate::types::ForeignTypeRegistry::default(),
-            true,
+            &crate::schemasync::database::surql::shape::DefineContext {
+                tables: &query_details,
+                objects: &server_only,
+                enums: &enums,
+                declared: &crate::types::DeclaredTypes::default(),
+                registry: &crate::types::ForeignTypeRegistry::default(),
+                options: crate::schemasync::config::SurqlOptions::from(true),
+            },
         )
         .unwrap();
 
@@ -500,6 +526,7 @@ mod tests {
                 comment: None,
             }),
             format: None,
+            morphs: Vec::new(),
             validators: Vec::new(),
             always_regenerate: false,
             doccom: None,
@@ -520,7 +547,6 @@ mod tests {
                     make_field("message"),
                     make_field("created_at"),
                 ],
-                validators: Vec::new(),
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -570,11 +596,14 @@ mod tests {
         let statements = generate_define_statements(
             "reaction",
             &table_config,
-            &query_details,
-            &server_only,
-            &enums,
-            &crate::types::ForeignTypeRegistry::default(),
-            true,
+            &crate::schemasync::database::surql::shape::DefineContext {
+                tables: &query_details,
+                objects: &server_only,
+                enums: &enums,
+                declared: &crate::types::DeclaredTypes::default(),
+                registry: &crate::types::ForeignTypeRegistry::default(),
+                options: crate::schemasync::config::SurqlOptions::from(true),
+            },
         )
         .unwrap();
 
@@ -610,6 +639,7 @@ mod tests {
             wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
+            morphs: Vec::new(),
             define_config: Some(DefineConfig {
                 select_permissions: Some("FULL".to_string()),
                 update_permissions: Some("FULL".to_string()),
@@ -639,12 +669,17 @@ mod tests {
         let reg = crate::types::ForeignTypeRegistry::default();
         let gen_stmt = |f: StructField, allow_scripting: bool| {
             f.generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"user".to_string(),
-                &reg,
-                allow_scripting,
+                &crate::types::FieldOwner::Table("user".to_string()),
+                "user",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &reg,
+                    options: crate::schemasync::config::SurqlOptions::from(allow_scripting),
+                },
+                &mut Vec::new(),
             )
             .unwrap()
         };
@@ -731,6 +766,7 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_morphs: Vec::new(),
                     element_validators: Vec::new(),
                     element_validator_overrides: Vec::new(),
                 }],
@@ -756,12 +792,17 @@ mod tests {
         };
         let statement = field
             .generate_define_statement(
-                &enums,
-                &structs,
-                &BTreeMap::new(),
-                &"entry".to_string(),
-                &crate::types::ForeignTypeRegistry::default(),
-                false,
+                &crate::types::FieldOwner::Table("entry".to_string()),
+                "entry",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &structs,
+                    enums: &enums,
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &crate::types::ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(false),
+                },
+                &mut Vec::new(),
             )
             .unwrap();
         assert!(statement.contains("variant: \"Created\""), "{statement}");
@@ -793,15 +834,20 @@ mod tests {
         let render = |field: &StructField| {
             field
                 .generate_define_statement(
-                    &BTreeMap::new(),
-                    &BTreeMap::new(),
-                    &BTreeMap::new(),
-                    &"profile".to_string(),
-                    &crate::types::ForeignTypeRegistry::default(),
-                    SurqlOptions {
-                        option_none: OptionNone::Null,
-                        ..Default::default()
+                    &crate::types::FieldOwner::Table("profile".to_string()),
+                    "profile",
+                    &crate::schemasync::database::surql::shape::DefineContext {
+                        tables: &BTreeMap::new(),
+                        objects: &BTreeMap::new(),
+                        enums: &BTreeMap::new(),
+                        declared: &crate::types::DeclaredTypes::default(),
+                        registry: &crate::types::ForeignTypeRegistry::default(),
+                        options: SurqlOptions {
+                            option_none: OptionNone::Null,
+                            ..Default::default()
+                        },
                     },
+                    &mut Vec::new(),
                 )
                 .unwrap()
         };
@@ -860,12 +906,17 @@ mod tests {
                 statements.push_str(
                     &field
                         .generate_define_statement(
-                            &BTreeMap::new(),
-                            &BTreeMap::new(),
-                            &BTreeMap::new(),
+                            &crate::types::FieldOwner::Table(table_name.to_string()),
                             &table_name,
-                            &crate::types::ForeignTypeRegistry::default(),
-                            options,
+                            &crate::schemasync::database::surql::shape::DefineContext {
+                                tables: &BTreeMap::new(),
+                                objects: &BTreeMap::new(),
+                                enums: &BTreeMap::new(),
+                                declared: &crate::types::DeclaredTypes::default(),
+                                registry: &crate::types::ForeignTypeRegistry::default(),
+                                options,
+                            },
+                            &mut Vec::new(),
                         )
                         .expect("render policy-aware fields"),
                 );
@@ -929,6 +980,7 @@ mod tests {
                 comment: None,
             }),
             format: None,
+            morphs: Vec::new(),
             validators: vec![Validator::StringValidator(StringValidator::MaxLength(500))],
             always_regenerate: false,
             doccom: None,
@@ -939,17 +991,36 @@ mod tests {
             validator_overrides: Default::default(),
         };
 
-        let merged = field
-            .merged_assert(true)
-            .expect("optional field with validators should produce an assert");
-        assert_eq!(merged, "$value = NONE OR (string::len($value) <= 500)");
+        let statement = |field: &StructField| {
+            field
+                .generate_define_statement(
+                    &crate::types::FieldOwner::Table("t".to_string()),
+                    "t",
+                    &crate::schemasync::database::surql::shape::DefineContext {
+                        tables: &BTreeMap::new(),
+                        objects: &BTreeMap::new(),
+                        enums: &BTreeMap::new(),
+                        declared: &crate::types::DeclaredTypes::default(),
+                        registry: &crate::types::ForeignTypeRegistry::default(),
+                        options: crate::schemasync::config::SurqlOptions::from(true),
+                    },
+                    &mut Vec::new(),
+                )
+                .expect("the field defines")
+        };
+        let optional = statement(&field);
+        assert!(
+            optional.contains(" ASSERT $value = NONE OR (string::len($value) <= 500) "),
+            "{optional}"
+        );
 
         // Non-optional fields are not guarded.
         let mut required = field.clone();
         required.field_type = FieldType::String;
-        assert_eq!(
-            required.merged_assert(true).unwrap(),
-            "string::len($value) <= 500"
+        let required = statement(&required);
+        assert!(
+            required.contains(" ASSERT string::len($value) <= 500 "),
+            "{required}"
         );
     }
 
@@ -962,6 +1033,7 @@ mod tests {
             wire: Default::default(),
             field_type: FieldType::String,
             edge_config: None,
+            morphs: Vec::new(),
             define_config: Some(DefineConfig {
                 select_permissions: Some("FULL".to_string()),
                 update_permissions: Some("FULL".to_string()),
@@ -990,12 +1062,17 @@ mod tests {
         let reg = crate::types::ForeignTypeRegistry::default();
         let gen_stmt = |f: StructField| {
             f.generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"t".to_string(),
-                &reg,
-                true,
+                &crate::types::FieldOwner::Table("t".to_string()),
+                "t",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &reg,
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .unwrap()
         };

@@ -59,12 +59,9 @@ fn field_with_annotations(name: &str, ty: &str, anns: Vec<&str>) -> StructField 
     created
 }
 
-fn field_with_validators(name: &str, ty: &str, vals: Vec<&str>) -> StructField {
+fn field_with_validators(name: &str, ty: &str, vals: Vec<StringValidator>) -> StructField {
     let mut created = field(name, ty);
-    created.validators = vals
-        .into_iter()
-        .map(|text| Validator::StringValidator(StringValidator::StringEmbedded(text.to_string())))
-        .collect();
+    created.validators = vals.into_iter().map(Validator::StringValidator).collect();
     created
 }
 
@@ -150,6 +147,7 @@ impl InputBuilder {
                         output_override: None,
                         raw_attributes: Default::default(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     })
@@ -168,13 +166,13 @@ impl InputBuilder {
                     raw_attributes: Default::default(),
                 })
             }
-            BuilderKind::Newtype => BuiltConfig::Newtype(NewtypeConfig {
+            BuilderKind::Newtype => BuiltConfig::Newtype(Box::new(NewtypeConfig {
                 name: self.name,
                 inner: FieldType::String,
                 annotations: self.annotations,
                 rust_derives: self.derives,
                 ..Default::default()
-            }),
+            })),
             BuilderKind::Struct => {
                 let config = StructConfig {
                     struct_name: self.name,
@@ -212,7 +210,7 @@ enum BuiltConfig {
     Struct(StructConfig),
     Table(Box<TableConfig>),
     Enum(TaggedUnion),
-    Newtype(NewtypeConfig),
+    Newtype(Box<NewtypeConfig>),
 }
 
 struct BuiltType {
@@ -542,7 +540,7 @@ fn validated_annotation_on_fields_with_validators() {
     let mut pm = stress_manager();
     let inp = struct_of("L")
         .fields(vec![
-            field_with_validators("email", "String", vec!["email"]),
+            field_with_validators("email", "String", vec![StringValidator::Email]),
             field("name", "String"),
         ])
         .build();
@@ -852,16 +850,16 @@ fn everything_combined_kitchen_sink() {
         .type_annotations(vec!["@audit"])
         .generator("arktype")
         .fields(vec![
-            field("amount", "Decimal"),                              // @bigdecimal
-            field("expires", "Option<DateTime>"),                    // @datetime_nullable
-            field("ids", "Vec<Uuid>"),                               // @readonly_uuid_array
-            field("scores", "HashMap<String, i64>"),                 // @string_number_map
-            field("created_at", "String"),                           // @readonly
-            field_with_validators("email", "String", vec!["email"]), // @validated
+            field("amount", "Decimal"),              // @bigdecimal
+            field("expires", "Option<DateTime>"),    // @datetime_nullable
+            field("ids", "Vec<Uuid>"),               // @readonly_uuid_array
+            field("scores", "HashMap<String, i64>"), // @string_number_map
+            field("created_at", "String"),           // @readonly
+            field_with_validators("email", "String", vec![StringValidator::Email]), // @validated
             field_with_annotations("secret", "String", vec!["@internal"]), // @skip_internal
-            field("__private", "i32"),                               // @skip_private
-            field("normal", "bool"),                                 // untouched
-            field("json_tricky", "String"),                          // @tricky(...)
+            field("__private", "i32"),               // @skip_private
+            field("normal", "bool"),                 // untouched
+            field("json_tricky", "String"),          // @tricky(...)
         ])
         .table_name("kitchen_sink_dto")
         .build();

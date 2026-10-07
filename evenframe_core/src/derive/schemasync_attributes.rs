@@ -69,18 +69,25 @@ pub fn parse_validator_overrides(attrs: &[Attribute]) -> syn::Result<ValidatorOv
     })
 }
 
-/// Refuses validator overrides on a struct or an enum. A value's validators
-/// sit on a field, a tuple element or a newtype; a table's own `#[validators]`
-/// are SurrealQL checks on the record.
-pub fn refuse_container_validator_overrides(attrs: &[Attribute]) -> syn::Result<()> {
+/// Refuses validators and morphs on a struct of named fields, an enum or a
+/// newtype of several values: none of them is one value, so a value's
+/// validators and morphs sit on a field, a tuple element or a single-value
+/// newtype.
+pub fn refuse_container_validators(attrs: &[Attribute]) -> syn::Result<()> {
     let overrides = parse_container_validator_overrides(attrs)?;
     match attrs.iter().find(|attr| {
-        !overrides.is_empty()
-            && (attr.path().is_ident("typesync") || attr.path().is_ident("schemasync"))
+        attr.path().is_ident("validators")
+            || attr.path().is_ident("morphs")
+            || (!overrides.is_empty()
+                && (attr.path().is_ident("typesync") || attr.path().is_ident("schemasync")))
     }) {
         Some(attr) => Err(syn::Error::new_spanned(
             attr,
-            "validators check a value: put them on a field, a tuple element or a newtype",
+            if attr.path().is_ident("morphs") {
+                "morphs rewrite a value: put them on a field, a tuple element or a newtype"
+            } else {
+                "validators check a value: put them on a field, a tuple element or a newtype"
+            },
         )),
         None => Ok(()),
     }

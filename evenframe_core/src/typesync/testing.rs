@@ -48,7 +48,6 @@ pub fn generate_struct_with_override(
         resolve_only: false,
         struct_name: name.to_string(),
         fields,
-        validators: vec![],
         doccom: None,
         macroforge_derives: vec![],
         annotations: vec![],
@@ -132,6 +131,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         edge_config: None,
         define_config: None,
         format: None,
+        morphs: Vec::new(),
         validators: vec![],
         always_regenerate: false,
         doccom: None,
@@ -160,7 +160,6 @@ mod tests {
             resolve_only: false,
             struct_name: "Site".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![
                 "Default".into(),

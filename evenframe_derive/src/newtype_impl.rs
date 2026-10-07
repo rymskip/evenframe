@@ -7,7 +7,7 @@ use crate::{
     deserialization_impl::{
         generate_custom_deserialize, generate_newtype_constructors, generate_newtype_deserialize,
     },
-    enum_impl::element_validator_tokens,
+    enum_impl::{ElementTokens, element_validator_tokens},
     surreal_value_impl::{Mode, struct_surreal_value},
     validate_impl::{CheckedField, struct_validate},
 };
@@ -17,7 +17,7 @@ use evenframe_core::{
         naming::{ItemShape, ItemWire, UnitValue},
         schemasync_attributes::{
             parse_container_validator_overrides, parse_validator_overrides,
-            refuse_container_validator_overrides,
+            refuse_container_validators,
         },
         typesync_attributes::{Position, TypesyncAttributes},
         validator_parser::{FieldValidators, parse_field_validators},
@@ -74,7 +74,6 @@ fn newtype_impl(
 
     let (inner, kind, validators, validator_overrides) = match value {
         Some((_, field)) => {
-            refuse_table_validators(&input.attrs)?;
             // The container's validators check the value, and so do the
             // field's own, after them.
             let attributes: Vec<Attribute> =
@@ -88,16 +87,14 @@ fn newtype_impl(
             )
         }
         None => {
-            if let Some(attribute) = input
-                .attrs
-                .iter()
-                .find(|attribute| attribute.path().is_ident("validators"))
-            {
+            if let Some(attribute) = input.attrs.iter().find(|attribute| {
+                attribute.path().is_ident("validators") || attribute.path().is_ident("morphs")
+            }) {
                 return Err(syn::Error::new_spanned(
                     attribute,
                     "serde writes a tuple struct of several fields as an array and a unit struct \
-                     as null, so there is no one value for `#[validators]` to check: put each \
-                     validator on the value it checks",
+                     as null, so there is no one value for `#[validators]` or `#[morphs]`: put \
+                     each on the value it applies to",
                 ));
             }
             let inner = match &wire.shape {
@@ -109,7 +106,7 @@ fn newtype_impl(
                         .collect(),
                 ),
             };
-            refuse_container_validator_overrides(&input.attrs)?;
+            refuse_container_validators(&input.attrs)?;
             (
                 inner,
                 quote! { ::evenframe::types::NewtypeKind::Alias },
@@ -187,6 +184,7 @@ fn newtype_impl(
         TokenStream::new()
     };
 
+    let morph_tokens = validators.morph_tokens();
     let validator_tokens = validators.config_tokens();
     let storage = evenframe_core::types::Storage {
         tuple: wire.stored_tuple,
@@ -194,11 +192,12 @@ fn newtype_impl(
         value: wire.unit_value.as_ref().map(UnitValue::surql),
         ..evenframe_core::types::Storage::default()
     };
-    let (element_validators, element_validator_overrides) = match value {
-        Some(_) => (
-            quote! { ::std::vec::Vec::new() },
-            quote! { ::std::vec::Vec::new() },
-        ),
+    let ElementTokens {
+        morphs: element_morphs,
+        validators: element_validators_tokens,
+        overrides: element_validator_overrides,
+    } = match value {
+        Some(_) => ElementTokens::none(),
         None => element_validator_tokens(&data.fields)?,
     };
     let TypesyncAttributes {
@@ -225,9 +224,11 @@ fn newtype_impl(
                             name: #name.to_owned(),
                             inner: #inner,
                             kind: #kind,
+                            morphs: vec![#(#morph_tokens),*],
                             validators: vec![#(#validator_tokens),*],
                             validator_overrides: #validator_overrides,
-                            element_validators: #element_validators,
+                            element_morphs: #element_morphs,
+                            element_validators: #element_validators_tokens,
                             element_validator_overrides: #element_validator_overrides,
                             storage: #storage,
                             doccom: None,
@@ -338,30 +339,6 @@ fn newtype_trait_impls(
             }
         }
     }
-}
-
-/// A table's SurrealQL `custom` validator written on a newtype, whose
-/// validators check its value rather than a record.
-fn refuse_table_validators(attrs: &[Attribute]) -> syn::Result<()> {
-    for attribute in attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("validators"))
-    {
-        let Ok(entries) = attribute.parse_args_with(
-            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-        ) else {
-            continue;
-        };
-        if let Some(entry) = entries.iter().find(|entry| entry.path().is_ident("custom")) {
-            return Err(syn::Error::new_spanned(
-                entry,
-                "`custom` is a table's SurrealQL validator, but a newtype's `#[validators]` \
-                 check the value it holds: name the validators instead, such as \
-                 `StringValidator::NonEmpty`",
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// How the field at `position` is reached.

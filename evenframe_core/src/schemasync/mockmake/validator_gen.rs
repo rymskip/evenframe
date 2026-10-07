@@ -14,9 +14,11 @@
 
 use crate::schemasync::mockmake::Mockmaker;
 use crate::types::FieldType;
+use crate::validator::morph::{Morph, NumberMorph, round_to};
+use crate::validator::text_pattern::TextPattern;
 use crate::validator::{
     ArrayValidator, DurationValidator, MockValue, NumberValidator, StringValidator, Validator,
-    bounds,
+    ValueRules, bounds,
 };
 use rand::{RngExt, rngs::ThreadRng};
 
@@ -25,20 +27,21 @@ use rand::{RngExt, rngs::ThreadRng};
 /// happens to fall outside a length bound).
 const STRING_GEN_ATTEMPTS: usize = 16;
 
-/// Produce a SurrealQL literal that satisfies every validator in
-/// `validators` for a field of type `field_type`, or `None` if the constraints
-/// can't be solved in closed form.
+/// Produce a SurrealQL literal that has been through every morph in `rules`
+/// and satisfies every validator, for a field of type `field_type`, or
+/// `None` if the constraints can't be solved in closed form.
 pub fn generate_with_validators(
     field_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     rng: &mut ThreadRng,
 ) -> Option<String> {
-    if validators.is_empty() {
+    if rules.is_empty() {
         return None;
     }
+    let validators = rules.validators;
     match field_type {
-        FieldType::String => generate_string(validators, rng),
-        FieldType::F32 | FieldType::F64 => generate_float(validators, rng),
+        FieldType::String => generate_string(rules, rng),
+        FieldType::F32 | FieldType::F64 => generate_float(rules, rng),
         FieldType::I8
         | FieldType::I16
         | FieldType::I32
@@ -50,8 +53,8 @@ pub fn generate_with_validators(
         | FieldType::U32
         | FieldType::U64
         | FieldType::U128
-        | FieldType::Usize => generate_integer(field_type, validators, rng),
-        FieldType::Duration => generate_duration(validators, rng),
+        | FieldType::Usize => generate_integer(field_type, rules, rng),
+        FieldType::Duration if !validators.is_empty() => generate_duration(validators, rng),
         // Containers, options, records, and foreign types are handled by the
         // existing recursion in field_value.rs. ArrayValidator on a Vec field
         // is honoured separately via `array_count_range`.
@@ -101,11 +104,13 @@ struct StringConstraints {
     max_len: Option<usize>,
     /// `Length(n)` collapses both bounds.
     exact_len: Option<usize>,
-    /// Substrings the value must include / start with / end with.
+    /// Text the value must include / start with / end with, a format's
+    /// argument as a value of it.
     starts_with: Vec<String>,
     ends_with: Vec<String>,
     includes: Vec<String>,
-    /// Apply lower/upper/trim/capitalize transformations after generation.
+    /// Keep the value lowercase, uppercase, trimmed or capitalized, as the
+    /// preformatted checks require.
     to_lower: bool,
     to_upper: bool,
     to_trim: bool,
@@ -162,21 +167,15 @@ fn collect_string_constraints(validators: &[Validator]) -> StringConstraints {
             StringValidator::NonEmpty => {
                 c.min_len = Some(c.min_len.map_or(1, |m| m.max(1)));
             }
-            StringValidator::StartsWith(s) => c.starts_with.push(s.clone()),
-            StringValidator::EndsWith(s) => c.ends_with.push(s.clone()),
-            StringValidator::Includes(s) => c.includes.push(s.clone()),
-            StringValidator::Lower
-            | StringValidator::LowerPreformatted
-            | StringValidator::Lowercased => c.to_lower = true,
-            StringValidator::Upper
-            | StringValidator::UpperPreformatted
-            | StringValidator::Uppercased => c.to_upper = true,
-            StringValidator::Trim
-            | StringValidator::TrimPreformatted
-            | StringValidator::Trimmed => c.to_trim = true,
-            StringValidator::Capitalize
-            | StringValidator::CapitalizePreformatted
-            | StringValidator::Capitalized => c.to_capitalize = true,
+            StringValidator::StartsWith(pattern) => c.starts_with.extend(text_sample(pattern)),
+            StringValidator::EndsWith(pattern) => c.ends_with.extend(text_sample(pattern)),
+            StringValidator::Includes(pattern) => c.includes.extend(text_sample(pattern)),
+            StringValidator::LowerPreformatted | StringValidator::Lowercased => c.to_lower = true,
+            StringValidator::UpperPreformatted | StringValidator::Uppercased => c.to_upper = true,
+            StringValidator::TrimPreformatted | StringValidator::Trimmed => c.to_trim = true,
+            StringValidator::CapitalizePreformatted | StringValidator::Capitalized => {
+                c.to_capitalize = true
+            }
             StringValidator::Literal(s) => c.literal = Some(s.clone()),
             StringValidator::RegexLiteral(fmt) => c.regex_format = Some(fmt.clone()),
             StringValidator::Email => c.shape = c.shape.or(Some(StringShape::Email)),
@@ -212,33 +211,24 @@ fn collect_string_constraints(validators: &[Validator]) -> StringConstraints {
             StringValidator::Alpha => c.shape = c.shape.or(Some(StringShape::Alpha)),
             StringValidator::Alphanumeric => c.shape = c.shape.or(Some(StringShape::Alphanumeric)),
             StringValidator::Digits => c.shape = c.shape.or(Some(StringShape::Digits)),
-            StringValidator::Numeric | StringValidator::NumericParse => {
-                c.shape = c.shape.or(Some(StringShape::Numeric))
-            }
-            StringValidator::Integer | StringValidator::IntegerParse => {
-                c.shape = c.shape.or(Some(StringShape::Integer))
-            }
+            StringValidator::Numeric => c.shape = c.shape.or(Some(StringShape::Numeric)),
+            StringValidator::Integer => c.shape = c.shape.or(Some(StringShape::Integer)),
             StringValidator::CreditCard => c.shape = c.shape.or(Some(StringShape::CreditCard)),
             StringValidator::Semver => c.shape = c.shape.or(Some(StringShape::Semver)),
-            StringValidator::DateIso | StringValidator::DateIsoParse => {
-                c.shape = c.shape.or(Some(StringShape::DateIso))
-            }
-            StringValidator::Date | StringValidator::DateParse => {
-                c.shape = c.shape.or(Some(StringShape::DateYmd))
-            }
-            StringValidator::DateEpoch | StringValidator::DateEpochParse => {
-                c.shape = c.shape.or(Some(StringShape::DateEpoch))
-            }
+            StringValidator::DateIso => c.shape = c.shape.or(Some(StringShape::DateIso)),
+            StringValidator::Date => c.shape = c.shape.or(Some(StringShape::DateYmd)),
+            StringValidator::DateEpoch => c.shape = c.shape.or(Some(StringShape::DateEpoch)),
             // Variants we either can't drive or that don't influence
-            // generation (StringEmbedded, Regex with no payload, base64,
-            // unicode normalization morphs, Uncapitalized).
+            // generation (Regex with no payload, base64, unicode
+            // normalization checks, Uncapitalized).
             _ => {}
         }
     }
     c
 }
 
-fn generate_string(validators: &[Validator], rng: &mut ThreadRng) -> Option<String> {
+fn generate_string(rules: ValueRules<'_>, rng: &mut ThreadRng) -> Option<String> {
+    let validators = rules.validators;
     let c = collect_string_constraints(validators);
 
     // A literal pin overrides everything.
@@ -251,7 +241,7 @@ fn generate_string(validators: &[Validator], rng: &mut ThreadRng) -> Option<Stri
     }
 
     for _ in 0..STRING_GEN_ATTEMPTS {
-        let candidate = build_string_candidate(&c, rng)?;
+        let candidate = morphed_string(build_string_candidate(&c, rng)?, rules.morphs);
         if validators
             .iter()
             .all(|v| v.matches(&MockValue::Str(&candidate)))
@@ -264,6 +254,48 @@ fn generate_string(validators: &[Validator], rng: &mut ThreadRng) -> Option<Stri
         }
     }
     None
+}
+
+/// Text that holds `pattern`: the text itself, or a value of the format. A
+/// format that cannot generate one is logged, and the candidate's check
+/// then rejects it.
+fn text_sample(pattern: &TextPattern) -> Option<String> {
+    match pattern {
+        TextPattern::Text(text) => Some(text.clone()),
+        TextPattern::Format(format) => format
+            .generate_formatted_value()
+            .inspect_err(|error| tracing::warn!("{error}; leaving the text argument out"))
+            .ok(),
+    }
+}
+
+/// `value` through each string morph in `morphs`, in order.
+pub fn morphed_string(value: String, morphs: &[Morph]) -> String {
+    morphs.iter().fold(value, |value, morph| match morph {
+        Morph::StringMorph(morph) => morph.apply(&value),
+        Morph::NumberMorph(_) | Morph::ArrayMorph(_) => value,
+    })
+}
+
+/// The range `clamp` pulls numbers into, intersected with `range`, and the
+/// fewest decimal places any `round` keeps.
+fn apply_number_morphs(range: &mut NumericRange, morphs: &[Morph]) -> Option<u32> {
+    let mut places = None;
+    for morph in morphs {
+        match morph {
+            Morph::NumberMorph(NumberMorph::Clamp(min, max)) => {
+                if let (Ok(min), Ok(max)) = (min.parse::<f64>(), max.parse::<f64>()) {
+                    range.lo = range.lo.max(min);
+                    range.hi = range.hi.min(max);
+                }
+            }
+            Morph::NumberMorph(NumberMorph::Round(kept)) => {
+                places = Some(places.map_or(*kept, |places: u32| places.min(*kept)));
+            }
+            Morph::StringMorph(_) | Morph::ArrayMorph(_) => {}
+        }
+    }
+    places
 }
 
 fn build_string_candidate(c: &StringConstraints, rng: &mut ThreadRng) -> Option<String> {
@@ -512,7 +544,7 @@ fn collect_numeric_range(validators: &[Validator]) -> NumericRange {
                 r.require_int = true;
             }
             NumberValidator::MultipleOf(d) => r.multiple_of = d.0,
-            NumberValidator::NonNaN | NumberValidator::Finite => {
+            NumberValidator::NonNan | NumberValidator::Finite => {
                 // Random sampling inside f64 range never produces NaN/Infinity.
             }
         }
@@ -538,10 +570,12 @@ fn integer_field_default_range(field_type: &FieldType) -> (f64, f64) {
 
 fn generate_integer(
     field_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     rng: &mut ThreadRng,
 ) -> Option<String> {
+    let validators = rules.validators;
     let mut r = collect_numeric_range(validators);
+    apply_number_morphs(&mut r, rules.morphs);
     r.require_int = true;
     let (default_lo, default_hi) = integer_field_default_range(field_type);
     // Default an unbounded side relative to the bounded one, since a plain
@@ -572,8 +606,11 @@ fn generate_integer(
     Some(format!("{}", int_value))
 }
 
-fn generate_float(validators: &[Validator], rng: &mut ThreadRng) -> Option<String> {
+fn generate_float(rules: ValueRules<'_>, rng: &mut ThreadRng) -> Option<String> {
+    let validators = rules.validators;
     let mut r = collect_numeric_range(validators);
+    // The literal keeps two decimal places, which a `round` to fewer narrows.
+    let places = apply_number_morphs(&mut r, rules.morphs).map_or(2, |places| places.min(2));
     // Default an unbounded side relative to the bounded one, since a plain
     // default can contradict it (e.g. Negative: hi < 0 with default lo 0,
     // or GreaterThan(1000) with default hi 100).
@@ -586,14 +623,15 @@ fn generate_float(validators: &[Validator], rng: &mut ThreadRng) -> Option<Strin
     let value = sample_numeric(&r, rng)?;
     // Round to the same precision used in the emitted literal so the matches
     // check is performed on the value the database actually sees.
-    let rounded = (value * 100.0).round() / 100.0;
+    let rounded = round_to(value, places);
     if !validators
         .iter()
         .all(|v| v.matches(&MockValue::Num(rounded)))
     {
         return None;
     }
-    Some(format!("{:.2}f", rounded))
+    let precision = usize::try_from(places).ok()?;
+    Some(format!("{rounded:.precision$}f"))
 }
 
 fn sample_numeric(r: &NumericRange, rng: &mut ThreadRng) -> Option<f64> {
@@ -706,8 +744,9 @@ fn generate_duration(validators: &[Validator], rng: &mut ThreadRng) -> Option<St
 mod tests {
     use super::{
         ArrayValidator, DurationValidator, FieldType, MockValue, NumberValidator, StringValidator,
-        Validator, array_count_range, duration_literal, generate_with_validators,
+        Validator, ValueRules, array_count_range, duration_literal, generate_with_validators,
     };
+    use crate::validator::morph::{Morph, NumberMorph, StringMorph};
     use ordered_float::OrderedFloat;
 
     /// Strip the surrounding `'…'` quoting so we can test the underlying value.
@@ -733,8 +772,12 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let literal = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                .expect("a value meets both lists");
+            let literal = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("a value meets both lists");
             let value = unquote(&literal);
             assert!(
                 validators
@@ -753,8 +796,12 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                .expect("should produce a value");
+            let lit = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce a value");
             let inner = unquote(&lit);
             let len = inner.chars().count();
             assert!(
@@ -774,8 +821,12 @@ mod tests {
         let validators = vec![Validator::StringValidator(StringValidator::Email)];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                .expect("should produce an email");
+            let lit = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce an email");
             let inner = unquote(&lit);
             assert!(
                 validators[0].matches(&MockValue::Str(inner)),
@@ -801,8 +852,12 @@ mod tests {
         ] {
             let validators = vec![Validator::StringValidator(validator)];
             for _ in 0..20 {
-                let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                    .expect("should produce a UUID");
+                let lit = generate_with_validators(
+                    &FieldType::String,
+                    ValueRules::new(&[], &validators),
+                    &mut rng,
+                )
+                .expect("should produce a UUID");
                 let inner = unquote(&lit);
                 assert!(
                     validators[0].matches(&MockValue::Str(inner)),
@@ -820,8 +875,12 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                .expect("should produce a value");
+            let lit = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce a value");
             let inner = unquote(&lit);
             assert!(inner.starts_with("ID-"), "missing prefix: {}", inner);
             for v in &validators {
@@ -838,12 +897,58 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::String, &validators, &mut rng)
-                .expect("should produce a value");
+            let lit = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce a value");
             let inner = unquote(&lit);
             for v in &validators {
                 assert!(v.matches(&MockValue::Str(inner)));
             }
+        }
+    }
+
+    #[test]
+    fn values_come_out_morphed() {
+        let mut rng = rand::rng();
+        let morphs = [
+            Morph::StringMorph(StringMorph::Upper),
+            Morph::StringMorph(StringMorph::CollapseWhitespace),
+        ];
+        let validators = [Validator::StringValidator(StringValidator::MinLength(3))];
+        for _ in 0..20 {
+            let literal = generate_with_validators(
+                &FieldType::String,
+                ValueRules::new(&morphs, &validators),
+                &mut rng,
+            )
+            .expect("a string");
+            let inner = unquote(&literal);
+            assert_eq!(inner, inner.to_uppercase());
+        }
+        let morphs = [
+            Morph::NumberMorph(NumberMorph::Clamp("10".to_owned(), "20".to_owned())),
+            Morph::NumberMorph(NumberMorph::Round(1)),
+        ];
+        for _ in 0..20 {
+            let literal =
+                generate_with_validators(&FieldType::F64, ValueRules::new(&morphs, &[]), &mut rng)
+                    .expect("a number");
+            let number: f64 = literal
+                .trim_end_matches('f')
+                .parse()
+                .expect("a float literal");
+            assert!((10.0..=20.0).contains(&number), "{literal}");
+            assert_eq!(
+                literal
+                    .trim_end_matches('f')
+                    .split('.')
+                    .nth(1)
+                    .map(str::len),
+                Some(1)
+            );
         }
     }
 
@@ -855,8 +960,12 @@ mod tests {
         ))];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::I32, &validators, &mut rng)
-                .expect("should produce an integer");
+            let lit = generate_with_validators(
+                &FieldType::I32,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce an integer");
             let n: f64 = lit.parse().expect("integer literal");
             assert!((10.0..=20.0).contains(&n), "{} outside [10,20]", n);
         }
@@ -870,8 +979,12 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::I64, &validators, &mut rng)
-                .expect("should produce an integer");
+            let lit = generate_with_validators(
+                &FieldType::I64,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce an integer");
             let n: f64 = lit.parse().expect("integer literal");
             assert!(n > 0.0, "got non-positive {}", n);
             assert!((n % 5.0).abs() < f64::EPSILON, "{} not a multiple of 5", n);
@@ -885,8 +998,12 @@ mod tests {
         )];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let lit = generate_with_validators(&FieldType::F64, &validators, &mut rng)
-                .expect("should produce a float");
+            let lit = generate_with_validators(
+                &FieldType::F64,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("should produce a float");
             // strip trailing 'f'
             let body = lit.strip_suffix('f').unwrap_or(&lit);
             let n: f64 = body.parse().expect("float literal");
@@ -920,8 +1037,12 @@ mod tests {
         ];
         let mut rng = rand::rng();
         for _ in 0..50 {
-            let literal = generate_with_validators(&FieldType::Duration, &validators, &mut rng)
-                .expect("a duration in range");
+            let literal = generate_with_validators(
+                &FieldType::Duration,
+                ValueRules::new(&[], &validators),
+                &mut rng,
+            )
+            .expect("a duration in range");
             let nanos = crate::validator::parse_duration_to_nanos(&literal).expect("a duration");
             assert!(
                 validators
@@ -937,8 +1058,12 @@ mod tests {
     #[test]
     fn empty_validators_yields_none() {
         let mut rng = rand::rng();
-        assert!(generate_with_validators(&FieldType::String, &[], &mut rng).is_none());
-        assert!(generate_with_validators(&FieldType::I32, &[], &mut rng).is_none());
+        assert!(
+            generate_with_validators(&FieldType::String, ValueRules::default(), &mut rng).is_none()
+        );
+        assert!(
+            generate_with_validators(&FieldType::I32, ValueRules::default(), &mut rng).is_none()
+        );
     }
 
     #[test]
@@ -946,6 +1071,13 @@ mod tests {
         let validators = vec![Validator::NumberValidator(NumberValidator::Positive)];
         let mut rng = rand::rng();
         // Bool is not handled by validator_gen; the caller falls back to default.
-        assert!(generate_with_validators(&FieldType::Bool, &validators, &mut rng).is_none());
+        assert!(
+            generate_with_validators(
+                &FieldType::Bool,
+                ValueRules::new(&[], &validators),
+                &mut rng
+            )
+            .is_none()
+        );
     }
 }

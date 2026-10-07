@@ -11,6 +11,7 @@
 #![cfg(all(feature = "schemasync", feature = "scan"))]
 
 use evenframe_core::scan::{ScanConfig, build_all_configs};
+use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schema};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::database::surql::define::generate_define_statements;
 use evenframe_core::schemasync::database::surql::remove::generate_remove_index_statements;
@@ -18,6 +19,8 @@ use evenframe_core::types::AllConfigs;
 use evenframe_core::types::ForeignTypeRegistry;
 use std::collections::BTreeMap;
 use std::fs;
+use surrealdb::Surreal;
+use surrealdb::engine::local::Mem;
 use tempfile::TempDir;
 
 fn write(tmp: &TempDir, rel: &str, body: &str) {
@@ -86,11 +89,14 @@ fn scanner_threads_struct_level_index_into_define_statements() {
     let surql = generate_define_statements(
         "reaction",
         table,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &registry,
-        true,
+        &evenframe_core::schemasync::database::surql::shape::DefineContext {
+            tables: &BTreeMap::new(),
+            objects: &BTreeMap::new(),
+            enums: &BTreeMap::new(),
+            declared: &evenframe_core::types::DeclaredTypes::default(),
+            registry: &registry,
+            options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+        },
     )
     .unwrap();
 
@@ -160,8 +166,8 @@ fn scanner_rejects_unknown_field_in_index() {
 /// which was present in the "previous" schema but removed from the Rust source
 /// produces a `REMOVE INDEX` statement. Without this wiring, orphan indexes
 /// would leak into the DB indefinitely.
-#[test]
-fn orphan_index_is_dropped_when_removed_from_source() {
+#[tokio::test]
+async fn orphan_index_is_dropped_when_removed_from_source() {
     // Pass 1: both indexes declared.
     let tmp_before = TempDir::new().unwrap();
     write(
@@ -196,13 +202,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         scan_path: tmp_before.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let AllConfigs {
-        tables: before_tables,
-        objects: before_objects,
-        ..
-    } = build_all_configs(&before_cfg).expect("build before");
-    let before_schema = SchemaDefinition::from_table_configs(&before_tables, &before_objects, true)
-        .expect("schema before");
+    let before_schema = generated_schema(&before_cfg).await;
 
     // Pass 2: `created_at` index removed from the struct.
     let tmp_after = TempDir::new().unwrap();
@@ -235,13 +235,7 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         scan_path: tmp_after.path().to_path_buf(),
         ..ScanConfig::default()
     };
-    let AllConfigs {
-        tables: after_tables,
-        objects: after_objects,
-        ..
-    } = build_all_configs(&after_cfg).expect("build after");
-    let after_schema = SchemaDefinition::from_table_configs(&after_tables, &after_objects, true)
-        .expect("schema after");
+    let after_schema = generated_schema(&after_cfg).await;
 
     // Compare "old" (before) vs "new" (after), as for a database whose
     // indexes were last synced under the old schema.
@@ -271,6 +265,38 @@ fn orphan_index_is_dropped_when_removed_from_source() {
         "unique index should be preserved, not dropped:\n{}",
         remove_sql,
     );
+}
+
+/// The schema the scanned project generates, applied to an in-memory
+/// database and read back from its export, as schemasync reads the schema it
+/// compares against the database.
+async fn generated_schema(config: &ScanConfig) -> SchemaDefinition {
+    let types = build_all_configs(config)
+        .expect("the project scans")
+        .into_schemasync()
+        .expect("the schemasync view");
+    let surql = evenframe_core::schemasync::dump::tables_surql(
+        &types,
+        &ForeignTypeRegistry::default(),
+        true,
+    )
+    .expect("the schema generates");
+    let db = Surreal::new::<Mem>(())
+        .await
+        .expect("an in-memory database");
+    db.use_ns("test")
+        .use_db("test")
+        .await
+        .expect("the database opens");
+    db.query(surql.as_str())
+        .await
+        .expect("the schema runs")
+        .check()
+        .expect("every DEFINE succeeds");
+    let export = export_schema(&db, "the generated schema")
+        .await
+        .expect("the schema exports");
+    SchemaImporter::parse_schema_from_export(&export).expect("the export reads back")
 }
 
 fn scan_single_file(name: &str, source: &str) -> evenframe_core::error::Result<AllConfigs> {
@@ -380,11 +406,14 @@ fn named_field_unique_replaces_default_unique_index() {
     let surql = generate_define_statements(
         "account",
         account,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &ForeignTypeRegistry::default(),
-        true,
+        &evenframe_core::schemasync::database::surql::shape::DefineContext {
+            tables: &BTreeMap::new(),
+            objects: &BTreeMap::new(),
+            enums: &BTreeMap::new(),
+            declared: &evenframe_core::types::DeclaredTypes::default(),
+            registry: &ForeignTypeRegistry::default(),
+            options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+        },
     )
     .unwrap();
     let index_lines: Vec<&str> = surql

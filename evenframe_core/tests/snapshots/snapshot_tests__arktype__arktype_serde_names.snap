@@ -17,13 +17,5 @@ Member: {
 
 const exported = bindings.export();
 
-export const defaultMember: Member = {
-id: "",
-displayName: "",
-"zip-code": "",
-nickname: null,
-status: "active"
-};
-
 export type Status = typeof exported.Status.infer;
 export type Member = typeof exported.Member.infer;

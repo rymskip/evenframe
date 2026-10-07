@@ -6,7 +6,7 @@ use evenframe::config::ForeignTypeConfig;
 use evenframe::prelude::ordered_float::OrderedFloat;
 use evenframe::registry::all_configs;
 use evenframe::schemasync::dump::tables_surql;
-use evenframe::types::ForeignTypeRegistry;
+use evenframe::types::{ForeignTypeRegistry, FromText};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -302,9 +302,7 @@ async fn a_record_round_trips_through_the_database() {
         .into_schemasync()
         .expect("the registered types have a stored form");
     let schema = tables_surql(
-        &types.tables,
-        &types.objects,
-        &types.enums,
+        &types,
         &ForeignTypeRegistry::from_config(&foreign_types()),
         false,
     )
@@ -489,26 +487,24 @@ fn tuple_structs_read_as_serde_writes_them() {
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
 #[serde(deny_unknown_fields)]
 struct Signup {
-    #[validators(StringValidator::Trim, StringValidator::Lower, StringValidator::Email)]
+    #[morphs(trim, lower)]
+    #[validators(StringValidator::Email)]
     email: String,
-    #[validators(
-        StringValidator::IntegerParse,
-        NumberValidator::GreaterThanOrEqualTo(13.0)
-    )]
-    age: i64,
-    #[validators(StringValidator::Capitalize)]
+    #[validators(NumberValidator::GreaterThanOrEqualTo(13.0))]
+    age: FromText<i64>,
+    #[morphs(capitalize)]
     nickname: Option<String>,
 }
 
 #[test]
-fn a_stored_read_parses_transforms_and_validates() {
+fn a_stored_read_morphs_and_validates_the_parsed_value() {
     let signup = Signup::from_value(Value::Object(
         BTreeMap::from([
             (
                 "email".to_owned(),
                 Value::String("  Ada@Example.COM ".to_owned()),
             ),
-            ("age".to_owned(), Value::String("42".to_owned())),
+            ("age".to_owned(), 42_i64.into_value()),
             ("nickname".to_owned(), Value::String("ada".to_owned())),
         ])
         .into_iter()
@@ -516,7 +512,7 @@ fn a_stored_read_parses_transforms_and_validates() {
     ))
     .expect("the signup reads");
     assert_eq!(signup.email, "ada@example.com");
-    assert_eq!(signup.age, 42);
+    assert_eq!(signup.age, FromText(42));
     assert_eq!(signup.nickname.as_deref(), Some("Ada"));
 
     let error = Signup::from_value(Value::Object(
@@ -525,7 +521,7 @@ fn a_stored_read_parses_transforms_and_validates() {
                 "email".to_owned(),
                 Value::String("ada@example.com".to_owned()),
             ),
-            ("age".to_owned(), Value::String("12".to_owned())),
+            ("age".to_owned(), 12_i64.into_value()),
         ])
         .into_iter()
         .collect(),
@@ -607,9 +603,7 @@ fn a_field_serde_skips_one_way_is_stored_as_serde_writes_it() {
         .into_schemasync()
         .expect("the registered types have a stored form");
     let schema = tables_surql(
-        &types.tables,
-        &types.objects,
-        &types.enums,
+        &types,
         &ForeignTypeRegistry::from_config(&foreign_types()),
         false,
     )

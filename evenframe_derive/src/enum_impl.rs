@@ -6,7 +6,7 @@ use evenframe_core::{
     derive::{
         attributes::parse_rust_derives,
         naming,
-        schemasync_attributes::{parse_validator_overrides, refuse_container_validator_overrides},
+        schemasync_attributes::{parse_validator_overrides, refuse_container_validators},
         typesync_attributes::{Position, TypesyncAttributes},
         validator_parser::{FieldValidators, parse_element_validators, parse_field_validators},
     },
@@ -22,7 +22,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
     if let Data::Enum(ref data_enum) = input.data {
         let enum_name = ident.to_string();
 
-        if let Err(err) = refuse_container_validator_overrides(&input.attrs) {
+        if let Err(err) = refuse_container_validators(&input.attrs) {
             return err.to_compile_error();
         }
         let TypesyncAttributes {
@@ -88,8 +88,10 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                         };
                         let field_name = naming::unraw(member);
                         let field_type = FieldType::parse_syn_ty(&field.ty);
-                        let validators = match parse_field_validators(&field.attrs) {
-                            Ok(validators) => validators.config_tokens(),
+                        let (morphs, validators) = match parse_field_validators(&field.attrs) {
+                            Ok(validators) => {
+                                (validators.morph_tokens(), validators.config_tokens())
+                            }
                             Err(err) => return err.to_compile_error(),
                         };
                         let validator_overrides = match parse_validator_overrides(&field.attrs) {
@@ -104,6 +106,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 edge_config: None,
                                 define_config: None,
                                 format: None,
+                                morphs: vec![#(#morphs),*],
                                 validators: vec![#(#validators),*],
                                 validator_overrides: #validator_overrides,
                                 always_regenerate: false,
@@ -121,7 +124,6 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                         Some(VariantData::InlineStruct(StructConfig {
                             struct_name: format!("{}_{}", #enum_name, #variant_name),
                             fields: vec![#(#struct_fields),*],
-                            validators: vec![],
                             doccom: None,
                             macroforge_derives: vec![#(#variant_macroforge_derives.to_string()),*],
                             annotations: vec![],
@@ -140,11 +142,14 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
             } else {
                 quote! { vec![#(#variant_annotations.to_string()),*] }
             };
-            let (element_validators_tokens, element_validator_overrides_tokens) =
-                match element_validator_tokens(&variant.fields) {
-                    Ok(tokens) => tokens,
-                    Err(err) => return err.to_compile_error(),
-                };
+            let ElementTokens {
+                morphs: element_morphs_tokens,
+                validators: element_validators_tokens,
+                overrides: element_validator_overrides_tokens,
+            } = match element_validator_tokens(&variant.fields) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            };
 
             variant_tokens.push(quote! {
                 Variant {
@@ -156,6 +161,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                     output_override: None,
                     raw_attributes: std::collections::BTreeMap::new(),
                     is_default: #is_default_variant,
+                    element_morphs: #element_morphs_tokens,
                     element_validators: #element_validators_tokens,
                     element_validator_overrides: #element_validator_overrides_tokens,
                 }
@@ -322,19 +328,41 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
 
 /// A tuple payload's validators and their overrides, one entry per element,
 /// or none when no element has any, as the scanner records them.
-pub(crate) fn element_validator_tokens(fields: &Fields) -> syn::Result<(TokenStream, TokenStream)> {
+/// A tuple payload's per-element morphs, validators and overrides, as
+/// tokens for its static config.
+pub(crate) struct ElementTokens {
+    pub morphs: TokenStream,
+    pub validators: TokenStream,
+    pub overrides: TokenStream,
+}
+
+impl ElementTokens {
+    pub fn none() -> Self {
+        Self {
+            morphs: quote! { ::std::vec::Vec::new() },
+            validators: quote! { ::std::vec::Vec::new() },
+            overrides: quote! { ::std::vec::Vec::new() },
+        }
+    }
+}
+
+pub(crate) fn element_validator_tokens(fields: &Fields) -> syn::Result<ElementTokens> {
     let Fields::Unnamed(unnamed) = fields else {
-        return Ok((
-            quote! { ::std::vec::Vec::new() },
-            quote! { ::std::vec::Vec::new() },
-        ));
+        return Ok(ElementTokens::none());
     };
-    let (validators, overrides) = parse_element_validators(&unnamed.unnamed)?;
-    let validators = validators
+    let elements = parse_element_validators(&unnamed.unnamed)?;
+    let morphs = elements
+        .morphs
         .iter()
         .map(|element| quote! { vec![#(#element),*] });
-    Ok((
-        quote! { vec![#(#validators),*] },
-        quote! { vec![#(#overrides),*] },
-    ))
+    let validators = elements
+        .validators
+        .iter()
+        .map(|element| quote! { vec![#(#element),*] });
+    let overrides = &elements.overrides;
+    Ok(ElementTokens {
+        morphs: quote! { vec![#(#morphs),*] },
+        validators: quote! { vec![#(#validators),*] },
+        overrides: quote! { vec![#(#overrides),*] },
+    })
 }

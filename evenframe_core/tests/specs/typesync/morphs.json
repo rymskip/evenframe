@@ -1,0 +1,67 @@
+{
+  "description": "Fields rewritten into canonical form by every morph family before their validators check them",
+  "structs": {
+    "Reading": {
+      "struct_name": "Reading",
+      "fields": [
+        {
+          "field_name": "label",
+          "field_type": "String",
+          "morphs": [
+            { "StringMorph": "CollapseWhitespace" },
+            { "StringMorph": "Trim" },
+            { "StringMorph": "NormalizeNfkc" }
+          ],
+          "validators": [{ "StringValidator": "NonEmpty" }],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "email",
+          "field_type": { "Option": "String" },
+          "morphs": [{ "StringMorph": "Trim" }, { "StringMorph": "Lower" }],
+          "validators": [{ "StringValidator": "Email" }],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "level",
+          "field_type": "F64",
+          "morphs": [
+            { "NumberMorph": { "Clamp": ["0", "10"] } },
+            { "NumberMorph": { "Round": 1 } }
+          ],
+          "validators": [],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "rating",
+          "field_type": "U8",
+          "morphs": [{ "NumberMorph": { "Clamp": ["1", "5"] } }],
+          "validators": [],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "price",
+          "field_type": "String",
+          "morphs": [{ "NumberMorph": { "Clamp": ["0", "99.50"] } }],
+          "validators": [],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "tags",
+          "field_type": { "Vec": "String" },
+          "morphs": [{ "ArrayMorph": "Unique" }, { "ArrayMorph": "Sort" }],
+          "validators": [{ "ArrayValidator": { "MaxItems": 10 } }],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "scores",
+          "field_type": { "Vec": "I32" },
+          "morphs": [{ "ArrayMorph": "Sort" }],
+          "validators": [],
+          "always_regenerate": false
+        }
+      ]
+    }
+  },
+  "enums": {}
+}

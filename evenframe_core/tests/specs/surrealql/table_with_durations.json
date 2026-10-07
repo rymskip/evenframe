@@ -49,8 +49,7 @@
             "should_skip": false
           }
         }
-      ],
-      "validators": []
+      ]
     },
     "relation": null,
     "permissions": null,

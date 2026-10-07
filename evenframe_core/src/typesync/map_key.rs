@@ -47,7 +47,11 @@ impl<'a> MapKey<'a> {
             | FieldType::HashMap(..)
             | FieldType::BTreeMap(..)
             | FieldType::RecordLink(_)
-            | FieldType::Duration => Err(UNSUPPORTED),
+            | FieldType::Duration
+            | FieldType::FromText(_)
+            | FieldType::JsonText(_)
+            | FieldType::IsoDate
+            | FieldType::EpochMillis => Err(UNSUPPORTED),
         }
     }
 

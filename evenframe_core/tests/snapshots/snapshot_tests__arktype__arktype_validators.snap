@@ -15,11 +15,4 @@ Registration: {
 
 const exported = bindings.export();
 
-export const defaultRegistration: Registration = {
-email: "",
-username: "",
-age: 0,
-website: null
-};
-
 export type Registration = typeof exported.Registration.infer;

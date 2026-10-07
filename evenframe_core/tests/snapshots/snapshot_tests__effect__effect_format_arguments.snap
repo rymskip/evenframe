@@ -1,0 +1,19 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Account extends Schema.Class<Account>("Account")( { 
+  password: Schema.propertySignature(Schema.String.pipe(Schema.minLength(8, { message: () => `'Password' must be at least 8 characters long` })).pipe(Schema.maxLength(32, { message: () => `'Password' must be at most 32 characters long` })).pipe(Schema.pattern(new RegExp("(?:[A-Z])"), { message: () => `'Password' must be a value containing an uppercase letter` })).pipe(Schema.pattern(new RegExp("(?:[a-z])"), { message: () => `'Password' must be a value containing a lowercase letter` })).pipe(Schema.pattern(new RegExp("(?:[0-9])"), { message: () => `'Password' must be a value containing a digit` })).pipe(Schema.pattern(new RegExp("(?:[!-/:-@\\[-\\x60{-~])"), { message: () => `'Password' must be a value containing a symbol` }))).annotations({ missingMessage: () => `'Password' is required` }),
+  handle: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^(?:[a-z0-9]+(?:-[a-z0-9]+)*)"), { message: () => `'Handle' must be a value starting with a slug such as my-post-1` })).pipe(Schema.filter((value) => value.endsWith("-team"), { message: () => `'Handle' must be a value ending with "-team"` }))).annotations({ missingMessage: () => `'Handle' is required` }),
+  home: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^/(?:[^/\\\\\\x00-\\x1F\\x7F]+[^\\x00-\\x1F\\x7F]*)?$"), { message: () => `'Home' must be a path such as /a/b` }))).annotations({ missingMessage: () => `'Home' is required` })
+}) {[key: string]: unknown}
+
+
+export interface AccountEncoded {
+  readonly password: string;
+  readonly handle: string;
+  readonly home: string;
+}
+
+
+export type AccountType = typeof Account.Type;

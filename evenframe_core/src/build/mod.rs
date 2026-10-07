@@ -51,15 +51,6 @@ pub fn schemadump() -> Result<std::path::PathBuf, EvenframeError> {
     let config = crate::scan::config::build_script_config()?;
     let types = build_all_configs(&ScanConfig::from_config(&config))?.into_schemasync()?;
     let path = DumpScope::Schema.default_path(config.project_root());
-    write_dump(
-        &path,
-        &dump_surql(
-            &config,
-            &types.tables,
-            &types.objects,
-            &types.enums,
-            DumpScope::Schema,
-        )?,
-    )?;
+    write_dump(&path, &dump_surql(&config, &types, DumpScope::Schema)?)?;
     Ok(path)
 }

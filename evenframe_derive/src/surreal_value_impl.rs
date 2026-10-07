@@ -585,7 +585,6 @@ fn checked_struct_read(
     let mut bindings = Vec::new();
     let mut pipelines = Vec::new();
     let mut assignments = Vec::new();
-    let mut parsed = Vec::new();
     let mut checks_anything = false;
 
     for (field, checked) in fields.iter().zip(checked_fields) {
@@ -595,30 +594,19 @@ fn checked_struct_read(
         let key = &field.key;
         let aliases = &field.aliases;
         let optional = option_inner(field.ty).is_some();
-        let parse = checked.validators.parse;
         let transforms = checked.transforms()?;
         let mutability = transforms.then(|| quote! { mut });
 
-        let present = if parse.is_some() {
-            let parsed_text =
-                quote! { #private::field(#private::parse_text(__present), #type_name, #key)? };
-            if optional {
-                quote! { ::std::option::Option::Some(#parsed_text) }
-            } else {
-                parsed_text
+        let read = |ty: &Type| {
+            let converted = field.conversion.read(ty, quote! { __present });
+            quote! { #private::field(#converted, #type_name, #key)? }
+        };
+        let present = match option_inner(field.ty).filter(|_| !field.conversion.whole()) {
+            Some(inner) => {
+                let read = read(inner);
+                quote! { ::std::option::Option::Some(#read) }
             }
-        } else {
-            let read = |ty: &Type| {
-                let converted = field.conversion.read(ty, quote! { __present });
-                quote! { #private::field(#converted, #type_name, #key)? }
-            };
-            match option_inner(field.ty).filter(|_| !field.conversion.whole()) {
-                Some(inner) => {
-                    let read = read(inner);
-                    quote! { ::std::option::Option::Some(#read) }
-                }
-                None => read(field.ty),
-            }
+            None => read(field.ty),
         };
         let raw = if !field.read {
             missing
@@ -633,57 +621,22 @@ fn checked_struct_read(
             }
         };
 
-        if let Some(parse) = parse {
-            checks_anything = true;
-            let path = &checked.path;
-            let function = format_ident!("{}", parse.runtime_function());
-            let parse_call = if optional {
-                quote! {
-                    (#raw).as_deref()
-                        .map(::evenframe::validator::runtime::#function)
-                        .transpose()
-                }
-            } else {
-                quote! { ::evenframe::validator::runtime::#function(&(#raw)) }
-            };
-            bindings.push(quote! {
-                let #mutability #local = match #parse_call {
-                    ::std::result::Result::Ok(__parsed) => ::std::option::Option::Some(__parsed),
-                    ::std::result::Result::Err(__rejection) => {
-                        __errors.push(#path, __rejection);
-                        ::std::option::Option::None
-                    }
-                };
-            });
-            let parsed_local = format_ident!("__parsed_{}", unraw(member));
-            parsed.push((local.clone(), parsed_local.clone()));
-            assignments.push(quote! { #member: #parsed_local });
-        } else {
-            bindings.push(quote! { let #mutability #local = #raw; });
-            assignments.push(quote! { #member: #local });
-        }
+        bindings.push(quote! { let #mutability #local = #raw; });
+        assignments.push(quote! { #member: #local });
 
         let chain = checked.chain(&quote! { (*__value) }, true)?;
         let direct_chain = checked.chain(&quote! { #local }, true)?;
         if !chain.is_empty() {
             checks_anything = true;
-            let pattern = match (parse.is_some(), optional) {
-                (true, true) => Some(quote! {
-                    ::std::option::Option::Some(::std::option::Option::Some(__value))
-                }),
-                (true, false) | (false, true) => {
-                    Some(quote! { ::std::option::Option::Some(__value) })
-                }
-                (false, false) => None,
-            };
             let borrow = if transforms {
                 quote! { &mut }
             } else {
                 quote! { & }
             };
-            pipelines.push(match pattern {
-                Some(pattern) => quote! { if let #pattern = #borrow #local { #chain } },
-                None => direct_chain,
+            pipelines.push(if optional {
+                quote! { if let ::std::option::Option::Some(__value) = #borrow #local { #chain } }
+            } else {
+                direct_chain
             });
         }
     }
@@ -694,22 +647,7 @@ fn checked_struct_read(
                 ::evenframe::validator::validate::ValidationErrors::new();
         }
     });
-    let build = if parsed.is_empty() {
-        quote! { Self { #(#assignments),* } }
-    } else {
-        let locals = parsed.iter().map(|(local, _)| local);
-        let patterns = parsed
-            .iter()
-            .map(|(_, value)| quote! { ::std::option::Option::Some(#value) });
-        quote! {
-            match (#(#locals,)*) {
-                (#(#patterns,)*) => Self { #(#assignments),* },
-                _ => return ::std::result::Result::Err(#private::error(
-                    ::std::format!("{} did not parse every field", #type_name),
-                )),
-            }
-        }
-    };
+    let build = quote! { Self { #(#assignments),* } };
     let reject = checks_anything.then(|| {
         quote! {
             if !__errors.is_empty() {

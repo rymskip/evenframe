@@ -1,0 +1,5 @@
+error: validators check a value: put them on a field, a tuple element or a newtype
+ --> tests/ui/fail/struct_validators.rs:5:1
+  |
+5 | #[validators(StringValidator::NonEmpty)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -4,12 +4,11 @@
 
 use crate::config::EvenframeConfig;
 use crate::error::{EvenframeError, Result};
-use crate::schemasync::TableConfig;
 use crate::schemasync::config::DatabaseConfig;
 use crate::schemasync::database::surql::access::access_definitions_surql;
 use crate::schemasync::database::surql::define::generate_define_statements;
-use crate::types::{ForeignTypeRegistry, StructConfig, TaggedUnion};
-use std::collections::BTreeMap;
+use crate::schemasync::database::surql::shape::DefineContext;
+use crate::types::{ForeignTypeRegistry, SchemasyncTypes};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,20 +36,12 @@ impl DumpScope {
 /// types, scripting setting and database definitions.
 pub fn dump_surql(
     config: &EvenframeConfig,
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    types: &SchemasyncTypes,
     scope: DumpScope,
 ) -> Result<String> {
     let schemasync = config.require_schemasync()?;
     let registry = ForeignTypeRegistry::from_config(&config.general.foreign_types);
-    let tables = tables_surql(
-        tables,
-        objects,
-        enums,
-        &registry,
-        schemasync.surql_options(),
-    )?;
+    let tables = tables_surql(types, &registry, schemasync.surql_options())?;
     match scope {
         DumpScope::Tables => Ok(tables),
         DumpScope::Schema => schema_surql(&schemasync.database, &tables),
@@ -87,27 +78,25 @@ pub fn analyzers_reference_functions(surql: &str) -> bool {
 
 /// The `DEFINE TABLE`/`FIELD`/`INDEX`/`EVENT` statements for every table,
 /// resolving each table's `output_override` and passing the full
-/// table/object/enum context, as schemasync does.
+/// table/object/enum context and the declared types, as schemasync does.
 pub fn tables_surql(
-    tables: &BTreeMap<String, TableConfig>,
-    objects: &BTreeMap<String, StructConfig>,
-    enums: &BTreeMap<String, TaggedUnion>,
+    types: &SchemasyncTypes,
     registry: &ForeignTypeRegistry,
     options: impl Into<crate::schemasync::config::SurqlOptions>,
 ) -> Result<String> {
-    let options = options.into();
-    Ok(tables
+    let context = DefineContext {
+        tables: &types.tables,
+        objects: &types.objects,
+        enums: &types.enums,
+        declared: &types.declared,
+        registry,
+        options: options.into(),
+    };
+    Ok(types
+        .tables
         .iter()
         .map(|(table_name, table)| {
-            generate_define_statements(
-                table_name,
-                table.effective(),
-                tables,
-                objects,
-                enums,
-                registry,
-                options,
-            )
+            generate_define_statements(table_name, table.effective(), &context)
         })
         .collect::<Result<Vec<_>>>()?
         .join("\n"))

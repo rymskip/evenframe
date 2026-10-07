@@ -9,8 +9,7 @@
         { "field_name": "age", "field_type": { "Option": "U32" }, "validators": [], "always_regenerate": false },
         { "field_name": "rating", "field_type": { "Option": "F64" }, "validators": [], "always_regenerate": false },
         { "field_name": "verified", "field_type": { "Option": "Bool" }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {}

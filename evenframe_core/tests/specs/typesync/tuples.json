@@ -7,8 +7,7 @@
         { "field_name": "point_2d", "field_type": { "Tuple": ["F64", "F64"] }, "validators": [], "always_regenerate": false },
         { "field_name": "point_3d", "field_type": { "Tuple": ["F64", "F64", "F64"] }, "validators": [], "always_regenerate": false },
         { "field_name": "labeled", "field_type": { "Tuple": ["String", "I32"] }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {}

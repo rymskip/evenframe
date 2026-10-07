@@ -765,7 +765,6 @@ impl TypeContextBuilder {
         let struct_config = serde_json::json!({
             "struct_name": self.struct_name,
             "fields": self.fields,
-            "validators": Vec::<String>::new(),
             "doccom": serde_json::Value::Null,
             "macroforge_derives": self.struct_macroforge_derives,
             "annotations": self.struct_annotations,
@@ -1096,7 +1095,6 @@ pub fn struct_item(name: &str, fields: &[(&str, serde_json::Value)]) -> serde_js
     serde_json::json!({
         "struct_name": name,
         "fields": field_objs,
-        "validators": [],
     })
 }
 

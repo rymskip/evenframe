@@ -49,6 +49,7 @@ use crate::{
             Transaction, execute_and_validate, execute_transactions, split_surql_statements,
         },
         optional::NamedTypes,
+        shape::DefineContext,
     },
 };
 #[cfg(feature = "schemasync")]
@@ -141,7 +142,6 @@ struct Ready<'a> {
     tables: &'a BTreeMap<String, TableConfig>,
     objects: &'a BTreeMap<String, StructConfig>,
     enums: &'a BTreeMap<String, TaggedUnion>,
-    #[cfg(feature = "mockmake")]
     declared: &'a crate::types::DeclaredTypes,
     config: crate::schemasync::config::SchemasyncConfig,
 }
@@ -423,23 +423,11 @@ impl<'a> Schemasync<'a> {
                 }
             }
         }
-        for finding in crate::schemasync::lint::lint_unasserted_newtypes(declared) {
-            warn!(
-                location = %finding.location,
-                newtype = %finding.newtype,
-                "`{}` holds the newtype `{}` below its own value, where the schema does not \
-                 assert the newtype's validators: the database accepts a value failing them, \
-                 and reading that record back fails.",
-                finding.location, finding.newtype,
-            );
-        }
-
         Ok(Ready {
             db,
             tables,
             objects,
             enums,
-            #[cfg(feature = "mockmake")]
             declared,
             config,
         })
@@ -447,26 +435,18 @@ impl<'a> Schemasync<'a> {
 
     /// Generate define statements for all tables.
     fn generate_all_define_statements<'b>(
-        tables: &'b BTreeMap<String, TableConfig>,
-        objects: &BTreeMap<String, StructConfig>,
-        enums: &BTreeMap<String, TaggedUnion>,
+        context: &DefineContext<'b>,
         full_refresh_mode: bool,
-        registry: &crate::types::ForeignTypeRegistry,
-        options: impl Into<crate::schemasync::config::SurqlOptions>,
     ) -> Result<(BTreeMap<&'b String, String>, String)> {
-        let options = options.into();
         debug!(
             "Generating table and field definition statements (full_refresh_mode: {}, allow_scripting: {})",
-            full_refresh_mode, options.allow_scripting
+            full_refresh_mode, context.options.allow_scripting
         );
         let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
-        for (table_name, table) in tables {
-            let table = table.effective();
+        for (table_name, table) in context.tables {
             define_statements.insert(
                 table_name,
-                generate_define_statements(
-                    table_name, table, tables, objects, enums, registry, options,
-                )?,
+                generate_define_statements(table_name, table.effective(), context)?,
             );
         }
 
@@ -489,8 +469,8 @@ impl<'a> Schemasync<'a> {
             tables,
             objects,
             enums,
+            declared,
             config,
-            ..
         } = self.validate()?;
         let default_registry = crate::types::ForeignTypeRegistry::default();
         let registry = self
@@ -499,12 +479,15 @@ impl<'a> Schemasync<'a> {
             .unwrap_or(&default_registry);
 
         let (_, define_statements_string) = Self::generate_all_define_statements(
-            tables,
-            objects,
-            enums,
+            &DefineContext {
+                tables,
+                objects,
+                enums,
+                declared,
+                registry,
+                options: config.surql_options(),
+            },
             config.mock_gen_config.full_refresh_mode,
-            registry,
-            config.surql_options(),
         )?;
 
         let mut comparator = SurrealdbComparator::new(&db, &config);
@@ -562,12 +545,15 @@ impl<'a> Schemasync<'a> {
             };
 
         let (_, define_statements_string) = Self::generate_all_define_statements(
-            effective_tables,
-            objects,
-            enums,
+            &DefineContext {
+                tables: effective_tables,
+                objects,
+                enums,
+                declared,
+                registry,
+                options: config.surql_options(),
+            },
             config.mock_gen_config.full_refresh_mode,
-            registry,
-            config.surql_options(),
         )?;
 
         let mut mockmaker = Mockmaker::new(
@@ -681,7 +667,6 @@ impl<'a> Schemasync<'a> {
             tables,
             objects,
             enums,
-            #[cfg(feature = "mockmake")]
             declared,
             config,
             ..
@@ -693,12 +678,15 @@ impl<'a> Schemasync<'a> {
             .unwrap_or(&default_registry);
 
         let (define_statements, define_statements_string) = Self::generate_all_define_statements(
-            tables,
-            objects,
-            enums,
+            &DefineContext {
+                tables,
+                objects,
+                enums,
+                declared,
+                registry,
+                options: config.surql_options(),
+            },
             config.mock_gen_config.full_refresh_mode,
-            registry,
-            config.surql_options(),
         )?;
 
         evenframe_log!("", "all_statements.surql");
