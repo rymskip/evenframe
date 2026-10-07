@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Account: {
+  password: [[[[[['string', '&', 'string >= 8'], '&', 'string <= 32'], '&', new RegExp("(?:[A-Z])")], '&', new RegExp("(?:[a-z])")], '&', new RegExp("(?:[0-9])")], '&', new RegExp("(?:[!-/:-@\\[-\\x60{-~])")],
+  handle: [['string', '&', new RegExp("^(?:[a-z0-9]+(?:-[a-z0-9]+)*)")], ':', (value) => value.endsWith("-team")],
+  home: ['string', '&', new RegExp("^/(?:[^/\\\\\\x00-\\x1F\\x7F]+[^\\x00-\\x1F\\x7F]*)?$")]
+},
+
+});
+
+const exported = bindings.export();
+
+export type Account = typeof exported.Account.infer;

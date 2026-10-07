@@ -11,8 +11,7 @@
         { "field_name": "message", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "emoji", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "created_at", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "relation": null,
     "permissions": null,

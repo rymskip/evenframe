@@ -10,15 +10,17 @@ use crate::{
             find_duplicate_index_name, indexable_fields, parse_doccom_attribute,
             parse_event_attributes, parse_field_index_attributes, parse_format_attribute_bin,
             parse_index_attributes, parse_mock_data_attribute, parse_relation_attribute,
-            parse_rust_derives, parse_table_validators,
+            parse_rust_derives,
         },
         naming,
         schemasync_attributes::{
             parse_container_validator_overrides, parse_validator_overrides,
-            refuse_container_validator_overrides,
+            refuse_container_validators,
         },
         typesync_attributes::{Position, TypesyncAttributes},
-        validator_parser::{parse_element_validators, parse_field_validators},
+        validator_parser::{
+            ElementValidators, FieldValidators, parse_element_validators, parse_field_validators,
+        },
     },
     schemasync::mockmake::MockGenerationConfig,
     schemasync::table::TableConfig,
@@ -29,7 +31,7 @@ use crate::{
     },
     typesync::config::{CollisionStrategy, StructVariants},
     typesync::struct_variants::declare_payloads,
-    validator::{StringValidator, Validator, ValidatorOverrides},
+    validator::ValidatorOverrides,
 };
 use convert_case::{Case, Casing};
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,7 @@ pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
     );
 
     reject_scanned_record_link(&struct_configs, &enum_configs)?;
+    reject_scanned_text_forms(&struct_configs, &enum_configs, &newtype_configs)?;
 
     // Before the plugins, so a named payload gets the rules any struct gets.
     if config.struct_variants == StructVariants::Named {
@@ -183,6 +186,39 @@ fn reject_scanned_record_link(
         )));
     }
     Ok(())
+}
+
+/// The names of evenframe's text-form types, which a field type naming one
+/// always means.
+const TEXT_FORMS: [&str; 4] = ["FromText", "JsonText", "IsoDate", "EpochMillis"];
+
+/// A scanned type named after a text form would be read as evenframe's.
+fn reject_scanned_text_forms(
+    struct_configs: &BTreeMap<String, crate::types::StructConfig>,
+    enum_configs: &BTreeMap<String, TaggedUnion>,
+    newtype_configs: &BTreeMap<String, NewtypeConfig>,
+) -> Result<()> {
+    let taken = struct_configs
+        .values()
+        .map(|struct_config| struct_config.struct_name.as_str())
+        .chain(
+            enum_configs
+                .values()
+                .map(|tagged_union| tagged_union.enum_name.as_str()),
+        )
+        .chain(
+            newtype_configs
+                .values()
+                .map(|newtype| newtype.name.as_str()),
+        )
+        .find(|name| TEXT_FORMS.contains(name));
+    match taken {
+        Some(name) => Err(crate::error::EvenframeError::config(format!(
+            "a scanned type is named `{name}`, which is evenframe's text-form type of that \
+             name wherever a field names it. Rename it"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Resolves `from`/`to` on relation tables by inspecting `in`/`out` field types.
@@ -330,7 +366,7 @@ pub enum ParsedType {
     },
     Enum(TaggedUnion),
     /// A struct serde writes as another type.
-    Newtype(NewtypeConfig),
+    Newtype(Box<NewtypeConfig>),
 }
 
 /// A table struct's table-level attributes.
@@ -364,7 +400,7 @@ pub(super) fn parse_scanned_item(
                 let mut newtype = parse_newtype_config(item_struct, &wire).map_err(failed)?;
                 newtype.pipeline = evenframe_type.pipeline;
                 newtype.resolve_only = evenframe_type.resolve_only;
-                return Ok(ParsedType::Newtype(newtype));
+                return Ok(ParsedType::Newtype(Box::new(newtype)));
             }
             let wire_as = wire
                 .wire_as
@@ -597,7 +633,7 @@ fn process_types(
                 newtype.name = name.clone();
                 let site = format!("{name}.0");
                 resolver.field_type(&mut newtype.inner, module_path, &site)?;
-                newtype_configs.insert(newtype.name.clone(), newtype);
+                newtype_configs.insert(newtype.name.clone(), *newtype);
             }
         }
     }
@@ -694,7 +730,10 @@ impl Resolver<'_> {
                 let resolved = self.resolve(path, module_path, site)?;
                 *field_type = resolved;
             }
-            FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::RecordLink(inner) => {
+            FieldType::Option(inner)
+            | FieldType::Vec(inner)
+            | FieldType::RecordLink(inner)
+            | FieldType::JsonText(inner) => {
                 self.field_type(inner, module_path, site)?;
             }
             FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
@@ -729,7 +768,10 @@ impl Resolver<'_> {
             | FieldType::U64
             | FieldType::U128
             | FieldType::Usize
-            | FieldType::Duration => {}
+            | FieldType::Duration
+            | FieldType::FromText(_)
+            | FieldType::IsoDate
+            | FieldType::EpochMillis => {}
         }
         Ok(())
     }
@@ -787,10 +829,8 @@ fn parse_struct_config(
         fields = process_struct_fields(fields_named, wire.fields)?;
     }
 
-    let table_validators = parse_table_validators(&item_struct.attrs)?;
-
     let doccom = parse_doccom_attribute(&item_struct.attrs)?;
-    refuse_container_validator_overrides(&item_struct.attrs)?;
+    refuse_container_validators(&item_struct.attrs)?;
     let TypesyncAttributes {
         macroforge_derives,
         annotations,
@@ -802,10 +842,6 @@ fn parse_struct_config(
     Ok(StructConfig {
         struct_name,
         fields,
-        validators: table_validators
-            .into_iter()
-            .map(|v| Validator::StringValidator(StringValidator::StringEmbedded(v)))
-            .collect(),
         doccom,
         macroforge_derives,
         annotations,
@@ -862,9 +898,11 @@ fn parse_newtype_config(
             ));
         }
     };
-    let (validators, validator_overrides) = match kind {
+    let (morphs, validators, validator_overrides) = match kind {
         NewtypeKind::Branded => {
-            let mut validators = parse_field_validators(&item_struct.attrs)?.validators;
+            let container = parse_field_validators(&item_struct.attrs)?;
+            let mut morphs = container.morphs;
+            let mut validators = container.validators;
             let mut overrides = parse_container_validator_overrides(&item_struct.attrs)?;
             // The field's own validators check the same value.
             if let naming::ItemShape::Newtype { member } = shape
@@ -883,20 +921,22 @@ fn parse_newtype_config(
                             _ => None,
                         })
             {
-                validators.extend(parse_field_validators(&field.attrs)?.validators);
+                let own = parse_field_validators(&field.attrs)?;
+                morphs.extend(own.morphs);
+                validators.extend(own.validators);
                 overrides = overrides.followed_by(parse_validator_overrides(&field.attrs)?);
             }
-            (validators, overrides)
+            (morphs, validators, overrides)
         }
         NewtypeKind::Alias => {
-            refuse_container_validator_overrides(&item_struct.attrs)?;
-            (Vec::new(), ValidatorOverrides::default())
+            refuse_container_validators(&item_struct.attrs)?;
+            (Vec::new(), Vec::new(), ValidatorOverrides::default())
         }
     };
-    let (element_validators, element_validator_overrides) = match shape {
+    let elements = match shape {
         naming::ItemShape::Tuple(_) => parse_element_validators(&item_struct.fields)?,
         naming::ItemShape::Newtype { .. } | naming::ItemShape::Unit | naming::ItemShape::Named => {
-            (Vec::new(), Vec::new())
+            ElementValidators::default()
         }
     };
     let TypesyncAttributes {
@@ -908,6 +948,7 @@ fn parse_newtype_config(
         name: item_struct.ident.to_string(),
         inner,
         kind,
+        morphs,
         validators,
         doccom: parse_doccom_attribute(&item_struct.attrs)?,
         annotations,
@@ -916,9 +957,10 @@ fn parse_newtype_config(
         pipeline: crate::types::Pipeline::default(),
         resolve_only: false,
         raw_attributes: collect_raw_attributes(&item_struct.attrs),
-        element_validators,
+        element_morphs: elements.morphs,
+        element_validators: elements.validators,
         storage: newtype_storage(wire),
-        element_validator_overrides,
+        element_validator_overrides: elements.overrides,
         validator_overrides,
         output_override: None,
     })
@@ -940,7 +982,7 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
     let mut variants = Vec::new();
 
     let enum_doccom = parse_doccom_attribute(&item_enum.attrs)?;
-    refuse_container_validator_overrides(&item_enum.attrs)?;
+    refuse_container_validators(&item_enum.attrs)?;
     let TypesyncAttributes {
         macroforge_derives: enum_macroforge_derives,
         annotations: enum_annotations,
@@ -989,11 +1031,10 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
 
         let variant_raw_attributes = collect_raw_attributes(&variant.attrs);
         let is_default_variant = variant.attrs.iter().any(|a| a.path().is_ident("default"));
-        let (variant_element_validators, variant_element_validator_overrides) =
-            match &variant.fields {
-                Fields::Unnamed(fields) => parse_element_validators(&fields.unnamed)?,
-                Fields::Named(_) | Fields::Unit => (Vec::new(), Vec::new()),
-            };
+        let elements = match &variant.fields {
+            Fields::Unnamed(fields) => parse_element_validators(&fields.unnamed)?,
+            Fields::Named(_) | Fields::Unit => ElementValidators::default(),
+        };
 
         variants.push(Variant {
             name: variant_name,
@@ -1004,8 +1045,9 @@ fn parse_enum_config(item_enum: &ItemEnum) -> syn::Result<TaggedUnion> {
             output_override: None,
             raw_attributes: variant_raw_attributes,
             is_default: is_default_variant,
-            element_validators: variant_element_validators,
-            element_validator_overrides: variant_element_validator_overrides,
+            element_morphs: elements.morphs,
+            element_validators: elements.validators,
+            element_validator_overrides: elements.overrides,
         });
     }
 
@@ -1044,7 +1086,9 @@ fn process_struct_fields(
         let edge_config = EdgeConfig::parse(field)?;
         let define_config = DefineConfig::parse(field)?;
         let format = parse_format_attribute_bin(&field.attrs)?;
-        let validators = parse_field_validators(&field.attrs)?.validators;
+        let FieldValidators {
+            morphs, validators, ..
+        } = parse_field_validators(&field.attrs)?;
         let doccom = parse_doccom_attribute(&field.attrs)?;
         let annotations = TypesyncAttributes::parse(&field.attrs, Position::Field)?.annotations;
 
@@ -1062,6 +1106,7 @@ fn process_struct_fields(
             edge_config,
             define_config,
             format,
+            morphs,
             validators,
             always_regenerate: false,
             doccom,
@@ -1102,6 +1147,7 @@ const KNOWN_ATTRS: &[&str] = &[
     "surreal",
     "typesync",
     "unique",
+    "morphs",
     "validators",
     // These are handled by proc-macros but aren't plugin-relevant metadata.
     "cfg",
@@ -1601,10 +1647,10 @@ fn merge_synthetic_output(
 mod resolution_tests {
     use super::{
         AllConfigs, BTreeMap, CollisionStrategy, FieldType, NewtypeKind, Result, ScanConfig,
-        StringValidator, StructVariants, Validator, VariantData, build_all_configs,
+        StructVariants, VariantData, build_all_configs,
     };
-    use crate::schemasync::lint::{UnassertedNewtype, lint_unasserted_newtypes};
     use crate::types::FieldOwner;
+    use crate::validator::{StringValidator, Validator};
     use std::fs;
     use tempfile::TempDir;
 
@@ -1899,19 +1945,199 @@ mod resolution_tests {
         assert_eq!(declared.newtype(&other("Status")), None);
     }
 
+    const POSITIONS: &str = r#"
+        use evenframe::Evenframe;
+        use std::collections::BTreeMap;
+
+        #[derive(Evenframe)]
+        #[validators(StringValidator::NonEmpty)]
+        pub struct StepId(String);
+
+        #[derive(Evenframe)]
+        pub struct Waiting { pub step: StepId, pub parents: Vec<StepId> }
+
+        #[derive(Evenframe)]
+        pub enum Change { Renamed { to: StepId }, Moved(StepId), Idle }
+
+        #[derive(Evenframe)]
+        #[serde(untagged)]
+        pub enum Loose { Named { to: StepId }, Plain(u32) }
+
+        #[derive(Evenframe)]
+        #[serde(untagged)]
+        pub enum Vague { Maybe(Option<u8>), Named { to: StepId } }
+
+        #[derive(Evenframe)]
+        #[serde(tag = "kind")]
+        pub enum Signal { Named { to: StepId }, Quiet }
+
+        #[derive(Evenframe)]
+        #[serde(tag = "kind", content = "data")]
+        pub enum Message { Text(StepId), Empty }
+
+        #[derive(Evenframe)]
+        pub struct Node { pub label: StepId, pub children: Vec<Node> }
+
+        #[derive(Evenframe)]
+        pub struct Run {
+            pub id: String,
+            pub waiting: Vec<Waiting>,
+            pub labels: BTreeMap<StepId, Option<StepId>>,
+            pub pair: (StepId, u32),
+            pub change: Change,
+            pub loose: Loose,
+            pub signal: Signal,
+            pub message: Message,
+            pub tree: Node,
+            pub vague: Vague,
+            pub current: Waiting,
+        }
+    "#;
+
+    /// The `DEFINE FIELD` statement of `field` on `table`, and the positions
+    /// whose validators it could not assert.
+    #[cfg(feature = "schemadump")]
+    fn defined(
+        types: &crate::types::SchemasyncTypes,
+        table: &str,
+        field: &str,
+    ) -> (
+        String,
+        Vec<crate::schemasync::database::surql::shape::Unasserted>,
+    ) {
+        let context = crate::schemasync::database::surql::shape::DefineContext {
+            tables: &types.tables,
+            objects: &types.objects,
+            enums: &types.enums,
+            declared: &types.declared,
+            registry: &crate::types::ForeignTypeRegistry::default(),
+            options: crate::schemasync::config::SurqlOptions::default(),
+        };
+        let table_config = types.tables[table].effective();
+        let mut unasserted = Vec::new();
+        let statement = table_config
+            .struct_config
+            .fields
+            .iter()
+            .find(|candidate| candidate.field_name == field)
+            .expect("the field exists")
+            .generate_define_statement(
+                &FieldOwner::Table(table_config.table_name.clone()),
+                table,
+                &context,
+                &mut unasserted,
+            )
+            .expect("the field defines");
+        (statement, unasserted)
+    }
+
+    #[cfg(feature = "schemadump")]
     #[test]
-    fn a_newtype_below_a_fields_own_value_is_reported_unasserted() {
+    fn a_newtype_below_a_fields_own_value_is_asserted_where_it_sits() {
         let configs = build(CollisionStrategy::Error, &[("lib.rs", NEWTYPES)]).expect("configs");
-        let declared = configs
-            .into_schemasync()
-            .expect("schemasync configs")
-            .declared;
+        let types = configs.into_schemasync().expect("schemasync configs");
+        let (tags, unasserted) = defined(&types, "profile", "tags");
+        assert!(
+            tags.contains(" ASSERT array::all($value, |$item0| string::len($item0) > 0)"),
+            "{tags}"
+        );
+        assert_eq!(unasserted, []);
+        let (name, _) = defined(&types, "profile", "name");
+        assert!(name.contains(" ASSERT string::len($value) > 0"), "{name}");
+    }
+
+    #[cfg(feature = "schemadump")]
+    #[test]
+    fn every_stored_position_asserts_the_validators_declared_there() {
+        let configs = build(CollisionStrategy::Error, &[("lib.rs", POSITIONS)]).expect("configs");
+        let types = configs.into_schemasync().expect("schemasync configs");
+
+        let (waiting, _) = defined(&types, "run", "waiting");
+        assert!(
+            waiting.contains(
+                " ASSERT array::all($value, |$item0| (string::len($item0.step) > 0) AND \
+                 (array::all($item0.parents, |$item1| string::len($item1) > 0)))"
+            ),
+            "{waiting}"
+        );
+
+        let (labels, _) = defined(&types, "run", "labels");
+        assert!(
+            labels.contains(
+                "(array::all(object::keys($value), |$item0| string::len($item0) > 0)) AND \
+                 (array::all(object::values($value), |$item0| $item0 = NONE OR \
+                 (string::len($item0) > 0)))"
+            ),
+            "{labels}"
+        );
+
+        let (pair, _) = defined(&types, "run", "pair");
+        assert!(
+            pair.contains(" ASSERT string::len($value[0]) > 0"),
+            "{pair}"
+        );
+        // Its zero, `['', 0]`, fails the check, so the field has no fallback.
+        assert!(!pair.contains(" DEFAULT "), "{pair}");
+        let (current, _) = defined(&types, "run", "current");
+        assert!(!current.contains(" DEFAULT "), "{current}");
+
+        let (change, _) = defined(&types, "run", "change");
+        assert!(
+            change.contains(
+                "($value.Renamed = NONE OR (string::len($value.Renamed.to) > 0)) AND \
+                 ($value.Moved = NONE OR (string::len($value.Moved) > 0))"
+            ),
+            "{change}"
+        );
+
+        let (signal, _) = defined(&types, "run", "signal");
+        assert!(
+            signal.contains(" ASSERT $value.kind != 'Named' OR (string::len($value.to) > 0)"),
+            "{signal}"
+        );
+
+        let (message, _) = defined(&types, "run", "message");
+        assert!(
+            message.contains(" ASSERT $value.kind != 'Text' OR (string::len($value.data) > 0)"),
+            "{message}"
+        );
+
+        let (tree, unasserted) = defined(&types, "run", "tree");
+        assert!(
+            tree.contains(" ASSERT string::len($value.label) > 0"),
+            "{tree}"
+        );
         assert_eq!(
-            lint_unasserted_newtypes(&declared),
-            [UnassertedNewtype {
-                location: "profile.tags".to_owned(),
-                newtype: "NonEmptyString".to_owned(),
-            }]
+            unasserted
+                .iter()
+                .map(|finding| (finding.location.as_str(), finding.reason))
+                .collect::<Vec<_>>(),
+            [(
+                "run.tree.children[].label",
+                crate::schemasync::database::surql::shape::UnassertedReason::Recursive
+            )]
+        );
+
+        let (loose, unasserted) = defined(&types, "run", "loose");
+        assert!(
+            loose.contains(
+                " ASSERT !(type::is_object($value) AND $value.to != NONE) OR \
+                 (string::len($value.to) > 0)"
+            ),
+            "{loose}"
+        );
+        assert_eq!(unasserted, []);
+
+        // Serde reads any value as `Maybe` first, which SurrealQL cannot
+        // state, so the variant after it cannot be told apart.
+        let (vague, unasserted) = defined(&types, "run", "vague");
+        assert!(!vague.contains(" ASSERT "), "{vague}");
+        assert_eq!(
+            unasserted
+                .iter()
+                .map(|finding| finding.location.as_str())
+                .collect::<Vec<_>>(),
+            ["run.vague::Named.to"]
         );
     }
 
@@ -1949,9 +2175,7 @@ mod resolution_tests {
         let configs = build(CollisionStrategy::Error, &[("lib.rs", FLATTENED)]).expect("configs");
         let stored = configs.into_schemasync().expect("schemasync view");
         let schema = crate::schemasync::dump::tables_surql(
-            &stored.tables,
-            &stored.objects,
-            &stored.enums,
+            &stored,
             &crate::types::ForeignTypeRegistry::default(),
             crate::schemasync::config::SurqlOptions::default(),
         )

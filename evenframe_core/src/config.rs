@@ -117,8 +117,6 @@ pub struct ForeignTypeConfig {
 
     // --- Default values ---
     #[serde(default)]
-    pub default_value_ts: String,
-    #[serde(default)]
     pub default_value_surql: String,
 
     // --- Mock data generation strategy ---

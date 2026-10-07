@@ -238,15 +238,6 @@ pub mod __private {
         }
     }
 
-    /// A stored value rendered as the text a parse morph accepts. Strings stay
-    /// unquoted; every other value uses its JSON representation.
-    pub fn parse_text(value: Value) -> Result<String, Error> {
-        match value.into_json_value() {
-            serde_json::Value::String(text) => Ok(text),
-            other => Ok(other.to_string()),
-        }
-    }
-
     /// Each item of a list as [`text`] reads it.
     pub fn texts(value: Value) -> Result<Vec<String>, Error> {
         match value {

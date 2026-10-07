@@ -14,7 +14,6 @@ effect = { type = "RecordIdCodec.schema", encoded = "Schema.Schema.Encoded<typeo
 macroforge = { type = "RecordIdEncoded", import = { from = "../record-id.ts", name = "RecordIdEncoded" } }
 protobuf = "string"
 flatbuffers = "string"
-default_value_ts = "RecordIdCodec.empty"
 
 [schemasync]
 option_none = "null"

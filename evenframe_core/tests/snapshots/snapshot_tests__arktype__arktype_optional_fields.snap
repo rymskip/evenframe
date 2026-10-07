@@ -16,12 +16,4 @@ Profile: {
 
 const exported = bindings.export();
 
-export const defaultProfile: Profile = {
-id: "",
-bio: null,
-age: null,
-rating: null,
-verified: null
-};
-
 export type Profile = typeof exported.Profile.infer;

@@ -122,6 +122,43 @@ impl CustomPattern {
     }
 }
 
+impl CustomPattern {
+    /// Refuses a pattern that anchors itself, for one placed where its
+    /// validator does the anchoring.
+    pub fn refuse_anchors(&self) -> Result<(), String> {
+        match &self.flags {
+            Some(flags) if javascript_anchors(&self.source, flags) => Err(
+                "the pattern anchors itself with `^` or `$`; the validator anchors it where it \
+                 belongs, so drop them"
+                    .to_owned(),
+            ),
+            Some(_) => Ok(()),
+            None => crate::validator::portable_regex::refuse_anchors(&self.source),
+        }
+    }
+}
+
+/// Whether a JavaScript pattern anchors itself: an unescaped `^` or `$`
+/// outside a class, where JavaScript always reads either as an assertion.
+/// The `v` flag lets classes nest.
+fn javascript_anchors(source: &str, flags: &str) -> bool {
+    let nests = flags.contains('v');
+    let mut depth = 0usize;
+    let mut characters = source.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                characters.next();
+            }
+            '[' if depth == 0 || nests => depth += 1,
+            ']' if depth > 0 => depth -= 1,
+            '^' | '$' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Checks a JavaScript regex literal's `source` and `flags` as a browser
 /// would read them.
 fn check_javascript(source: &str, flags: &str) -> Result<(), String> {
@@ -302,8 +339,18 @@ pub enum Format {
     Custom(CustomPattern),
     /// Generate a completely random string of 8-16 characters
     Random,
-    /// Generate appointment duration in nanoseconds (1-5 hours in 15-minute increments)
-    AppointmentDurationNs,
+    /// One uppercase ASCII letter
+    Uppercase,
+    /// One lowercase ASCII letter
+    Lowercase,
+    /// One digit 0-9
+    Digit,
+    /// One ASCII punctuation character
+    Symbol,
+    /// An absolute path of a URL without its origin, such as `/a/b-c/d.e`
+    RelativePath,
+    /// Lowercase letters and digits in runs joined by single hyphens
+    Slug,
 }
 
 /// A day in 2020 through 2029, the years the date patterns allow.
@@ -375,6 +422,80 @@ impl Format {
 }
 
 impl Format {
+    /// The pattern without its own anchors, to sit inside another: a custom
+    /// pattern as written, which a text argument refuses to anchor.
+    pub fn body(&self) -> String {
+        match self {
+            Format::Custom(custom) => custom.as_str().to_owned(),
+            _ => {
+                let pattern = self.pattern();
+                match pattern
+                    .strip_prefix('^')
+                    .and_then(|unanchored| unanchored.strip_suffix('$'))
+                {
+                    Some(body) => body.to_owned(),
+                    None => pattern,
+                }
+            }
+        }
+    }
+
+    /// This format in words, for messages about the values it accepts.
+    pub fn description(&self) -> String {
+        match self {
+            Format::Uuid => "a UUID".to_owned(),
+            Format::DateTime => "an ISO 8601 date and time".to_owned(),
+            Format::Date => "a YYYY-MM-DD date".to_owned(),
+            Format::Time => "an HH:MM:SS time".to_owned(),
+            Format::HexString(length) => format!("{length} hex digits"),
+            Format::Base64String(length) => format!("{length} base64 characters"),
+            Format::JwtToken => "a JSON Web Token".to_owned(),
+            Format::CreditCardNumber => "a credit card number".to_owned(),
+            Format::SocialSecurityNumber => "a social security number".to_owned(),
+            Format::IpAddress => "an IPv4 address".to_owned(),
+            Format::MacAddress => "a MAC address".to_owned(),
+            Format::ColorHex => "a #RRGGBB color".to_owned(),
+            Format::Oklch => "an oklch() color".to_owned(),
+            Format::Filename(extension) => format!("a .{extension} file name"),
+            Format::Url(domain) => format!("a URL on {domain}"),
+            Format::CurrencyAmount => "a currency amount".to_owned(),
+            Format::Percentage => "a percentage".to_owned(),
+            Format::Latitude => "a latitude".to_owned(),
+            Format::Longitude => "a longitude".to_owned(),
+            Format::CompanyName => "a company name".to_owned(),
+            Format::JobTitle => "a job title".to_owned(),
+            Format::StreetAddress => "a street address".to_owned(),
+            Format::City => "a city".to_owned(),
+            Format::State => "a US state code".to_owned(),
+            Format::PostalCode => "a five-digit postal code".to_owned(),
+            Format::Country => "a country".to_owned(),
+            Format::LoremIpsum(_) => "lowercase words".to_owned(),
+            Format::ProductName => "a product name".to_owned(),
+            Format::ProductSku => "a product SKU".to_owned(),
+            Format::Version => "a version such as 1.2.3".to_owned(),
+            Format::Hash => "a SHA-256 hash".to_owned(),
+            Format::UserAgent => "a user agent".to_owned(),
+            Format::Email => "an email address".to_owned(),
+            Format::FirstName => "a first name".to_owned(),
+            Format::LastName => "a last name".to_owned(),
+            Format::FullName => "a full name".to_owned(),
+            Format::PhoneNumber => "a phone number".to_owned(),
+            Format::Iso8601DurationString => "an ISO 8601 duration".to_owned(),
+            Format::TimeZone => "a time zone".to_owned(),
+            Format::DateWithinDays(days) => format!("a date and time within {days} days"),
+            Format::AppointmentDateTime => "an appointment date and time".to_owned(),
+            Format::TailwindColorSet(_) => "a Tailwind color set".to_owned(),
+            Format::Custom(custom) => format!("matching /{}/", custom.as_str()),
+            Format::Random => "8 to 16 letters and digits".to_owned(),
+            Format::Uppercase => "an uppercase letter".to_owned(),
+            Format::Lowercase => "a lowercase letter".to_owned(),
+            Format::Digit => "a digit".to_owned(),
+            Format::Symbol => "a symbol".to_owned(),
+            Format::RelativePath => "a path such as /a/b".to_owned(),
+            Format::Slug => "a slug such as my-post-1".to_owned(),
+        }
+    }
+
     /// This format as a compiled regex.
     pub fn regex(&self) -> Regex {
         Regex::new(&self.pattern()).expect(
@@ -516,14 +637,12 @@ impl Format {
 
             Format::Random => r"^[a-zA-Z0-9]{8,16}$",
 
-            Format::AppointmentDurationNs => {
-                // 1-5 hours in nanoseconds, in 15-minute increments
-                // 15 minutes = 900,000,000,000 ns
-                // 1 hour = 3,600,000,000,000 ns
-                // 5 hours = 18,000,000,000,000 ns
-                // Exhaustive list of all valid values wrapped in duration::from_nanos():
-                r"^(duration::from_nanos\(3600000000000\)|duration::from_nanos\(4500000000000\)|duration::from_nanos\(5400000000000\)|duration::from_nanos\(6300000000000\)|duration::from_nanos\(7200000000000\)|duration::from_nanos\(8100000000000\)|duration::from_nanos\(9000000000000\)|duration::from_nanos\(9900000000000\)|duration::from_nanos\(10800000000000\)|duration::from_nanos\(11700000000000\)|duration::from_nanos\(12600000000000\)|duration::from_nanos\(13500000000000\)|duration::from_nanos\(14400000000000\)|duration::from_nanos\(15300000000000\)|duration::from_nanos\(16200000000000\)|duration::from_nanos\(17100000000000\)|duration::from_nanos\(18000000000000\))$"
-            }
+            Format::Uppercase => r"^[A-Z]$",
+            Format::Lowercase => r"^[a-z]$",
+            Format::Digit => r"^[0-9]$",
+            Format::Symbol => r"^[!-/:-@\[-\x60{-~]$",
+            Format::RelativePath => r"^/(?:[^/\\\x00-\x1F\x7F]+[^\x00-\x1F\x7F]*)?$",
+            Format::Slug => r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
         };
 
         pattern.to_string()
@@ -659,9 +778,14 @@ impl ToTokens for Format {
             Format::Random => {
                 quote! { ::evenframe::schemasync::format::Format::Random }
             }
-            Format::AppointmentDurationNs => {
-                quote! { ::evenframe::schemasync::format::Format::AppointmentDurationNs }
+            Format::Uppercase => quote! { ::evenframe::schemasync::format::Format::Uppercase },
+            Format::Lowercase => quote! { ::evenframe::schemasync::format::Format::Lowercase },
+            Format::Digit => quote! { ::evenframe::schemasync::format::Format::Digit },
+            Format::Symbol => quote! { ::evenframe::schemasync::format::Format::Symbol },
+            Format::RelativePath => {
+                quote! { ::evenframe::schemasync::format::Format::RelativePath }
             }
+            Format::Slug => quote! { ::evenframe::schemasync::format::Format::Slug },
         };
 
         tokens.extend(variant_tokens);
@@ -718,6 +842,27 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_pattern_is_its_anchored_body() {
+        use strum::IntoEnumIterator;
+        for format in Format::iter().filter(|format| !matches!(format, Format::Custom(_))) {
+            assert_eq!(
+                format.pattern(),
+                format!("^{}$", format.body()),
+                "{format:?} is not anchored around its body"
+            );
+            assert!(
+                crate::validator::portable_regex::refuse_anchors(&format.body()).is_ok(),
+                "{format:?}'s body anchors itself"
+            );
+            let value = format.generate_formatted_value().expect("a value");
+            assert!(
+                format.regex().is_match(&value),
+                "{format:?} generated {value:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_built_in_pattern_reads_the_same_in_rust_and_javascript() {
         use strum::IntoEnumIterator;
         let failures: Vec<String> = Format::iter()
@@ -745,6 +890,17 @@ mod tests {
             );
             assert!(Format::DateTime.regex().is_match(&datetime), "{datetime}");
         }
+    }
+
+    #[test]
+    fn javascript_anchors_are_found_outside_classes() {
+        use super::javascript_anchors;
+        assert!(javascript_anchors("^a", ""));
+        assert!(javascript_anchors("a$", "u"));
+        assert!(!javascript_anchors(r"\^a\$", ""));
+        assert!(!javascript_anchors("[^a$]", ""));
+        assert!(!javascript_anchors("[[^a]$]", "v"));
+        assert!(javascript_anchors("[a]$", "v"));
     }
 
     #[test]

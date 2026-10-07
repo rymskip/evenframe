@@ -5,8 +5,7 @@
       "struct_name": "Phone",
       "fields": [
         { "field_name": "number", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {
@@ -28,8 +27,7 @@
               "fields": [
                 { "field_name": "street", "field_type": "String", "validators": [], "always_regenerate": false },
                 { "field_name": "city", "field_type": "String", "validators": [], "always_regenerate": false }
-              ],
-              "validators": []
+              ]
             }
           },
           "wire": { "serde_untagged": true }

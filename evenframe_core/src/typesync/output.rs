@@ -856,10 +856,7 @@ mod tests {
             .err()
             .map(|error| error.to_string())
             .unwrap_or_default();
-        assert!(
-            error.contains("DateTime (missing arktype, default_value_ts)"),
-            "{error}"
-        );
+        assert!(error.contains("DateTime (missing arktype)"), "{error}");
 
         let effect = TypesyncOutput::new(OutputKind::Effect, "unused");
         assert!(render_output(&effect, tmp.path(), None, &types).is_ok());

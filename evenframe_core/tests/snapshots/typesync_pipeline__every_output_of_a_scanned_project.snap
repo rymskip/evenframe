@@ -56,46 +56,6 @@ NonEmptyString: "NonEmptyString__value#NonEmptyString",
 
 const exported = bindings.export();
 
-export const defaultAddress: Address = {
-street: "",
-city: null
-};
-export const defaultComment: Comment = {
-body: "",
-author: ("" as AuthorId),
-replies: []
-};
-export const defaultReply: Reply = {
-body: "",
-thread: []
-};
-export const defaultScheduled: Scheduled = {
-at: "",
-note: null
-};
-export const defaultSection: Section = {
-heading: "",
-children: []
-};
-export const defaultAuthor: Author = {
-id: "",
-name: ("" as NonEmptyString),
-home: { street: "", city: null }
-};
-export const defaultPost: Post = {
-id: "",
-title: "",
-author: RecordIdCodec.empty,
-editor: ("" as AuthorId),
-subtitle: null,
-tags: [],
-readTime: { secs: 0, nanos: 0 },
-status: "Draft",
-location: { street: "", city: null },
-outline: null,
-comments: []
-};
-
 export type Status = typeof exported.Status.infer;
 export type Address = typeof exported.Address.infer;
 export type Comment = typeof exported.Comment.infer;

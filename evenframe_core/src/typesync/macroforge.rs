@@ -8,7 +8,7 @@ use crate::error::{EvenframeError, Result};
 use crate::schemasync::format::Format;
 use crate::types::{
     EnumRepresentation, FieldType, NewtypeConfig, NewtypeKind, StructConfig, TaggedUnion,
-    VariantData,
+    TextFormKind, VariantData,
 };
 use crate::typesync::config::{ArrayStyle, OutputKind};
 use crate::typesync::doc_comment::format_jsdoc;
@@ -18,9 +18,10 @@ use crate::typesync::foreign_ts::{
 use crate::typesync::js_checks::{self, JsCheck, object_key, string_literal};
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
+use crate::validator::text_pattern::{Anchoring, TextPattern};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-    NumberValidator, StringValidator, Validator,
+    NumberValidator, StringValidator, Validator, ValueRules,
 };
 use convert_case::{Case, Casing};
 use std::collections::{BTreeMap, BTreeSet};
@@ -258,17 +259,20 @@ fn generate_newtype_block(
     }
     let (_, inner) = element_types(
         &newtype.inner,
-        &newtype.element_validators,
+        &ValueRules::elements(&newtype.element_morphs, &newtype.element_validators),
         name,
         rendering,
         helpers,
     )?;
     let declared = match newtype.kind {
         NewtypeKind::Branded => {
-            let validators =
-                collect_validators_for_field(&newtype.validators, &newtype.inner, name, helpers)?;
-            let (endec, _) =
-                build_endec_annotation(&validators, &newtype.inner, rendering.registry);
+            let options = endec_options(
+                ValueRules::new(&newtype.morphs, &newtype.validators),
+                &newtype.inner,
+                name,
+                helpers,
+            )?;
+            let (endec, _) = build_endec_annotation(&options, &newtype.inner, rendering.registry);
             lines.extend(endec.lines().map(str::to_owned));
             format!("$Newtype<{inner}>")
         }
@@ -572,7 +576,7 @@ fn payload_type(
 ) -> Result<(String, String)> {
     element_types(
         field_type,
-        &variant.element_validators,
+        &ValueRules::elements(&variant.element_morphs, &variant.element_validators),
         variant.serde_name(),
         rendering,
         helpers,
@@ -583,46 +587,46 @@ fn payload_type(
 /// writes it.
 fn element_types(
     field_type: &FieldType,
-    element_validators: &[Vec<Validator>],
+    elements: &[ValueRules<'_>],
     owner: &str,
     rendering: Rendering<'_>,
     helpers: &mut HelperModule,
 ) -> Result<(String, String)> {
-    let mut annotation = |held: &FieldType, validators: &[Validator], name: &str| {
-        let validators = collect_validators_for_field(validators, held, name, helpers)?;
-        Ok::<_, EvenframeError>(if validators.is_empty() {
+    let mut annotation = |held: &FieldType, rules: ValueRules<'_>, name: &str| {
+        let options = endec_options(rules, held, name, helpers)?;
+        Ok::<_, EvenframeError>(if options.is_empty() {
             String::new()
         } else {
-            format!("/** @endec({{ validate: [{validators}] }}) */ ")
+            format!("/** @endec({{ {options} }}) */ ")
         })
     };
-    match (field_type, element_validators) {
+    match (field_type, elements) {
         (_, []) => Ok((
             String::new(),
             field_type_to_typescript(field_type, rendering),
         )),
-        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+        (FieldType::Tuple(items), rules) if items.len() == rules.len() => {
             let elements = items
                 .iter()
-                .zip(validators)
+                .zip(rules)
                 .enumerate()
-                .map(|(position, (item, validators))| {
+                .map(|(position, (item, rules))| {
                     Ok(format!(
                         "{}{}",
-                        annotation(item, validators, &format!("{owner}.{position}"))?,
+                        annotation(item, *rules, &format!("{owner}.{position}"))?,
                         field_type_to_typescript(item, rendering)
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok((String::new(), format!("[{}]", elements.join(", "))))
         }
-        (single, [validators]) => Ok((
-            annotation(single, validators, owner)?,
+        (single, [rules]) => Ok((
+            annotation(single, *rules, owner)?,
             field_type_to_typescript(single, rendering),
         )),
-        (_, validators) => Err(EvenframeError::config(format!(
+        (_, rules) => Err(EvenframeError::config(format!(
             "`{owner}` has validators for {} elements but holds {field_type:?}",
-            validators.len()
+            rules.len()
         ))),
     }
 }
@@ -639,16 +643,16 @@ fn inline_struct_type(
         .iter()
         .map(|field| {
             let field = field.effective();
-            let validators = collect_validators_for_field(
-                &field.validators,
+            let options = endec_options(
+                ValueRules::new(&field.morphs, &field.validators),
                 &field.field_type,
                 &field.field_name,
                 helpers,
             )?;
-            let annotation = if validators.is_empty() {
+            let annotation = if options.is_empty() {
                 String::new()
             } else {
-                format!("/** @endec({{ validate: [{validators}] }}) */ ")
+                format!("/** @endec({{ {options} }}) */ ")
             };
             Ok(format!(
                 "{annotation}{}: {};",
@@ -682,15 +686,15 @@ fn render_field_block(
         lines.push(format!("  /** {} */", ann));
     }
 
-    // 2. Compute validators and endec annotation
-    let validators_str = collect_validators_for_field(
-        &field.validators,
+    // 2. Compute the morphs, validators and endec annotation
+    let options = endec_options(
+        ValueRules::new(&field.morphs, &field.validators),
         &field.field_type,
         &field.field_name,
         helpers,
     )?;
     let (endec_annotation, is_inline) =
-        build_endec_annotation(&validators_str, &field.field_type, rendering.registry);
+        build_endec_annotation(&options, &field.field_type, rendering.registry);
 
     // 3. Legacy doccom handling (for backwards compatibility)
     if let Some(ref dc) = field.doccom {
@@ -768,6 +772,11 @@ fn field_type_to_typescript(field_type: &FieldType, rendering: Rendering<'_>) ->
         | FieldType::U128
         | FieldType::Usize => "number".to_string(),
         FieldType::Duration => render(&FieldType::serde_duration()),
+        // A text form's type is the value its text decodes to.
+        FieldType::FromText(TextFormKind::Url) => "URL".to_string(),
+        FieldType::FromText(kind) => render(kind.value_type()),
+        FieldType::JsonText(inner) => render(inner),
+        FieldType::IsoDate | FieldType::EpochMillis => "Date".to_string(),
         FieldType::Option(inner) => {
             format!("{} | null", wrap_union_type(inner, rendering))
         }
@@ -871,32 +880,101 @@ fn collect_endec_format(
     None
 }
 
-/// Build the full endec annotation string for a field.
-/// Combines validate and format annotations as needed.
-/// Returns the annotation line (or empty string), and a boolean indicating
-/// whether the endec should be rendered inline (for RecordLink fields).
+/// The endec codec that decodes a text form, composed through the
+/// containers that hold it, as `as` names it.
+fn endec_codec(field_type: &FieldType) -> Option<String> {
+    match field_type {
+        FieldType::FromText(TextFormKind::Url) => Some("URLFromString".to_owned()),
+        FieldType::FromText(_) => Some("DisplayFromStr".to_owned()),
+        FieldType::IsoDate => Some("DateFromString".to_owned()),
+        FieldType::EpochMillis => Some("TimestampMilliSeconds<String>".to_owned()),
+        FieldType::JsonText(_) => Some("JsonString".to_owned()),
+        FieldType::Option(inner) => endec_codec(inner).map(|codec| format!("Option<{codec}>")),
+        FieldType::Vec(inner) => endec_codec(inner).map(|codec| format!("Array<{codec}>")),
+        FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => {
+            endec_codec(value).map(|codec| format!("Map<_, {codec}>"))
+        }
+        FieldType::String
+        | FieldType::Char
+        | FieldType::Bool
+        | FieldType::Unit
+        | FieldType::F32
+        | FieldType::F64
+        | FieldType::I8
+        | FieldType::I16
+        | FieldType::I32
+        | FieldType::I64
+        | FieldType::I128
+        | FieldType::Isize
+        | FieldType::U8
+        | FieldType::U16
+        | FieldType::U32
+        | FieldType::U64
+        | FieldType::U128
+        | FieldType::Usize
+        | FieldType::Duration
+        | FieldType::Tuple(_)
+        | FieldType::Struct(_)
+        | FieldType::RecordLink(_)
+        | FieldType::Other(_) => None,
+    }
+}
+
+/// A value's `@endec` options: the codec its text decodes through, its
+/// morphs as `normalize` steps, then its validators as `validate` checks, or
+/// nothing when it has none of them.
+fn endec_options(
+    rules: ValueRules<'_>,
+    field_type: &FieldType,
+    field_name: &str,
+    helpers: &mut HelperModule,
+) -> Result<String> {
+    let mut options = Vec::new();
+    if let Some(codec) = endec_codec(field_type) {
+        options.push(format!("as: \"{}\"", escape_for_jsdoc(&codec)));
+    }
+    if !rules.morphs.is_empty() {
+        let steps = rules
+            .morphs
+            .iter()
+            .map(|morph| {
+                morph
+                    .endec_step()
+                    .map(|step| format!("\"{}\"", escape_for_jsdoc(&step)))
+                    .map_err(|problem| {
+                        EvenframeError::config(format!("field '{field_name}': {problem}"))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        options.push(format!("normalize: [{}]", steps.join(", ")));
+    }
+    let validators =
+        collect_validators_for_field(rules.validators, field_type, field_name, helpers)?;
+    if !validators.is_empty() {
+        options.push(format!("validate: [{validators}]"));
+    }
+    Ok(options.join(", "))
+}
+
+/// Build the full endec annotation string for a field from its `options`,
+/// with any format annotation on its own line after them. Returns the
+/// annotation (or empty string), and whether it is rendered inline (for
+/// RecordLink fields).
 fn build_endec_annotation(
-    validators_str: &str,
+    options: &str,
     field_type: &FieldType,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> (String, bool) {
     let format_ann = collect_endec_format(field_type, registry);
     let is_record_link = matches!(field_type, FieldType::RecordLink(_));
 
-    if !validators_str.is_empty()
+    if !options.is_empty()
         && let Some(format_line) = format_ann
     {
-        // Both validate and format: render as separate lines (validate first)
-        let validate_line = format!("/** @endec({{ validate: [{}] }}) */", validators_str);
-        (
-            format!("{}\n{}", validate_line, format_line),
-            is_record_link,
-        )
-    } else if !validators_str.is_empty() {
-        (
-            format!("/** @endec({{ validate: [{}] }}) */", validators_str),
-            is_record_link,
-        )
+        let options_line = format!("/** @endec({{ {options} }}) */");
+        (format!("{options_line}\n{format_line}"), is_record_link)
+    } else if !options.is_empty() {
+        (format!("/** @endec({{ {options} }}) */"), is_record_link)
     } else if let Some(fmt) = format_ann {
         (fmt, false)
     } else {
@@ -1247,8 +1325,7 @@ fn collect_validators_for_field(
 }
 
 /// A validator as the macroforge output writes it, or `None` for one that
-/// checks nothing: a transform, a parse morph or a carrier, which a
-/// macroforge type reads as already applied.
+/// checks nothing (`String`, which every string meets).
 fn macroforge_validator(validator: &Validator) -> Result<Option<MacroforgeValidator>> {
     let native = |text: String| Ok(Some(MacroforgeValidator::Native(text)));
     let quoted = |text: &str| format!("\\\"{}\\\"", escape_for_jsdoc(text));
@@ -1259,7 +1336,7 @@ fn macroforge_validator(validator: &Validator) -> Result<Option<MacroforgeValida
         Validator::NumberValidator(number_validator) => native(match number_validator {
             NumberValidator::Int => "int".to_owned(),
             NumberValidator::Finite => "finite".to_owned(),
-            NumberValidator::NonNaN => "nonNaN".to_owned(),
+            NumberValidator::NonNan => "nonNaN".to_owned(),
             NumberValidator::Positive => "positive".to_owned(),
             NumberValidator::Negative => "negative".to_owned(),
             NumberValidator::NonPositive => "nonPositive".to_owned(),
@@ -1367,6 +1444,12 @@ fn string_validator_to_macroforge(
             js_checks::string_check(validator)?,
         )?)))
     };
+    // Macroforge's `pattern` takes no flags, so a flagged one gets a helper.
+    let format_argument =
+        |pattern: &TextPattern, anchoring: Anchoring| match pattern.regex(anchoring) {
+            (_, Some(flags)) if !flags.is_empty() => helper("matchesPattern", true),
+            (source, _) => native(format!("pattern({})", escape_for_jsdoc(&source))),
+        };
     match validator {
         StringValidator::MinLength(length) => native(format!("minLength({length})")),
         StringValidator::MaxLength(length) => native(format!("maxLength({length})")),
@@ -1380,9 +1463,25 @@ fn string_validator_to_macroforge(
         StringValidator::Trimmed => native("trimmed".to_owned()),
         StringValidator::Capitalized => native("capitalized".to_owned()),
         StringValidator::Uncapitalized => native("uncapitalized".to_owned()),
-        StringValidator::StartsWith(prefix) => native(format!("startsWith({})", quoted(prefix))),
-        StringValidator::EndsWith(suffix) => native(format!("endsWith({})", quoted(suffix))),
-        StringValidator::Includes(substring) => native(format!("includes({})", quoted(substring))),
+        StringValidator::StartsWith(TextPattern::Text(prefix)) => {
+            native(format!("startsWith({})", quoted(prefix)))
+        }
+        StringValidator::EndsWith(TextPattern::Text(suffix)) => {
+            native(format!("endsWith({})", quoted(suffix)))
+        }
+        StringValidator::Includes(TextPattern::Text(substring)) => {
+            native(format!("includes({})", quoted(substring)))
+        }
+        // A format argument is a pattern, anchored where the validator looks.
+        StringValidator::StartsWith(pattern @ TextPattern::Format(_)) => {
+            format_argument(pattern, Anchoring::Start)
+        }
+        StringValidator::EndsWith(pattern @ TextPattern::Format(_)) => {
+            format_argument(pattern, Anchoring::End)
+        }
+        StringValidator::Includes(pattern @ TextPattern::Format(_)) => {
+            format_argument(pattern, Anchoring::Anywhere)
+        }
         // Macroforge's `pattern` takes no flags, so a flagged pattern is checked
         // by a helper of its own.
         StringValidator::RegexLiteral(Format::Custom(custom))
@@ -1424,30 +1523,13 @@ fn string_validator_to_macroforge(
         StringValidator::UpperPreformatted => helper("isUpperPreformatted", false),
         StringValidator::TrimPreformatted => helper("isTrimPreformatted", false),
         StringValidator::CapitalizePreformatted => helper("isCapitalizePreformatted", false),
-        StringValidator::NormalizeNFCPreformatted => helper("isNormalizedNfc", false),
-        StringValidator::NormalizeNFDPreformatted => helper("isNormalizedNfd", false),
-        StringValidator::NormalizeNFKCPreformatted => helper("isNormalizedNfkc", false),
-        StringValidator::NormalizeNFKDPreformatted => helper("isNormalizedNfkd", false),
+        StringValidator::NormalizeNfcPreformatted => helper("isNormalizedNfc", false),
+        StringValidator::NormalizeNfdPreformatted => helper("isNormalizedNfd", false),
+        StringValidator::NormalizeNfkcPreformatted => helper("isNormalizedNfkc", false),
+        StringValidator::NormalizeNfkdPreformatted => helper("isNormalizedNfkd", false),
         StringValidator::Literal(_) => helper("isLiteral", true),
 
-        StringValidator::String
-        | StringValidator::StringEmbedded(_)
-        | StringValidator::Capitalize
-        | StringValidator::Lower
-        | StringValidator::Upper
-        | StringValidator::Trim
-        | StringValidator::Normalize
-        | StringValidator::NormalizeNFC
-        | StringValidator::NormalizeNFD
-        | StringValidator::NormalizeNFKC
-        | StringValidator::NormalizeNFKD
-        | StringValidator::DateParse
-        | StringValidator::DateEpochParse
-        | StringValidator::DateIsoParse
-        | StringValidator::IntegerParse
-        | StringValidator::NumericParse
-        | StringValidator::JsonParse
-        | StringValidator::UrlParse => Ok(None),
+        StringValidator::String => Ok(None),
     }
 }
 
@@ -1687,27 +1769,6 @@ mod tests {
     }
 
     #[test]
-    fn test_transformation_validators_skipped() {
-        // These should return None as they're transformations, not validations
-        assert_eq!(
-            native(&Validator::StringValidator(StringValidator::Lower)),
-            None
-        );
-        assert_eq!(
-            native(&Validator::StringValidator(StringValidator::Upper)),
-            None
-        );
-        assert_eq!(
-            native(&Validator::StringValidator(StringValidator::Trim)),
-            None
-        );
-        assert_eq!(
-            native(&Validator::StringValidator(StringValidator::IntegerParse)),
-            None
-        );
-    }
-
-    #[test]
     fn test_field_type_to_typescript() {
         let registry = crate::types::ForeignTypeRegistry::default();
         let s = ArrayStyle::Shorthand;
@@ -1875,19 +1936,6 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_validators_skips_transformations() {
-        let validators = vec![
-            Validator::StringValidator(StringValidator::Email),
-            Validator::StringValidator(StringValidator::Lower), // Should be skipped
-            Validator::StringValidator(StringValidator::MinLength(5)),
-        ];
-        assert_eq!(
-            collected(&validators, &FieldType::String),
-            "\"email\", \"minLength(5)\""
-        );
-    }
-
-    #[test]
     fn an_explicit_non_empty_is_written() {
         let validators = vec![
             Validator::StringValidator(StringValidator::NonEmpty),
@@ -1973,7 +2021,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2028,7 +2075,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![
                     "Default".to_string(),
@@ -2063,6 +2109,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -2075,6 +2122,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -2152,7 +2200,6 @@ mod tests {
                 resolve_only: false,
                 struct_name: "simple".to_string(),
                 fields: vec![],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2349,7 +2396,6 @@ mod tests {
                     field_type: FieldType::Other("DateTime".to_string()),
                     ..Default::default()
                 }],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2387,7 +2433,6 @@ mod tests {
                     field_type: FieldType::Other("Decimal".to_string()),
                     ..Default::default()
                 }],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2651,7 +2696,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2692,7 +2736,6 @@ mod tests {
                     field_type: FieldType::String,
                     ..Default::default()
                 }],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -2728,7 +2771,6 @@ mod tests {
                     annotations: vec!["@currency({ symbol: \"$\" })".to_string()],
                     ..Default::default()
                 }],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec!["Encode".to_string(), "Decode".to_string()],
                 annotations: vec!["@listing({ dataName: \"order\" })".to_string()],

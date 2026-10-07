@@ -5,7 +5,6 @@
 //! validators then run, and every failing field is reported together.
 
 use crate::validate_impl::CheckedField;
-use evenframe_core::derive::validator_parser::FieldValidators;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
@@ -118,13 +117,12 @@ fn container_entries(input: &DeriveInput) -> syn::Result<(Vec<Meta>, ContainerDe
 }
 
 /// One record's fields as the shadow reads them: the shadow's members, the
-/// reads taking each value off the shadow, the validator pipelines, the parse
-/// morphs' locals and the assignments that build the record.
+/// reads taking each value off the shadow, the morph and validator pipelines
+/// and the assignments that build the record.
 struct FieldPlan {
     wire_fields: Vec<TokenStream>,
     reads: Vec<TokenStream>,
     pipelines: Vec<TokenStream>,
-    parsed: Vec<(syn::Ident, syn::Ident)>,
     assignments: Vec<TokenStream>,
     checks_anything: bool,
 }
@@ -138,7 +136,6 @@ fn plan_fields(
         wire_fields: Vec::new(),
         reads: Vec::new(),
         pipelines: Vec::new(),
-        parsed: Vec::new(),
         assignments: Vec::new(),
         checks_anything: false,
     };
@@ -158,99 +155,36 @@ fn plan_fields(
         };
         let field_type = &field.field.ty;
 
-        let wire_type = match field.validators.parse {
-            Some(parse) => {
-                if let Some(entry) = entries.iter().find(|entry| {
-                    ["default", "deserialize_with", "with"]
-                        .iter()
-                        .any(|key| entry.path().is_ident(key))
-                }) {
-                    return Err(syn::Error::new_spanned(
-                        entry,
-                        "this field is read through a parse morph, which reads the input as \
-                         text, so serde cannot also default or deserialize it another way",
-                    ));
-                }
-                plan.checks_anything = true;
-                let function = format_ident!("{}", parse.runtime_function());
-                let parse_call = if optional {
-                    quote! {
-                        #value
-                            .as_deref()
-                            .map(::evenframe::validator::runtime::#function)
-                            .transpose()
-                    }
-                } else {
-                    quote! { ::evenframe::validator::runtime::#function(&#value) }
-                };
-                plan.reads.push(quote! {
-                    let #mutability #local = match #parse_call {
-                        ::std::result::Result::Ok(__parsed) => ::std::option::Option::Some(__parsed),
-                        ::std::result::Result::Err(__rejection) => {
-                            __errors.push(#path, __rejection);
-                            ::std::option::Option::None
-                        }
-                    };
-                });
-                let parsed_local = format_ident!("__parsed_{}", field.binding_name());
-                plan.parsed.push((local.clone(), parsed_local.clone()));
-                plan.assignments.push(quote! { #member: #parsed_local });
-                if optional {
-                    quote! { ::std::option::Option<::std::string::String> }
-                } else {
-                    quote! { ::std::string::String }
-                }
-            }
-            None => {
-                plan.reads.push(quote! { let #mutability #local = #value; });
-                plan.assignments.push(quote! { #member: #local });
-                quote! { #field_type }
-            }
-        };
+        plan.reads.push(quote! { let #mutability #local = #value; });
+        plan.assignments.push(quote! { #member: #local });
 
         let chain = field.chain(&quote! { (*__value) }, true)?;
         let direct_chain = field.chain(&quote! { #local }, true)?;
         if !chain.is_empty() {
             plan.checks_anything = true;
-            let present = match (field.validators.parse.is_some(), optional) {
-                (true, true) => Some(quote! {
-                    ::std::option::Option::Some(::std::option::Option::Some(__value))
-                }),
-                (true, false) | (false, true) => {
-                    Some(quote! { ::std::option::Option::Some(__value) })
-                }
-                (false, false) => None,
-            };
-            plan.pipelines.push(match present {
-                Some(pattern) => quote! { if let #pattern = #borrow #local { #chain } },
-                None => direct_chain,
+            plan.pipelines.push(if optional {
+                quote! { if let ::std::option::Option::Some(__value) = #borrow #local { #chain } }
+            } else {
+                direct_chain
             });
         }
-        // A parse leaves the local optional, holding the value when it parsed.
-        if field.validators.parse.is_some() {
-            plan.pipelines.push(recheck(
-                &quote! { &#local },
-                &quote! { ::std::option::Option<#field_type> },
-                path,
-            ));
-        } else if transforms {
+        if transforms {
             plan.pipelines
                 .push(recheck(&quote! { &#local }, &quote! { #field_type }, path));
         }
 
         let field_attribute = serde_attribute(&entries);
         plan.wire_fields.push(match member {
-            syn::Member::Named(_) => quote! { #field_attribute #member: #wire_type },
-            syn::Member::Unnamed(_) => quote! { #field_attribute #wire_type },
+            syn::Member::Named(_) => quote! { #field_attribute #member: #field_type },
+            syn::Member::Unnamed(_) => quote! { #field_attribute #field_type },
         });
     }
     Ok(plan)
 }
 
-/// The value's own `Validate` again, after a parse built it or a transform
-/// rewrote it without going through its own deserializer. The value's type is
-/// named, since a parsed value's type is otherwise still being inferred when
-/// the probe picks its impl.
+/// The value's own `Validate` again, after a morph rewrote it without going
+/// through its own deserializer. The value's type is named for the probe to
+/// pick its impl by.
 fn recheck(value: &TokenStream, value_type: &TokenStream, path: &str) -> TokenStream {
     quote! {
         {
@@ -270,14 +204,11 @@ fn build(plan: &FieldPlan, path: &TokenStream) -> TokenStream {
     let FieldPlan {
         reads,
         pipelines,
-        parsed,
         assignments,
         checks_anything,
         ..
     } = plan;
-    let finish = if !checks_anything {
-        quote! { ::std::result::Result::Ok(#path { #(#assignments),* }) }
-    } else if parsed.is_empty() {
+    let finish = if *checks_anything {
         quote! {
             if __errors.is_empty() {
                 ::std::result::Result::Ok(#path { #(#assignments),* })
@@ -286,18 +217,7 @@ fn build(plan: &FieldPlan, path: &TokenStream) -> TokenStream {
             }
         }
     } else {
-        let locals = parsed.iter().map(|(local, _)| local);
-        let patterns = parsed
-            .iter()
-            .map(|(_, parsed_local)| quote! { ::std::option::Option::Some(#parsed_local) });
-        quote! {
-            match (#(#locals,)*) {
-                (#(#patterns,)*) if __errors.is_empty() => {
-                    ::std::result::Result::Ok(#path { #(#assignments),* })
-                }
-                _ => ::std::result::Result::Err(::serde::de::Error::custom(__errors)),
-            }
-        }
+        quote! { ::std::result::Result::Ok(#path { #(#assignments),* }) }
     };
     let errors = checks_anything.then(|| {
         quote! { let mut __errors = ::evenframe::validator::validate::ValidationErrors::new(); }
@@ -365,15 +285,6 @@ pub(crate) fn generate_custom_deserialize(
     if let Source::Converted { source, fallible } = source {
         return converted_deserialize(input, fields, &source, fallible);
     }
-    let has_parse = fields.iter().any(|field| field.validators.parse.is_some());
-    if has_parse && !matches!(default, ContainerDefault::None) {
-        return Err(syn::Error::new_spanned(
-            ident,
-            "#[serde(default)] on a struct cannot fill a field read through a parse morph, \
-             which reads text rather than the field's type",
-        ));
-    }
-
     let plan = plan_fields(fields, |field| {
         let member = &field.member;
         quote! { __wire.#member }
@@ -471,8 +382,7 @@ fn remote_handoff(input: &DeriveInput, remote: &syn::Path, body: TokenStream) ->
 }
 
 /// serde's `from` or `try_from`: the source type read and converted, then
-/// each field's validators run on the result. A parse morph has nothing to
-/// parse there, as the field already holds its type.
+/// each field's morphs and validators run on the result.
 fn converted_deserialize(
     input: &DeriveInput,
     fields: &[CheckedField],
@@ -480,29 +390,12 @@ fn converted_deserialize(
     fallible: bool,
 ) -> syn::Result<TokenStream> {
     let ident = &input.ident;
-    let unparsed: Vec<FieldValidators> = fields
-        .iter()
-        .map(|field| FieldValidators {
-            validators: field.validators.steps().to_vec(),
-            parse: None,
-        })
-        .collect();
-    let checked: Vec<CheckedField> = fields
-        .iter()
-        .zip(&unparsed)
-        .map(|(field, validators)| CheckedField {
-            field: field.field,
-            member: field.member.clone(),
-            path: field.path.clone(),
-            validators,
-        })
-        .collect();
-    let plan = plan_fields(&checked, |field| {
+    let plan = plan_fields(fields, |field| {
         let binding = format_ident!("__converted_{}", field.binding_name());
         quote! { #binding }
     })?;
-    let members: Vec<_> = checked.iter().map(|field| &field.member).collect();
-    let bindings: Vec<_> = checked
+    let members: Vec<_> = fields.iter().map(|field| &field.member).collect();
+    let bindings: Vec<_> = fields
         .iter()
         .map(|field| format_ident!("__converted_{}", field.binding_name()))
         .collect();
@@ -669,49 +562,18 @@ pub(crate) fn generate_newtype_deserialize(
     let ident = &input.ident;
     let member = &checked.member;
     let field_type = &checked.field.ty;
-    let optional = checked.is_optional();
     let mutability = checked.transforms()?.then(|| quote! { mut });
     let rejected = quote! {
         ::std::result::Result::Err(::serde::de::Error::custom(__errors))
     };
-    let (read, wire_type) = match checked.validators.parse {
-        Some(parse) => {
-            let function = format_ident!("{}", parse.runtime_function());
-            let parsed = if optional {
-                quote! { __text.as_deref().map(::evenframe::validator::runtime::#function).transpose() }
-            } else {
-                quote! { ::evenframe::validator::runtime::#function(&__text) }
-            };
-            let text_type = if optional {
-                quote! { ::std::option::Option<::std::string::String> }
-            } else {
-                quote! { ::std::string::String }
-            };
-            (
-                quote! {
-                    let __text = <#text_type as ::serde::Deserialize<'__de>>::deserialize(__deserializer)?;
-                    let #mutability __value = match #parsed {
-                        ::std::result::Result::Ok(__parsed) => __parsed,
-                        ::std::result::Result::Err(__rejection) => {
-                            __errors.push("", __rejection);
-                            return #rejected;
-                        }
-                    };
-                },
-                text_type,
-            )
-        }
-        None => (
-            quote! {
-                let #mutability __value =
-                    <#field_type as ::serde::Deserialize<'__de>>::deserialize(__deserializer)?;
-            },
-            quote! { #field_type },
-        ),
+    let read = quote! {
+        let #mutability __value =
+            <#field_type as ::serde::Deserialize<'__de>>::deserialize(__deserializer)?;
     };
     let chain = newtype_chain(checked)?;
-    let checks = checked.validators.parse.is_some() || !chain.is_empty();
-    let recheck = (checked.validators.parse.is_some() || mutability.is_some())
+    let checks = !chain.is_empty();
+    let recheck = mutability
+        .is_some()
         .then(|| recheck(&quote! { &__value }, &quote! { #field_type }, ""));
 
     let (errors, verdict) = if checks {
@@ -733,7 +595,7 @@ pub(crate) fn generate_newtype_deserialize(
     generics
         .make_where_clause()
         .predicates
-        .push(syn::parse_quote! { #wire_type: ::serde::Deserialize<'__de> });
+        .push(syn::parse_quote! { #field_type: ::serde::Deserialize<'__de> });
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     Ok(quote! {
         impl #impl_generics ::serde::Deserialize<'__de> for #ident #ty_generics #where_clause {
@@ -888,10 +750,7 @@ fn converted_enum_deserialize(
     let ident = &input.ident;
     let mut arms = Vec::new();
     for CheckedVariant { variant, fields } in variants {
-        if fields
-            .iter()
-            .all(|field| field.validators.steps().is_empty())
-        {
+        if fields.iter().all(|field| field.validators.is_empty()) {
             continue;
         }
         let variant_ident = &variant.ident;

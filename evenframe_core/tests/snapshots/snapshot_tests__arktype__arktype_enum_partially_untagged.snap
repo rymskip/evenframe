@@ -17,14 +17,6 @@ Postal: {
 
 const exported = bindings.export();
 
-export const defaultPhone: Phone = {
-number: ""
-};
-export const defaultPostal: Postal = {
-street: "",
-city: ""
-};
-
 export type Contact = typeof exported.Contact.infer;
 export type Phone = typeof exported.Phone.infer;
 export type Postal = typeof exported.Postal.infer;

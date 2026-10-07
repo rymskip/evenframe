@@ -11,6 +11,7 @@ pub mod mock_records;
 pub mod optional;
 #[cfg(feature = "schemasync")]
 pub mod remove;
+pub mod shape;
 mod type_mapper;
 
 pub use type_mapper::SurrealdbTypeMapper;

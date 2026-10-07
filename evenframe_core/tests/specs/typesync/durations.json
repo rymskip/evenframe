@@ -18,8 +18,7 @@
           "always_regenerate": false
         },
         { "field_name": "laps", "field_type": { "Vec": "Duration" }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {}

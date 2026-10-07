@@ -33,7 +33,147 @@ pub enum FieldType {
     HashMap(Box<FieldType>, Box<FieldType>),
     BTreeMap(Box<FieldType>, Box<FieldType>),
     RecordLink(Box<FieldType>),
+    /// `FromText<T>`: the value written as its text.
+    FromText(TextFormKind),
+    /// `JsonText<T>`: the value written as JSON text.
+    JsonText(Box<FieldType>),
+    /// `IsoDate`: an instant written as ISO 8601 text.
+    IsoDate,
+    /// `EpochMillis`: an instant written as text of epoch milliseconds.
+    EpochMillis,
     Other(String),
+}
+
+/// The values `FromText` reads from text, the impls of its sealed
+/// `TextForm`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TextFormKind {
+    I8,
+    I16,
+    I32,
+    I64,
+    Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+    F32,
+    F64,
+    Url,
+}
+
+impl TextFormKind {
+    /// The form `FromText<value>` reads, when `value` is one it can.
+    pub fn of(value: &FieldType) -> Option<Self> {
+        Some(match value {
+            FieldType::I8 => TextFormKind::I8,
+            FieldType::I16 => TextFormKind::I16,
+            FieldType::I32 => TextFormKind::I32,
+            FieldType::I64 => TextFormKind::I64,
+            FieldType::Isize => TextFormKind::Isize,
+            FieldType::U8 => TextFormKind::U8,
+            FieldType::U16 => TextFormKind::U16,
+            FieldType::U32 => TextFormKind::U32,
+            FieldType::U64 => TextFormKind::U64,
+            FieldType::Usize => TextFormKind::Usize,
+            FieldType::F32 => TextFormKind::F32,
+            FieldType::F64 => TextFormKind::F64,
+            FieldType::Other(name) if name.rsplit("::").next() == Some("Url") => TextFormKind::Url,
+            _ => return None,
+        })
+    }
+
+    /// The parsed value's own type; a URL is stored as its text.
+    pub fn value_type(self) -> &'static FieldType {
+        match self {
+            TextFormKind::I8 => &FieldType::I8,
+            TextFormKind::I16 => &FieldType::I16,
+            TextFormKind::I32 => &FieldType::I32,
+            TextFormKind::I64 => &FieldType::I64,
+            TextFormKind::Isize => &FieldType::Isize,
+            TextFormKind::U8 => &FieldType::U8,
+            TextFormKind::U16 => &FieldType::U16,
+            TextFormKind::U32 => &FieldType::U32,
+            TextFormKind::U64 => &FieldType::U64,
+            TextFormKind::Usize => &FieldType::Usize,
+            TextFormKind::F32 => &FieldType::F32,
+            TextFormKind::F64 => &FieldType::F64,
+            TextFormKind::Url => &FieldType::String,
+        }
+    }
+
+    /// The Rust name of the parsed value.
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            TextFormKind::I8 => "i8",
+            TextFormKind::I16 => "i16",
+            TextFormKind::I32 => "i32",
+            TextFormKind::I64 => "i64",
+            TextFormKind::Isize => "isize",
+            TextFormKind::U8 => "u8",
+            TextFormKind::U16 => "u16",
+            TextFormKind::U32 => "u32",
+            TextFormKind::U64 => "u64",
+            TextFormKind::Usize => "usize",
+            TextFormKind::F32 => "f32",
+            TextFormKind::F64 => "f64",
+            TextFormKind::Url => "Url",
+        }
+    }
+
+    pub fn is_integer(self) -> bool {
+        !matches!(
+            self,
+            TextFormKind::F32 | TextFormKind::F64 | TextFormKind::Url
+        )
+    }
+
+    /// The range a parsed integer must fall in where it is narrower than
+    /// JavaScript's safe integers, which every integer parse holds to.
+    pub fn integer_range(self) -> Option<(i64, i64)> {
+        Some(match self {
+            TextFormKind::I8 => (i64::from(i8::MIN), i64::from(i8::MAX)),
+            TextFormKind::I16 => (i64::from(i16::MIN), i64::from(i16::MAX)),
+            TextFormKind::I32 => (i64::from(i32::MIN), i64::from(i32::MAX)),
+            TextFormKind::U8 => (0, i64::from(u8::MAX)),
+            TextFormKind::U16 => (0, i64::from(u16::MAX)),
+            TextFormKind::U32 => (0, i64::from(u32::MAX)),
+            TextFormKind::U64 | TextFormKind::Usize => {
+                (0, crate::validator::keywords::MAX_SAFE_INTEGER)
+            }
+            TextFormKind::I64
+            | TextFormKind::Isize
+            | TextFormKind::F32
+            | TextFormKind::F64
+            | TextFormKind::Url => return None,
+        })
+    }
+
+    /// The SurrealQL type of the stored, parsed value.
+    pub fn surql_type(self) -> &'static str {
+        match self {
+            TextFormKind::F32 | TextFormKind::F64 => "float",
+            TextFormKind::Url => "string",
+            TextFormKind::I8
+            | TextFormKind::I16
+            | TextFormKind::I32
+            | TextFormKind::I64
+            | TextFormKind::Isize
+            | TextFormKind::U8
+            | TextFormKind::U16
+            | TextFormKind::U32
+            | TextFormKind::U64
+            | TextFormKind::Usize => "int",
+        }
+    }
+}
+
+impl ToTokens for TextFormKind {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let variant = proc_macro2::Ident::new(&format!("{self:?}"), proc_macro2::Span::call_site());
+        tokens.extend(quote! { ::evenframe::types::TextFormKind::#variant });
+    }
 }
 
 /// The paths that name `std::time::Duration` without any import.
@@ -57,6 +197,18 @@ impl FieldType {
             ("secs".to_string(), FieldType::U64),
             ("nanos".to_string(), FieldType::U32),
         ])
+    }
+
+    /// Whether serde reads the value from text and parses it: one of the
+    /// text-form types.
+    pub fn reads_text(&self) -> bool {
+        matches!(
+            self,
+            FieldType::FromText(_)
+                | FieldType::JsonText(_)
+                | FieldType::IsoDate
+                | FieldType::EpochMillis
+        )
     }
 
     /// True when the field stores a number (float or integer), looking
@@ -139,6 +291,12 @@ impl ToTokens for FieldType {
             FieldType::BTreeMap(Box::new(#key),Box::new(#value) ) }),
             FieldType::RecordLink(inner) => tokens.extend(quote! {
             FieldType::RecordLink(Box::new(#inner)) }),
+            FieldType::FromText(kind) => tokens.extend(quote! { FieldType::FromText(#kind) }),
+            FieldType::JsonText(inner) => {
+                tokens.extend(quote! { FieldType::JsonText(Box::new(#inner)) })
+            }
+            FieldType::IsoDate => tokens.extend(quote! { FieldType::IsoDate }),
+            FieldType::EpochMillis => tokens.extend(quote! { FieldType::EpochMillis }),
         }
     }
 }
@@ -285,6 +443,12 @@ impl FieldType {
                 "HashMap" if type_args.len() == 2 => FieldType::HashMap(parse(0), parse(1)),
                 "BTreeMap" if type_args.len() == 2 => FieldType::BTreeMap(parse(0), parse(1)),
                 "RecordLink" if type_args.len() == 1 => FieldType::RecordLink(parse(0)),
+                "JsonText" if type_args.len() == 1 => FieldType::JsonText(parse(0)),
+                // A `FromText` of a type it cannot read does not compile.
+                "FromText" if type_args.len() == 1 => match TextFormKind::of(&parse(0)) {
+                    Some(kind) => FieldType::FromText(kind),
+                    None => unknown(),
+                },
                 // Any other generic type (e.g. `DateTime<Utc>`) is named
                 // without its arguments, so foreign type config can match it.
                 _ => unknown(),
@@ -310,6 +474,8 @@ impl FieldType {
             "u64" => FieldType::U64,
             "u128" => FieldType::U128,
             "usize" => FieldType::Usize,
+            "IsoDate" => FieldType::IsoDate,
+            "EpochMillis" => FieldType::EpochMillis,
             _ => {
                 tracing::trace!("Unknown type '{}', storing as Other", ident);
                 unknown()
@@ -378,6 +544,10 @@ impl FieldType {
                 format!("BTreeMap<{}, {}>", k.canonical_name(), v.canonical_name())
             }
             FieldType::RecordLink(inner) => format!("RecordLink<{}>", inner.canonical_name()),
+            FieldType::FromText(kind) => format!("FromText<{}>", kind.rust_name()),
+            FieldType::JsonText(inner) => format!("JsonText<{}>", inner.canonical_name()),
+            FieldType::IsoDate => "IsoDate".to_string(),
+            FieldType::EpochMillis => "EpochMillis".to_string(),
             FieldType::Other(name) => name.clone(),
         }
     }
@@ -434,6 +604,10 @@ impl fmt::Display for FieldType {
             FieldType::HashMap(key, value) => write!(f, "HashMap({}, {})", key, value),
             FieldType::BTreeMap(key, value) => write!(f, "BTreeMap({}, {})", key, value),
             FieldType::RecordLink(inner) => write!(f, "RecordLink({})", inner),
+            FieldType::FromText(kind) => write!(f, "FromText({kind:?})"),
+            FieldType::JsonText(inner) => write!(f, "JsonText({inner})"),
+            FieldType::IsoDate => write!(f, "IsoDate"),
+            FieldType::EpochMillis => write!(f, "EpochMillis"),
             FieldType::Other(name) => write!(f, "{}", name),
         }
     }

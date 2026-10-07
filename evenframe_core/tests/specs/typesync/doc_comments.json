@@ -19,7 +19,6 @@
           "doccom": "Request timeout in milliseconds"
         }
       ],
-      "validators": [],
       "doccom": "Application configuration settings"
     }
   },

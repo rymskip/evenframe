@@ -11,8 +11,8 @@ use tracing::trace;
 /// when the type has no valid zero value: a required record link cannot
 /// point at nothing, and neither can a struct or variant that contains one.
 pub fn field_type_to_surql_default<'registry>(
-    field_name: &String,
-    table_name: &String,
+    field_name: &str,
+    table_name: &str,
     field_type: &FieldType,
     enums: &BTreeMap<String, TaggedUnion>,
     app_structs: &BTreeMap<String, StructConfig>,
@@ -59,7 +59,10 @@ pub fn field_type_to_surql_default<'registry>(
             .map(|fields| format!("{{ {} }}", fields.join(", "))),
         FieldType::Vec(_) => Some("[]".to_string()),
         FieldType::HashMap(_, _) | FieldType::BTreeMap(_, _) => Some("{}".to_string()),
-        FieldType::RecordLink(_) => None,
+        FieldType::FromText(kind) => default_of(kind.value_type()),
+        FieldType::JsonText(inner) => default_of(inner),
+        // An instant has no zero value, so the field is required.
+        FieldType::RecordLink(_) | FieldType::IsoDate | FieldType::EpochMillis => None,
         FieldType::Other(name) => {
             if let Some(ftc) = context.registry.lookup(name) {
                 // A foreign type without a configured default has no zero value.
@@ -97,8 +100,8 @@ pub fn field_type_to_surql_default<'registry>(
 /// The default of an enum: its `#[default]` variant, else the first declared.
 fn enum_surql_default(
     enum_schema: &TaggedUnion,
-    field_name: &String,
-    table_name: &String,
+    field_name: &str,
+    table_name: &str,
     enums: &BTreeMap<String, TaggedUnion>,
     app_structs: &BTreeMap<String, StructConfig>,
     context: SurqlContext<'_>,
@@ -203,7 +206,7 @@ fn enum_surql_default(
 /// enum-variant payloads.
 fn struct_fields_to_surql_default_object(
     fields: &[StructField],
-    table_name: &String,
+    table_name: &str,
     enums: &BTreeMap<String, TaggedUnion>,
     app_structs: &BTreeMap<String, StructConfig>,
     context: SurqlContext<'_>,
@@ -246,8 +249,8 @@ mod tests {
             FieldType::Option(Box::new(FieldType::String)),
         )]);
         let value = field_type_to_surql_default(
-            &"details".to_string(),
-            &"profile".to_string(),
+            "details",
+            "profile",
             &field_type,
             &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
@@ -286,8 +289,8 @@ mod tests {
             ..Default::default()
         };
         let default = field_type_to_surql_default(
-            &"address".to_owned(),
-            &"person".to_owned(),
+            "address",
+            "person",
             &FieldType::Other("Address".to_owned()),
             &BTreeMap::new(),
             &BTreeMap::from([("Address".to_owned(), address)]),
@@ -339,6 +342,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         }
@@ -408,8 +412,8 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"some_field".to_string(),
-            &"some_table".to_string(),
+            "some_field",
+            "some_table",
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
@@ -436,8 +440,8 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"some_field".to_string(),
-            &"some_table".to_string(),
+            "some_field",
+            "some_table",
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
@@ -494,8 +498,8 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"section_listing_settings".to_string(),
-            &"user".to_string(),
+            "section_listing_settings",
+            "user",
             &FieldType::Other("ListingSettings".to_string()),
             &enums,
             &app_structs,
@@ -530,8 +534,8 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"strategy".to_string(),
-            &"job".to_string(),
+            "strategy",
+            "job",
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
@@ -564,8 +568,8 @@ mod tests {
         let registry = ForeignTypeRegistry::default();
 
         let result = field_type_to_surql_default(
-            &"strategy".to_string(),
-            &"job".to_string(),
+            "strategy",
+            "job",
             &FieldType::Other(enum_name),
             &enums,
             &app_structs,
@@ -583,8 +587,8 @@ mod tests {
         let link = FieldType::RecordLink(Box::new(FieldType::Other("Customer".to_string())));
         let default_of = |field_type: &FieldType| {
             field_type_to_surql_default(
-                &"customer".to_string(),
-                &"order".to_string(),
+                "customer",
+                "order",
                 field_type,
                 &BTreeMap::new(),
                 &BTreeMap::new(),

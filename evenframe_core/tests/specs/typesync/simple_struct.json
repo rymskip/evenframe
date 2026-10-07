@@ -9,8 +9,7 @@
         { "field_name": "age", "field_type": "U32", "validators": [], "always_regenerate": false },
         { "field_name": "score", "field_type": "F64", "validators": [], "always_regenerate": false },
         { "field_name": "is_active", "field_type": "Bool", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {}

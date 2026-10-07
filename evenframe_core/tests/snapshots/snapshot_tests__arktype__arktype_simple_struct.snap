@@ -16,12 +16,4 @@ User: {
 
 const exported = bindings.export();
 
-export const defaultUser: User = {
-id: "",
-email: "",
-age: 0,
-score: 0,
-isActive: false
-};
-
 export type User = typeof exported.User.infer;

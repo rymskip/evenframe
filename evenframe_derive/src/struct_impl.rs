@@ -12,10 +12,9 @@ use evenframe_core::{
             find_duplicate_index_name, indexable_fields, parse_event_attributes,
             parse_field_index_attributes, parse_format_attribute, parse_index_attributes,
             parse_mock_data_attribute, parse_relation_attribute, parse_rust_derives,
-            parse_table_validators,
         },
         naming,
-        schemasync_attributes::{parse_validator_overrides, refuse_container_validator_overrides},
+        schemasync_attributes::{parse_validator_overrides, refuse_container_validators},
         typesync_attributes::{Position, TypesyncAttributes},
         validator_parser::parse_field_validators,
     },
@@ -70,22 +69,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             Err(err) => return err.to_compile_error(),
         };
 
-        // Table-level validators are SurrealQL expressions, carried as the
-        // scanner carries them.
-        let table_validators = match parse_table_validators(&input.attrs) {
-            Ok(expressions) => expressions
-                .iter()
-                .map(|expression| {
-                    quote! {
-                        ::evenframe::validator::Validator::StringValidator(
-                            ::evenframe::validator::StringValidator::StringEmbedded(#expression.to_string()),
-                        )
-                    }
-                })
-                .collect::<Vec<_>>(),
-            Err(err) => return err.to_compile_error(),
-        };
-
         // Parse relation attribute
         let relation_config = match parse_relation_attribute(&input.attrs) {
             Ok(Some(mut config)) => {
@@ -125,7 +108,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             }
         };
 
-        if let Err(err) = refuse_container_validator_overrides(&input.attrs) {
+        if let Err(err) = refuse_container_validators(&input.attrs) {
             return err.to_compile_error();
         }
         let TypesyncAttributes {
@@ -223,7 +206,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                 Ok(fmt) => fmt,
                 Err(err) => {
                     return syn::Error::new(
-                        field.span(),
+                        err.span(),
                         format!(
                             "Failed to parse format attribute for field '{}': {}",
                             field_name, err
@@ -298,12 +281,10 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             }
 
             // Build validators token for this field
-            let validators_tokens = if field_validators.is_empty() {
-                quote! { vec![] }
-            } else {
-                let config_tokens = field_validators.config_tokens();
-                quote! { vec![#(#config_tokens),*] }
-            };
+            let morph_tokens = field_validators.morph_tokens();
+            let morphs_tokens = quote! { vec![#(#morph_tokens),*] };
+            let config_tokens = field_validators.config_tokens();
+            let validators_tokens = quote! { vec![#(#config_tokens),*] };
             fields_validators.push(field_validators);
 
             let field_annotations_tokens = if field_annotations.is_empty() {
@@ -320,6 +301,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     edge_config: #edge_config_tokens,
                     define_config: #define_config_tokens,
                     format: #format_tokens,
+                    morphs: #morphs_tokens,
                     validators: #validators_tokens,
                     validator_overrides: #validator_overrides,
                     always_regenerate: false,
@@ -341,13 +323,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             quote! { Some(#config) }
         } else {
             quote! { None }
-        };
-
-        let table_validators_tokens = if !table_validators.is_empty() {
-            // The validators are already TokenStreams from parse_field_validators
-            quote! { vec![#(#table_validators),*] }
-        } else {
-            quote! { vec![] }
         };
 
         let mock_data_tokens = if let Some(config) = mock_data_config {
@@ -455,7 +430,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                             struct_config: ::evenframe::types::StructConfig {
                                 struct_name: #struct_name.to_owned(),
                                 fields: vec![ #(#table_field_tokens),* ],
-                                validators: #table_validators_tokens,
                                 doccom: None,
                                 macroforge_derives: #macroforge_derives_tokens,
                                 annotations: #struct_annotations_tokens,
@@ -479,14 +453,9 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
 
         // No trait implementation needed for app structs - the derive macro itself is the marker
 
-        // A validators attribute that failed to parse is already a compile
-        // error above, so its presence alone says the field has validators.
-        let has_field_validators = fields_named.named.iter().any(|field| {
-            field
-                .attrs
-                .iter()
-                .any(|attr| attr.path().is_ident("validators"))
-        });
+        let has_field_validators = fields_validators
+            .iter()
+            .any(|validators| !validators.is_empty());
 
         let checked_fields: Vec<CheckedField> = fields_named
             .named
@@ -573,7 +542,6 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                         ::evenframe::types::StructConfig {
                             struct_name: #struct_name.to_owned(),
                             fields: vec![ #(#table_field_tokens),* ],
-                            validators: #table_validators_tokens,
                             doccom: None,
                             macroforge_derives: #macroforge_derives_tokens,
                             annotations: #struct_annotations_tokens,

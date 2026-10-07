@@ -2,7 +2,8 @@ use evenframe_derive::Evenframe;
 
 /// A newtype is written as its one field's value, checked by its validators.
 #[derive(Evenframe, serde::Serialize)]
-#[validators(StringValidator::Trim, StringValidator::NonEmpty)]
+#[morphs(trim)]
+#[validators(StringValidator::NonEmpty)]
 pub struct NonEmptyString(String);
 
 /// A transparent struct is a newtype of the field serde writes.

@@ -1,0 +1,16 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+attribute "normalize";
+
+table Reading {
+    label: string (validate: "nonEmpty", normalize: "collapseWhitespace, trim, normalizeUnicode(\"NFKC\")");
+    email: string (validate: "email", normalize: "trim, lowercase");
+    level: double (normalize: "clamp(0, 10), round(1)");
+    rating: uint8 (normalize: "clamp(1, 5)");
+    price: string (normalize: "clamp(0, 99.5)");
+    tags: [string] (validate: "maxItems(10)", normalize: "unique, sort");
+    scores: [int32] (normalize: "sort");
+}

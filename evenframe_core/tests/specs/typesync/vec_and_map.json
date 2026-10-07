@@ -18,8 +18,7 @@
         { "field_name": "grid", "field_type": { "BTreeMap": ["U8", { "BTreeMap": ["U8", "Bool"] }] }, "validators": [], "always_regenerate": false },
         { "field_name": "initial", "field_type": "Char", "validators": [], "always_regenerate": false },
         { "field_name": "note_by_flag", "field_type": { "HashMap": ["Bool", "String"] }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {
@@ -36,7 +35,6 @@
       "rust_type_names": ["AccountId"],
       "arktype": { "type": "'string'" },
       "effect": { "type": "Schema.String", "encoded": "string" },
-      "default_value_ts": "\"\"",
       "macroforge": { "type": "string" },
       "protobuf": "string",
       "flatbuffers": "string"
@@ -45,7 +43,6 @@
       "crate": "surrealdb",
       "arktype": { "type": "{ '+': 'reject', table: 'string', key: [[{ '+': 'reject', String: 'string' }, '|', { '+': 'reject', Number: 'number.integer' }], '|', { '+': 'reject', Uuid: 'string.uuid' }] }" },
       "effect": { "type": "Schema.Struct({ table: Schema.String, key: Schema.Union(Schema.Struct({ String: Schema.String }), Schema.Struct({ Number: Schema.Number.pipe(Schema.int()) }), Schema.Struct({ Uuid: Schema.UUID })) })", "encoded": "{ readonly table: string; readonly key: { readonly String: string } | { readonly Number: number } | { readonly Uuid: string } }" },
-      "default_value_ts": "{ table: \"\", key: { String: \"\" } }",
       "macroforge": { "type": "{ table: string; key: { String: string } | { Number: number } | { Uuid: string } }" },
       "protobuf": "string",
       "flatbuffers": "string"

@@ -3,10 +3,18 @@
 
 use evenframe_core::derive::naming::{ItemWire, unraw};
 use evenframe_core::derive::validator_parser::{FieldValidators, parse_field_validators};
-use evenframe_core::validator::RuntimeStep;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Fields};
+
+/// What a field's morph or validator does at runtime to its value: each
+/// holds an expression of type `Result<(), runtime::Rejection>`.
+enum RuntimeStep {
+    /// Checks the value in `place`.
+    Check(TokenStream),
+    /// Rewrites the value in `place`, which must be a mutable place.
+    Transform(TokenStream),
+}
 
 /// A field with its validators, at its path in serde's names.
 pub(crate) struct CheckedField<'a> {
@@ -49,24 +57,27 @@ impl<'a> CheckedField<'a> {
         is_option_type(&self.field.ty)
     }
 
-    /// Whether a validator rewrites the value, which needs it mutable.
+    /// Whether a morph rewrites the value, which needs it mutable.
     pub fn transforms(&self) -> syn::Result<bool> {
-        Ok(self
-            .runtime_steps(&quote! { value })?
-            .iter()
-            .any(|step| matches!(step, RuntimeStep::Transform(_))))
+        Ok(!self.validators.morphs.is_empty())
     }
 
+    /// The field's morphs, then its validators.
     fn runtime_steps(&self, place: &TokenStream) -> syn::Result<Vec<RuntimeStep>> {
-        self.validators
-            .steps()
-            .iter()
-            .map(|validator| {
-                validator
-                    .runtime_step(place)
-                    .map_err(|message| syn::Error::new_spanned(&self.field.ty, message))
-            })
-            .collect()
+        let error = |message: String| syn::Error::new_spanned(&self.field.ty, message);
+        let morphs = self.validators.morphs.iter().map(|morph| {
+            morph
+                .runtime_step(place)
+                .map(RuntimeStep::Transform)
+                .map_err(error)
+        });
+        let checks = self.validators.validators.iter().map(|validator| {
+            validator
+                .runtime_step(place)
+                .map(RuntimeStep::Check)
+                .map_err(error)
+        });
+        morphs.chain(checks).collect()
     }
 
     /// The field's steps on `place`, run in order until one fails, which is
@@ -80,7 +91,7 @@ impl<'a> CheckedField<'a> {
             .filter_map(|step| match step {
                 RuntimeStep::Check(expression) => Some(expression),
                 RuntimeStep::Transform(expression) if with_transforms => Some(expression),
-                RuntimeStep::Transform(_) | RuntimeStep::Nothing => None,
+                RuntimeStep::Transform(_) => None,
             })
             .map(|expression| {
                 quote! {

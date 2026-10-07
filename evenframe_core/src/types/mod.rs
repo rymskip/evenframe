@@ -6,17 +6,18 @@ mod newtype;
 mod record_id;
 #[cfg(feature = "surrealdb-types")]
 mod record_link;
+mod text_form;
 
-pub use crate::types::field_type::{FieldType, PathNames, STD_DURATION_PATHS};
+pub use crate::types::field_type::{FieldType, PathNames, STD_DURATION_PATHS, TextFormKind};
 #[cfg(feature = "schemadump")]
 use crate::{
-    EvenframeError, Result, evenframe_log,
+    Result,
     schemasync::{TableConfig, table::surql_ident},
 };
 use crate::{
-    schemasync::mockmake::format::Format,
+    schemasync::mockmake::mock_format::MockFormat,
     schemasync::{DefineConfig, EdgeConfig},
-    validator::{Validator, ValidatorOverrides},
+    validator::{Validator, ValidatorOverrides, morph::Morph},
 };
 pub use all_configs::{AllConfigs, SchemasyncTypes};
 use convert_case::{Case, Casing};
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[cfg(feature = "schemadump")]
 use std::collections::HashSet;
+pub use text_form::{EpochMillis, FromText, IsoDate, JsonText, TextForm};
 
 /// Which pipeline(s) a type participates in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -299,6 +301,9 @@ pub struct Variant {
     /// variant is flagged, the first declared variant is used.
     #[serde(default)]
     pub is_default: bool,
+    /// A tuple variant's morphs, one list per element of its payload.
+    #[serde(default)]
+    pub element_morphs: Vec<Vec<Morph>>,
     /// A tuple variant's validators, one list per element of its payload.
     #[serde(default)]
     pub element_validators: Vec<Vec<Validator>>,
@@ -340,7 +345,10 @@ pub struct StructField {
     pub wire: Wire,
     pub edge_config: Option<EdgeConfig>,
     pub define_config: Option<DefineConfig>,
-    pub format: Option<Format>,
+    pub format: Option<MockFormat>,
+    /// Rewrites the value into canonical form before `validators` check it.
+    #[serde(default)]
+    pub morphs: Vec<Morph>,
     pub validators: Vec<Validator>,
     /// Lists replacing `validators` in one pipeline.
     #[serde(default, skip_serializing_if = "ValidatorOverrides::is_empty")]
@@ -420,664 +428,20 @@ impl StructField {
             })
     }
 
-    /// Combine the manually-specified `#[define_field_statement(assert(...))]`
-    /// clause with the assertions derived from this field's validators into a
-    /// single ASSERT expression. Returns `None` when neither is present.
-    ///
-    /// The manual clause is preserved verbatim when it is the only part (so
-    /// existing schemas don't churn); manual and validator parts are each
-    /// parenthesized when combined to keep operator precedence intact.
-    #[cfg(feature = "schemadump")]
-    pub fn merged_assert(
-        &self,
-        options: impl Into<crate::schemasync::config::SurqlOptions>,
-    ) -> Option<String> {
-        let options = options.into();
-        use crate::schemasync::database::surql::assert::generate_assert_from_validators;
-
-        let manual = self
-            .define_config
-            .as_ref()
-            .and_then(|d| d.assert.as_ref())
-            .map(|a| a.trim())
-            .filter(|a| !a.is_empty());
-
-        let generated =
-            generate_assert_from_validators(&self.validators, "$value", options.allow_scripting);
-        let generated = if generated.is_empty() {
-            None
-        } else if matches!(self.field_type, FieldType::Option(_)) {
-            // Inner assertions such as `string::len($value)` reject absence,
-            // so they apply only to a present value.
-            Some(format!(
-                "$value = {} OR ({generated})",
-                options.option_none.literal()
-            ))
-        } else {
-            Some(generated)
-        };
-
-        match (manual, generated) {
-            (Some(m), None) => Some(m.to_string()),
-            (None, Some(g)) => Some(g),
-            (Some(m), Some(g)) => Some(format!("({m}) AND ({g})")),
-            (None, None) => None,
-        }
-    }
-
-    /// The value SurrealDB's auto-generated fallback `DEFAULT` represents, as a
-    /// [`crate::validator::MockValue`], for the field types that receive a
-    /// zero/empty default (`''`, `0`, `[]`). Returns `None` for types whose
-    /// default cannot conflict with validators: optionals have no default
-    /// (absence is guarded by [`Self::merged_assert`]) and the rest
-    /// have no overlapping validator family.
-    #[cfg(feature = "schemadump")]
-    fn auto_default_mock_value(&self) -> Option<crate::validator::MockValue<'static>> {
-        use crate::validator::MockValue;
-        match self.field_type {
-            FieldType::String | FieldType::Char => Some(MockValue::Str("")),
-            FieldType::F32
-            | FieldType::F64
-            | FieldType::I8
-            | FieldType::I16
-            | FieldType::I32
-            | FieldType::I64
-            | FieldType::I128
-            | FieldType::Isize
-            | FieldType::U8
-            | FieldType::U16
-            | FieldType::U32
-            | FieldType::U64
-            | FieldType::U128
-            | FieldType::Usize => Some(MockValue::Num(0.0)),
-            FieldType::Duration => Some(MockValue::DurationNanos(0)),
-            FieldType::Vec(_) => Some(MockValue::ArrayLen(0)),
-            _ => None,
-        }
-    }
-
-    /// Whether the auto-generated fallback `DEFAULT` would satisfy this field's
-    /// validators. A default that the validators reject (`''` under `NonEmpty`,
-    /// `0` under `Positive`, `[]` under `MinItems`) makes the field
-    /// unsatisfiable (the default itself fails the `ASSERT`), so the caller
-    /// omits the default and the field becomes required instead.
-    #[cfg(feature = "schemadump")]
-    fn auto_default_satisfies_validators(&self) -> bool {
-        self.auto_default_mock_value()
-            .map(|mv| self.validators.iter().all(|v| v.matches(&mv)))
-            .unwrap_or(true)
-    }
-
+    /// The field's `DEFINE FIELD` statements on `table_name`, recording each
+    /// position whose validators the schema cannot assert in `unasserted`.
     #[cfg(feature = "schemadump")]
     pub fn generate_define_statement(
         &self,
-        enums: &BTreeMap<String, TaggedUnion>,
-        app_structs: &BTreeMap<String, StructConfig>,
-        persistable_structs: &BTreeMap<String, TableConfig>,
-        table_name: &String,
-        registry: &ForeignTypeRegistry,
-        options: impl Into<crate::schemasync::config::SurqlOptions>,
+        owner: &FieldOwner,
+        table_name: &str,
+        context: &crate::schemasync::database::surql::shape::DefineContext<'_>,
+        unasserted: &mut Vec<crate::schemasync::database::surql::shape::Unasserted>,
     ) -> Result<String> {
-        let options = options.into();
-        evenframe_log!(
-            format!(
-                "Generating define statements for:\nEnums: {:#?}\nApp structs: {:#?}\nTables: {:#?}",
-                enums.keys(),
-                app_structs.keys(),
-                persistable_structs.keys()
-            ),
-            "define_generation.log"
-        );
-
-        /* --- Start of Iterative Type Conversion Logic --- */
-
-        #[derive(Debug)]
-        enum WorkItem<'a> {
-            Process(&'a FieldType),
-            /// A struct field's value: its type, or any for one stored
-            /// through serde.
-            ProcessField(&'a StructField),
-            PushString(String),
-            AssembleOption,
-            AssembleVec,
-            AssembleMap,
-            AssembleTuple {
-                count: usize,
-            },
-            AssembleStruct {
-                count: usize,
-                names: Vec<String>,
-            },
-            AssembleEnum {
-                count: usize,
-            },
-            WrapInVariantKey {
-                variant_name: String,
-            },
-            EnterStructScope {
-                name: String,
-            },
-            LeaveStructScope {
-                name: String,
-            },
-        }
-
-        /// The work items a tuple variant's payload pushes: its element, or
-        /// each of several, as `#[surreal(tuple)]` and `#[surreal(wrap)]`
-        /// store them, in the order they are pushed.
-        fn payload_items<'a>(payload: &'a FieldType, storage: &Storage) -> Vec<WorkItem<'a>> {
-            let element = |item: &'a FieldType, position: usize| match storage
-                .opaque_elements
-                .get(position)
-            {
-                Some(true) => WorkItem::PushString("any".to_owned()),
-                _ => WorkItem::Process(item),
-            };
-            match payload {
-                FieldType::Tuple(items) if storage.opaque_elements.contains(&true) => {
-                    let mut pushed = vec![WorkItem::AssembleTuple { count: items.len() }];
-                    pushed.extend(
-                        items
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .map(|(position, item)| element(item, position)),
-                    );
-                    pushed
-                }
-                single if storage.tuple => {
-                    vec![WorkItem::AssembleTuple { count: 1 }, element(single, 0)]
-                }
-                single => vec![element(single, 0)],
-            }
-        }
-
-        /// The work items an adjacently tagged variant pushes: its tag, and
-        /// its content as `#[surreal(skip_content)]` stores it, from the
-        /// payload's own `content_items`, in the order they are pushed.
-        fn adjacent_items<'a>(
-            tag: &str,
-            content: &str,
-            variant_name: &str,
-            storage: &Storage,
-            content_items: Vec<WorkItem<'a>>,
-        ) -> Vec<WorkItem<'a>> {
-            let tag_value = WorkItem::PushString(format!("\"{variant_name}\""));
-            match storage.content {
-                ContentStorage::Never => vec![
-                    WorkItem::AssembleStruct {
-                        count: 1,
-                        names: vec![tag.to_owned()],
-                    },
-                    tag_value,
-                ],
-                ContentStorage::Sometimes | ContentStorage::Always => {
-                    let mut pushed = vec![WorkItem::AssembleStruct {
-                        count: 2,
-                        names: vec![tag.to_owned(), content.to_owned()],
-                    }];
-                    if storage.content == ContentStorage::Sometimes {
-                        pushed.push(WorkItem::AssembleOption);
-                    }
-                    pushed.extend(content_items);
-                    pushed.push(tag_value);
-                    pushed
-                }
-            }
-        }
-
-        let convert_type_iteratively =
-            |start_field_type: &FieldType| -> Result<(String, bool, Option<String>)> {
-                let mut work_stack: Vec<WorkItem> = vec![WorkItem::Process(start_field_type)];
-                let mut value_stack: Vec<(String, bool, Option<String>)> = Vec::new();
-                let mut visited_types = HashSet::new();
-
-                while let Some(item) = work_stack.pop() {
-                    match item {
-                        WorkItem::Process(field_type) => {
-                            match field_type {
-                                FieldType::String | FieldType::Char => {
-                                    value_stack.push(("string".to_string(), false, None))
-                                }
-                                FieldType::Bool => {
-                                    value_stack.push(("bool".to_string(), false, None))
-                                }
-                                FieldType::F32 | FieldType::F64 => {
-                                    value_stack.push(("float".to_string(), false, None))
-                                }
-                                FieldType::I8
-                                | FieldType::I16
-                                | FieldType::I32
-                                | FieldType::I64
-                                | FieldType::I128
-                                | FieldType::Isize
-                                | FieldType::U8
-                                | FieldType::U16
-                                | FieldType::U32
-                                | FieldType::U64
-                                | FieldType::U128
-                                | FieldType::Usize => {
-                                    value_stack.push(("int".to_string(), false, None))
-                                }
-                                FieldType::Unit => {
-                                    value_stack.push(("any".to_string(), false, None))
-                                }
-                                FieldType::Duration => {
-                                    value_stack.push(("duration".to_string(), false, None))
-                                }
-                                FieldType::Option(inner) => {
-                                    work_stack.push(WorkItem::AssembleOption);
-                                    work_stack.push(WorkItem::Process(inner));
-                                }
-                                FieldType::Vec(inner) => {
-                                    work_stack.push(WorkItem::AssembleVec);
-                                    work_stack.push(WorkItem::Process(inner));
-                                }
-                                FieldType::HashMap(_, value) | FieldType::BTreeMap(_, value) => {
-                                    work_stack.push(WorkItem::AssembleMap);
-                                    work_stack.push(WorkItem::Process(value));
-                                }
-                                FieldType::RecordLink(inner) => {
-                                    if let FieldType::Other(type_name) = inner.as_ref() {
-                                        let resolved = record_link_target_surql(
-                                            type_name,
-                                            persistable_structs,
-                                            app_structs,
-                                            enums,
-                                        )
-                                        .unwrap_or_else(|| type_name.to_case(Case::Snake));
-                                        value_stack.push((
-                                            format!("record<{}>", resolved),
-                                            false,
-                                            None,
-                                        ));
-                                    } else {
-                                        work_stack.push(WorkItem::Process(inner));
-                                    }
-                                }
-                                FieldType::Tuple(types) => {
-                                    work_stack.push(WorkItem::AssembleTuple { count: types.len() });
-                                    for t in types.iter().rev() {
-                                        work_stack.push(WorkItem::Process(t));
-                                    }
-                                }
-                                FieldType::Struct(fields) => {
-                                    let names =
-                                        fields.iter().map(|(name, _)| name.clone()).collect();
-                                    work_stack.push(WorkItem::AssembleStruct {
-                                        count: fields.len(),
-                                        names,
-                                    });
-                                    for (_, ftype) in fields.iter().rev() {
-                                        work_stack.push(WorkItem::Process(ftype));
-                                    }
-                                }
-                                FieldType::Other(name) => {
-                                    // Check foreign type registry first
-                                    if let Some(ftc) = registry.lookup(name) {
-                                        let type_str = if self.db_name() == "id" {
-                                            ftc.surrealdb_id_format
-                                                .as_ref()
-                                                .map(|fmt| fmt.replace("{table_name}", table_name))
-                                                .unwrap_or_else(|| ftc.surrealdb.clone())
-                                        } else {
-                                            ftc.surrealdb_non_id_format
-                                                .as_ref()
-                                                .cloned()
-                                                .unwrap_or_else(|| ftc.surrealdb.clone())
-                                        };
-                                        value_stack.push((type_str, false, None));
-                                    } else if let Some(enum_def) = enums.get(name) {
-                                        let enum_def = enum_def.effective();
-                                        let total_variants = enum_def.variants.len();
-                                        work_stack.push(WorkItem::AssembleEnum {
-                                            count: total_variants,
-                                        });
-
-                                        for variant in enum_def.variants.iter().rev() {
-                                            let variant = variant.effective();
-                                            let storage = &variant.wire.storage;
-                                            // A variant serde skips is stored as NONE.
-                                            if storage.skipped {
-                                                work_stack
-                                                    .push(WorkItem::PushString("none".to_owned()));
-                                                continue;
-                                            }
-                                            // An untagged unit variant is stored as its literal.
-                                            if let Some(literal) = &storage.value {
-                                                work_stack.push(WorkItem::PushString(
-                                                    match literal.as_str() {
-                                                        "NULL" => "null".to_owned(),
-                                                        "NONE" => "none".to_owned(),
-                                                        literal => literal.to_owned(),
-                                                    },
-                                                ));
-                                                continue;
-                                            }
-                                            if let Some(data) = &variant.data {
-                                                match data {
-                                                    VariantData::InlineStruct(s) => {
-                                                        let struct_config = s.effective();
-                                                        match variant.stored_representation(&enum_def.representation) {
-                                                        EnumRepresentation::ExternallyTagged => {
-                                                            // { VariantName: { fields } }
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
-                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
-                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
-                                                            for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
-                                                            }
-                                                        }
-                                                        EnumRepresentation::InternallyTagged { tag } => {
-                                                            // { tag: "VariantName", field1: type1, ... }
-                                                            let mut names = vec![tag.clone()];
-                                                            names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
-                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
-                                                            for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
-                                                            }
-                                                            work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
-                                                        }
-                                                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                                                            // { tag: "VariantName", content: { fields } }
-                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
-                                                            let mut content_items = vec![WorkItem::AssembleStruct { count: struct_config.fields.len(), names }];
-                                                            content_items.extend(struct_config.fields.iter().rev().map(|field| WorkItem::ProcessField(field.effective())));
-                                                            work_stack.extend(adjacent_items(tag, content, variant.db_name(), storage, content_items));
-                                                        }
-                                                        EnumRepresentation::Untagged => {
-                                                            // { fields } (no wrapping)
-                                                            let names = struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()).collect();
-                                                            work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len(), names });
-                                                            for field in struct_config.fields.iter().rev() {
-                                                                work_stack.push(WorkItem::ProcessField(field.effective()));
-                                                            }
-                                                        }
-                                                    }
-                                                    }
-                                                    VariantData::DataStructureRef(ft) => {
-                                                        match variant.stored_representation(&enum_def.representation) {
-                                                        EnumRepresentation::ExternallyTagged => {
-                                                            // { VariantName: value }
-                                                            work_stack.push(WorkItem::WrapInVariantKey { variant_name: variant.db_name().to_owned() });
-                                                            work_stack.extend(payload_items(ft, storage));
-                                                        }
-                                                        EnumRepresentation::AdjacentlyTagged { tag, content } => {
-                                                            // { tag: "VariantName", content: value }
-                                                            work_stack.extend(adjacent_items(tag, content, variant.db_name(), storage, payload_items(ft, storage)));
-                                                        }
-                                                        EnumRepresentation::Untagged => {
-                                                            // value (no wrapping)
-                                                            work_stack.extend(payload_items(ft, storage));
-                                                        }
-                                                         EnumRepresentation::InternallyTagged { tag } => {
-                                                             let struct_config = match ft {
-                                                                 FieldType::Other(name) => app_structs.get(name).map(StructConfig::effective),
-                                                                 _ => None,
-                                                             }.ok_or_else(|| EvenframeError::SchemaSync(format!(
-                                                                 "Internally tagged enum `{}` variant `{}` must reference a known struct payload; found `{ft:?}`",
-                                                                 enum_def.enum_name, variant.db_name(),
-                                                             )))?;
-                                                             let mut names = vec![tag.clone()];
-                                                             names.extend(struct_config.fields.iter().map(|field| field.effective().db_name().to_owned()));
-                                                             work_stack.push(WorkItem::AssembleStruct { count: struct_config.fields.len() + 1, names });
-                                                             for field in struct_config.fields.iter().rev() {
-                                                                 work_stack.push(WorkItem::ProcessField(field.effective()));
-                                                             }
-                                                             work_stack.push(WorkItem::PushString(format!("\"{}\"", variant.db_name())));
-                                                         }
-                                                    }
-                                                    }
-                                                }
-                                            } else {
-                                                // Unit variant
-                                                match variant
-                                                    .stored_representation(&enum_def.representation)
-                                                {
-                                                    EnumRepresentation::InternallyTagged {
-                                                        tag,
-                                                    } => {
-                                                        // { tag: "VariantName" }
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            count: 1,
-                                                            names: vec![tag.clone()],
-                                                        });
-                                                        work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.db_name()),
-                                                        ));
-                                                    }
-                                                    EnumRepresentation::AdjacentlyTagged {
-                                                        tag,
-                                                        ..
-                                                    } => {
-                                                        // { tag: "VariantName" }
-                                                        work_stack.push(WorkItem::AssembleStruct {
-                                                            count: 1,
-                                                            names: vec![tag.clone()],
-                                                        });
-                                                        work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.db_name()),
-                                                        ));
-                                                    }
-                                                    _ => {
-                                                        // ExternallyTagged / Untagged: "VariantName"
-                                                        work_stack.push(WorkItem::PushString(
-                                                            format!("\"{}\"", variant.db_name()),
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else if let Some(app_struct) = app_structs.get(name) {
-                                        let app_struct = app_struct.effective();
-                                        // If the effective struct is itself a registered
-                                        // table (e.g. a synthetic projection that
-                                        // overrides to the underlying table), emit a
-                                        // record<> reference instead of inlining the
-                                        // struct's fields.
-                                        let effective_snake =
-                                            app_struct.struct_name.to_case(Case::Snake);
-                                        if persistable_structs.contains_key(&effective_snake) {
-                                            let resolved = persistable_structs
-                                                .get(&effective_snake)
-                                                .map(|tc| tc.effective().table_name.clone())
-                                                .unwrap_or(effective_snake);
-                                            value_stack.push((
-                                                format!("record<{}>", resolved),
-                                                false,
-                                                None,
-                                            ));
-                                        } else {
-                                            // A struct holding itself, or keys known
-                                            // only from a value, is any object.
-                                            if visited_types.contains(name) || app_struct.is_open()
-                                            {
-                                                value_stack.push((
-                                                    "object".to_string(),
-                                                    false,
-                                                    None,
-                                                ));
-                                                continue;
-                                            }
-                                            work_stack.push(WorkItem::LeaveStructScope {
-                                                name: name.clone(),
-                                            });
-                                            let names = app_struct
-                                                .fields
-                                                .iter()
-                                                .map(|field| field.effective().db_name().to_owned())
-                                                .collect();
-                                            work_stack.push(WorkItem::AssembleStruct {
-                                                count: app_struct.fields.len(),
-                                                names,
-                                            });
-                                            for field in app_struct.fields.iter().rev() {
-                                                work_stack.push(WorkItem::ProcessField(
-                                                    field.effective(),
-                                                ));
-                                            }
-                                            work_stack.push(WorkItem::EnterStructScope {
-                                                name: name.clone(),
-                                            });
-                                        }
-                                    } else if let Some(tc) =
-                                        persistable_structs.get(&name.to_case(Case::Snake))
-                                    {
-                                        let resolved = tc.effective().table_name.clone();
-                                        value_stack.push((
-                                            format!("record<{}>", resolved),
-                                            false,
-                                            None,
-                                        ));
-                                    } else {
-                                        value_stack.push((name.clone(), false, None));
-                                    }
-                                }
-                            }
-                        }
-                        WorkItem::ProcessField(field) => {
-                            if field.wire.storage.opaque {
-                                value_stack.push(("any".to_string(), false, None));
-                            } else {
-                                work_stack.push(WorkItem::Process(&field.field_type));
-                            }
-                        }
-                        WorkItem::PushString(s) => {
-                            value_stack.push((s, false, None));
-                        }
-                        WorkItem::AssembleOption => {
-                            let (inner_type, needs_wildcard, wildcard_type) = value_stack
-                                .pop()
-                                .ok_or_else(|| EvenframeError::FieldDefinition {
-                                    message: "Stack underflow in AssembleOption".to_string(),
-                                    work_stack: format!("{:#?}", work_stack),
-                                    value_stack: format!("{:#?}", value_stack),
-                                    item: "AssembleOption".to_string(),
-                                    visited_types: format!("{:#?}", visited_types),
-                                })?;
-                            value_stack.push((
-                                options.option_none.surql_type(&inner_type),
-                                needs_wildcard,
-                                wildcard_type,
-                            ));
-                        }
-                        WorkItem::AssembleVec => {
-                            let (inner_type, _, _) = value_stack.pop().ok_or_else(|| {
-                                EvenframeError::FieldDefinition {
-                                    message: "Stack underflow in AssembleVec".to_string(),
-                                    work_stack: format!("{:#?}", work_stack),
-                                    value_stack: format!("{:#?}", value_stack),
-                                    item: "AssembleVec".to_string(),
-                                    visited_types: format!("{:#?}", visited_types),
-                                }
-                            })?;
-                            value_stack.push((format!("array<{}>", inner_type), false, None));
-                        }
-                        WorkItem::AssembleMap => {
-                            let (value_type, _, _) = value_stack.pop().ok_or_else(|| {
-                                EvenframeError::FieldDefinition {
-                                    message: "Stack underflow in AssembleMap".to_string(),
-                                    work_stack: format!("{:#?}", work_stack),
-                                    value_stack: format!("{:#?}", value_stack),
-                                    item: "AssembleMap".to_string(),
-                                    visited_types: format!("{:#?}", visited_types),
-                                }
-                            })?;
-                            value_stack.push(("object".to_string(), true, Some(value_type)));
-                        }
-                        WorkItem::AssembleTuple { count } => {
-                            let mut items = Vec::with_capacity(count);
-                            for _ in 0..count {
-                                items.push(
-                                    value_stack
-                                        .pop()
-                                        .ok_or_else(|| EvenframeError::FieldDefinition {
-                                            message: "Stack underflow in AssembleTuple".to_string(),
-                                            work_stack: format!("{:#?}", work_stack),
-                                            value_stack: format!("{:#?}", value_stack),
-                                            item: "AssembleTuple".to_string(),
-                                            visited_types: format!("{:#?}", visited_types),
-                                        })?
-                                        .0,
-                                );
-                            }
-                            items.reverse();
-                            value_stack.push((format!("[{}]", items.join(", ")), false, None));
-                        }
-                        WorkItem::AssembleStruct { count, names } => {
-                            let mut items = Vec::with_capacity(count);
-                            for i in 0..count {
-                                let (field_type, _, _) = value_stack.pop().ok_or_else(|| {
-                                    EvenframeError::FieldDefinition {
-                                        message: "Stack underflow in AssembleStruct".to_string(),
-                                        work_stack: format!("{:#?}", work_stack),
-                                        value_stack: format!("{:#?}", value_stack),
-                                        item: "AssembleStruct".to_string(),
-                                        visited_types: format!("{:#?}", visited_types),
-                                    }
-                                })?;
-                                items.push(format!(
-                                    "{}: {}",
-                                    surql_ident(&names[count - 1 - i]),
-                                    field_type
-                                ));
-                            }
-                            items.reverse();
-                            value_stack.push((format!("{{ {} }}", items.join(", ")), false, None));
-                        }
-                        WorkItem::AssembleEnum { count } => {
-                            let mut variants = Vec::with_capacity(count);
-                            for _ in 0..count {
-                                variants.push(
-                                    value_stack
-                                        .pop()
-                                        .ok_or_else(|| EvenframeError::FieldDefinition {
-                                            message: "Stack underflow in AssembleEnum".to_string(),
-                                            work_stack: format!("{:#?}", work_stack),
-                                            value_stack: format!("{:#?}", value_stack),
-                                            item: "AssembleEnum".to_string(),
-                                            visited_types: format!("{:#?}", visited_types),
-                                        })?
-                                        .0,
-                                );
-                            }
-                            variants.reverse();
-                            value_stack.push((variants.join(" | "), false, None));
-                        }
-                        WorkItem::WrapInVariantKey { variant_name } => {
-                            let (inner, _, _) = value_stack.pop().ok_or_else(|| {
-                                EvenframeError::FieldDefinition {
-                                    message: "Stack underflow in WrapInVariantKey".to_string(),
-                                    work_stack: format!("{:#?}", work_stack),
-                                    value_stack: format!("{:#?}", value_stack),
-                                    item: "WrapInVariantKey".to_string(),
-                                    visited_types: format!("{:#?}", visited_types),
-                                }
-                            })?;
-                            value_stack.push((
-                                format!("{{ {}: {} }}", surql_ident(&variant_name), inner),
-                                false,
-                                None,
-                            ));
-                        }
-                        WorkItem::EnterStructScope { name } => {
-                            visited_types.insert(name);
-                        }
-                        WorkItem::LeaveStructScope { name } => {
-                            visited_types.remove(&name);
-                        }
-                    }
-                }
-                value_stack
-                    .pop()
-                    .ok_or_else(|| EvenframeError::FieldDefinition {
-                        message: "Final stack underflow".to_string(),
-                        work_stack: format!("{:#?}", work_stack),
-                        value_stack: format!("{:#?}", value_stack),
-                        item: "(item out of scope)".to_string(),
-                        visited_types: format!("{:#?}", visited_types),
-                    })
-            };
+        use crate::schemasync::database::surql::shape::{
+            field_shape, own_assertion, own_zero_ok, type_surql,
+        };
+        let options = context.options;
 
         let mut stmt = format!(
             "DEFINE FIELD OVERWRITE {} ON TABLE {}",
@@ -1095,8 +459,7 @@ impl StructField {
             let type_str = if let Some(ref data_type) = def.data_type {
                 data_type.clone()
             } else {
-                let (ts, _, _) = convert_type_iteratively(&self.field_type)?;
-                ts
+                type_surql(&self.field_type, self.db_name(), table_name, context)?
             };
 
             if def.flexible.unwrap_or(false) {
@@ -1133,20 +496,33 @@ impl StructField {
             return Ok(stmt);
         }
 
-        let (type_str, needs_wildcard, wildcard_type) = if let Some(ref def) = self.define_config {
-            if def.should_skip {
-                ("".to_string(), false, None)
-            } else if let Some(ref data_type) = def.data_type {
-                (data_type.clone(), false, None)
-            } else if self.wire.storage.opaque {
-                ("any".to_string(), false, None)
-            } else {
-                convert_type_iteratively(&self.field_type)?
+        // A field whose stored type is not taken from its Rust type asserts
+        // its own validators alone.
+        let (type_str, map_values, generated_assert, zero_ok) = match &self.define_config {
+            Some(def) if def.should_skip => (
+                String::new(),
+                None,
+                own_assertion(self, options),
+                own_zero_ok(self),
+            ),
+            Some(DefineConfig {
+                data_type: Some(data_type),
+                ..
+            }) => (
+                data_type.clone(),
+                None,
+                own_assertion(self, options),
+                own_zero_ok(self),
+            ),
+            _ => {
+                let shape = field_shape(self, owner, table_name, context, unasserted)?;
+                (
+                    shape.surql,
+                    shape.map_values,
+                    shape.assertion,
+                    shape.zero_ok,
+                )
             }
-        } else if self.wire.storage.opaque {
-            ("any".to_string(), false, None)
-        } else {
-            convert_type_iteratively(&self.field_type)?
         };
 
         // A struct with keys known only from a value is any object, which
@@ -1157,9 +533,9 @@ impl StructField {
             .is_some_and(|def| def.flexible.unwrap_or(false))
             || holds_open_struct(
                 &self.field_type,
-                enums,
-                app_structs,
-                persistable_structs,
+                context.enums,
+                context.objects,
+                context.tables,
                 &mut HashSet::new(),
             );
         if flexible {
@@ -1183,14 +559,17 @@ impl StructField {
             } else if nullable_option {
                 stmt.push_str(" DEFAULT NULL");
             } else if !matches!(self.field_type, FieldType::Option(_))
-                && self.auto_default_satisfies_validators()
+                && zero_ok
                 && let Some(default) = crate::default::field_type_to_surql_default(
                     &self.field_name,
                     table_name,
                     &self.field_type,
-                    enums,
-                    app_structs,
-                    crate::schemasync::config::SurqlContext { registry, options },
+                    context.enums,
+                    context.objects,
+                    crate::schemasync::config::SurqlContext {
+                        registry: context.registry,
+                        options,
+                    },
                 )
             {
                 stmt.push_str(&format!(" DEFAULT {default}"));
@@ -1207,7 +586,20 @@ impl StructField {
                 stmt.push_str(&format!(" VALUE {}", val));
             }
 
-            if let Some(assert_clause) = self.merged_assert(options) {
+            // A hand-written clause is kept verbatim when it is the only part;
+            // combined, each part is parenthesized to keep precedence.
+            let manual = def
+                .assert
+                .as_deref()
+                .map(str::trim)
+                .filter(|manual| !manual.is_empty());
+            let assert_clause = match (manual, generated_assert) {
+                (Some(manual), None) => Some(manual.to_owned()),
+                (None, Some(generated)) => Some(generated),
+                (Some(manual), Some(generated)) => Some(format!("({manual}) AND ({generated})")),
+                (None, None) => None,
+            };
+            if let Some(assert_clause) = assert_clause {
                 stmt.push_str(&format!(" ASSERT {}", assert_clause));
             }
         } else if nullable_option {
@@ -1241,9 +633,7 @@ impl StructField {
 
         stmt.push_str(";\n");
 
-        if let Some(wildcard_value_type) = wildcard_type
-            && needs_wildcard
-        {
+        if let Some(wildcard_value_type) = map_values {
             stmt.push_str(&format!(
                 "DEFINE FIELD OVERWRITE {}.* ON TABLE {} TYPE {};\n",
                 surql_ident(self.db_name()),
@@ -1260,7 +650,6 @@ impl StructField {
 pub struct StructConfig {
     pub struct_name: String,
     pub fields: Vec<StructField>,
-    pub validators: Vec<Validator>,
     #[serde(default)]
     pub doccom: Option<String>,
     #[serde(default)]
@@ -1305,7 +694,9 @@ fn holds_open_struct(
         holds_open_struct(held, enums, app_structs, persistable_structs, visited)
     };
     match field_type {
-        FieldType::Option(inner) | FieldType::Vec(inner) => holds(inner, visited),
+        FieldType::Option(inner) | FieldType::Vec(inner) | FieldType::JsonText(inner) => {
+            holds(inner, visited)
+        }
         FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
             holds(key, visited) || holds(value, visited)
         }
@@ -1363,7 +754,10 @@ fn holds_open_struct(
         | FieldType::U64
         | FieldType::U128
         | FieldType::Usize
-        | FieldType::Duration => false,
+        | FieldType::Duration
+        | FieldType::FromText(_)
+        | FieldType::IsoDate
+        | FieldType::EpochMillis => false,
     }
 }
 
@@ -1559,6 +953,7 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_morphs: Vec::new(),
                     element_validators: Vec::new(),
                     element_validator_overrides: Vec::new(),
                 },
@@ -1571,6 +966,7 @@ mod tests {
                     output_override: None,
                     raw_attributes: BTreeMap::new(),
                     is_default: false,
+                    element_morphs: Vec::new(),
                     element_validators: Vec::new(),
                     element_validator_overrides: Vec::new(),
                 },
@@ -1602,6 +998,7 @@ mod tests {
                 output_override: None,
                 raw_attributes: BTreeMap::new(),
                 is_default: false,
+                element_morphs: Vec::new(),
                 element_validators: Vec::new(),
                 element_validator_overrides: Vec::new(),
             }],
@@ -1666,6 +1063,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         };
@@ -1683,6 +1081,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         };
@@ -1698,7 +1097,6 @@ mod tests {
             resolve_only: false,
             struct_name: "InnerData".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -1716,6 +1114,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         };
@@ -1738,7 +1137,6 @@ mod tests {
             resolve_only: false,
             struct_name: "Test".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -1823,6 +1221,7 @@ mod tests {
             edge_config: None,
             define_config: None,
             format: None,
+            morphs: Vec::new(),
             validators: vec![],
             always_regenerate: false,
             doccom: None,
@@ -1844,7 +1243,6 @@ mod tests {
             resolve_only: false,
             struct_name: "Empty".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -1869,6 +1267,7 @@ mod tests {
                     edge_config: None,
                     define_config: None,
                     format: None,
+                    morphs: Vec::new(),
                     validators: vec![],
                     always_regenerate: false,
                     doccom: None,
@@ -1885,6 +1284,7 @@ mod tests {
                     edge_config: None,
                     define_config: None,
                     format: None,
+                    morphs: Vec::new(),
                     validators: vec![],
                     always_regenerate: false,
                     doccom: None,
@@ -1895,7 +1295,6 @@ mod tests {
                     validator_overrides: Default::default(),
                 },
             ],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -1913,7 +1312,6 @@ mod tests {
             resolve_only: false,
             struct_name: "Test".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -2043,7 +1441,6 @@ mod tests {
             resolve_only: false,
             struct_name: "".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -2074,6 +1471,7 @@ mod tests {
             edge_config: None,
             define_config: None,
             format: None,
+            morphs: Vec::new(),
             validators: vec![Validator::StringValidator(StringValidator::Email)],
             always_regenerate: false,
             doccom: None,
@@ -2189,6 +1587,7 @@ mod tests {
             output_override: None,
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         };
@@ -2201,6 +1600,7 @@ mod tests {
             output_override: Some(Box::new(real_variant)),
             raw_attributes: BTreeMap::new(),
             is_default: false,
+            element_morphs: Vec::new(),
             element_validators: Vec::new(),
             element_validator_overrides: Vec::new(),
         };
@@ -2237,6 +1637,7 @@ mod tests {
                 comment: None,
             }),
             format: None,
+            morphs: Vec::new(),
             validators: vec![],
             always_regenerate: false,
             doccom: None,
@@ -2252,7 +1653,6 @@ mod tests {
             resolve_only: false,
             struct_name: "PartialUser".to_string(),
             fields: vec![],
-            validators: vec![],
             doccom: None,
             macroforge_derives: vec![],
             annotations: vec![],
@@ -2288,12 +1688,17 @@ mod tests {
 
         let stmt = field
             .generate_define_statement(
-                &BTreeMap::new(),
-                &app_structs,
-                &tables,
-                &"errand_channel".to_string(),
-                &ForeignTypeRegistry::default(),
-                true,
+                &crate::types::FieldOwner::Table("errand_channel".to_string()),
+                "errand_channel",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &tables,
+                    objects: &app_structs,
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .expect("generate_define_statement should succeed");
 
@@ -2337,6 +1742,7 @@ mod tests {
                 comment: None,
             }),
             format: None,
+            morphs: Vec::new(),
             validators: vec![],
             always_regenerate: false,
             doccom: None,
@@ -2349,12 +1755,17 @@ mod tests {
 
         let stmt = field
             .generate_define_statement(
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &"errand_channel".to_string(),
-                &ForeignTypeRegistry::default(),
-                true,
+                &crate::types::FieldOwner::Table("errand_channel".to_string()),
+                "errand_channel",
+                &crate::schemasync::database::surql::shape::DefineContext {
+                    tables: &BTreeMap::new(),
+                    objects: &BTreeMap::new(),
+                    enums: &BTreeMap::new(),
+                    declared: &crate::types::DeclaredTypes::default(),
+                    registry: &ForeignTypeRegistry::default(),
+                    options: crate::schemasync::config::SurqlOptions::from(true),
+                },
+                &mut Vec::new(),
             )
             .expect("generate_define_statement should succeed");
 

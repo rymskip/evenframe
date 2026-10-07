@@ -9,8 +9,7 @@
         { "field_name": "id", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "created_at", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "strength", "field_type": { "Option": "F64" }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "relation": {
       "edge_name": "likes",

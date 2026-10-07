@@ -115,8 +115,7 @@
           ],
           "always_regenerate": false
         }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {},
@@ -127,7 +126,6 @@
       ],
       "arktype": { "type": "'string'" },
       "effect": { "type": "Schema.Date", "encoded": "string" },
-      "default_value_ts": "\"\"",
       "macroforge": { "type": "string" },
       "protobuf": "string",
       "flatbuffers": "string"
@@ -138,7 +136,6 @@
       ],
       "arktype": { "type": "'string'" },
       "effect": { "type": "Schema.BigDecimal", "encoded": "string" },
-      "default_value_ts": "\"0\"",
       "macroforge": { "type": "string" },
       "protobuf": "string",
       "flatbuffers": "string"
@@ -149,7 +146,6 @@
       ],
       "arktype": { "type": "'string'" },
       "effect": { "type": "Schema.BigInt", "encoded": "string" },
-      "default_value_ts": "\"0\"",
       "macroforge": { "type": "string" },
       "protobuf": "string",
       "flatbuffers": "string"
@@ -160,7 +156,6 @@
       ],
       "arktype": { "type": "'string'" },
       "effect": { "type": "Schema.DurationFromNanos", "encoded": "bigint" },
-      "default_value_ts": "\"0s\"",
       "macroforge": { "type": "bigint" },
       "protobuf": "int64",
       "flatbuffers": "long"

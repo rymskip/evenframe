@@ -10,8 +10,7 @@
         { "field_name": "customer_id", "field_type": "String", "validators": [], "always_regenerate": false },
         { "field_name": "total", "field_type": "F64", "validators": [], "always_regenerate": false },
         { "field_name": "status", "field_type": "String", "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     },
     "relation": null,
     "permissions": null,

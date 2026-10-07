@@ -12,6 +12,7 @@ use crate::typesync::doc_comment::format_double_slash;
 use crate::typesync::map_key::MapKey;
 use crate::typesync::protobuf_rules;
 use crate::validator::Validator;
+use crate::validator::morph::Morph;
 use convert_case::{Case, Casing};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -251,6 +252,23 @@ impl Proto<'_> {
                 &field.validators,
             )?;
             let mut declaration = proto_field.declaration(&field_name, index + 1);
+            if self.import_validate && !field.morphs.is_empty() {
+                let steps = field
+                    .morphs
+                    .iter()
+                    .map(Morph::endec_step)
+                    .collect::<std::result::Result<Vec<_>, String>>()
+                    .map_err(|problem| {
+                        EvenframeError::type_sync(format!(
+                            "`{name}.{}`: {problem}",
+                            field.field_name
+                        ))
+                    })?;
+                body.push_str(&format!(
+                    "{indent}    // protoc-gen-validate cannot normalize: {}\n",
+                    steps.join("; ")
+                ));
+            }
             if self.import_validate && proto_field.holds_validators {
                 let rules = protobuf_rules::field_rules(
                     &format!("{name}.{}", field.field_name),
@@ -386,6 +404,13 @@ impl Proto<'_> {
                 self.single(&FieldType::serde_duration(), hint, owner, nested, indent)?
             }
             FieldType::RecordLink(inner) => self.single(inner, hint, owner, nested, indent)?,
+            // A text form is held as the value its text writes, and an
+            // instant as its epoch milliseconds.
+            FieldType::FromText(kind) => {
+                self.single(kind.value_type(), hint, owner, nested, indent)?
+            }
+            FieldType::JsonText(inner) => self.single(inner, hint, owner, nested, indent)?,
+            FieldType::IsoDate | FieldType::EpochMillis => "int64".to_string(),
             FieldType::Other(name) => match self.registry.lookup(name) {
                 Some(foreign) if !foreign.protobuf.is_empty() => foreign.protobuf.clone(),
                 _ => self.user_type(name),
@@ -717,7 +742,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -791,6 +815,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -803,6 +828,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -815,6 +841,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -891,7 +918,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                validators: vec![],
                 doccom: None,
                 macroforge_derives: vec![],
                 annotations: vec![],
@@ -918,6 +944,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },
@@ -930,6 +957,7 @@ mod tests {
                         output_override: None,
                         raw_attributes: std::collections::BTreeMap::new(),
                         is_default: false,
+                        element_morphs: Vec::new(),
                         element_validators: Vec::new(),
                         element_validator_overrides: Vec::new(),
                     },

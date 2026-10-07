@@ -310,6 +310,25 @@ pub fn trim(value: &str) -> &str {
     value.trim_matches(is_js_whitespace)
 }
 
+/// Each run of JavaScript whitespace as one space, as
+/// `value.replace(/\s+/g, " ")` writes it.
+pub fn collapse_whitespace(value: &str) -> String {
+    let mut collapsed = String::with_capacity(value.len());
+    let mut in_whitespace = false;
+    for character in value.chars() {
+        if is_js_whitespace(character) {
+            if !in_whitespace {
+                collapsed.push(' ');
+            }
+            in_whitespace = true;
+        } else {
+            collapsed.push(character);
+            in_whitespace = false;
+        }
+    }
+    collapsed
+}
+
 /// ArkType's `string.capitalize` morph: the first UTF-16 unit uppercased,
 /// the rest unchanged.
 pub fn capitalize(value: &str) -> String {

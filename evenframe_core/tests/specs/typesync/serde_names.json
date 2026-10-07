@@ -9,8 +9,7 @@
         { "field_name": "zip_code", "field_type": "String", "wire": { "serde": "zip-code" }, "validators": [], "always_regenerate": false },
         { "field_name": "nickname", "field_type": { "Option": "String" }, "wire": { "serde_optional": true }, "validators": [], "always_regenerate": false },
         { "field_name": "status", "field_type": { "Other": "Status" }, "validators": [], "always_regenerate": false }
-      ],
-      "validators": []
+      ]
     }
   },
   "enums": {

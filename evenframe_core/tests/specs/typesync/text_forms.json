@@ -1,0 +1,20 @@
+{
+  "description": "Values serde reads and writes as text: numbers, a URL, instants and JSON, alone, optional, in a list and in a map, one with a validator on its value",
+  "structs": {
+    "Import": {
+      "struct_name": "Import",
+      "fields": [
+        { "field_name": "count", "field_type": { "FromText": "I64" }, "validators": [{ "NumberValidator": { "GreaterThanOrEqualTo": 0.0 } }], "always_regenerate": false },
+        { "field_name": "level", "field_type": { "FromText": "U8" }, "validators": [], "always_regenerate": false },
+        { "field_name": "ratio", "field_type": { "Option": { "FromText": "F64" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "source", "field_type": { "FromText": "Url" }, "validators": [], "always_regenerate": false },
+        { "field_name": "started", "field_type": "IsoDate", "validators": [], "always_regenerate": false },
+        { "field_name": "finished", "field_type": { "Option": "EpochMillis" }, "validators": [], "always_regenerate": false },
+        { "field_name": "settings", "field_type": { "JsonText": { "Vec": "String" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "sizes", "field_type": { "Vec": { "FromText": "U32" } }, "validators": [], "always_regenerate": false },
+        { "field_name": "totals", "field_type": { "HashMap": ["String", { "FromText": "I32" }] }, "validators": [], "always_regenerate": false }
+      ]
+    }
+  },
+  "enums": {}
+}

@@ -85,6 +85,9 @@ impl<'a> SurrealdbTypeMapper<'a> {
             FieldType::F32 | FieldType::F64 => "float".to_string(),
             FieldType::Unit => "null".to_string(),
             FieldType::Duration => "duration".to_string(),
+            FieldType::FromText(kind) => kind.surql_type().to_string(),
+            FieldType::IsoDate | FieldType::EpochMillis => "datetime".to_string(),
+            FieldType::JsonText(inner) => self.field_type_to_surql_inner(inner),
             FieldType::Option(inner) => self
                 .option_none
                 .surql_type(&self.field_type_to_surql_inner(inner)),

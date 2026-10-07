@@ -76,6 +76,23 @@ impl Decimal {
     }
 }
 
+/// The decimal's canonical form: no leading or trailing zeros, no `-0`.
+impl std::fmt::Display for Decimal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sign = if self.negative { "-" } else { "" };
+        let whole = if self.whole.is_empty() {
+            "0"
+        } else {
+            &self.whole
+        };
+        if self.fraction.is_empty() {
+            write!(formatter, "{sign}{whole}")
+        } else {
+            write!(formatter, "{sign}{whole}.{}", self.fraction)
+        }
+    }
+}
+
 impl PartialOrd for Decimal {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -161,24 +178,9 @@ impl Validator {
     }
 }
 
-/// Checks a field's validators as a whole: every bound parses, and a parse
-/// morph, which changes how the field is read, comes first and only once.
+/// Checks a field's validators as a whole: every bound parses.
 pub fn check_validators(validators: &[Validator]) -> Result<(), String> {
-    for (index, validator) in validators.iter().enumerate() {
-        validator.check_bounds()?;
-        if index > 0
-            && let Validator::StringValidator(string_validator) = validator
-            && matches!(
-                string_validator.rule(),
-                super::string_rules::StringRule::Parse(_)
-            )
-        {
-            return Err(format!(
-                "{string_validator:?} parses the field's input, so it must be the first validator and appear once"
-            ));
-        }
-    }
-    Ok(())
+    validators.iter().try_for_each(Validator::check_bounds)
 }
 
 #[cfg(test)]

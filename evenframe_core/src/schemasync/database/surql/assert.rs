@@ -1,5 +1,6 @@
 use crate::schemasync::format::Format;
 use crate::validator::keywords::{self, NormalForm};
+use crate::validator::text_pattern::{Anchoring, TextPattern};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
     NumberValidator, StringValidator, Validator,
@@ -91,6 +92,22 @@ fn js_assert(value_var: &str, body: &str) -> String {
 /// shared patterns natively; predicates without a native form run as
 /// JavaScript when scripting is allowed. Morphs transform input rather than
 /// constrain storage, so they assert nothing.
+/// A format argument as the schema checks it: Rust's engine matching its
+/// body anchored where the validator looks. A JavaScript-only pattern never
+/// reaches the schema.
+fn format_argument(value_var: &str, pattern: &TextPattern, anchoring: Anchoring) -> Option<String> {
+    match pattern.regex(anchoring) {
+        (source, Some(_)) => {
+            error!(
+                "the JavaScript pattern `{source}` reached the schema, which runs Rust's engine; \
+                 #[typesync(validators(...))] never applies to schemasync"
+            );
+            None
+        }
+        (source, None) => Some(matches(value_var, &source)),
+    }
+}
+
 fn string_assertion(
     validator: &StringValidator,
     value_var: &str,
@@ -138,10 +155,10 @@ fn string_assertion(
         StringValidator::IpV6 => Some(matches(value_var, keywords::IPV6)),
         StringValidator::Json => script(JSON_JS),
         StringValidator::LowerPreformatted => Some(matches(value_var, keywords::LOWER)),
-        StringValidator::NormalizeNFCPreformatted => normalized_js(NormalForm::Nfc),
-        StringValidator::NormalizeNFDPreformatted => normalized_js(NormalForm::Nfd),
-        StringValidator::NormalizeNFKCPreformatted => normalized_js(NormalForm::Nfkc),
-        StringValidator::NormalizeNFKDPreformatted => normalized_js(NormalForm::Nfkd),
+        StringValidator::NormalizeNfcPreformatted => normalized_js(NormalForm::Nfc),
+        StringValidator::NormalizeNfdPreformatted => normalized_js(NormalForm::Nfd),
+        StringValidator::NormalizeNfkcPreformatted => normalized_js(NormalForm::Nfkc),
+        StringValidator::NormalizeNfkdPreformatted => normalized_js(NormalForm::Nfkd),
         StringValidator::Numeric => Some(matches(value_var, keywords::NUMERIC)),
         StringValidator::Regex => script(REGEX_JS),
         StringValidator::Semver => Some(matches(value_var, keywords::SEMVER)),
@@ -180,18 +197,27 @@ fn string_assertion(
         StringValidator::MinLength(length) => Some(format!("string::len({value_var}) >= {length}")),
         StringValidator::MaxLength(length) => Some(format!("string::len({value_var}) <= {length}")),
         StringValidator::NonEmpty => Some(format!("string::len({value_var}) > 0")),
-        StringValidator::StartsWith(prefix) => Some(format!(
+        StringValidator::StartsWith(TextPattern::Text(prefix)) => Some(format!(
             "string::starts_with({value_var}, \"{}\")",
             escape_surql_string(prefix)
         )),
-        StringValidator::EndsWith(suffix) => Some(format!(
+        StringValidator::EndsWith(TextPattern::Text(suffix)) => Some(format!(
             "string::ends_with({value_var}, \"{}\")",
             escape_surql_string(suffix)
         )),
-        StringValidator::Includes(substring) => Some(format!(
+        StringValidator::Includes(TextPattern::Text(substring)) => Some(format!(
             "string::contains({value_var}, \"{}\")",
             escape_surql_string(substring)
         )),
+        StringValidator::StartsWith(pattern @ TextPattern::Format(_)) => {
+            format_argument(value_var, pattern, Anchoring::Start)
+        }
+        StringValidator::EndsWith(pattern @ TextPattern::Format(_)) => {
+            format_argument(value_var, pattern, Anchoring::End)
+        }
+        StringValidator::Includes(pattern @ TextPattern::Format(_)) => {
+            format_argument(value_var, pattern, Anchoring::Anywhere)
+        }
         StringValidator::Trimmed => script("return v.trim() === v;")
             .or_else(|| Some(format!("{value_var} = string::trim({value_var})"))),
         StringValidator::Lowercased => {
@@ -202,24 +228,7 @@ fn string_assertion(
         }
         StringValidator::Capitalized => script(CAPITALIZED_JS),
         StringValidator::Uncapitalized => script(UNCAPITALIZED_JS),
-        StringValidator::String
-        | StringValidator::StringEmbedded(_)
-        | StringValidator::Trim
-        | StringValidator::Lower
-        | StringValidator::Upper
-        | StringValidator::Capitalize
-        | StringValidator::Normalize
-        | StringValidator::NormalizeNFC
-        | StringValidator::NormalizeNFD
-        | StringValidator::NormalizeNFKC
-        | StringValidator::NormalizeNFKD => None,
-        StringValidator::IntegerParse
-        | StringValidator::NumericParse
-        | StringValidator::DateParse
-        | StringValidator::DateIsoParse
-        | StringValidator::DateEpochParse
-        | StringValidator::JsonParse
-        | StringValidator::UrlParse => None,
+        StringValidator::String => None,
     }
 }
 
@@ -297,7 +306,7 @@ pub fn generate_assert_from_validators(
                     "type::is_int({value_var}) AND {value_var} >= 0 AND {value_var} <= 255"
                 )),
                 // NaN never equals itself, so self-equality is a native NaN guard.
-                NumberValidator::NonNaN => assertions.push(format!("{value_var} = {value_var}")),
+                NumberValidator::NonNan => assertions.push(format!("{value_var} = {value_var}")),
                 NumberValidator::Finite if allow_scripting => assertions.push(js_assert(
                     value_var,
                     "return typeof v === 'number' ? Number.isFinite(v) : true;",
@@ -584,9 +593,15 @@ mod tests {
         // Quotes inside the argument must be escaped.
         assert_eq!(
             gen_assert(Validator::StringValidator(StringValidator::StartsWith(
-                "a\"b".to_string()
+                "a\"b".into()
             ))),
             "string::starts_with($value, \"a\\\"b\")"
+        );
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::Includes(
+                crate::validator::text_pattern::TextPattern::Format(Format::Digit)
+            ))),
+            "string::matches($value, \"(?:[0-9])\")"
         );
         assert_eq!(
             gen_assert(Validator::StringValidator(StringValidator::Literal(
@@ -655,21 +670,11 @@ mod tests {
     }
 
     #[test]
-    fn string_transformations_produce_nothing() {
-        for v in [
-            StringValidator::String,
-            StringValidator::Trim,
-            StringValidator::Lower,
-            StringValidator::Upper,
-            StringValidator::Capitalize,
-            StringValidator::UrlParse,
-            StringValidator::IntegerParse,
-            StringValidator::JsonParse,
-            StringValidator::DateParse,
-            StringValidator::Normalize,
-        ] {
-            assert_eq!(gen_assert(Validator::StringValidator(v)), "");
-        }
+    fn any_string_produces_nothing() {
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::String)),
+            ""
+        );
     }
 
     #[test]
@@ -704,7 +709,7 @@ mod tests {
             "type::is_int($value) AND $value >= 0 AND $value <= 255"
         );
         assert_eq!(
-            gen_assert(Validator::NumberValidator(NumberValidator::NonNaN)),
+            gen_assert(Validator::NumberValidator(NumberValidator::NonNan)),
             "$value = $value"
         );
         assert_eq!(

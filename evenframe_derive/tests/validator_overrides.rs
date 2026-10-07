@@ -81,9 +81,7 @@ fn each_pipeline_view_holds_its_own_validators() {
     );
 
     let schema = tables_surql(
-        &schemasync.tables,
-        &schemasync.objects,
-        &schemasync.enums,
+        &schemasync,
         &ForeignTypeRegistry::from_config(&BTreeMap::new()),
         false,
     )

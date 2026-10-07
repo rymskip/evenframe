@@ -12,8 +12,10 @@ export interface Profile {
   position: Pair;
   marker: Marker;
   status: StatusCode;
+  /** @endec({ normalize: ["trim"] }) */
   title: NonEmptyString;
-  age: Age;
+  /** @endec({ as: "DisplayFromStr", validate: ["greaterThanOrEqualTo(18)"] }) */
+  age: number;
 }
 
 /** @derive(Decode) */
@@ -22,11 +24,10 @@ export type Status =
 	| "Active"
 	| "Inactive";
 
-export type Age = $Newtype<number>;
-
-/** @endec({ validate: ["greaterThanOrEqualTo(0)"] }) */
+/** @endec({ as: "DisplayFromStr", validate: ["greaterThanOrEqualTo(0)"] }) */
 export type Count = $Newtype<number>;
 
+/** @endec({ normalize: ["trim", "lowercase"] }) */
 export type Handle = $Newtype<NonEmptyString>;
 
 export type Label = $Newtype<string>;

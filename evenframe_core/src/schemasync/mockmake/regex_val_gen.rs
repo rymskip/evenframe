@@ -5,7 +5,7 @@
 //!
 //! # Example
 //! ```ignore
-//! use maker::RegexValGen;
+//! use evenframe_core::schemasync::mockmake::regex_val_gen::RegexValGen;
 //!
 //! let mut generator = RegexValGen::new();
 //! let result = generator.generate(r"[a-z]{3}\d{2}").unwrap();
@@ -33,7 +33,6 @@ const DEFAULT_REPEAT_MAX: usize = 10;
 pub enum MakerError {
     InvalidPattern(String),
     InvalidQuantifier(String),
-    InvalidCharacterRange { start: char, end: char },
     UnmatchedBracket(char),
     EmptyAlternation,
 }
@@ -43,9 +42,6 @@ impl fmt::Display for MakerError {
         match self {
             Self::InvalidPattern(msg) => write!(f, "Invalid pattern: {}", msg),
             Self::InvalidQuantifier(quantifier) => write!(f, "Invalid quantifier: {}", quantifier),
-            Self::InvalidCharacterRange { start, end } => {
-                write!(f, "Invalid character range: {}-{}", start, end)
-            }
             Self::UnmatchedBracket(ch) => write!(f, "Unmatched bracket: '{}'", ch),
             Self::EmptyAlternation => write!(f, "Empty alternation pattern"),
         }
@@ -296,7 +292,13 @@ impl RegexValGen {
         let mut class_content = String::new();
         let mut bracket_count = 1;
 
-        for ch in chars.into_iter() {
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                // An escaped bracket is a character of the class.
+                class_content.push(ch);
+                class_content.extend(chars.next());
+                continue;
+            }
             if ch == '[' {
                 bracket_count += 1;
             } else if ch == ']' {
@@ -338,55 +340,7 @@ impl RegexValGen {
                 chars.push(' ');
                 RegexComponent::CharClass(chars)
             }
-            content if content.contains('-') && content.len() == 3 => {
-                let chars: Vec<char> = content.chars().collect();
-                if chars[1] == '-' {
-                    let start = chars[0];
-                    let end = chars[2];
-                    if start > end {
-                        return Err(MakerError::InvalidCharacterRange { start, end });
-                    }
-                    RegexComponent::CharRange(start, end)
-                } else {
-                    RegexComponent::CharClass(content.chars().collect())
-                }
-            }
-            _ => {
-                // Handle character sets like [s.\-] or specific character lists
-                let mut result_chars = Vec::new();
-                let mut content_chars = class_content.chars().peekable();
-
-                while let Some(ch) = content_chars.next() {
-                    match ch {
-                        '\\' => {
-                            // Handle escaped characters
-                            if let Some(escaped) = content_chars.next() {
-                                match escaped {
-                                    's' => {
-                                        result_chars.push(' ');
-                                        result_chars.push('\t');
-                                    }
-                                    'd' => {
-                                        // Add digits
-                                        result_chars.extend('0'..='9');
-                                    }
-                                    '-' | '.' | '+' | '[' | ']' => {
-                                        result_chars.push(escaped);
-                                    }
-                                    _ => result_chars.push(escaped),
-                                }
-                            }
-                        }
-                        _ => result_chars.push(ch),
-                    }
-                }
-
-                // Remove duplicates
-                result_chars.sort();
-                result_chars.dedup();
-
-                RegexComponent::CharClass(result_chars)
-            }
+            content => RegexComponent::CharClass(class_chars(content)?),
         };
         Ok(component)
     }
@@ -674,6 +628,41 @@ impl ParsedPattern {
 
 /// `components` with each run of adjacent literals joined into one, which
 /// the parser emits a character at a time.
+/// The characters a bracketed class's `content` admits, as Rust's regex
+/// engine reads it, negations and ranges included. Generated text stays
+/// printable ASCII where the class allows any, so a negated class yields
+/// ordinary characters rather than arbitrary Unicode.
+fn class_chars(content: &str) -> Result<Vec<char>> {
+    use regex_syntax::hir::{Class, HirKind};
+    let class = format!("[{content}]");
+    let hir = regex_syntax::Parser::new()
+        .parse(&class)
+        .map_err(|error| MakerError::InvalidPattern(format!("{class}: {error}")))?;
+    let HirKind::Class(Class::Unicode(ranges)) = hir.kind() else {
+        return Err(MakerError::InvalidPattern(format!(
+            "{class} is not a character class"
+        )));
+    };
+    let printable: Vec<char> = ranges
+        .iter()
+        .flat_map(|range| range.start().max(' ')..=range.end().min('~'))
+        .collect();
+    if !printable.is_empty() {
+        return Ok(printable);
+    }
+    let any: Vec<char> = ranges
+        .iter()
+        .flat_map(|range| range.start()..=range.end())
+        .take(256)
+        .collect();
+    if any.is_empty() {
+        return Err(MakerError::InvalidPattern(format!(
+            "{class} admits no character"
+        )));
+    }
+    Ok(any)
+}
+
 fn merge_literals(components: Vec<RegexComponent>) -> Vec<RegexComponent> {
     let mut merged: Vec<RegexComponent> = Vec::with_capacity(components.len());
     for component in components {
@@ -780,6 +769,37 @@ fn write_component(component: &RegexComponent, rng: &mut impl RngExt, out: &mut 
 #[cfg(test)]
 mod tests {
     use super::RegexValGen;
+
+    #[test]
+    fn classes_generate_the_characters_they_admit() {
+        let mut value_generator = RegexValGen::new();
+        for _ in 0..200 {
+            let hash = value_generator.generate("^[0-9a-f]{64}$").expect("a hash");
+            assert!(
+                hash.chars().all(|character| character.is_ascii_hexdigit()),
+                "{hash}"
+            );
+            let path = value_generator
+                .generate("^[^/]{6}$")
+                .expect("text without a slash");
+            assert!(
+                !path.contains('/')
+                    && path
+                        .chars()
+                        .all(|character| character.is_ascii_graphic() || character == ' '),
+                "{path}"
+            );
+            let symbol = value_generator
+                .generate(r"^[!-/:-@\[-\x60{-~]$")
+                .expect("a symbol");
+            assert!(
+                symbol
+                    .chars()
+                    .all(|character| character.is_ascii_punctuation()),
+                "{symbol}"
+            );
+        }
+    }
 
     #[test]
     fn test_literal_pattern() {

@@ -5,7 +5,7 @@
 
 use evenframe::Evenframe;
 use evenframe::registry::get_newtype_config;
-use evenframe::types::{FieldType, NewtypeKind};
+use evenframe::types::{FieldType, FromText, NewtypeKind};
 use evenframe::validator::validate::Validate;
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{SurrealValue, Value};
@@ -15,15 +15,12 @@ use surrealdb::types::{SurrealValue, Value};
 pub struct NonEmptyString(String);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
-#[validators(StringValidator::Trim, StringValidator::Lower)]
+#[morphs(trim, lower)]
 pub struct Handle(NonEmptyString);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
-#[validators(
-    StringValidator::IntegerParse,
-    NumberValidator::GreaterThanOrEqualTo(0.0)
-)]
-pub struct Count(i64);
+#[validators(NumberValidator::GreaterThanOrEqualTo(0.0))]
+pub struct Count(FromText<i64>);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
 #[serde(transparent)]
@@ -38,24 +35,18 @@ pub struct Plain(String);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
 pub struct Pair(String, u32);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
-pub struct Age(u8);
-
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
 pub struct Account {
     #[validators(StringValidator::MaxLength(5))]
     pub name: NonEmptyString,
-    #[validators(StringValidator::Trim)]
+    #[morphs(trim)]
     pub title: NonEmptyString,
-    #[validators(StringValidator::Lower)]
+    #[morphs(lower)]
     pub nickname: Option<NonEmptyString>,
     #[validators(NumberValidator::LessThan(100.0))]
     pub visits: Count,
-    #[validators(
-        StringValidator::IntegerParse,
-        NumberValidator::GreaterThanOrEqualTo(18.0)
-    )]
-    pub age: Age,
+    #[validators(NumberValidator::GreaterThanOrEqualTo(18.0))]
+    pub age: FromText<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
@@ -85,7 +76,7 @@ fn a_newtype_reads_its_value_through_its_validators() {
     let error = read::<Handle>(r#""   ""#).unwrap_err();
     assert!(error.starts_with("must be a non-empty string"), "{error}");
 
-    assert_eq!(read::<Count>(r#""42""#), Ok(Count(42)));
+    assert_eq!(read::<Count>(r#""42""#), Ok(Count(FromText(42))));
     assert!(read::<Count>(r#""-1""#).is_err());
     assert!(read::<Count>(r#""forty""#).is_err());
 }
@@ -128,9 +119,9 @@ fn a_newtype_is_built_from_its_value_through_its_validators() {
     );
     assert!(Handle::try_from(NonEmptyString("   ".to_owned())).is_err());
 
-    // A parse reads text, so building from the parsed value skips it.
-    assert_eq!(Count::try_from(42), Ok(Count(42)));
-    assert!(Count::try_from(-1).is_err());
+    // A text form is built from its value, which is checked as read.
+    assert_eq!(Count::try_from(FromText(42)), Ok(Count(FromText(42))));
+    assert!(Count::try_from(FromText(-1)).is_err());
 
     assert_eq!(
         Label::try_from("ab").map(|label| label.as_str().to_owned()),
@@ -233,8 +224,8 @@ fn a_field_validator_checks_the_value_a_newtype_holds() {
             name: NonEmptyString("Ada".to_owned()),
             title: NonEmptyString("Lead".to_owned()),
             nickname: Some(NonEmptyString("ada".to_owned())),
-            visits: Count(3),
-            age: Age(30),
+            visits: Count(FromText(3)),
+            age: FromText(30),
         })
     );
 
@@ -253,8 +244,8 @@ fn a_field_validator_checks_the_value_a_newtype_holds() {
         name: NonEmptyString("Adalyn".to_owned()),
         title: NonEmptyString("Lead".to_owned()),
         nickname: None,
-        visits: Count(3),
-        age: Age(17),
+        visits: Count(FromText(3)),
+        age: FromText(17),
     };
     let error = account.validate().unwrap_err();
     let paths: Vec<&str> = error

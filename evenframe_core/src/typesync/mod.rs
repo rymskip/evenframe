@@ -8,7 +8,6 @@ pub mod arktype;
 #[cfg(feature = "typesync")]
 pub mod checks;
 #[cfg(feature = "typesync")]
-pub mod default_value;
 #[cfg(feature = "typesync")]
 pub mod doc_comment;
 #[cfg(feature = "effect")]

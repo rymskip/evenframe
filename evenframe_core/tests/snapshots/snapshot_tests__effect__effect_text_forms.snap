@@ -1,0 +1,31 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Import extends Schema.Class<Import>("Import")( { 
+  count: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => "must be a well-formed integer string" })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(-9007199254740991, 9007199254740991, { message: () => "must be an integer from -9007199254740991 to 9007199254740991" })).pipe(Schema.greaterThanOrEqualTo(0, { message: () => `'Count' must be greater than or equal to 0` }))).annotations({ missingMessage: () => `'Count' is required` }),
+  level: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => "must be a well-formed integer string" })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(0, 255, { message: () => "must be an integer from 0 to 255" }))).annotations({ missingMessage: () => `'Level' is required` }),
+  ratio: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.pattern(new RegExp("^(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?|-(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)|\\.[0-9]+)$"), { message: () => "must be a well-formed numeric string" })).pipe(Schema.compose(Schema.NumberFromString)), null),
+  source: Schema.propertySignature(Schema.URL).annotations({ missingMessage: () => `'Source' is required` }),
+  started: Schema.propertySignature(Schema.String.pipe(Schema.pattern(new RegExp("^([+-]?\\d{4}(?!\\d{2}\\b))((-?)((0[1-9]|1[0-2])(\\3([12]\\d|0[1-9]|3[01]))?|W([0-4]\\d|5[0-3])(-?[1-7])?|(00[1-9]|0[1-9]\\d|[12]\\d{2}|3([0-5]\\d|6[1-6])))(T((([01]\\d|2[0-3])((:?)[0-5]\\d)?|24:?00)([,.]\\d+(?!:))?)?(\\17[0-5]\\d([,.]\\d+)?)?([Zz]|([+-])([01]\\d|2[0-3]):?([0-5]\\d)?)?)?)?$"), { message: () => "must be an ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date" })).pipe(Schema.compose(Schema.Date))).annotations({ missingMessage: () => `'Started' is required` }),
+  finished: Schema.OptionFromNullishOr(Schema.String.pipe(Schema.filter((value) => new RegExp("^(?:0|-?[1-9][0-9]*)$").test(value) && Math.abs(Number.parseInt(value, 10)) <= 8640000000000000, { message: () => "must be an integer string representing a safe Unix timestamp" })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.compose(Schema.DateFromNumber)), null),
+  settings: Schema.propertySignature(Schema.parseJson(Schema.Array(Schema.String))).annotations({ missingMessage: () => `'Settings' is required` }),
+  sizes: Schema.propertySignature(Schema.Array(Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => "must be a well-formed integer string" })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(0, 4294967295, { message: () => "must be an integer from 0 to 4294967295" })))).annotations({ missingMessage: () => `'Sizes' is required` }),
+  totals: Schema.propertySignature(Schema.Record({ key: Schema.String, value: Schema.String.pipe(Schema.pattern(new RegExp("^(?:0|-?[1-9][0-9]*)$"), { message: () => "must be a well-formed integer string" })).pipe(Schema.compose(Schema.NumberFromString)).pipe(Schema.between(-2147483648, 2147483647, { message: () => "must be an integer from -2147483648 to 2147483647" })) }).annotations({ parseOptions: { onExcessProperty: "error" } })).annotations({ missingMessage: () => `'Totals' is required` })
+}) {[key: string]: unknown}
+
+
+export interface ImportEncoded {
+  readonly count: string;
+  readonly level: string;
+  readonly ratio: string | null | undefined;
+  readonly source: string;
+  readonly started: string;
+  readonly finished: string | null | undefined;
+  readonly settings: string;
+  readonly sizes: ReadonlyArray<string>;
+  readonly totals: Record<string, string>;
+}
+
+
+export type ImportType = typeof Import.Type;

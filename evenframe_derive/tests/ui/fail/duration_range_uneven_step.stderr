@@ -1,0 +1,5 @@
+error: Failed to parse format attribute for field 'length': steps of PT25M from PT1H do not land on PT2H: the step must divide the range
+ --> tests/ui/fail/duration_range_uneven_step.rs:8:14
+  |
+8 |     #[format(duration_ns(min = "PT1H", max = "PT2H", step = "PT25M"))]
+  |              ^^^^^^^^^^^

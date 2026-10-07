@@ -1,24 +1,22 @@
-//! Deserializing through the derive applies each field's validators: checks
-//! reject, morphs transform, and parse morphs read a string into the field's
-//! type.
+//! Deserializing through the derive applies each field's morphs and
+//! validators: morphs rewrite, checks reject, and a text-form type reads its
+//! value from text.
 
-use chrono::{DateTime, Utc};
 use evenframe::Evenframe;
+use evenframe::types::{FromText, IsoDate};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Evenframe)]
 pub struct Signup {
-    #[validators(StringValidator::Trim, StringValidator::Lower, StringValidator::Email)]
+    #[morphs(trim, lower)]
+    #[validators(StringValidator::Email)]
     pub email: String,
-    #[validators(
-        StringValidator::IntegerParse,
-        NumberValidator::GreaterThanOrEqualTo(13.0)
-    )]
-    pub age: i64,
-    #[validators(StringValidator::MinLength(2), StringValidator::Capitalize)]
+    #[validators(NumberValidator::GreaterThanOrEqualTo(13.0))]
+    pub age: FromText<i64>,
+    #[morphs(capitalize)]
+    #[validators(StringValidator::MinLength(2))]
     pub nickname: Option<String>,
-    #[validators(StringValidator::DateIsoParse)]
-    pub joined: DateTime<Utc>,
+    pub joined: IsoDate,
     #[validators(ArrayValidator::MaxItems(2))]
     pub tags: Vec<String>,
 }
@@ -38,12 +36,16 @@ fn signup(fields: serde_json::Value) -> Result<Signup, serde_json::Error> {
 }
 
 #[test]
-fn morphs_transform_and_parses_produce_the_field_type() {
+fn morphs_rewrite_and_text_forms_read_their_value() {
     let signup = signup(serde_json::json!({})).unwrap();
     assert_eq!(signup.email, "someone@example.com");
-    assert_eq!(signup.age, 42);
+    assert_eq!(signup.age, FromText(42));
     assert_eq!(signup.nickname.as_deref(), Some("Bo"));
-    assert_eq!(signup.joined.to_rfc3339(), "2024-02-29T10:15:00+00:00");
+    assert_eq!(signup.joined.0.to_rfc3339(), "2024-02-29T10:15:00+00:00");
+    assert_eq!(
+        serde_json::to_value(&signup).unwrap()["joined"],
+        "2024-02-29T10:15:00.000Z"
+    );
 }
 
 #[test]
@@ -64,7 +66,7 @@ fn checks_reject_with_the_field_name() {
 
     let error = signup(serde_json::json!({ "age": "4.2" })).unwrap_err();
     assert!(
-        error.to_string().starts_with("age: must be an integer"),
+        error.to_string().starts_with("must be an integer"),
         "{error}"
     );
 
@@ -251,7 +253,8 @@ fn validate_checks_a_built_value_and_everything_it_holds() {
 #[serde(tag = "variant")]
 pub enum Contact {
     Company {
-        #[validators(StringValidator::Trim, StringValidator::NonEmpty)]
+        #[morphs(trim)]
+        #[validators(StringValidator::NonEmpty)]
         company_name: String,
     },
     Person {
@@ -326,4 +329,46 @@ fn validate_checks_a_built_enum_variant() {
     };
     assert!(named.validate().is_ok());
     assert!(Contact::Unknown.validate().is_ok());
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Reading {
+    #[morphs(collapse_whitespace, trim)]
+    pub label: String,
+    #[morphs(clamp = ("0", "10"), round = 1)]
+    pub level: f64,
+    #[morphs(clamp = ("1", "5"))]
+    pub rating: u8,
+    #[morphs(unique, sort)]
+    pub tags: Vec<String>,
+    #[morphs(clamp = ("0", "99.5"))]
+    pub price: String,
+}
+
+#[test]
+fn every_morph_family_rewrites_the_value_it_applies_to() {
+    let reading: Reading = serde_json::from_value(serde_json::json!({
+        "label": "  low \t  battery ",
+        "level": 12.345,
+        "rating": 9,
+        "tags": ["b", "a", "b"],
+        "price": "120.25",
+    }))
+    .unwrap();
+    assert_eq!(reading.label, "low battery");
+    assert_eq!(reading.level, 10.0);
+    assert_eq!(reading.rating, 5);
+    assert_eq!(reading.tags, vec!["a".to_owned(), "b".to_owned()]);
+    assert_eq!(reading.price, "99.5");
+
+    let rounded: Reading = serde_json::from_value(serde_json::json!({
+        "label": "x",
+        "level": 2.25,
+        "rating": 0,
+        "tags": [],
+        "price": "1",
+    }))
+    .unwrap();
+    assert_eq!(rounded.level, 2.3);
+    assert_eq!(rounded.rating, 1);
 }

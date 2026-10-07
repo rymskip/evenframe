@@ -1,8 +1,9 @@
 use crate::config::fill;
 use crate::error::{EvenframeError, Result};
-use crate::types::{EnumRepresentation, FieldType, StructField, Variant, VariantData};
+use crate::types::{
+    EnumRepresentation, FieldType, StructField, TextFormKind, Variant, VariantData,
+};
 use crate::typesync::config::OutputKind;
-use crate::typesync::default_value::field_type_to_default_value;
 use crate::typesync::doc_comment::format_jsdoc;
 use crate::typesync::foreign_ts::{RecordLinkMapping, record_link_mapping};
 use crate::typesync::js_checks::{
@@ -10,10 +11,10 @@ use crate::typesync::js_checks::{
 };
 use crate::typesync::map_key::{BOOL_KEYS, MapKey};
 use crate::typesync::type_index::TypeIndex;
-use crate::validator::string_rules::StringRule;
+use crate::validator::morph::Morph;
 use crate::validator::{
     ArrayValidator, BigIntValidator, DateValidator, NumberValidator, StringValidator, Validator,
-    bounds,
+    ValueRules, bounds,
 };
 use convert_case::{Case, Casing};
 use tracing;
@@ -55,7 +56,7 @@ fn variant_to_arktype(
         }
         VariantData::DataStructureRef(field_type) => payload_arktype(
             field_type,
-            &variant.element_validators,
+            &ValueRules::elements(&variant.element_morphs, &variant.element_validators),
             variant.serde_name(),
             index,
             registry,
@@ -81,27 +82,29 @@ fn variant_to_arktype(
     })
 }
 
-/// A tuple payload with each element's validators applied, or a newtype
-/// payload with its one element's.
+/// A tuple payload with each element's morphs and validators applied, or a
+/// newtype payload with its one element's.
 fn payload_arktype(
     field_type: &FieldType,
-    element_validators: &[Vec<Validator>],
+    elements: &[ValueRules<'_>],
     owner: &str,
     index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
-    match (field_type, element_validators) {
+    match (field_type, elements) {
         (_, []) => field_type_to_arktype(field_type, index, registry),
-        (FieldType::Tuple(items), validators) if items.len() == validators.len() => {
+        (FieldType::Tuple(items), rules) if items.len() == rules.len() => {
             let elements = items
                 .iter()
-                .zip(validators)
+                .zip(rules)
                 .enumerate()
-                .map(|(position, (item, validators))| {
+                .map(|(position, (item, rules))| {
                     validated_arktype(
                         field_type_to_arktype(item, index, registry)?,
-                        validators,
+                        *rules,
+                        item,
+                        index,
                         &format!("{owner}.{position}"),
                         helpers,
                     )
@@ -109,15 +112,17 @@ fn payload_arktype(
                 .collect::<Result<Vec<_>>>()?;
             Ok(format!("[{}]", elements.join(", ")))
         }
-        (single, [validators]) => validated_arktype(
+        (single, [rules]) => validated_arktype(
             field_type_to_arktype(single, index, registry)?,
-            validators,
+            *rules,
+            single,
+            index,
             owner,
             helpers,
         ),
-        (_, validators) => Err(EvenframeError::config(format!(
+        (_, rules) => Err(EvenframeError::config(format!(
             "`{owner}` has validators for {} elements but holds {field_type:?}",
-            validators.len()
+            rules.len()
         ))),
     }
 }
@@ -178,6 +183,32 @@ fn field_type_to_arktype(
         // serde writes whole seconds and the nanoseconds past them, and
         // rejects any other key.
         FieldType::Duration => "{ '+': 'reject', secs: 'number.integer >= 0', nanos: '0 <= number.integer < 1000000000' }".to_string(),
+        FieldType::FromText(kind) => match (kind, kind.integer_range()) {
+            (_, Some((min, max))) => {
+                format!("['string.integer.parse', '|>', '{min} <= number <= {max}']")
+            }
+            (TextFormKind::F32 | TextFormKind::F64, None) => "'string.numeric.parse'".to_owned(),
+            (TextFormKind::Url, None) => "'string.url.parse'".to_owned(),
+            (
+                TextFormKind::I8
+                | TextFormKind::I16
+                | TextFormKind::I32
+                | TextFormKind::I64
+                | TextFormKind::Isize
+                | TextFormKind::U8
+                | TextFormKind::U16
+                | TextFormKind::U32
+                | TextFormKind::U64
+                | TextFormKind::Usize,
+                None,
+            ) => "'string.integer.parse'".to_owned(),
+        },
+        FieldType::JsonText(inner) => format!(
+            "['string.json.parse', '|>', {}]",
+            field_type_to_arktype(inner, index, registry)?
+        ),
+        FieldType::IsoDate => "'string.date.iso.parse'".to_owned(),
+        FieldType::EpochMillis => "'string.date.epoch.parse'".to_owned(),
 
         FieldType::Tuple(types) => format!(
             "[{}]",
@@ -325,7 +356,6 @@ pub fn generate_arktype_type_string(
     let mut output = String::new();
     let mut scope_output = String::new();
     let mut types_output = String::new();
-    let mut defaults_output = String::new();
     let mut helpers = Helpers::default();
 
     scope_output.push_str("export const bindings = scope({\n\n");
@@ -403,7 +433,6 @@ pub fn generate_arktype_type_string(
         }
 
         let mut entries = Vec::new();
-        let mut defaults = Vec::new();
         let mut held_values = Vec::new();
         let mut index_values = Vec::new();
         let mut intersections = Vec::new();
@@ -420,10 +449,6 @@ pub fn generate_arktype_type_string(
                             index,
                             registry,
                         )?);
-                        defaults.push(format!(
-                            "...{}",
-                            field_type_to_default_value(&field.field_type, index, registry)?
-                        ));
                     }
                 }
                 continue;
@@ -436,11 +461,6 @@ pub fn generate_arktype_type_string(
             let definition = field_arktype(field, index, registry, &mut helpers)?;
             held_values.push(definition.clone());
             entries.push(format!("{doc}  {}: {definition}", field_key(field)?));
-            defaults.push(format!(
-                "{}: {}",
-                object_key(&field.ts_name())?,
-                field_type_to_default_value(&field.field_type, index, registry)?
-            ));
         }
         if !index_values.is_empty() {
             // A key of the map may share an object with every named field, so
@@ -461,10 +481,6 @@ pub fn generate_arktype_type_string(
             format!("[{definition}, '&', {held}]")
         });
         scope_output.push_str(&format!("{type_name}: {definition},\n"));
-        defaults_output.push_str(&format!(
-            "export const default{type_name}: {type_name} = {{\n{}\n}};\n",
-            defaults.join(",\n")
-        ));
         types_output.push_str(&format!(
             "export type {} = typeof exported.{}.infer;\n",
             type_name, type_name
@@ -491,15 +507,17 @@ pub fn generate_arktype_type_string(
     }
     scope_output.push_str("\n});\n\n");
 
-    if helpers.compare_decimal {
+    if helpers.compare_decimal || helpers.morphs.compare_decimal {
         output.push_str(js_checks::COMPARE_DECIMAL);
+    }
+    if helpers.morphs.compare_code_points {
+        output.push_str(js_checks::COMPARE_CODE_POINTS);
     }
     if helpers.duration_nanos {
         output.push_str(js_checks::DURATION_NANOS);
     }
-    // The defaults are annotated with these types, so they are always emitted.
     output.push_str(&format!(
-        "{scope_output}const exported = bindings.export();\n\n{defaults_output}\n{types_output}"
+        "{scope_output}const exported = bindings.export();\n\n{types_output}"
     ));
 
     tracing::info!(
@@ -525,16 +543,17 @@ fn newtype_entries(
 ) -> Result<String> {
     let inner = payload_arktype(
         &newtype.inner,
-        &newtype.element_validators,
+        &ValueRules::elements(&newtype.element_morphs, &newtype.element_validators),
         type_name,
         index,
         registry,
         helpers,
     )?;
+    let rules = ValueRules::new(&newtype.morphs, &newtype.validators);
     let value = renewed(
-        validated_arktype(inner, &newtype.validators, type_name, helpers)?,
+        validated_arktype(inner, rules, &newtype.inner, index, type_name, helpers)?,
         &newtype.inner,
-        &newtype.validators,
+        rules,
         index,
         registry,
     )?;
@@ -568,6 +587,7 @@ fn newtype_entries(
 struct Helpers {
     compare_decimal: bool,
     duration_nanos: bool,
+    morphs: js_checks::MorphHelpers,
 }
 
 /// One validator as ArkType: a definition to intersect or pipe into, or a
@@ -585,22 +605,25 @@ fn field_arktype(
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
+    let rules = ValueRules::new(&field.morphs, &field.validators);
     let validated = |field_type: &FieldType, helpers: &mut Helpers| {
         renewed(
             validated_arktype(
                 field_type_to_arktype(field_type, index, registry)?,
-                &field.validators,
+                rules,
+                field_type,
+                index,
                 &field.field_name,
                 helpers,
             )?,
             field_type,
-            &field.validators,
+            rules,
             index,
             registry,
         )
     };
     match &field.field_type {
-        FieldType::Option(inner) if !field.validators.is_empty() => Ok(format!(
+        FieldType::Option(inner) if !rules.is_empty() => Ok(format!(
             "[[{}, '|', 'undefined'], '|', 'null']",
             validated(inner, helpers)?
         )),
@@ -608,21 +631,18 @@ fn field_arktype(
     }
 }
 
-/// `definition`, piped back into the newtype `value_type` names once a
-/// validator rewrote the value, which checks the newtype again and keeps its
+/// `definition`, piped back into the newtype `value_type` names once a morph
+/// or parse rewrote the value, which checks the newtype again and keeps its
 /// brand, as the Rust deserializer does.
 fn renewed(
     definition: String,
     value_type: &FieldType,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
     index: &TypeIndex,
     registry: &crate::types::ForeignTypeRegistry,
 ) -> Result<String> {
     match value_type {
-        FieldType::Other(name)
-            if validators.iter().any(Validator::rewrites)
-                && index.newtype_named(name).is_some() =>
-        {
+        FieldType::Other(name) if rules.rewrites() && index.newtype_named(name).is_some() => {
             Ok(format!(
                 "[{definition}, '|>', {}]",
                 field_type_to_arktype(value_type, index, registry)?
@@ -632,39 +652,48 @@ fn renewed(
     }
 }
 
-/// `base` constrained by `validators` in order. A parse morph replaces the
-/// input type with its keyword; after any morph, later steps pipe.
+/// `base` rewritten by `rules`' morphs, then constrained by its validators
+/// in order. A parse morph replaces the input type with its keyword; after
+/// any morph, later steps pipe.
 fn validated_arktype(
     base: String,
-    validators: &[Validator],
+    rules: ValueRules<'_>,
+    value_type: &FieldType,
+    index: &TypeIndex,
     field_name: &str,
     helpers: &mut Helpers,
 ) -> Result<String> {
-    bounds::check_validators(validators)
+    bounds::check_validators(rules.validators)
         .map_err(|problem| EvenframeError::config(format!("field '{field_name}': {problem}")))?;
     let mut definition = base;
-    let mut piped = false;
-    for validator in validators {
+    // A text form's definition parses, so what follows pipes its output.
+    let mut piped = index.underlying(value_type).reads_text();
+    for morph in rules.morphs {
+        let keyword = match morph {
+            Morph::StringMorph(string_morph) => string_morph.arktype_keyword(),
+            Morph::NumberMorph(_) | Morph::ArrayMorph(_) => None,
+        };
+        definition = match keyword {
+            Some(keyword) => format!("[{definition}, '|>', '{keyword}']"),
+            None => format!(
+                "[{definition}, '=>', (value: {}) => {}]",
+                js_checks::morph_parameter(index.underlying(value_type), index),
+                js_checks::morph_expression(
+                    morph,
+                    index.underlying(value_type),
+                    index,
+                    &mut helpers.morphs
+                )
+                .map_err(|error| EvenframeError::config(format!(
+                    "field '{field_name}': {error}"
+                )))?
+            ),
+        };
+        piped = true;
+    }
+    for validator in rules.validators {
         let steps = match validator {
-            Validator::StringValidator(string_validator) => match string_validator.rule() {
-                StringRule::Carrier => continue,
-                StringRule::Parse(_) => {
-                    let keyword = keyword(string_validator)?;
-                    definition = if matches!(string_validator, StringValidator::JsonParse) {
-                        format!("['{keyword}', '|>', {definition}]")
-                    } else {
-                        format!("'{keyword}'")
-                    };
-                    piped = true;
-                    continue;
-                }
-                StringRule::Transform(_) => {
-                    definition = format!("[{definition}, '|>', '{}']", keyword(string_validator)?);
-                    piped = true;
-                    continue;
-                }
-                StringRule::Check => vec![string_step(string_validator)?],
-            },
+            Validator::StringValidator(string_validator) => vec![string_step(string_validator)?],
             Validator::NumberValidator(number_validator) => number_steps(number_validator),
             Validator::ArrayValidator(array_validator) => vec![Step::Type(match array_validator {
                 ArrayValidator::MinItems(count) => format!("'unknown[] >= {count}'"),
@@ -695,12 +724,6 @@ fn validated_arktype(
         }
     }
     Ok(definition)
-}
-
-fn keyword(validator: &StringValidator) -> Result<&'static str> {
-    validator
-        .arktype_keyword()
-        .ok_or_else(|| EvenframeError::config(format!("{validator:?} has no ArkType keyword")))
 }
 
 fn string_step(validator: &StringValidator) -> Result<Step> {
@@ -738,7 +761,7 @@ fn number_steps(validator: &NumberValidator) -> Vec<Step> {
             range(format!("{} <= number <= {}", start.0, end.0))
         }
         NumberValidator::Int => range("number.integer".to_owned()),
-        NumberValidator::NonNaN => vec![Step::Narrow("!Number.isNaN(value)".to_owned())],
+        NumberValidator::NonNan => vec![Step::Narrow("!Number.isNaN(value)".to_owned())],
         NumberValidator::Finite => vec![Step::Narrow("Number.isFinite(value)".to_owned())],
         NumberValidator::Positive => range("number > 0".to_owned()),
         NumberValidator::NonNegative => range("number >= 0".to_owned()),

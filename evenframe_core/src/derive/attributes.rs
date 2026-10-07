@@ -14,6 +14,7 @@ use crate::{
             MockGenerationConfig,
             coordinate::Coordination,
             format::{CustomPattern, Format, PatternDialect},
+            mock_format::{DurationRange, MockFormat},
         },
     },
     types::EnumRepresentation,
@@ -1109,78 +1110,6 @@ fn parse_index_entry(
     })
 }
 
-pub fn parse_table_validators(attrs: &[Attribute]) -> Result<Vec<String>, syn::Error> {
-    info!(
-        "Starting table validators parsing for {} attributes",
-        attrs.len()
-    );
-    let mut validators = Vec::new();
-
-    for attr in attrs {
-        if attr.path().is_ident("validators") {
-            debug!("Found validators attribute");
-            let result: Result<syn::punctuated::Punctuated<Meta, syn::Token![,]>, _> =
-                attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated);
-
-            match result {
-                Ok(metas) => {
-                    for meta in metas {
-                        match meta {
-                            Meta::NameValue(nv) if nv.path.is_ident("custom") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(lit), ..
-                                }) = &nv.value
-                                {
-                                    let validator_value = lit.value();
-                                    debug!("Adding custom validator: {}", validator_value);
-                                    validators.push(validator_value);
-                                } else {
-                                    return Err(syn::Error::new(
-                                        nv.value.span(),
-                                        "The 'custom' parameter must be a string literal containing a validation expression.\n\nExample: #[validators(custom = \"$value > 0 AND $value < 100\")]",
-                                    ));
-                                }
-                            }
-                            Meta::NameValue(nv) => {
-                                let param_name = nv
-                                    .path
-                                    .get_ident()
-                                    .map(|i| i.to_string())
-                                    .unwrap_or_else(|| "unknown".to_string());
-                                return Err(syn::Error::new(
-                                    nv.path.span(),
-                                    format!(
-                                        "Unknown parameter '{}' in validators attribute.\n\nValid parameter is: custom\n\nExample: #[validators(custom = \"$value > 0\")]",
-                                        param_name
-                                    ),
-                                ));
-                            }
-                            _ => {
-                                return Err(syn::Error::new(
-                                    meta.span(),
-                                    "Invalid syntax in validators attribute.\n\nExpected format: #[validators(custom = \"validation_expression\")]",
-                                ));
-                            }
-                        }
-                    }
-                }
-                Err(err) => {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        format!(
-                            "Failed to parse validators attribute: {}\n\nExample usage:\n#[validators(custom = \"$value > 0\")]\n#[validators(custom = \"string::len($value) > 5\")]",
-                            err
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-
-    info!("Successfully parsed {} table validators", validators.len());
-    Ok(validators)
-}
-
 pub fn parse_relation_attribute(attrs: &[Attribute]) -> Result<Option<EdgeConfig>, syn::Error> {
     info!(
         "Starting relation attribute parsing for {} attributes",
@@ -1406,100 +1335,58 @@ pub fn parse_format_attribute(
     Ok(parse_format_attribute_bin(attrs)?.map(|format| quote! { #format }))
 }
 
-pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<Format>, syn::Error> {
-    use syn::{Expr, ExprCall, ExprPath, Path, PathSegment};
-
-    info!(
-        "Starting format attribute parsing for {} attributes",
-        attrs.len()
-    );
-    for attr in attrs {
-        if attr.path().is_ident("format") {
-            debug!("Found format attribute");
-            // Parse the attribute content as an expression
-            let expr: syn::Expr = attr.parse_args()
-                .map_err(|e| syn::Error::new(
-                    attr.span(),
-                    format!("Failed to parse format attribute: {}\n\nExamples:\n#[format(DateTime)]\n#[format(Url(\"example.com\"))]", e)
-                ))?;
-
-            // Transform the expression to add Format:: prefix if needed
-            let format_expr = match &expr {
-                // If it's just an identifier like DateTime, convert to Format::DateTime
-                Expr::Path(path_expr) if path_expr.path.segments.len() == 1 => {
-                    let variant = &path_expr.path.segments[0];
-                    let mut segments = syn::punctuated::Punctuated::new();
-                    segments.push(PathSegment::from(syn::Ident::new("Format", variant.span())));
-                    segments.push(variant.clone());
-                    Expr::Path(ExprPath {
-                        attrs: vec![],
-                        qself: None,
-                        path: Path {
-                            leading_colon: None,
-                            segments,
-                        },
-                    })
-                }
-                // If it's a call like Url("domain"), convert to Format::Url("domain")
-                Expr::Call(call_expr) => {
-                    if let Expr::Path(path_expr) = &*call_expr.func {
-                        if path_expr.path.segments.len() == 1 {
-                            let variant = &path_expr.path.segments[0];
-                            let mut segments = syn::punctuated::Punctuated::new();
-                            segments
-                                .push(PathSegment::from(syn::Ident::new("Format", variant.span())));
-                            segments.push(variant.clone());
-                            Expr::Call(ExprCall {
-                                attrs: call_expr.attrs.clone(),
-                                func: Box::new(Expr::Path(ExprPath {
-                                    attrs: vec![],
-                                    qself: None,
-                                    path: Path {
-                                        leading_colon: None,
-                                        segments,
-                                    },
-                                })),
-                                paren_token: call_expr.paren_token,
-                                args: call_expr.args.clone(),
-                            })
-                        } else {
-                            expr.clone()
-                        }
-                    } else {
-                        expr.clone()
-                    }
-                }
-                // Otherwise keep as is
-                _ => expr.clone(),
-            };
-
-            // Use the TryFrom implementation to parse the Format
-            match Format::try_from(&format_expr) {
-                Ok(Format::Custom(custom)) => {
-                    // Mock data generates from it in Rust's engine alone.
-                    return CustomPattern::parse(custom.as_str(), PatternDialect::Rust)
-                        .map(|custom| Some(Format::Custom(custom)))
-                        .map_err(|message| syn::Error::new(expr.span(), message));
-                }
-                Ok(format) => {
-                    debug!("Successfully parsed format: {:?}", format);
-                    return Ok(Some(format));
-                }
-                Err(e) => {
-                    error!("Failed to parse format expression: {}", e);
-                    return Err(syn::Error::new(
-                        expr.span(),
-                        format!(
-                            "{}\n\nValid formats:\n- Simple: DateTime, Date, Time, Currency, Percentage, Phone, Email, FirstName, LastName, CompanyName, PhoneNumber, ColorHex, JwtToken, Oklch, PostalCode\n- With parameter: Url(\"domain.com\")",
-                            e
-                        ),
-                    ));
-                }
-            }
-        }
+pub fn parse_format_attribute_bin(attrs: &[Attribute]) -> Result<Option<MockFormat>, syn::Error> {
+    let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident("format")) else {
+        return Ok(None);
+    };
+    let expr: syn::Expr = attr.parse_args().map_err(|error| {
+        syn::Error::new(
+            attr.span(),
+            format!(
+                "Failed to parse format attribute: {error}\n\nExamples:\n#[format(DateTime)]\n\
+                 #[format(Url(\"example.com\"))]\n\
+                 #[format(duration_ns(min = \"PT1H\", max = \"PT5H\", step = \"PT15M\"))]"
+            ),
+        )
+    })?;
+    if let Some(range) = DurationRange::from_attribute(&expr)? {
+        return Ok(Some(MockFormat::DurationNs(range)));
     }
-    debug!("No format attribute found");
-    Ok(None)
+    match Format::try_from(&qualified_format(&expr)) {
+        // Mock data generates from it in Rust's engine alone.
+        Ok(Format::Custom(custom)) => CustomPattern::parse(custom.as_str(), PatternDialect::Rust)
+            .map(|custom| Some(MockFormat::Format(Format::Custom(custom))))
+            .map_err(|message| syn::Error::new(expr.span(), message)),
+        Ok(format) => Ok(Some(MockFormat::Format(format))),
+        Err(error) => Err(syn::Error::new(
+            expr.span(),
+            format!(
+                "{error}\n\nA format names a `Format` variant, such as DateTime, Email, \
+                 PhoneNumber or Url(\"example.com\"), or a duration range, \
+                 duration_ns(min = \"PT1H\", max = \"PT5H\", step = \"PT15M\")"
+            ),
+        )),
+    }
+}
+
+/// `DateTime` and `Url("x")` name a `Format` variant without its path.
+fn qualified_format(expr: &syn::Expr) -> syn::Expr {
+    let mut qualified = expr.clone();
+    let path = match &mut qualified {
+        syn::Expr::Path(path_expr) => Some(&mut path_expr.path),
+        syn::Expr::Call(call) => match &mut *call.func {
+            syn::Expr::Path(path_expr) => Some(&mut path_expr.path),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(path) = path
+        && let Some(variant) = path.get_ident().cloned()
+    {
+        let format = syn::Ident::new("Format", variant.span());
+        path.segments.insert(0, syn::PathSegment::from(format));
+    }
+    qualified
 }
 
 #[cfg(test)]

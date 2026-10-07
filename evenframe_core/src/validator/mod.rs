@@ -1,8 +1,10 @@
 pub mod bounds;
 pub mod keywords;
+pub mod morph;
 pub mod portable_regex;
 pub mod runtime;
 pub mod string_rules;
+pub mod text_pattern;
 pub mod validate;
 
 use crate::schemasync::mockmake::format::Format;
@@ -11,7 +13,7 @@ use ordered_float::OrderedFloat;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use serde::{Deserialize, Serialize};
-use string_rules::StringRule;
+use text_pattern::TextPattern;
 use try_from_expr::TryFromExpr;
 
 #[derive(Debug, Clone, PartialEq, From, Eq, Hash, TryFromExpr, Serialize, Deserialize)]
@@ -23,6 +25,42 @@ pub enum Validator {
     BigIntValidator(BigIntValidator),
     BigDecimalValidator(BigDecimalValidator),
     DurationValidator(DurationValidator),
+}
+
+/// A value's morphs and validators, which run in that order.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValueRules<'a> {
+    pub morphs: &'a [morph::Morph],
+    pub validators: &'a [Validator],
+}
+
+impl<'a> ValueRules<'a> {
+    pub fn new(morphs: &'a [morph::Morph], validators: &'a [Validator]) -> Self {
+        Self { morphs, validators }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.morphs.is_empty() && self.validators.is_empty()
+    }
+
+    /// Whether the value is rewritten rather than only checked.
+    pub fn rewrites(&self) -> bool {
+        !self.morphs.is_empty()
+    }
+
+    /// Each tuple element's rules, as many as either list has, an element
+    /// missing from one list having none there.
+    pub fn elements(
+        morphs: &'a [Vec<morph::Morph>],
+        validators: &'a [Vec<Validator>],
+    ) -> Vec<ValueRules<'a>> {
+        (0..morphs.len().max(validators.len()))
+            .map(|position| ValueRules {
+                morphs: morphs.get(position).map_or(&[], Vec::as_slice),
+                validators: validators.get(position).map_or(&[], Vec::as_slice),
+            })
+            .collect()
+    }
 }
 
 /// Validators that replace a value's `#[validators(...)]` in one pipeline:
@@ -80,7 +118,7 @@ impl ToTokens for ValidatorOverrides {
     }
 }
 
-/// Describes various string validation and transformation _requirements.
+/// A check of a string value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, TryFromExpr, Serialize, Deserialize)]
 pub enum StringValidator {
     /// A string
@@ -98,13 +136,10 @@ pub enum StringValidator {
     /// Base64url-encoded
     Base64Url,
 
-    /// A morph from a string to capitalized
-    Capitalize,
-
     /// Capitalized
     CapitalizePreformatted,
 
-    /// A credit card number and a credit card number
+    /// A credit card number
     CreditCard,
 
     /// A string and a parsable date
@@ -113,17 +148,8 @@ pub enum StringValidator {
     /// An integer string representing a safe Unix timestamp
     DateEpoch,
 
-    /// A morph from an integer string representing a safe Unix timestamp to a Date
-    DateEpochParse,
-
     /// An ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date
     DateIso,
-
-    /// A morph from an ISO 8601 (YYYY-MM-DDTHH:mm:ss.sssZ) date to a Date
-    DateIsoParse,
-
-    /// A morph from a string and a parsable date to a Date
-    DateParse,
 
     /// Only digits 0-9
     Digits,
@@ -137,9 +163,6 @@ pub enum StringValidator {
     /// A well-formed integer string
     Integer,
 
-    /// A morph from a well-formed integer string to an integer
-    IntegerParse,
-
     /// An IP address
     Ip,
 
@@ -152,47 +175,23 @@ pub enum StringValidator {
     /// A JSON string
     Json,
 
-    /// Safe JSON string parser
-    JsonParse,
-
-    /// A morph from a string to only lowercase letters
-    Lower,
-
     /// Only lowercase letters
     LowerPreformatted,
 
-    /// A morph from a string to NFC-normalized unicode
-    Normalize,
-
-    /// A morph from a string to NFC-normalized unicode
-    NormalizeNFC,
-
     /// NFC-normalized unicode
-    NormalizeNFCPreformatted,
-
-    /// A morph from a string to NFD-normalized unicode
-    NormalizeNFD,
+    NormalizeNfcPreformatted,
 
     /// NFD-normalized unicode
-    NormalizeNFDPreformatted,
-
-    /// A morph from a string to NFKC-normalized unicode
-    NormalizeNFKC,
+    NormalizeNfdPreformatted,
 
     /// NFKC-normalized unicode
-    NormalizeNFKCPreformatted,
-
-    /// A morph from a string to NFKD-normalized unicode
-    NormalizeNFKD,
+    NormalizeNfkcPreformatted,
 
     /// NFKD-normalized unicode
-    NormalizeNFKDPreformatted,
+    NormalizeNfkdPreformatted,
 
     /// A well-formed numeric string
     Numeric,
-
-    /// A morph from a well-formed numeric string to a number
-    NumericParse,
 
     /// Checks that the value is itself a valid regular expression
     Regex,
@@ -200,23 +199,14 @@ pub enum StringValidator {
     /// A semantic version (see <https://semver.org/>)
     Semver,
 
-    /// A morph from a string to trimmed
-    Trim,
-
     /// Trimmed
     TrimPreformatted,
-
-    /// A morph from a string to only uppercase letters
-    Upper,
 
     /// Only uppercase letters
     UpperPreformatted,
 
     /// A string and a URL string
     Url,
-
-    /// A morph from a string and a URL string to a URL instance
-    UrlParse,
 
     /// A UUID
     Uuid,
@@ -247,8 +237,6 @@ pub enum StringValidator {
 
     Literal(String),
 
-    StringEmbedded(String),
-
     RegexLiteral(Format),
 
     Length(String),
@@ -262,14 +250,14 @@ pub enum StringValidator {
     /// Non-empty string (equivalent to MinLength(1))
     NonEmpty,
 
-    /// String starts with a specific prefix
-    StartsWith(String),
+    /// String starts with text or a format
+    StartsWith(TextPattern),
 
-    /// String ends with a specific suffix
-    EndsWith(String),
+    /// String ends with text or a format
+    EndsWith(TextPattern),
 
-    /// String includes a specific substring
-    Includes(String),
+    /// String includes text or a format
+    Includes(TextPattern),
 
     /// String has no leading or trailing whitespace (validation only)
     Trimmed,
@@ -308,7 +296,7 @@ pub enum NumberValidator {
     Int,
 
     /// Must not be NaN
-    NonNaN,
+    NonNan,
 
     /// Must be a finite number (not NaN, +Infinity, -Infinity)
     Finite,
@@ -448,79 +436,46 @@ pub enum DurationValidator {
     BetweenDuration(String, String),
 }
 
-/// What a validator does at runtime to a field's value: each holds an
-/// expression of type `Result<(), runtime::Rejection>`.
-pub enum RuntimeStep {
-    /// Checks the value in `place`.
-    Check(TokenStream),
-    /// Rewrites the value in `place`, which must be a mutable place.
-    Transform(TokenStream),
-    /// Carries data for the schema and checks nothing.
-    Nothing,
-}
-
 impl Validator {
-    /// This validator's runtime step on `place`, a place holding the field's
-    /// value. Parse morphs change how the field is read, so the derive
-    /// applies them there instead.
-    pub fn runtime_step(&self, place: &TokenStream) -> Result<RuntimeStep, String> {
+    /// This validator's runtime check on `place`, a place holding the field's
+    /// value, as an expression of type `Result<(), runtime::Rejection>`.
+    pub fn runtime_step(&self, place: &TokenStream) -> Result<TokenStream, String> {
         self.check_bounds()?;
-        let (validator_type, validator_value, call, transform) = match self {
-            Validator::StringValidator(validator) => match validator.rule() {
-                StringRule::Check => (
-                    quote! { StringValidator },
-                    quote! { #validator },
-                    quote! { check_string(&#place, &VALIDATOR) },
-                    false,
-                ),
-                StringRule::Transform(_) => (
-                    quote! { StringValidator },
-                    quote! { #validator },
-                    quote! { transform_string(&mut #place, &VALIDATOR) },
-                    true,
-                ),
-                StringRule::Carrier => return Ok(RuntimeStep::Nothing),
-                StringRule::Parse(_) => {
-                    return Err(format!(
-                        "{validator:?} parses the field's input, so it must come first and only once"
-                    ));
-                }
-            },
+        let (validator_type, validator_value, call) = match self {
+            Validator::StringValidator(validator) => (
+                quote! { StringValidator },
+                quote! { #validator },
+                quote! { check_string(&#place, &VALIDATOR) },
+            ),
             Validator::NumberValidator(validator) => (
                 quote! { NumberValidator },
                 quote! { #validator },
                 quote! { check_number(&#place, &VALIDATOR) },
-                false,
             ),
             Validator::ArrayValidator(validator) => (
                 quote! { ArrayValidator },
                 quote! { #validator },
                 quote! { check_items(&#place, &VALIDATOR) },
-                false,
             ),
             Validator::DateValidator(validator) => (
                 quote! { DateValidator },
                 quote! { #validator },
                 quote! { check_date(&#place, &VALIDATOR) },
-                false,
             ),
             Validator::BigIntValidator(validator) => (
                 quote! { BigIntValidator },
                 quote! { #validator },
                 quote! { check_big_int(&#place, &VALIDATOR) },
-                false,
             ),
             Validator::BigDecimalValidator(validator) => (
                 quote! { BigDecimalValidator },
                 quote! { #validator },
                 quote! { check_decimal(&#place, &VALIDATOR) },
-                false,
             ),
             Validator::DurationValidator(validator) => (
                 quote! { DurationValidator },
                 quote! { #validator },
                 quote! { check_duration(&#place, &VALIDATOR) },
-                false,
             ),
         };
         let expression = quote! {
@@ -530,11 +485,7 @@ impl Validator {
                 ::evenframe::validator::runtime::#call
             }
         };
-        Ok(if transform {
-            RuntimeStep::Transform(expression)
-        } else {
-            RuntimeStep::Check(expression)
-        })
+        Ok(expression)
     }
 }
 
@@ -627,16 +578,6 @@ pub fn parse_duration_to_nanos(s: &str) -> Option<i128> {
 }
 
 impl Validator {
-    /// Whether this validator rewrites the value rather than checking it: a
-    /// parse morph or a transform.
-    pub fn rewrites(&self) -> bool {
-        matches!(
-            self,
-            Validator::StringValidator(validator)
-                if matches!(validator.rule(), StringRule::Parse(_) | StringRule::Transform(_))
-        )
-    }
-
     /// This validator in words, for messages about the values it accepts.
     pub fn describe(&self) -> String {
         match self {
@@ -661,7 +602,7 @@ impl Validator {
                 NumberValidator::Uint8 => "an integer from 0 to 255".to_string(),
                 NumberValidator::MultipleOf(divisor) => format!("a multiple of {}", divisor.0),
                 NumberValidator::Finite => "a finite number".to_string(),
-                NumberValidator::NonNaN => "a number that is not NaN".to_string(),
+                NumberValidator::NonNan => "a number that is not NaN".to_string(),
             },
             Validator::ArrayValidator(array) => match array {
                 ArrayValidator::MinItems(count) => format!("at least {count} items"),
@@ -747,7 +688,7 @@ impl Validator {
         }
         match (self, value) {
             (Validator::StringValidator(validator), MockValue::Str(text)) => {
-                validator.holds_for(text)
+                validator.accepts(text)
             }
             (Validator::NumberValidator(validator), MockValue::Num(number)) => {
                 runtime::check_number(number, validator).is_ok()
@@ -821,9 +762,6 @@ impl ToTokens for StringValidator {
             StringValidator::Base64Url => {
                 quote! { ::evenframe::validator::StringValidator::Base64Url }
             }
-            StringValidator::Capitalize => {
-                quote! { ::evenframe::validator::StringValidator::Capitalize }
-            }
             StringValidator::CapitalizePreformatted => {
                 quote! { ::evenframe::validator::StringValidator::CapitalizePreformatted }
             }
@@ -836,17 +774,8 @@ impl ToTokens for StringValidator {
             StringValidator::DateEpoch => {
                 quote! { ::evenframe::validator::StringValidator::DateEpoch }
             }
-            StringValidator::DateEpochParse => {
-                quote! { ::evenframe::validator::StringValidator::DateEpochParse }
-            }
             StringValidator::DateIso => {
                 quote! { ::evenframe::validator::StringValidator::DateIso }
-            }
-            StringValidator::DateIsoParse => {
-                quote! { ::evenframe::validator::StringValidator::DateIsoParse }
-            }
-            StringValidator::DateParse => {
-                quote! { ::evenframe::validator::StringValidator::DateParse }
             }
             StringValidator::Digits => {
                 quote! { ::evenframe::validator::StringValidator::Digits }
@@ -860,9 +789,6 @@ impl ToTokens for StringValidator {
             StringValidator::Integer => {
                 quote! { ::evenframe::validator::StringValidator::Integer }
             }
-            StringValidator::IntegerParse => {
-                quote! { ::evenframe::validator::StringValidator::IntegerParse }
-            }
             StringValidator::Ip => quote! { ::evenframe::validator::StringValidator::Ip },
             StringValidator::IpV4 => {
                 quote! { ::evenframe::validator::StringValidator::IpV4 }
@@ -873,47 +799,23 @@ impl ToTokens for StringValidator {
             StringValidator::Json => {
                 quote! { ::evenframe::validator::StringValidator::Json }
             }
-            StringValidator::JsonParse => {
-                quote! { ::evenframe::validator::StringValidator::JsonParse }
-            }
-            StringValidator::Lower => {
-                quote! { ::evenframe::validator::StringValidator::Lower }
-            }
             StringValidator::LowerPreformatted => {
                 quote! { ::evenframe::validator::StringValidator::LowerPreformatted }
             }
-            StringValidator::Normalize => {
-                quote! { ::evenframe::validator::StringValidator::Normalize }
+            StringValidator::NormalizeNfcPreformatted => {
+                quote! { ::evenframe::validator::StringValidator::NormalizeNfcPreformatted }
             }
-            StringValidator::NormalizeNFC => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFC }
+            StringValidator::NormalizeNfdPreformatted => {
+                quote! { ::evenframe::validator::StringValidator::NormalizeNfdPreformatted }
             }
-            StringValidator::NormalizeNFCPreformatted => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFCPreformatted }
+            StringValidator::NormalizeNfkcPreformatted => {
+                quote! { ::evenframe::validator::StringValidator::NormalizeNfkcPreformatted }
             }
-            StringValidator::NormalizeNFD => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFD }
-            }
-            StringValidator::NormalizeNFDPreformatted => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFDPreformatted }
-            }
-            StringValidator::NormalizeNFKC => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFKC }
-            }
-            StringValidator::NormalizeNFKCPreformatted => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFKCPreformatted }
-            }
-            StringValidator::NormalizeNFKD => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFKD }
-            }
-            StringValidator::NormalizeNFKDPreformatted => {
-                quote! { ::evenframe::validator::StringValidator::NormalizeNFKDPreformatted }
+            StringValidator::NormalizeNfkdPreformatted => {
+                quote! { ::evenframe::validator::StringValidator::NormalizeNfkdPreformatted }
             }
             StringValidator::Numeric => {
                 quote! { ::evenframe::validator::StringValidator::Numeric }
-            }
-            StringValidator::NumericParse => {
-                quote! { ::evenframe::validator::StringValidator::NumericParse }
             }
             StringValidator::Regex => {
                 quote! { ::evenframe::validator::StringValidator::Regex }
@@ -921,23 +823,14 @@ impl ToTokens for StringValidator {
             StringValidator::Semver => {
                 quote! { ::evenframe::validator::StringValidator::Semver }
             }
-            StringValidator::Trim => {
-                quote! { ::evenframe::validator::StringValidator::Trim }
-            }
             StringValidator::TrimPreformatted => {
                 quote! { ::evenframe::validator::StringValidator::TrimPreformatted }
-            }
-            StringValidator::Upper => {
-                quote! { ::evenframe::validator::StringValidator::Upper }
             }
             StringValidator::UpperPreformatted => {
                 quote! { ::evenframe::validator::StringValidator::UpperPreformatted }
             }
             StringValidator::Url => {
                 quote! { ::evenframe::validator::StringValidator::Url }
-            }
-            StringValidator::UrlParse => {
-                quote! { ::evenframe::validator::StringValidator::UrlParse }
             }
             StringValidator::Uuid => {
                 quote! { ::evenframe::validator::StringValidator::Uuid }
@@ -969,9 +862,6 @@ impl ToTokens for StringValidator {
             StringValidator::Literal(s) => {
                 quote! { ::evenframe::validator::StringValidator::Literal(#s.to_string()) }
             }
-            StringValidator::StringEmbedded(s) => {
-                quote! { ::evenframe::validator::StringValidator::StringEmbedded(#s.to_string()) }
-            }
             StringValidator::RegexLiteral(f) => {
                 quote! { ::evenframe::validator::StringValidator::RegexLiteral(#f) }
             }
@@ -987,14 +877,14 @@ impl ToTokens for StringValidator {
             StringValidator::NonEmpty => {
                 quote! { ::evenframe::validator::StringValidator::NonEmpty }
             }
-            StringValidator::StartsWith(s) => {
-                quote! { ::evenframe::validator::StringValidator::StartsWith(#s.to_string()) }
+            StringValidator::StartsWith(pattern) => {
+                quote! { ::evenframe::validator::StringValidator::StartsWith(#pattern) }
             }
-            StringValidator::EndsWith(s) => {
-                quote! { ::evenframe::validator::StringValidator::EndsWith(#s.to_string()) }
+            StringValidator::EndsWith(pattern) => {
+                quote! { ::evenframe::validator::StringValidator::EndsWith(#pattern) }
             }
-            StringValidator::Includes(s) => {
-                quote! { ::evenframe::validator::StringValidator::Includes(#s.to_string()) }
+            StringValidator::Includes(pattern) => {
+                quote! { ::evenframe::validator::StringValidator::Includes(#pattern) }
             }
             StringValidator::Trimmed => {
                 quote! { ::evenframe::validator::StringValidator::Trimmed }
@@ -1043,8 +933,8 @@ impl ToTokens for NumberValidator {
             NumberValidator::Int => {
                 quote! { ::evenframe::validator::NumberValidator::Int }
             }
-            NumberValidator::NonNaN => {
-                quote! { ::evenframe::validator::NumberValidator::NonNaN }
+            NumberValidator::NonNan => {
+                quote! { ::evenframe::validator::NumberValidator::NonNan }
             }
             NumberValidator::Positive => {
                 quote! { ::evenframe::validator::NumberValidator::Positive }
@@ -1213,7 +1103,8 @@ impl ToTokens for DurationValidator {
 mod tests {
     use super::{
         ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
-        MockValue, NumberValidator, RuntimeStep, StringValidator, ToTokens, Validator, quote,
+        Format, MockValue, NumberValidator, StringValidator, TextPattern, ToTokens, Validator,
+        quote,
     };
     use ordered_float::OrderedFloat;
 
@@ -1315,20 +1206,20 @@ mod tests {
 
     #[test]
     fn test_string_validator_starts_with() {
-        let v = StringValidator::StartsWith("prefix".to_string());
-        assert!(matches!(v, StringValidator::StartsWith(s) if s == "prefix"));
+        let v = StringValidator::StartsWith("prefix".into());
+        assert!(matches!(v, StringValidator::StartsWith(TextPattern::Text(s)) if s == "prefix"));
     }
 
     #[test]
     fn test_string_validator_ends_with() {
-        let v = StringValidator::EndsWith("suffix".to_string());
-        assert!(matches!(v, StringValidator::EndsWith(s) if s == "suffix"));
+        let v = StringValidator::EndsWith("suffix".into());
+        assert!(matches!(v, StringValidator::EndsWith(TextPattern::Text(s)) if s == "suffix"));
     }
 
     #[test]
     fn test_string_validator_includes() {
-        let v = StringValidator::Includes("substring".to_string());
-        assert!(matches!(v, StringValidator::Includes(s) if s == "substring"));
+        let v = StringValidator::Includes("substring".into());
+        assert!(matches!(v, StringValidator::Includes(TextPattern::Text(s)) if s == "substring"));
     }
 
     #[test]
@@ -1602,36 +1493,23 @@ mod tests {
 
     // ==================== runtime_step Tests ====================
 
-    fn step_tokens(validator: Validator) -> (bool, String) {
-        match validator
-            .runtime_step(&quote! { value })
-            .expect("a runtime step")
-        {
-            RuntimeStep::Check(tokens) => (false, tokens.to_string()),
-            RuntimeStep::Transform(tokens) => (true, tokens.to_string()),
-            RuntimeStep::Nothing => panic!("expected a check or a transform"),
-        }
-    }
-
     #[test]
     fn runtime_steps_call_the_runtime_family() {
-        let (transform, check) = step_tokens(Validator::StringValidator(StringValidator::Email));
-        assert!(!transform && check.contains("check_string"));
-        let (transform, lower) = step_tokens(Validator::StringValidator(StringValidator::Lower));
-        assert!(transform && lower.contains("transform_string"));
-        let (transform, count) =
-            step_tokens(Validator::ArrayValidator(ArrayValidator::MinItems(3)));
-        assert!(!transform && count.contains("check_items"));
+        let step = |validator: Validator| {
+            validator
+                .runtime_step(&quote! { value })
+                .expect("a runtime step")
+                .to_string()
+        };
+        assert!(step(Validator::StringValidator(StringValidator::Email)).contains("check_string"));
+        assert!(
+            step(Validator::ArrayValidator(ArrayValidator::MinItems(3))).contains("check_items")
+        );
     }
 
     #[test]
-    fn runtime_steps_reject_misplaced_parses_and_bad_bounds() {
+    fn runtime_steps_reject_bad_bounds() {
         let place = quote! { value };
-        assert!(
-            Validator::StringValidator(StringValidator::IntegerParse)
-                .runtime_step(&place)
-                .is_err()
-        );
         assert!(
             Validator::DateValidator(DateValidator::LessThanDate("soon".into()))
                 .runtime_step(&place)
@@ -1751,6 +1629,17 @@ mod tests {
         let inc = Validator::StringValidator(StringValidator::Includes("zz".into()));
         assert!(inc.matches(&MockValue::Str("buzzy")));
         assert!(!inc.matches(&MockValue::Str("plain")));
+
+        let upper = Validator::StringValidator(StringValidator::Includes(TextPattern::Format(
+            Format::Uppercase,
+        )));
+        assert!(upper.matches(&MockValue::Str("abCd")));
+        assert!(!upper.matches(&MockValue::Str("abcd")));
+        let slug = Validator::StringValidator(StringValidator::StartsWith(TextPattern::Format(
+            Format::Slug,
+        )));
+        assert!(slug.matches(&MockValue::Str("my-post and more")));
+        assert!(!slug.matches(&MockValue::Str(" my-post")));
     }
 
     #[test]

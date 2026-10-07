@@ -1,0 +1,23 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+const compareDecimal = (left: string, right: string): number => { const parse = (text: string) => { const negative = text.startsWith("-"); const [whole, fraction = ""] = text.replace(/^-/, "").split("."); const digits = whole.replace(/^0+/, ""); const decimals = fraction.replace(/0+$/, ""); return { negative: negative && (digits !== "" || decimals !== ""), digits, decimals }; }; const magnitude = (a: { digits: string; decimals: string }, b: { digits: string; decimals: string }): number => a.digits.length !== b.digits.length ? Math.sign(a.digits.length - b.digits.length) : a.digits !== b.digits ? (a.digits < b.digits ? -1 : 1) : a.decimals.padEnd(b.decimals.length, "0") === b.decimals.padEnd(a.decimals.length, "0") ? 0 : a.decimals.padEnd(b.decimals.length, "0") < b.decimals.padEnd(a.decimals.length, "0") ? -1 : 1; const a = parse(String(left)); const b = parse(String(right)); if (a.negative !== b.negative) return a.negative ? -1 : 1; return a.negative ? magnitude(b, a) : magnitude(a, b); };
+const compareCodePoints = (left: string, right: string): number => { const a = Array.from(left, (character) => character.codePointAt(0) ?? 0); const b = Array.from(right, (character) => character.codePointAt(0) ?? 0); for (let index = 0; index < Math.min(a.length, b.length); index++) { if (a[index] !== b[index]) return a[index] - b[index]; } return a.length - b.length; };
+export const bindings = scope({
+
+Reading: {
+  label: [[[['string', '=>', (value: string) => value.replace(/\s+/g, " ")], '|>', 'string.trim'], '|>', 'string.normalize.NFKC'], '|>', 'string >= 1'],
+  email: [[[[['string', '|>', 'string.trim'], '|>', 'string.lower'], '|>', 'string.email'], '|', 'undefined'], '|', 'null'],
+  level: [['number', '=>', (value: number) => Math.min(Math.max(value, 0), 10)], '=>', (value: number) => Math.round(value * 1e1) / 1e1],
+  rating: ['number', '=>', (value: number) => Math.min(Math.max(value, 1), 5)],
+  price: ['string', '=>', (value: string) => compareDecimal(value, "0") < 0 ? "0" : compareDecimal(value, "99.5") > 0 ? "99.5" : value],
+  tags: [[[['string', '[]'], '=>', (value: string[]) => [...new Set(value)]], '=>', (value: string[]) => [...value].sort(compareCodePoints)], '|>', 'unknown[] <= 10'],
+  scores: [['number', '[]'], '=>', (value: number[]) => [...value].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))]
+},
+
+});
+
+const exported = bindings.export();
+
+export type Reading = typeof exported.Reading.infer;

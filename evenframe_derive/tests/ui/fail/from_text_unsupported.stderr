@@ -1,0 +1,143 @@
+error[E0277]: the trait bound `std::string::String: TextForm` is not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:6:16
+  |
+6 |     pub label: FromText<String>,
+  |                ^^^^^^^^^^^^^^^^ the trait `TextForm` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `TextForm`:
+            evenframe::prelude::url::Url
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            isize
+          and $N others
+note: required by a bound in `evenframe::types::FromText`
+ --> $WORKSPACE/evenframe_core/src/types/text_form.rs
+  |
+  | pub struct FromText<T: TextForm>(pub T);
+  |                        ^^^^^^^^ required by this bound in `FromText`
+
+error[E0277]: the trait bound `std::string::String: TextForm` is not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:6:5
+  |
+4 | #[derive(Debug, Clone, Evenframe)]
+  |          ----- in this derive macro expansion
+5 | pub struct Reading {
+6 |     pub label: FromText<String>,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TextForm` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `TextForm`:
+            evenframe::prelude::url::Url
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            isize
+          and $N others
+  = note: required for `evenframe::types::FromText<std::string::String>` to implement `Debug`
+  = note: 1 redundant requirement hidden
+  = note: required for `&evenframe::types::FromText<std::string::String>` to implement `Debug`
+  = note: required for the cast from `&&evenframe::types::FromText<std::string::String>` to `&dyn Debug`
+
+error[E0277]: the trait bound `std::string::String: TextForm` is not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:6:5
+  |
+4 | #[derive(Debug, Clone, Evenframe)]
+  |                 ----- in this derive macro expansion
+5 | pub struct Reading {
+6 |     pub label: FromText<String>,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TextForm` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `TextForm`:
+            evenframe::prelude::url::Url
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            isize
+          and $N others
+note: required by a bound in `evenframe::types::FromText`
+ --> $WORKSPACE/evenframe_core/src/types/text_form.rs
+  |
+  | pub struct FromText<T: TextForm>(pub T);
+  |                        ^^^^^^^^ required by this bound in `FromText`
+
+error[E0277]: the trait bound `std::string::String: TextForm` is not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:4:24
+  |
+4 | #[derive(Debug, Clone, Evenframe)]
+  |                        ^^^^^^^^^ the trait `TextForm` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `TextForm`:
+            evenframe::prelude::url::Url
+            f32
+            f64
+            i16
+            i32
+            i64
+            i8
+            isize
+          and $N others
+note: required by a bound in `evenframe::types::FromText`
+ --> $WORKSPACE/evenframe_core/src/types/text_form.rs
+  |
+  | pub struct FromText<T: TextForm>(pub T);
+  |                        ^^^^^^^^ required by this bound in `FromText`
+  = note: this error originates in the derive macro `Evenframe` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `write` exists for reference `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:4:24
+  |
+4 | #[derive(Debug, Clone, Evenframe)]
+  |                        ^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/evenframe_core/src/surreal_value.rs
+  |
+  |     pub struct Field<T>(PhantomData<T>);
+  |     ------------------- doesn't satisfy `_: Convert<FromText<String>>`
+  |
+ ::: $WORKSPACE/evenframe_core/src/types/text_form.rs
+  |
+  | pub struct FromText<T: TextForm>(pub T);
+  | -------------------------------- doesn't satisfy `_: DeserializeOwned`, `_: Serialize` or `_: SurrealValue`
+  |
+  = note: the following trait bounds were not satisfied:
+          `evenframe::types::FromText<std::string::String>: evenframe::surreal_value::__private::SurrealValue`
+          which is required by `evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+          `evenframe::types::FromText<std::string::String>: serde_core::ser::Serialize`
+          which is required by `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+          `evenframe::types::FromText<std::string::String>: serde_core::de::DeserializeOwned`
+          which is required by `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+  = note: this error originates in the derive macro `Evenframe` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `read` exists for reference `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/from_text_unsupported.rs:4:24
+  |
+4 | #[derive(Debug, Clone, Evenframe)]
+  |                        ^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/evenframe_core/src/surreal_value.rs
+  |
+  |     pub struct Field<T>(PhantomData<T>);
+  |     ------------------- doesn't satisfy `_: Convert<FromText<String>>`
+  |
+ ::: $WORKSPACE/evenframe_core/src/types/text_form.rs
+  |
+  | pub struct FromText<T: TextForm>(pub T);
+  | -------------------------------- doesn't satisfy `_: DeserializeOwned`, `_: Serialize` or `_: SurrealValue`
+  |
+  = note: the following trait bounds were not satisfied:
+          `evenframe::types::FromText<std::string::String>: evenframe::surreal_value::__private::SurrealValue`
+          which is required by `evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+          `evenframe::types::FromText<std::string::String>: serde_core::ser::Serialize`
+          which is required by `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+          `evenframe::types::FromText<std::string::String>: serde_core::de::DeserializeOwned`
+          which is required by `&evenframe::surreal_value::__private::Field<evenframe::types::FromText<std::string::String>>: evenframe::surreal_value::__private::Convert<evenframe::types::FromText<std::string::String>>`
+  = note: this error originates in the derive macro `Evenframe` (in Nightly builds, run with -Z macro-backtrace for more info)

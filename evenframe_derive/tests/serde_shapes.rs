@@ -14,11 +14,8 @@ fn read<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, String> {
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
 #[serde(into = "String", try_from = "String")]
 pub struct Slug {
-    #[validators(
-        StringValidator::Trim,
-        StringValidator::Lower,
-        StringValidator::NonEmpty
-    )]
+    #[morphs(trim, lower)]
+    #[validators(StringValidator::NonEmpty)]
     value: String,
 }
 
@@ -101,7 +98,7 @@ fn a_remote_definition_hands_serde_its_checked_remote_value() {
 #[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
 pub struct Range(
     #[validators(NumberValidator::GreaterThanOrEqualTo(0.0))] i32,
-    #[validators(StringValidator::Trim)] String,
+    #[morphs(trim)] String,
 );
 
 #[test]

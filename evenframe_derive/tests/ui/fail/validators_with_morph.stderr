@@ -1,0 +1,5 @@
+error: Failed to parse validators for field 'name': `trim` rewrites the value rather than checking it: write it in `#[morphs(...)]`, which runs before the validators
+ --> tests/ui/fail/validators_with_morph.rs:5:18
+  |
+5 |     #[validators(trim, non_empty)]
+  |                  ^^^^

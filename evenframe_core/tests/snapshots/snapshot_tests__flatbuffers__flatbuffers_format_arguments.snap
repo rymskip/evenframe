@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Account {
+    password: string (validate: "minLength(8), maxLength(32), pattern(\"(?:[A-Z])\"), pattern(\"(?:[a-z])\"), pattern(\"(?:[0-9])\"), pattern(\"(?:[!-/:-@\\[-\\x60{-~])\")");
+    handle: string (validate: "pattern(\"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)\"), endsWith(\"-team\")");
+    home: string (validate: "pattern(\"^/(?:[^/\\\\\\x00-\\x1F\\x7F]+[^\\x00-\\x1F\\x7F]*)?$\")");
+}

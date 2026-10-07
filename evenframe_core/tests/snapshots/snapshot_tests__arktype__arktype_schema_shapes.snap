@@ -37,34 +37,6 @@ Shapes: {
 
 const exported = bindings.export();
 
-export const defaultMoved: Moved = {
-from: { name: "" },
-to: { name: "" }
-};
-export const defaultPlace: Place = {
-name: ""
-};
-export const defaultShapes: Shapes = {
-maybeTags: null,
-matrix: [],
-gaps: [],
-triState: null,
-maybeCount: null,
-listsByName: {},
-optionalByName: {},
-mapsByName: {},
-pair: ["", 0],
-pairs: [],
-corner: { x: 0, y: 0 },
-nothing: null,
-huge: 0,
-hugeById: {},
-event: "Opened",
-events: [],
-lastEvent: null,
-eventsByName: {}
-};
-
 export type Event = typeof exported.Event.infer;
 export type Moved = typeof exported.Moved.infer;
 export type Place = typeof exported.Place.infer;

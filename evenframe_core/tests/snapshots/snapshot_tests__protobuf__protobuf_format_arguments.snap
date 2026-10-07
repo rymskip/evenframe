@@ -1,0 +1,11 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+message Account {
+    string password = 1;
+    string handle = 2;
+    string home = 3;
+}

@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Reading {
+  /** @endec({ normalize: ["collapseWhitespace", "trim", "normalizeUnicode(\"NFKC\")"], validate: ["nonEmpty"] }) */
+  label: string;
+  /** @endec({ normalize: ["trim", "lowercase"], validate: ["email"] }) */
+  email: string | null;
+  /** @endec({ normalize: ["clamp(0, 10)", "round(1)"] }) */
+  level: number;
+  /** @endec({ normalize: ["clamp(1, 5)"] }) */
+  rating: number;
+  /** @endec({ normalize: ["clamp(0, 99.5)"] }) */
+  price: string;
+  /** @endec({ normalize: ["unique", "sort"], validate: ["maxItems(10)"] }) */
+  tags: string[];
+  /** @endec({ normalize: ["sort"] }) */
+  scores: number[];
+}

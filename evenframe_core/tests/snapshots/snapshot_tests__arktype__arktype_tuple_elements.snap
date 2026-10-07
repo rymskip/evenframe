@@ -11,6 +11,5 @@ Range: [['number', '&', 'number >= 0'], 'string'],
 
 const exported = bindings.export();
 
-
 export type Shape = typeof exported.Shape.infer;
 export type Range = typeof exported.Range.infer;

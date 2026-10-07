@@ -6,6 +6,7 @@ use crate::error::{EvenframeError, Result};
 use crate::types::FieldType;
 use crate::typesync::js_checks::{self, JsCheck, LengthCheck};
 use crate::validator::keywords;
+use crate::validator::text_pattern::TextPattern;
 use crate::validator::{
     ArrayValidator, DateValidator, NumberValidator, StringValidator, Validator, bounds,
 };
@@ -33,7 +34,12 @@ enum Kind {
 
 fn kind(field_type: &FieldType, registry: &crate::types::ForeignTypeRegistry) -> Kind {
     match field_type {
-        FieldType::Option(inner) => kind(inner, registry),
+        FieldType::Option(inner) | FieldType::JsonText(inner) => kind(inner, registry),
+        FieldType::FromText(text_form) => kind(text_form.value_type(), registry),
+        FieldType::IsoDate | FieldType::EpochMillis => Kind::Number {
+            rule: "int64",
+            integer: true,
+        },
         FieldType::String | FieldType::Char | FieldType::I128 | FieldType::U128 => Kind::String,
         FieldType::F32 => Kind::Number {
             rule: "float",
@@ -267,7 +273,7 @@ fn string_rule(
     match validator {
         // The field's type already guarantees a string.
         StringValidator::String => return Ok(true),
-        StringValidator::StartsWith(prefix) => {
+        StringValidator::StartsWith(TextPattern::Text(prefix)) => {
             rules.prefix = Some(merge_affix(
                 rules.prefix.take(),
                 prefix,
@@ -277,7 +283,7 @@ fn string_rule(
             )?);
             return Ok(true);
         }
-        StringValidator::EndsWith(suffix) => {
+        StringValidator::EndsWith(TextPattern::Text(suffix)) => {
             rules.suffix = Some(merge_affix(
                 rules.suffix.take(),
                 suffix,
@@ -287,7 +293,7 @@ fn string_rule(
             )?);
             return Ok(true);
         }
-        StringValidator::Includes(substring) => {
+        StringValidator::Includes(TextPattern::Text(substring)) => {
             return Ok(match rules.contains.take() {
                 None => {
                     rules.contains = Some(substring.clone());
@@ -326,6 +332,7 @@ fn string_rule(
             ));
             return Ok(true);
         }
+        // A format argument is a pattern, which the checks below write.
         _ => {}
     }
     Ok(match js_checks::string_check(validator)? {
@@ -407,7 +414,7 @@ fn number_rule(validator: &NumberValidator, integer: bool, rules: &mut Rules) ->
             lower_upper(rules, 255.0, false);
             return integer;
         }
-        NumberValidator::MultipleOf(_) | NumberValidator::Finite | NumberValidator::NonNaN => {
+        NumberValidator::MultipleOf(_) | NumberValidator::Finite | NumberValidator::NonNan => {
             return false;
         }
     }

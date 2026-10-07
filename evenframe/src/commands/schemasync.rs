@@ -141,7 +141,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     }
                     None => (DumpScope::Schema, dump_args.file),
                 };
-                let ddl = dump_surql(&config, &types.tables, &types.objects, &types.enums, scope)?;
+                let ddl = dump_surql(&config, &types, scope)?;
                 let output_path =
                     chosen_file.unwrap_or_else(|| scope.default_path(config.project_root()));
                 let statement_count = ddl

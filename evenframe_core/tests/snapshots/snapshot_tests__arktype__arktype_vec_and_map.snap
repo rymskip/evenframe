@@ -26,22 +26,5 @@ Collection: {
 
 const exported = bindings.export();
 
-export const defaultCollection: Collection = {
-id: "",
-tags: [],
-scores: [],
-metadata: {},
-sortedData: {},
-notesByRank: {},
-relatedByName: {},
-balanceByOffset: {},
-countByLetter: {},
-ownerByRole: {},
-labelByAccount: {},
-grid: {},
-initial: "",
-noteByFlag: {}
-};
-
 export type Role = typeof exported.Role.infer;
 export type Collection = typeof exported.Collection.infer;

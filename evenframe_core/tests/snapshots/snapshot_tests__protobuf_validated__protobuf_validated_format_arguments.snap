@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Account {
+    // protoc-gen-validate cannot check: a substring (protoc-gen-validate holds one pattern per field); a substring (protoc-gen-validate holds one pattern per field); a substring (protoc-gen-validate holds one pattern per field)
+    string password = 1 [(validate.rules).string = {min_len: 8, max_len: 32, pattern: "(?:[A-Z])"}];
+    string handle = 2 [(validate.rules).string = {pattern: "^(?:[a-z0-9]+(?:-[a-z0-9]+)*)", suffix: "-team"}];
+    string home = 3 [(validate.rules).string = {pattern: "^/(?:[^/\\\\\\x00-\\x1F\\x7F]+[^\\x00-\\x1F\\x7F]*)?$"}];
+}

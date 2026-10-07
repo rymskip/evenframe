@@ -15,9 +15,8 @@ Profile: {
   marker: 'Marker',
   status: 'StatusCode',
   title: [['NonEmptyString', '|>', 'string.trim'], '|>', 'NonEmptyString'],
-  age: ['string.integer.parse', '|>', 'Age']
+  age: [['string.integer.parse', '|>', '0 <= number <= 255'], '|>', 'number >= 18']
 },
-Age: "number#Age",
 "#Count__value": ['string.integer.parse', '|>', 'number >= 0'],
 Count: "Count__value#Count",
 "#Handle__value": [[['NonEmptyString', '|>', 'string.trim'], '|>', 'string.lower'], '|>', 'NonEmptyString'],
@@ -33,22 +32,8 @@ StatusCode: "Status#StatusCode",
 
 const exported = bindings.export();
 
-export const defaultProfile: Profile = {
-name: ("" as NonEmptyString),
-nickname: null,
-handles: [],
-visits: {},
-label: ("" as Label),
-position: ["", 0],
-marker: null,
-status: ("Active" as StatusCode),
-title: ("" as NonEmptyString),
-age: (0 as Age)
-};
-
 export type Status = typeof exported.Status.infer;
 export type Profile = typeof exported.Profile.infer;
-export type Age = typeof exported.Age.infer;
 export type Count = typeof exported.Count.infer;
 export type Handle = typeof exported.Handle.infer;
 export type Label = typeof exported.Label.infer;

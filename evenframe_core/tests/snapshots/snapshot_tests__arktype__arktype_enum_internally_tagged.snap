@@ -17,14 +17,6 @@ RectangleData: {
 
 const exported = bindings.export();
 
-export const defaultCircleData: CircleData = {
-radius: 0
-};
-export const defaultRectangleData: RectangleData = {
-width: 0,
-height: 0
-};
-
 export type Shape = typeof exported.Shape.infer;
 export type CircleData = typeof exported.CircleData.infer;
 export type RectangleData = typeof exported.RectangleData.infer;
