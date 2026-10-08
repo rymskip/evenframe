@@ -1,6 +1,5 @@
 ---
 source: evenframe/tests/cli.rs
-assertion_line: 88
 expression: transcript
 ---
 $ evenframe info
@@ -10,7 +9,7 @@ status: Some(0)
 === Configuration ===
 
 Outputs:
-  arktype -> ./generated
+  arktype -> [PROJECT]/generated
 
 Mock Generation: disabled
 
@@ -47,7 +46,7 @@ status: Some(0)
     "outputs": [
       {
         "kind": "arktype",
-        "dir": "./generated",
+        "dir": "[PROJECT]/generated",
         "mode": "single",
         "barrel_file": false,
         "file_naming": "kebab",

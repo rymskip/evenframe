@@ -1,0 +1,5 @@
+[general]
+projects = ["app", "auth"]
+
+[typesync]
+output = { kind = "arktype", dir = "./generated" }

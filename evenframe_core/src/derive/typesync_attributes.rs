@@ -1,7 +1,9 @@
 //! `#[typesync(...)]`: what the TypeScript outputs add to an item beside what
 //! evenframe describes for it.
 //!
-//! - `annotation("...")` is written as `/** ... */` before the item.
+//! - `annotation("...")` is written as `/** ... */` before the item. A
+//!   Macroforge `@derive(...)` written this way is warned about: derives go in
+//!   `macroforge(derives = [...])`, which replaces the output's `default_derives`.
 //! - `macroforge(derives = [A, B], attributes = [...])` adds Macroforge derives
 //!   to the item's `@derive(...)`, and writes each attribute as a JSDoc
 //!   annotation: `name` as `@name`, `name(key = value, flag)` as
@@ -15,8 +17,11 @@ use crate::{
     validator::Validator,
 };
 use convert_case::{Case, Casing};
+use proc_macro2::{Span, TokenStream};
+use quote::quote_spanned;
 use syn::{
-    Attribute, Expr, Ident, Lit, LitStr, Meta, Token, UnOp, bracketed, punctuated::Punctuated,
+    Attribute, Data, DeriveInput, Expr, Fields, Ident, Lit, LitStr, Meta, Token, UnOp, bracketed,
+    punctuated::Punctuated,
 };
 
 /// Where an attribute sits, which decides whether it takes derives.
@@ -43,8 +48,32 @@ impl Position {
     }
 }
 
+/// An entry evenframe reads but steers away from, reported as a compile
+/// warning where it is written.
+#[derive(Debug, Clone)]
+pub struct Warning {
+    pub span: Span,
+    pub note: String,
+}
+
+impl Warning {
+    /// Tokens that make rustc warn with the note at the entry: a use of a
+    /// deprecated constant, since a derive on stable Rust has no warning of its
+    /// own.
+    pub fn to_tokens(&self) -> TokenStream {
+        let note = &self.note;
+        quote_spanned! {self.span=>
+            const _: () = {
+                #[deprecated(note = #note)]
+                const TYPESYNC: () = ();
+                TYPESYNC
+            };
+        }
+    }
+}
+
 /// An item's `#[typesync(...)]` entries.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct TypesyncAttributes {
     /// Macroforge derives, in the order written.
     pub macroforge_derives: Vec<String>,
@@ -54,6 +83,8 @@ pub struct TypesyncAttributes {
     /// `validators(...)`, replacing `#[validators(...)]` in the TypeScript
     /// outputs, its custom patterns JavaScript regex literals.
     pub validators: Option<Vec<Validator>>,
+    /// Entries written in a form evenframe steers away from.
+    pub warnings: Vec<Warning>,
 }
 
 impl TypesyncAttributes {
@@ -72,6 +103,15 @@ impl TypesyncAttributes {
                             "an annotation is the text written inside its JSDoc comment, such \
                              as `annotation(\"@hidden\")`",
                         ));
+                    }
+                    if annotation.value().trim_start().starts_with("@derive(") {
+                        parsed.warnings.push(Warning {
+                            span: annotation.span(),
+                            note: "a Macroforge derive is not an annotation: list it in \
+                                   `#[typesync(macroforge(derives = [...]))]`, which replaces \
+                                   the output's `default_derives`"
+                                .to_string(),
+                        });
                     }
                     parsed.annotations.push(annotation.value());
                     Ok(())
@@ -135,6 +175,39 @@ impl TypesyncAttributes {
         }
         Ok(parsed)
     }
+}
+
+/// The warnings for every `#[typesync(...)]` on `input`, its variants and
+/// their fields. Attributes that do not parse are left to the derive, which
+/// reports them as errors.
+pub fn warnings(input: &DeriveInput) -> TokenStream {
+    let field_attrs = |fields: &Fields| {
+        fields
+            .iter()
+            .map(|field| (field.attrs.clone(), Position::Field))
+            .collect::<Vec<_>>()
+    };
+    let mut sites = vec![(input.attrs.clone(), Position::Container)];
+    match &input.data {
+        Data::Struct(data) => sites.extend(field_attrs(&data.fields)),
+        Data::Enum(data) => {
+            for variant in &data.variants {
+                let position = match variant.fields {
+                    Fields::Named(_) => Position::StructVariant,
+                    Fields::Unnamed(_) | Fields::Unit => Position::Variant,
+                };
+                sites.push((variant.attrs.clone(), position));
+                sites.extend(field_attrs(&variant.fields));
+            }
+        }
+        Data::Union(_) => {}
+    }
+    sites
+        .iter()
+        .filter_map(|(attrs, position)| TypesyncAttributes::parse(attrs, *position).ok())
+        .flat_map(|parsed| parsed.warnings)
+        .map(|warning| warning.to_tokens())
+        .collect()
 }
 
 /// The comma-separated items of `key = [...]`.
@@ -256,7 +329,7 @@ fn single_ident(path: &syn::Path) -> syn::Result<&Ident> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Position, TypesyncAttributes};
+    use super::{Position, TypesyncAttributes, warnings};
 
     fn parse(source: &str, position: Position) -> syn::Result<TypesyncAttributes> {
         let item: syn::DeriveInput =
@@ -269,6 +342,43 @@ mod tests {
             Ok(parsed) => panic!("expected {source} to be refused, got {parsed:?}"),
             Err(error) => error.to_string(),
         }
+    }
+
+    #[test]
+    fn a_derive_written_as_an_annotation_is_warned_about() {
+        let parsed = parse(
+            r#"#[typesync(annotation("@derive(Encode, Decode)"), annotation("@hidden"))]"#,
+            Position::Container,
+        )
+        .expect("the entries parse");
+        let notes: Vec<&str> = parsed
+            .warnings
+            .iter()
+            .map(|warning| warning.note.as_str())
+            .collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .all(|note| note.contains("macroforge(derives = [...])")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn every_warning_on_an_item_becomes_a_deprecated_use() {
+        let item: syn::DeriveInput = syn::parse_str(
+            r#"#[typesync(annotation("@derive(Encode)"))]
+               enum Item {
+                   #[typesync(annotation("@derive(Decode)"))]
+                   One { #[typesync(annotation("@derive(Clone)"))] value: u8 },
+                   #[typesync(annotation("@hidden"))]
+                   Two,
+               }"#,
+        )
+        .expect("the item parses");
+        let tokens = warnings(&item).to_string();
+        assert_eq!(tokens.matches("deprecated").count(), 3, "{tokens}");
     }
 
     #[test]

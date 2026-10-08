@@ -437,7 +437,7 @@ fn surreal_value_impl(
 
                 impl #impl_generics #private::SurrealValue for #ident #ty_generics #where_clause {
                     fn kind_of() -> #private::Kind {
-                        #kind
+                        #private::kind_of::<Self>(|| #kind)
                     }
 
                     fn into_value(self) -> #private::Value {

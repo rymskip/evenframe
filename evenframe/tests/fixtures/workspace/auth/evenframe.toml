@@ -1,0 +1,10 @@
+[general]
+include_files = [{ path = "../app/src/address.rs", resolve_only = true }]
+
+[schemasync]
+should_generate_mocks = false
+
+[schemasync.database]
+url = "http://localhost:8000"
+namespace = "test"
+database = "auth"

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use surrealdb::Surreal;
 use surrealdb::engine::local::Mem;
-use surrealdb::types::{RecordId, SurrealValue, Value};
+use surrealdb::types::{Kind, RecordId, SurrealValue, Value};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Evenframe)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +86,66 @@ enum Interval {
     Yearly {
         quantity_of_years: u32,
     },
+}
+
+/// A value that nests itself, as a list of its own values.
+#[derive(Debug, Clone, PartialEq, evenframe::SurrealValue)]
+#[serde(untagged)]
+enum Nested {
+    Text(String),
+    List(Vec<Option<Nested>>),
+}
+
+/// Two types that nest each other.
+#[derive(Debug, Clone, PartialEq, evenframe::SurrealValue)]
+struct Folder {
+    name: String,
+    entries: Vec<Entry>,
+}
+
+#[derive(Debug, Clone, PartialEq, evenframe::SurrealValue)]
+enum Entry {
+    File(String),
+    Folder(Folder),
+}
+
+#[test]
+fn a_recursive_type_describes_its_nested_self_as_any() {
+    let nested = Nested::List(vec![
+        Some(Nested::Text("leaf".to_owned())),
+        None,
+        Some(Nested::List(vec![Some(Nested::Text("deeper".to_owned()))])),
+    ]);
+    assert_eq!(
+        Nested::from_value(nested.clone().into_value()).expect("the nesting reads"),
+        nested
+    );
+    let Kind::Either(kinds) = Nested::kind_of() else {
+        panic!("an untagged enum is either of its payloads");
+    };
+    assert_eq!(
+        kinds,
+        vec![
+            Kind::String,
+            Kind::Array(Box::new(Kind::option(Kind::Any)), None)
+        ]
+    );
+
+    let folder = Folder {
+        name: "root".to_owned(),
+        entries: vec![
+            Entry::File("a".to_owned()),
+            Entry::Folder(Folder {
+                name: "inner".to_owned(),
+                entries: vec![Entry::File("b".to_owned())],
+            }),
+        ],
+    };
+    assert_eq!(
+        Folder::from_value(folder.clone().into_value()).expect("the folders read"),
+        folder
+    );
+    assert!(matches!(Folder::kind_of(), Kind::Literal(_) | Kind::Object));
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, evenframe::SurrealValue)]

@@ -51,6 +51,11 @@ impl PipelineKind {
     }
 }
 
+/// The compile warnings for the item's `#[typesync(...)]` entries.
+fn typesync_warnings(input: &DeriveInput) -> proc_macro2::TokenStream {
+    evenframe_core::derive::typesync_attributes::warnings(input)
+}
+
 /// For structs it generates both:
 /// - A `table_schema()` function returning a `helpers::TableSchema`
 #[proc_macro_derive(
@@ -80,17 +85,18 @@ impl PipelineKind {
 )]
 pub fn evenframe_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let warnings = typesync_warnings(&input);
 
-    match input.data {
-        Data::Struct(_) => struct_impl::generate_struct_impl(input, PipelineKind::Both).into(),
-        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Both).into(),
+    let tokens = match input.data {
+        Data::Struct(_) => struct_impl::generate_struct_impl(input, PipelineKind::Both),
+        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Both),
         _ => syn::Error::new(
             input.ident.span(),
             "Evenframe can only be used on structs and enums",
         )
-        .to_compile_error()
-        .into(),
-    }
+        .to_compile_error(),
+    };
+    quote::quote! { #tokens #warnings }.into()
 }
 
 /// Derive macro for unions of persistable structs
@@ -98,16 +104,17 @@ pub fn evenframe_derive(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(EvenframeUnion, attributes(typesync))]
 pub fn evenframe_union_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let warnings = typesync_warnings(&input);
 
-    match input.data {
-        Data::Enum(_) => union_impl::generate_union_impl(input).into(),
+    let tokens = match input.data {
+        Data::Enum(_) => union_impl::generate_union_impl(input),
         _ => syn::Error::new(
             input.ident.span(),
             "EvenframeUnion can only be used on enums",
         )
-        .to_compile_error()
-        .into(),
-    }
+        .to_compile_error(),
+    };
+    quote::quote! { #tokens #warnings }.into()
 }
 
 /// `SurrealValue` alone, in the shape evenframe stores a type: for a value
@@ -159,17 +166,18 @@ pub fn surreal_value_derive(input: TokenStream) -> TokenStream {
 )]
 pub fn typesync_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let warnings = typesync_warnings(&input);
 
-    match input.data {
-        Data::Struct(_) => struct_impl::generate_struct_impl(input, PipelineKind::Typesync).into(),
-        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Typesync).into(),
+    let tokens = match input.data {
+        Data::Struct(_) => struct_impl::generate_struct_impl(input, PipelineKind::Typesync),
+        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Typesync),
         _ => syn::Error::new(
             input.ident.span(),
             "Typesync can only be used on structs and enums",
         )
-        .to_compile_error()
-        .into(),
-    }
+        .to_compile_error(),
+    };
+    quote::quote! { #tokens #warnings }.into()
 }
 
 /// Derive macro for types that only participate in database schema synchronization.
@@ -200,17 +208,16 @@ pub fn typesync_derive(input: TokenStream) -> TokenStream {
 )]
 pub fn schemasync_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    let warnings = typesync_warnings(&input);
 
-    match input.data {
-        Data::Struct(_) => {
-            struct_impl::generate_struct_impl(input, PipelineKind::Schemasync).into()
-        }
-        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Schemasync).into(),
+    let tokens = match input.data {
+        Data::Struct(_) => struct_impl::generate_struct_impl(input, PipelineKind::Schemasync),
+        Data::Enum(_) => enum_impl::generate_enum_impl(input, PipelineKind::Schemasync),
         _ => syn::Error::new(
             input.ident.span(),
             "Schemasync can only be used on structs and enums",
         )
-        .to_compile_error()
-        .into(),
-    }
+        .to_compile_error(),
+    };
+    quote::quote! { #tokens #warnings }.into()
 }

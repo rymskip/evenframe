@@ -147,9 +147,9 @@ struct Ready<'a> {
 }
 
 #[cfg(feature = "schemasync")]
-#[derive(Default)]
 pub struct Schemasync<'a> {
     // Input parameters - set via builder methods
+    config: &'a EvenframeConfig,
     types: Option<&'a crate::types::SchemasyncTypes>,
     registry: Option<&'a crate::types::ForeignTypeRegistry>,
 
@@ -162,12 +162,15 @@ pub struct Schemasync<'a> {
     mock_overrides: MockOverrides,
 }
 
-/// Load the config for a command that connects to the database: connection
+/// `config` for a command that connects to the database: connection
 /// settings may come from `overrides` instead of environment variables, but
 /// must be fully resolved one way or the other.
 #[cfg(feature = "schemasync")]
-pub fn load_connected_config(overrides: &ConnectionOverrides) -> Result<EvenframeConfig> {
-    let mut config = EvenframeConfig::new_offline()?;
+pub fn load_connected_config(
+    config: &EvenframeConfig,
+    overrides: &ConnectionOverrides,
+) -> Result<EvenframeConfig> {
+    let mut config = config.clone();
     let mut schemasync = config.require_schemasync()?.clone();
     schemasync.database.apply_connection_overrides(overrides);
     if let Some(var) = schemasync.database.unresolved_connection_var() {
@@ -240,11 +243,10 @@ async fn open_database(
     Ok(db)
 }
 
-/// Check database connectivity by loading config, connecting, authenticating,
-/// and selecting the configured namespace/database.
+/// Check database connectivity for `config`: connect, authenticate, and
+/// select the configured namespace/database.
 #[cfg(feature = "schemasync")]
-pub async fn check_database_connectivity() -> Result<()> {
-    let config = EvenframeConfig::new()?;
+pub async fn check_database_connectivity(config: &EvenframeConfig) -> Result<()> {
     let database = &config.require_schemasync()?.database;
     info!("Connecting to SurrealDB at {}...", database.url);
     connect_database(database).await?;
@@ -257,10 +259,11 @@ pub async fn check_database_connectivity() -> Result<()> {
 
 #[cfg(feature = "schemasync")]
 impl<'a> Schemasync<'a> {
-    /// Create a new empty Schemasync instance
-    pub fn new() -> Self {
+    /// A Schemasync run for the project `config` describes.
+    pub fn new(config: &'a EvenframeConfig) -> Self {
         trace!("Creating new Schemasync instance");
         Self {
+            config,
             types: None,
             registry: None,
             db: None,
@@ -305,7 +308,7 @@ impl<'a> Schemasync<'a> {
     /// Initialize database connection and config from environment
     async fn initialize(&mut self) -> Result<()> {
         info!("Initializing Schemasync database connection and configuration");
-        let config = load_connected_config(&self.connection_overrides)?;
+        let config = load_connected_config(self.config, &self.connection_overrides)?;
         let mut schemasync = config.require_schemasync()?.clone();
         schemasync.apply_mock_overrides(&self.mock_overrides);
         debug!("Loaded Evenframe configuration successfully");

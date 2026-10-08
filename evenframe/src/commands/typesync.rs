@@ -1,8 +1,8 @@
 //! Typesync command - generates TypeScript types and schemas.
 
 use crate::cli::{Cli, TypesyncArgs, TypesyncCommands};
-use crate::scan_cache::build_and_record;
-use evenframe_core::scan::{ScanConfig, merge_tables_and_objects};
+use crate::target::Target;
+use evenframe_core::scan::merge_tables_and_objects;
 use evenframe_core::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
@@ -16,11 +16,12 @@ use evenframe_core::{
 use std::path::PathBuf;
 use tracing::info;
 
-/// Runs the typesync command.
+/// Runs the typesync command: one output for the project, or for every
+/// project of a workspace together.
 pub async fn run(cli: &Cli, args: TypesyncArgs) -> Result<()> {
-    let config = EvenframeConfig::new_offline()?;
-    let build_config = ScanConfig::from_config(&config);
-    let configs = build_and_record(&build_config)?;
+    let target = Target::discover()?;
+    let scanned = target.scan_all()?;
+    let (config, configs) = target.typesync_input(&scanned)?;
     generate(cli, args, &config, &configs)
 }
 

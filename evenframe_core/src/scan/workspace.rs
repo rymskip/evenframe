@@ -251,6 +251,8 @@ pub struct WorkspaceScanner {
     /// Files outside the scan subtree to additionally parse after the directory
     /// walk. See [`Self::with_extra_files`].
     extra_files: Vec<IncludeFile>,
+    /// Files in the scan subtree to leave out. See [`Self::with_excluded_files`].
+    excluded_files: Vec<PathBuf>,
 }
 
 impl WorkspaceScanner {
@@ -279,7 +281,19 @@ impl WorkspaceScanner {
             apply_aliases,
             expand_macros,
             extra_files: Vec::new(),
+            excluded_files: Vec::new(),
         }
+    }
+
+    /// Leaves `files` (absolute paths) out of the directory walk, so their
+    /// types are neither registered nor emitted by this scan.
+    pub fn with_excluded_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.excluded_files = files.iter().map(|file| normalized(file)).collect();
+        self
+    }
+
+    fn is_excluded(&self, path: &Path) -> bool {
+        is_excluded(&self.excluded_files, path)
     }
 
     /// Adds files outside the scan subtree to parse after the directory walk.
@@ -556,12 +570,13 @@ impl WorkspaceScanner {
         })?;
 
         // 1. Walk src/ and collect per-file metadata.
-        let file_meta = collect_source_files(&src_path, crate_name).map_err(|error| {
-            EvenframeError::WorkspaceScan(format!(
-                "failed to walk src for '{}': {}",
-                crate_name, error
-            ))
-        })?;
+        let file_meta =
+            collect_source_files(&src_path, crate_name, &self.excluded_files).map_err(|error| {
+                EvenframeError::WorkspaceScan(format!(
+                    "failed to walk src for '{}': {}",
+                    crate_name, error
+                ))
+            })?;
 
         if file_meta.is_empty() {
             return Ok(Scan::default());
@@ -815,6 +830,10 @@ impl WorkspaceScanner {
                     self.scan_directory_into(&path, state, &module_path, depth + 1)?;
                 }
             } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                if self.is_excluded(&path) {
+                    debug!("Skipping excluded file: {:?}", path);
+                    continue;
+                }
                 let file_stem = path
                     .file_stem()
                     .and_then(|stem| stem.to_str())
@@ -1031,16 +1050,30 @@ struct SourceFile {
 /// Walks a crate's `src/` directory and returns metadata for every `.rs`
 /// file discovered. Mirrors the module-path resolution rules of
 /// [`WorkspaceScanner::scan_directory_into`] without doing any parsing.
-fn collect_source_files(src_path: &Path, crate_name: &str) -> Result<Vec<SourceFile>> {
+fn collect_source_files(
+    src_path: &Path,
+    crate_name: &str,
+    excluded: &[PathBuf],
+) -> Result<Vec<SourceFile>> {
     let mut out = Vec::new();
-    walk_src(src_path, crate_name, "", &mut out, 0)?;
+    walk_src(src_path, crate_name, "", excluded, &mut out, 0)?;
     Ok(out)
+}
+
+/// `path` without `.` components, for comparing configured paths with walked ones.
+fn normalized(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
+fn is_excluded(excluded: &[PathBuf], path: &Path) -> bool {
+    !excluded.is_empty() && excluded.contains(&normalized(path))
 }
 
 fn walk_src(
     dir: &Path,
     base_module: &str,
     rel_dir: &str,
+    excluded: &[PathBuf],
     out: &mut Vec<SourceFile>,
     depth: usize,
 ) -> Result<()> {
@@ -1072,14 +1105,14 @@ fn walk_src(
             } else {
                 format!("{}/{}", rel_dir, dir_name)
             };
-            walk_src(&path, &child_module, &child_rel, out, depth + 1)?;
+            walk_src(&path, &child_module, &child_rel, excluded, out, depth + 1)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let file_stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
             // `src/main.rs` is the default binary target. It doesn't appear
             // in `cargo expand --lib` output, so including it would always
             // produce a missing-module error in the expansion path.
-            if file_stem == "main" {
+            if file_stem == "main" || is_excluded(excluded, &path) {
                 continue;
             }
             let rel_path = if rel_dir.is_empty() {
@@ -2393,7 +2426,7 @@ mod tests {
         create_rust_file(&sub_dir, "bar.rs", "").unwrap();
         create_rust_file(&sub_dir, "mod.rs", "").unwrap();
 
-        let files = collect_source_files(&src_dir, "my_crate").unwrap();
+        let files = collect_source_files(&src_dir, "my_crate", &[]).unwrap();
         let by_rel: HashMap<String, String> = files
             .iter()
             .map(|f| (f.rel_path.clone(), f.module_path.clone()))
@@ -2426,7 +2459,7 @@ mod tests {
         create_rust_file(&src_dir.join("tests"), "should_skip.rs", "").unwrap();
         create_rust_file(&src_dir.join("benches"), "should_skip.rs", "").unwrap();
 
-        let files = collect_source_files(&src_dir, "my_crate").unwrap();
+        let files = collect_source_files(&src_dir, "my_crate", &[]).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].rel_path, "lib.rs");
     }
@@ -2446,10 +2479,43 @@ mod tests {
         create_rust_file(&src_dir, "utils.rs", "").unwrap();
         create_rust_file(&src_dir.join("bin"), "extra.rs", "").unwrap();
 
-        let files = collect_source_files(&src_dir, "my_crate").unwrap();
+        let files = collect_source_files(&src_dir, "my_crate", &[]).unwrap();
         let mut names: Vec<_> = files.iter().map(|f| f.rel_path.clone()).collect();
         names.sort();
         assert_eq!(names, vec!["lib.rs".to_string(), "utils.rs".to_string()]);
+    }
+
+    #[test]
+    fn excluded_files_are_left_out_of_the_scan() {
+        let root = TempDir::new().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"exclusion\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let src = root.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        create_rust_file(&src, "lib.rs", "mod kept;\nmod owned_elsewhere;\n").unwrap();
+        create_rust_file(
+            &src,
+            "kept.rs",
+            "#[derive(Evenframe)]\npub struct Kept { pub name: String }\n",
+        )
+        .unwrap();
+        create_rust_file(
+            &src,
+            "owned_elsewhere.rs",
+            "#[derive(Evenframe)]\npub struct OwnedElsewhere { pub name: String }\n",
+        )
+        .unwrap();
+
+        let types = WorkspaceScanner::with_path(root.path().to_path_buf(), vec![], false)
+            .with_excluded_files(vec![root.path().join("./src/owned_elsewhere.rs")])
+            .scan_for_evenframe_types()
+            .unwrap();
+
+        let names: Vec<&str> = types.iter().map(|found| found.name.as_str()).collect();
+        assert_eq!(names, ["Kept"]);
     }
 
     #[test]

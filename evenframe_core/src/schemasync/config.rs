@@ -185,6 +185,11 @@ pub struct SchemasyncConfig {
     #[serde(default)]
     #[builder(default)]
     pub warn_schemaless: bool,
+    /// The project root of the config this came from, which `plugins` paths
+    /// are relative to (set at load, not from TOML).
+    #[serde(skip)]
+    #[builder(default)]
+    pub project_root: std::path::PathBuf,
 }
 
 /// Configuration for the schemasync lint pass, under `[schemasync.lint]`.

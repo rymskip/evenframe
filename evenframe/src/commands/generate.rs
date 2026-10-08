@@ -1,10 +1,8 @@
 //! Generate command - runs the full pipeline (typesync + schemasync).
 
 use crate::cli::{Cli, GenerateArgs, TypesyncArgs};
-use crate::scan_cache::build_and_record;
-use evenframe_core::scan::ScanConfig;
+use crate::target::Target;
 use evenframe_core::{
-    config::EvenframeConfig,
     error::Result,
     schemasync::config::{ConnectionOverrides, MockOverrides},
 };
@@ -20,12 +18,13 @@ pub async fn run_default(cli: &Cli) -> Result<()> {
     run(cli, args).await
 }
 
-/// Runs the full generation pipeline over a single workspace scan.
+/// Runs the full generation pipeline: one typesync output over every
+/// project's scan, then each focused project's schemasync against its own
+/// database.
 pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
     info!("Starting Evenframe code generation");
-    let config = EvenframeConfig::new()?;
-    let build_config = ScanConfig::from_config(&config);
-    let configs = build_and_record(&build_config)?;
+    let target = Target::discover()?;
+    let scanned = target.scan_all()?;
 
     if args.skip_typesync {
         debug!("Skipping typesync phase");
@@ -37,21 +36,29 @@ pub async fn run(cli: &Cli, args: GenerateArgs) -> Result<()> {
             skip: None,
             per_file: false,
         };
+        let (config, configs) = target.typesync_input(&scanned)?;
         super::typesync::generate(cli, typesync_args, &config, &configs)?;
     }
 
     if args.skip_schemasync {
         debug!("Skipping schemasync phase");
     } else {
-        super::schemasync::run_schemasync(
-            &configs.into_schemasync()?,
-            ConnectionOverrides::default(),
-            MockOverrides {
-                skip_mocks: args.no_mocks,
-                full_refresh: false,
-            },
-        )
-        .await?;
+        let focused = target.focused();
+        for project in scanned {
+            if !focused.iter().any(|(name, _)| *name == project.name) {
+                continue;
+            }
+            super::schemasync::run_schemasync(
+                project.config,
+                &project.types.into_schemasync()?,
+                ConnectionOverrides::default(),
+                MockOverrides {
+                    skip_mocks: args.no_mocks,
+                    full_refresh: false,
+                },
+            )
+            .await?;
+        }
     }
 
     info!("Evenframe code generation completed successfully");
