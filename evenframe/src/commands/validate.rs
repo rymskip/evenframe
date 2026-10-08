@@ -1,11 +1,11 @@
 //! Validate command - validates configuration and types.
 
 use crate::cli::ValidateArgs;
-use crate::scan_cache::build_and_record;
-use evenframe_core::scan::ScanConfig;
+use crate::target::Target;
 use evenframe_core::{
     config::EvenframeConfig,
     error::{EvenframeError, Result},
+    schemasync::{check_database_connectivity, config::ConnectionOverrides, load_connected_config},
     typesync::config::OutputMode,
 };
 use tracing::{info, warn};
@@ -16,28 +16,42 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
 
     let mut has_errors = false;
 
-    if !args.types_only {
-        match EvenframeConfig::new() {
-            Ok(config) => {
-                println!("Configuration: OK");
-                for output in &config.typesync.outputs {
-                    let layout = match output.files.mode {
-                        OutputMode::Single => "",
-                        OutputMode::PerFile => " (per-file)",
-                    };
-                    println!("  Output: {} -> {}{layout}", output.kind, output.dir);
-                }
+    let target = match Target::discover() {
+        Ok(target) => Some(target),
+        Err(e) => {
+            // Reported once, under the check the user asked for.
+            let check = if args.types_only {
+                "Types"
+            } else {
+                "Configuration"
+            };
+            println!("{check}: FAILED");
+            println!("  {e}");
+            if !args.types_only && !args.config_only {
+                println!("Types: SKIPPED, the configuration did not load");
             }
-            Err(e) => {
-                println!("Configuration: FAILED");
-                println!("  {e}");
-                has_errors = true;
-            }
+            has_errors = true;
+            None
+        }
+    };
+
+    if !args.types_only
+        && let Some(target) = &target
+    {
+        println!("Configuration: OK");
+        for output in &typesync_config(target).typesync.outputs {
+            let layout = match output.files.mode {
+                OutputMode::Single => "",
+                OutputMode::PerFile => " (per-file)",
+            };
+            println!("  Output: {} -> {}{layout}", output.kind, output.dir);
         }
     }
 
-    if !args.config_only {
-        match validate_types() {
+    if !args.config_only
+        && let Some(target) = &target
+    {
+        match validate_types(target) {
             Ok((enums, tables, objects)) => {
                 println!("Types: OK");
                 println!("  tables: {tables}, objects: {objects}, enums: {enums}");
@@ -53,8 +67,10 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
         }
     }
 
-    if args.check_db {
-        match check_database().await {
+    if args.check_db
+        && let Some(target) = &target
+    {
+        match check_database(target).await {
             Ok(()) => println!("Database: OK"),
             // Connectivity depends on the environment, not the project, so it
             // is reported without failing validation.
@@ -74,9 +90,19 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
     Ok(())
 }
 
-fn validate_types() -> Result<(usize, usize, usize)> {
-    let build_config = ScanConfig::discover()?;
-    let configs = build_and_record(&build_config)?;
+/// The configuration typesync follows: the project's, or the workspace's.
+fn typesync_config(target: &Target) -> &EvenframeConfig {
+    match target {
+        Target::Project(config) => config,
+        Target::Workspace(workspace) => &workspace.config,
+    }
+}
+
+/// Scans every project and merges their types, which is where two projects
+/// disagreeing on a shared type is found.
+fn validate_types(target: &Target) -> Result<(usize, usize, usize)> {
+    let scanned = target.scan_all()?;
+    let (_, configs) = target.typesync_input(&scanned)?;
     Ok((
         configs.enums.len(),
         configs.tables.len(),
@@ -84,6 +110,10 @@ fn validate_types() -> Result<(usize, usize, usize)> {
     ))
 }
 
-async fn check_database() -> Result<()> {
-    evenframe_core::schemasync::check_database_connectivity().await
+async fn check_database(target: &Target) -> Result<()> {
+    for (_, config) in target.focused() {
+        let config = load_connected_config(config, &ConnectionOverrides::default())?;
+        check_database_connectivity(&config).await?;
+    }
+    Ok(())
 }

@@ -64,6 +64,9 @@ pub struct ScanConfig {
     /// Files outside the scan subtree to additionally parse for Evenframe types.
     /// Paths are already resolved (absolute) relative to the project root.
     pub include_files: Vec<IncludeFile>,
+
+    /// Files inside the scan subtree to leave out, already resolved (absolute).
+    pub exclude_files: Vec<PathBuf>,
 }
 
 impl Default for ScanConfig {
@@ -81,6 +84,7 @@ impl Default for ScanConfig {
             output_rule_plugins: BTreeMap::new(),
             synthetic_item_plugins: BTreeMap::new(),
             include_files: Vec::new(),
+            exclude_files: Vec::new(),
         }
     }
 }
@@ -107,6 +111,7 @@ impl ScanConfig {
             output_rule_plugins: config.general.output_rule_plugins.clone(),
             synthetic_item_plugins: config.general.synthetic_item_plugins.clone(),
             include_files: config.resolved_include_files(),
+            exclude_files: config.resolved_exclude_files(),
         }
     }
 

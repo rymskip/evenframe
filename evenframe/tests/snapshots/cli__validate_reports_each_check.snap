@@ -6,7 +6,7 @@ $ evenframe validate
 status: Some(0)
 --- stdout ---
 Configuration: OK
-  Output: arktype -> ./generated
+  Output: arktype -> [PROJECT]/generated
 Types: OK
   tables: 1, objects: 2, enums: 1
 Validation passed
@@ -22,12 +22,6 @@ Configuration: FAILED
    | ^^^^^^^^^^
 the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
 
-Types: FAILED
-  Configuration error: Failed to parse configuration file [PROJECT]/evenframe.toml: TOML parse error at line 12, column 1
-   |
-12 | [typesync]
-   | ^^^^^^^^^^
-the `arktype` output cannot use mode = "per_file"; only effect and macroforge can
-
+Types: SKIPPED, the configuration did not load
 --- stderr ---
 [TIME] ERROR evenframe: Evenframe failed: Validation error: validation failed with errors

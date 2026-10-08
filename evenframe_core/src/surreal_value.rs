@@ -7,6 +7,7 @@
 pub mod __private {
     use crate::validator::validate::Validate;
     use serde::{Serialize, de::DeserializeOwned};
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::marker::PhantomData;
 
@@ -65,6 +66,40 @@ pub mod __private {
         fn read(&self, value: Value) -> Result<T, Error> {
             SerdeWrapper::<T>::from_value(value).map(|wrapper| wrapper.0)
         }
+    }
+
+    thread_local! {
+        /// The types whose kind is being described, outermost first.
+        static DESCRIBING: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Pops the type `kind_of` pushed, also when describing it panicked.
+    struct Described;
+
+    impl Drop for Described {
+        fn drop(&mut self) {
+            DESCRIBING.with(|describing| describing.borrow_mut().pop());
+        }
+    }
+
+    /// The kind `describe` gives `T`, or `Kind::Any` where `T` sits inside
+    /// its own description: a recursive type nests without end, which no
+    /// finite kind describes.
+    pub fn kind_of<T: ?Sized>(describe: impl FnOnce() -> Kind) -> Kind {
+        let name = std::any::type_name::<T>();
+        let entered = DESCRIBING.with(|describing| {
+            let mut describing = describing.borrow_mut();
+            let entered = !describing.contains(&name);
+            if entered {
+                describing.push(name);
+            }
+            entered
+        });
+        if !entered {
+            return Kind::Any;
+        }
+        let _described = Described;
+        describe()
     }
 
     /// The keys a struct reads, which a flattened read of it takes from the

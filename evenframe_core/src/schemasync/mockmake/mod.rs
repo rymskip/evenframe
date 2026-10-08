@@ -97,14 +97,9 @@ impl<'a> Mockmaker<'a> {
         let plugin_manager = if schemasync_config.plugins.is_empty() {
             None
         } else {
-            let project_root = crate::config::EvenframeConfig::find_project_root().ok_or_else(|| {
-                crate::error::EvenframeError::config(
-                    "[schemasync] plugins are resolved against the project root, but no evenframe.toml was found",
-                )
-            })?;
             Some(std::cell::RefCell::new(plugin::PluginManager::new(
                 &schemasync_config.plugins,
-                &project_root,
+                &schemasync_config.project_root,
             )?))
         };
         Ok(Self {

@@ -1,0 +1,60 @@
+---
+source: evenframe/tests/cli.rs
+expression: transcript
+---
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/generated/arktype.ts
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts
+
+import { scope } from 'arktype';
+
+export const bindings = scope({
+
+Address: {
+  city: 'string'
+},
+Account: {
+  id: 'string',
+  home: 'Address'
+},
+Deal: {
+  id: 'string',
+  address: 'Address'
+},
+
+});
+
+const exported = bindings.export();
+
+export type Address = typeof exported.Address.infer;
+export type Account = typeof exported.Account.infer;
+export type Deal = typeof exported.Deal.infer;
+
+export const validator = exported;
+$ evenframe typesync
+status: Some(0)
+--- stdout ---
+Wrote [PROJECT]/generated/arktype.ts
+--- stderr ---
+
+$ ls -R generated
+generated/arktype.ts
+
+$ evenframe validate --types-only
+status: Some(0)
+--- stdout ---
+Types: OK
+  tables: 2, objects: 3, enums: 0
+Validation passed
+--- stderr ---
+
+$ evenframe typesync
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Configuration error: The struct `Address` is emitted by both `app` and `auth`, and the two definitions differ. Emit it from one project and include its file in the other with `resolve_only = true`, or make the two definitions the same

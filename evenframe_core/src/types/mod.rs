@@ -7,6 +7,7 @@ mod record_id;
 #[cfg(feature = "surrealdb-types")]
 mod record_link;
 mod text_form;
+mod workspace_types;
 
 pub use crate::types::field_type::{FieldType, PathNames, STD_DURATION_PATHS, TextFormKind};
 #[cfg(feature = "schemadump")]
@@ -30,6 +31,7 @@ use std::collections::BTreeMap;
 #[cfg(feature = "schemadump")]
 use std::collections::HashSet;
 pub use text_form::{EpochMillis, FromText, IsoDate, JsonText, TextForm};
+pub use workspace_types::{merge_foreign_types, merge_project_types};
 
 /// Which pipeline(s) a type participates in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

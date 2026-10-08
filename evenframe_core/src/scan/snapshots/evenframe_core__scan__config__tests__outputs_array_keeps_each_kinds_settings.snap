@@ -5,7 +5,7 @@ expression: config.outputs
 [
     TypesyncOutput {
         kind: Arktype,
-        dir: "./generated/arktype",
+        dir: "/nonexistent-evenframe-project/generated/arktype",
         file: Some(
             "schemas.ts",
         ),
@@ -25,7 +25,7 @@ expression: config.outputs
     },
     TypesyncOutput {
         kind: Protobuf,
-        dir: "./proto",
+        dir: "/nonexistent-evenframe-project/proto",
         file: None,
         files: OutputConfig {
             mode: Single,

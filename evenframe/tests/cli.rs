@@ -244,3 +244,41 @@ fn typesync_writes_no_output_when_any_output_fails() {
         &transcript,
     );
 }
+
+#[test]
+fn a_workspace_writes_one_output_for_every_project() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    copy_dir(&fixture("workspace"), root);
+    let mut transcript = run(root, &["typesync"]);
+    transcript += &files_under(root, "generated");
+    for entry in fs::read_dir(root.join("generated")).unwrap() {
+        transcript += &fs::read_to_string(entry.unwrap().path()).unwrap();
+    }
+    fs::remove_dir_all(root.join("generated")).unwrap();
+    transcript += &run(&root.join("auth/src"), &["typesync"]);
+    transcript += &files_under(root, "generated");
+    transcript += &run(root, &["validate", "--types-only"]);
+    // `auth` now emits an `Address` of its own, unlike `app`'s.
+    fs::copy(
+        fixture("workspace-conflicting-address.rs"),
+        root.join("auth/src/lib.rs"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("auth/evenframe.toml"),
+        fs::read_to_string(root.join("auth/evenframe.toml"))
+            .unwrap()
+            .replace(
+                "include_files = [{ path = \"../app/src/address.rs\", resolve_only = true }]",
+                "",
+            ),
+    )
+    .unwrap();
+    transcript += &run(root, &["typesync"]);
+    assert_transcript(
+        root,
+        "a_workspace_writes_one_output_for_every_project",
+        &transcript,
+    );
+}

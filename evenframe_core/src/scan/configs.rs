@@ -53,7 +53,8 @@ pub fn build_all_configs(config: &ScanConfig) -> Result<AllConfigs> {
         config.apply_aliases.clone(),
         config.expand_macros,
     )
-    .with_extra_files(config.include_files.clone());
+    .with_extra_files(config.include_files.clone())
+    .with_excluded_files(config.exclude_files.clone());
 
     let scanned = scanner.scan()?;
     info!("Found {} Evenframe types", scanned.items.len());

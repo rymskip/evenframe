@@ -6,8 +6,10 @@ EvenframeConfig {
     general: GeneralConfig {
         apply_aliases: [],
         include_files: [],
+        exclude_files: [],
         expand_macros: false,
         env_path: None,
+        projects: [],
         foreign_types: {},
         output_rule_plugins: {},
         synthetic_item_plugins: {},
@@ -44,6 +46,7 @@ EvenframeConfig {
                 silence_unverifiable_annotations: false,
             },
             warn_schemaless: false,
+            project_root: "",
         },
     ),
     typesync: TypesyncConfig {

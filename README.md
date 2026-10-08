@@ -414,9 +414,51 @@ default_record_count = 100
 outputs = [{ kind = "arktype", dir = "./web/src/generated" }]
 ```
 
-`evenframe.toml` is found by searching upward from the current directory.
-Values can reference environment variables as `${VAR}` or `${VAR:-default}`,
-and a `.env` file next to the config is loaded first.
+The configuration is every `.evenframe/config.toml` or `evenframe.toml` from
+the current directory upward, merged with the nearer file winning: tables
+merge key by key, and any other value, a list included, replaces the outer
+one. A bare config in a subdirectory therefore inherits everything it leaves
+out. Each file resolves on its own before the merge: its relative paths are
+relative to its own project root, and its values can reference environment
+variables as `${VAR}` or `${VAR:-default}`, read from its own `.env`
+(`general.env_path`, by default `.env` in its project root). A variable a
+nearer file's `.env` sets wins over an outer one's.
+
+#### Workspaces
+
+A config that lists `projects` makes its directory a workspace. Each project
+keeps its own config (its sources, plugins and database) and inherits the
+workspace's, so shared settings such as `foreign_types` and `[typesync]` are
+written once:
+
+```toml
+# evenframe.toml at the workspace root
+[general]
+projects = ["app/backend", "auth/backend"]
+
+[typesync]
+output = { kind = "macroforge", dir = "./web/src/generated" }
+```
+
+```toml
+# auth/backend/evenframe.toml: the app's address type is read, not emitted
+[general]
+include_files = [{ path = "../../app/backend/src/address.rs", resolve_only = true }]
+
+[schemasync.database]
+url = "${SURREALDB_URL}"
+namespace = "${SURREALDB_NS}"
+database = "auth"
+```
+
+Run from the workspace root, a command covers every project; run from inside
+a project, schemasync and mockmake cover that project alone. Typesync always
+scans every project and writes one output, so a type two projects share is
+generated once: a project that only resolves it (`resolve_only`) defers to
+the one that emits it, and two projects that both emit it must define it
+alike. A file a project's crate holds but another project owns is left out of
+the project's scan with `exclude_files`. `projects` is never inherited, and a
+workspace cannot contain another.
 
 Schemasync compares the types with the live database and applies only what
 changed, one transaction per table. Existing records are kept, trimmed or

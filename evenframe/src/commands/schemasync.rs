@@ -1,10 +1,10 @@
 //! Schemasync command - synchronizes database schema.
 
 use crate::cli::{DiffFormat, DumpCommands, SchemasyncArgs, SchemasyncCommands};
-use crate::scan_cache::build_and_record;
-use evenframe_core::scan::ScanConfig;
+use crate::target::Target;
 use evenframe_core::{
-    error::Result,
+    config::EvenframeConfig,
+    error::{EvenframeError, Result},
     schemasync::{
         Schemasync,
         config::{ConnectionOverrides, MockOverrides},
@@ -14,14 +14,42 @@ use evenframe_core::{
 };
 use tracing::{debug, info};
 
-/// Runs the schemasync command.
+/// Runs the schemasync command for each focused project, against its own
+/// database.
 pub async fn run(args: SchemasyncArgs) -> Result<()> {
     info!("Starting schema synchronization");
+    let target = Target::discover()?;
+    let focused = target.scan_focused()?;
+    if focused.len() > 1
+        && let Some(SchemasyncCommands::Dump(dump_args)) = &args.command
+        && (dump_args.file.is_some()
+            || matches!(&dump_args.command, Some(DumpCommands::Tables(tables)) if tables.file.is_some()))
+    {
+        return Err(EvenframeError::config(format!(
+            "-o names one file, but this run dumps {} projects; run it from one project's \
+             directory, or leave out -o to write each project's own",
+            focused.len()
+        )));
+    }
+    for project in focused {
+        if !project.name.is_empty() {
+            info!("Project {}", project.name);
+        }
+        run_project(
+            project.config,
+            project.types.into_schemasync()?,
+            args.clone(),
+        )
+        .await?;
+    }
+    Ok(())
+}
 
-    // Build all configs and filter to schemasync-eligible types
-    let build_config = ScanConfig::discover()?;
-    let types = build_and_record(&build_config)?.into_schemasync()?;
-
+async fn run_project(
+    config: &EvenframeConfig,
+    types: SchemasyncTypes,
+    args: SchemasyncArgs,
+) -> Result<()> {
     info!(
         "Found {} enums, {} tables, {} objects",
         types.enums.len(),
@@ -45,7 +73,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
             SchemasyncCommands::Diff(diff_args) => {
                 info!("Running schema diff...");
 
-                let schemasync = Schemasync::new()
+                let schemasync = Schemasync::new(config)
                     .with_connection_overrides(overrides.clone())
                     .with_types(&types);
 
@@ -71,7 +99,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     }
                     DiffFormat::Json => {
                         let json = serde_json::to_string_pretty(&changes).map_err(|e| {
-                            evenframe_core::error::EvenframeError::config(format!(
+                            EvenframeError::config(format!(
                                 "Failed to serialize changes to JSON: {e}"
                             ))
                         })?;
@@ -86,7 +114,7 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                 if apply_args.dry_run {
                     info!("Dry run mode - showing what would be applied...");
 
-                    let schemasync = Schemasync::new()
+                    let schemasync = Schemasync::new(config)
                         .with_connection_overrides(overrides.clone())
                         .with_types(&types);
 
@@ -99,15 +127,11 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     use std::io::{self, Write};
                     print!("Apply schema changes to the database? [y/N] ");
                     io::stdout().flush().map_err(|e| {
-                        evenframe_core::error::EvenframeError::config(format!(
-                            "Failed to flush stdout: {e}"
-                        ))
+                        EvenframeError::config(format!("Failed to flush stdout: {e}"))
                     })?;
                     let mut input = String::new();
                     io::stdin().read_line(&mut input).map_err(|e| {
-                        evenframe_core::error::EvenframeError::config(format!(
-                            "Failed to read confirmation input: {e}"
-                        ))
+                        EvenframeError::config(format!("Failed to read confirmation input: {e}"))
                     })?;
                     if !input.trim().eq_ignore_ascii_case("y") {
                         println!("Aborted");
@@ -115,12 +139,12 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
                     }
                 }
 
-                run_schemasync(&types, overrides, mocks).await?;
+                run_schemasync(config, &types, overrides, mocks).await?;
             }
             SchemasyncCommands::Mock(mock_args) => {
                 info!("Generating mock data only...");
 
-                let schemasync = Schemasync::new()
+                let schemasync = Schemasync::new(config)
                     .with_connection_overrides(overrides.clone())
                     .with_types(&types);
 
@@ -132,16 +156,13 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
             SchemasyncCommands::Dump(dump_args) => {
                 info!("Dumping resolved schema SurrealQL (offline)...");
 
-                // This path opens no database connection, so the connection
-                // settings' env vars aren't required.
-                let config = evenframe_core::config::EvenframeConfig::new_offline()?;
                 let (scope, chosen_file) = match dump_args.command {
                     Some(DumpCommands::Tables(tables_args)) => {
                         (DumpScope::Tables, tables_args.file)
                     }
                     None => (DumpScope::Schema, dump_args.file),
                 };
-                let ddl = dump_surql(&config, &types, scope)?;
+                let ddl = dump_surql(config, &types, scope)?;
                 let output_path =
                     chosen_file.unwrap_or_else(|| scope.default_path(config.project_root()));
                 let statement_count = ddl
@@ -161,16 +182,17 @@ pub async fn run(args: SchemasyncArgs) -> Result<()> {
     }
 
     // Default: run full schemasync
-    run_schemasync(&types, overrides, mocks).await
+    run_schemasync(config, &types, overrides, mocks).await
 }
 
 /// Runs the full schemasync pipeline over the scanned types.
 pub(crate) async fn run_schemasync(
+    config: &EvenframeConfig,
     types: &SchemasyncTypes,
     overrides: ConnectionOverrides,
     mocks: MockOverrides,
 ) -> Result<()> {
-    let schemasync = Schemasync::new()
+    let schemasync = Schemasync::new(config)
         .with_connection_overrides(overrides)
         .with_mock_overrides(mocks)
         .with_types(types);

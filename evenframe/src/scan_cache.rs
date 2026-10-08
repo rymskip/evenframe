@@ -358,8 +358,10 @@ pub fn scan_inputs(
         }
     }
 
+    // Every config the scan's configuration merges, since an outer one's
+    // settings reach this scan as surely as the nearest one's.
     if let Some(config_path) = &config.config_path {
-        files.push(config_path.clone());
+        files.extend(evenframe_core::config::chain_ending_at(config_path));
     }
     let plugin_paths = config
         .output_rule_plugins

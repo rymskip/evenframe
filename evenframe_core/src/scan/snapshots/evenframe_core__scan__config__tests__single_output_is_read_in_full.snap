@@ -5,7 +5,7 @@ expression: config.outputs
 [
     TypesyncOutput {
         kind: Macroforge,
-        dir: "./generated",
+        dir: "/nonexistent-evenframe-project/generated",
         file: None,
         files: OutputConfig {
             mode: PerFile,
