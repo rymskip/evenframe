@@ -4,9 +4,9 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "deno run -A npm:vite dev",
-		"build": "deno run -A npm:vite build",
-		"preview": "deno run -A npm:wrangler dev",
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite dev",
 		"deploy": "deno task build && deno run -A npm:wrangler deploy",
 		"deploy:check": "deno run -A npm:wrangler deploy --dry-run",
 		"format": "deno run -A npm:@biomejs/biome check --write .",
