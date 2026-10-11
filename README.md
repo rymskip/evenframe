@@ -269,7 +269,7 @@ your outputs in `evenframe.toml` at the project root:
 
 ```toml
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["build-typesync"] }
+evenframe = { version = "0.6", default-features = false, features = ["build-typesync", "arktype", "effect"] }
 ```
 
 ```toml
@@ -296,8 +296,8 @@ code instead of the file, build a `ScanConfig` and call
 `evenframe::build::typesync_with`.
 
 The outputs are ArkType, Effect, Macroforge, Protocol Buffers and
-FlatBuffers. ArkType and Effect are always available; enable `macroforge`,
-`protobuf` and `flatbuffers` (or `typesync-all`) for the others. A validator
+FlatBuffers. Select generators with `arktype`, `effect`, `macroforge`,
+`protobuf` and `flatbuffers` (or `typesync-all` for all of them). A validator
 macroforge does not provide is written as a function in a helpers module beside
 the output, which the generated types name in `custom({ function, source })`.
 
@@ -513,8 +513,10 @@ TypeScript naming does not change Rust serialization or database naming.
 
 ## Database storage
 
-The database stores what serde writes unless a `#[surreal(...)]` key says
-otherwise. Every key the SurrealDB SDK's `SurrealValue` derive defines is
+The database stores the shape serde writes unless a `#[surreal(...)]` key says
+otherwise. Key names are the exception: a stored key is the Rust name unless
+`#[surreal(rename)]` or `#[surreal(rename_all)]` changes it, whatever serde
+renames it to. Every key the SurrealDB SDK's `SurrealValue` derive defines is
 accepted where it applies, and the schema, mock data and the derived
 `SurrealValue` all follow it:
 
@@ -647,3 +649,9 @@ with `{0}` for the linked type.
 ## License
 
 MIT
+
+## Documentation website
+
+The SvelteKit documentation site lives in [`website/`](website/). It uses Deno,
+Biome, and shadcn-svelte and deploys to Cloudflare Workers Static Assets. See
+[`website/README.md`](website/README.md) for development and deployment commands.

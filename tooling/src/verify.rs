@@ -2,12 +2,51 @@
 //! named steps. Each run keeps its progress in `.verify/<id>.json`, so a run
 //! stopped partway, by a failure or by its process ending, resumes with the
 //! steps that did not pass.
+//!
+//! A run fixes what a tool can fix for it, the formatting and clippy's
+//! machine-applicable lints, and then checks. `--check` leaves the tree as it
+//! is and only reports.
 
 use crate::{generated, glob_imports, header, project_root, run, testground_dir};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Whether a run may rewrite the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fixes {
+    /// Format the code and apply clippy's machine-applicable fixes, then check.
+    Apply,
+    /// Leave the tree as it is and report.
+    Check,
+}
+
+/// `cargo fmt` over a workspace: applied, or only checked.
+fn fmt_args(fixes: Fixes) -> &'static [&'static str] {
+    match fixes {
+        Fixes::Apply => &["fmt", "--all"],
+        Fixes::Check => &["fmt", "--all", "--", "--check"],
+    }
+}
+
+/// Clippy over `scope`, refusing every warning. With fixes, its
+/// machine-applicable ones are applied and formatted first, so the gate sees
+/// only what is left for a person.
+fn clippy(cargo: impl Fn(&[&str]) -> bool, scope: &[&str], fixes: Fixes) -> bool {
+    let gate = [&["clippy"][..], scope, &["--", "-D", "warnings"][..]].concat();
+    match fixes {
+        Fixes::Check => cargo(&gate),
+        Fixes::Apply => {
+            let fix = [
+                &["clippy", "--fix", "--allow-dirty", "--allow-staged"][..],
+                scope,
+            ]
+            .concat();
+            cargo(&fix) && cargo(fmt_args(Fixes::Apply)) && cargo(&gate)
+        }
+    }
+}
 
 /// A verify step, by the name `--pipeline` takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -63,7 +102,7 @@ impl Step {
         }
     }
 
-    fn run(self) -> bool {
+    fn run(self, fixes: Fixes) -> bool {
         let cargo = |args: &[&str]| {
             run("cargo", |command| {
                 command.args(args);
@@ -76,25 +115,16 @@ impl Step {
         };
         match self {
             Step::GlobImports => glob_imports::check(),
-            Step::Fmt => cargo(&["fmt", "--all", "--", "--check"]),
-            Step::Clippy => cargo(&[
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--all-features",
-                "--",
-                "-D",
-                "warnings",
-            ]),
-            Step::TestgroundFmt => testground(&["fmt", "--all", "--", "--check"]),
-            Step::TestgroundClippy => testground(&[
-                "clippy",
-                "--all-targets",
-                "--all-features",
-                "--",
-                "-D",
-                "warnings",
-            ]),
+            Step::Fmt => cargo(fmt_args(fixes)),
+            Step::Clippy => clippy(
+                cargo,
+                &["--workspace", "--all-targets", "--all-features"],
+                fixes,
+            ),
+            Step::TestgroundFmt => testground(fmt_args(fixes)),
+            Step::TestgroundClippy => {
+                clippy(testground, &["--all-targets", "--all-features"], fixes)
+            }
             Step::CoreTests => cargo(&["test", "-p", "evenframe_core", "--features", "full"]),
             Step::Snapshots => cargo(&[
                 "test",
@@ -255,8 +285,8 @@ pub enum Source {
     Resume(Option<String>),
 }
 
-pub fn cmd_verify(source: Source, fail_fast: bool) -> bool {
-    match verify(source, fail_fast) {
+pub fn cmd_verify(source: Source, fixes: Fixes, fail_fast: bool) -> bool {
+    match verify(source, fixes, fail_fast) {
         Ok(passed) => passed,
         Err(problem) => {
             eprintln!("verify: {problem}");
@@ -265,7 +295,7 @@ pub fn cmd_verify(source: Source, fail_fast: bool) -> bool {
     }
 }
 
-fn verify(source: Source, fail_fast: bool) -> Result<bool, String> {
+fn verify(source: Source, fixes: Fixes, fail_fast: bool) -> Result<bool, String> {
     let mut record = match source {
         Source::Pipeline(pipeline) if pipeline.is_empty() => start(&Step::ALL)?,
         Source::Pipeline(pipeline) => start(&pipeline)?,
@@ -298,7 +328,7 @@ fn verify(source: Source, fail_fast: bool) -> Result<bool, String> {
         };
         set_outcome(&mut record, position, Outcome::Running)?;
         header(step.label());
-        let outcome = if step.run() {
+        let outcome = if step.run(fixes) {
             Outcome::Passed
         } else {
             Outcome::Failed
@@ -340,4 +370,55 @@ fn set_outcome(record: &mut RunRecord, position: usize, outcome: Outcome) -> Res
         step.outcome = outcome;
     }
     record.save()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Fixes, clippy, fmt_args};
+    use std::cell::RefCell;
+
+    /// The cargo invocations `clippy` makes over a scope, each joined by
+    /// spaces, with every one of them answering `passes`.
+    fn invocations(fixes: Fixes, passes: bool) -> (bool, Vec<String>) {
+        let made = RefCell::new(Vec::new());
+        let passed = clippy(
+            |args| {
+                made.borrow_mut().push(args.join(" "));
+                passes
+            },
+            &["--workspace"],
+            fixes,
+        );
+        (passed, made.into_inner())
+    }
+
+    #[test]
+    fn a_checking_run_formats_and_fixes_nothing() {
+        assert_eq!(fmt_args(Fixes::Check), ["fmt", "--all", "--", "--check"]);
+        let (passed, made) = invocations(Fixes::Check, true);
+        assert!(passed);
+        assert_eq!(made, ["clippy --workspace -- -D warnings"]);
+    }
+
+    #[test]
+    fn a_fixing_run_fixes_then_formats_then_checks() {
+        assert_eq!(fmt_args(Fixes::Apply), ["fmt", "--all"]);
+        let (passed, made) = invocations(Fixes::Apply, true);
+        assert!(passed);
+        assert_eq!(
+            made,
+            [
+                "clippy --fix --allow-dirty --allow-staged --workspace",
+                "fmt --all",
+                "clippy --workspace -- -D warnings",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fix_that_fails_stops_the_step() {
+        let (passed, made) = invocations(Fixes::Apply, false);
+        assert!(!passed);
+        assert_eq!(made.len(), 1, "nothing runs after the failure");
+    }
 }

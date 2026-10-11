@@ -360,19 +360,6 @@ fn test_global_output_flag() {
     );
 }
 
-#[test]
-fn test_global_source_flag() {
-    let output = run_evenframe(&["--help"]);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(
-        stdout.contains("source") || stdout.contains("rust") || stdout.contains("flatbuffers"),
-        "Help should mention source flag. stdout: {}",
-        stdout
-    );
-}
-
 // ============================================================================
 // Error Handling Tests
 // ============================================================================

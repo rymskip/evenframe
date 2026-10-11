@@ -2,27 +2,43 @@
 
 use crate::cli::CheckArgs;
 use crate::scan_cache::{CACHE_REFRESH_COMMAND, CacheStatus, ScanCache};
+use crate::target::Target;
 use evenframe_core::{
     error::{EvenframeError, Result},
     scan::ScanConfig,
 };
 use serde::Serialize;
 
-/// Runs the check command.
+/// Runs the check command for each focused project, against its own cache.
 pub async fn run(args: CheckArgs) -> Result<()> {
-    let config = ScanConfig::discover()?;
-    let report = Report::new(
-        ScanCache::path(&config.scan_path).display().to_string(),
-        ScanCache::status(&config)?,
-    );
+    let target = Target::discover()?;
+    let reports = target
+        .focused()
+        .into_iter()
+        .map(|(project, config)| {
+            let scan = ScanConfig::from_config(config);
+            Ok(Report::new(
+                project,
+                ScanCache::path(&scan.scan_path).display().to_string(),
+                ScanCache::status(&scan)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        // A workspace root reports its projects as a list, one project alone.
+        let json = match reports.as_slice() {
+            [only] if !target.covers_workspace() => serde_json::to_string_pretty(only)?,
+            _ => serde_json::to_string_pretty(&reports)?,
+        };
+        println!("{json}");
     } else {
-        report.print();
+        for report in &reports {
+            report.print();
+        }
     }
 
-    if !report.in_sync() {
+    if !reports.iter().all(Report::in_sync) {
         return Err(EvenframeError::Validation(
             "the scan cache is not current".to_string(),
         ));
@@ -30,9 +46,13 @@ pub async fn run(args: CheckArgs) -> Result<()> {
     Ok(())
 }
 
-/// What the command reports, in both its human and its JSON form.
+/// What the command reports for one project, in both its human and its JSON
+/// form.
 #[derive(Debug, Serialize)]
 struct Report {
+    /// The project's name in its workspace, empty for a project on its own.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    project: String,
     cache_path: String,
     #[serde(flatten)]
     status: ReportStatus,
@@ -54,7 +74,7 @@ struct TypeCounts {
 }
 
 impl Report {
-    fn new(cache_path: String, status: CacheStatus) -> Self {
+    fn new(project: &str, cache_path: String, status: CacheStatus) -> Self {
         let status = match status {
             CacheStatus::Current(cache) => ReportStatus::InSync {
                 types: TypeCounts {
@@ -66,7 +86,11 @@ impl Report {
             CacheStatus::Absent => ReportStatus::Missing,
             CacheStatus::Stale(reason) => ReportStatus::Stale { reason },
         };
-        Self { cache_path, status }
+        Self {
+            project: project.to_string(),
+            cache_path,
+            status,
+        }
     }
 
     fn in_sync(&self) -> bool {
@@ -74,6 +98,9 @@ impl Report {
     }
 
     fn print(&self) {
+        if !self.project.is_empty() {
+            println!("Project {}", self.project);
+        }
         match &self.status {
             ReportStatus::InSync { types } => {
                 println!("Types are in sync with {}", self.cache_path);
@@ -118,7 +145,7 @@ mod tests {
     }
 
     fn report(status: CacheStatus) -> Report {
-        Report::new(".evenframe/cache.json".to_string(), status)
+        Report::new("", ".evenframe/cache.json".to_string(), status)
     }
 
     #[test]
@@ -133,12 +160,21 @@ mod tests {
         let json =
             serde_json::to_value(report(CacheStatus::Current(cache_with_one_object()))).unwrap();
         assert_eq!(json["status"], "in_sync");
+        assert_eq!(json.get("project"), None);
         assert_eq!(json["cache_path"], ".evenframe/cache.json");
         assert_eq!(json["types"]["objects"], 1);
         assert_eq!(json["types"]["tables"], 0);
 
         let json = serde_json::to_value(report(CacheStatus::Absent)).unwrap();
         assert_eq!(json["status"], "missing");
+
+        let json = serde_json::to_value(Report::new(
+            "app",
+            "app/.evenframe/cache.json".to_string(),
+            CacheStatus::Absent,
+        ))
+        .unwrap();
+        assert_eq!(json["project"], "app");
 
         let json =
             serde_json::to_value(report(CacheStatus::Stale("src/lib.rs changed".to_string())))

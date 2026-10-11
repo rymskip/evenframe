@@ -5,7 +5,7 @@ use crate::scan_cache::build_and_record;
 use evenframe_core::{
     config::{
         EvenframeConfig,
-        workspace::{Project, Workspace},
+        workspace::{Focus, Project, Workspace},
     },
     error::Result,
     scan::ScanConfig,
@@ -43,6 +43,12 @@ impl Target {
             Self::Project(config) => vec![("", config)],
             Self::Workspace(workspace) => workspace.focused().map(named).collect(),
         }
+    }
+
+    /// Whether the run started at a workspace root, and so covers every
+    /// project of it.
+    pub fn covers_workspace(&self) -> bool {
+        matches!(self, Self::Workspace(workspace) if workspace.focus == Focus::All)
     }
 
     /// Every project, focused or not.

@@ -57,7 +57,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             Err(err) => {
                 return syn::Error::new(
                         input.span(),
-                        format!("Failed to parse permissions configuration: {}\n\nExample usage:\n#[permissions(\n    select = \"true\",\n    create = \"auth.role == 'admin'\",\n    update = \"$auth.id == id\",\n    delete = \"false\"\n)]\nstruct MyStruct {{ ... }}", err)
+                        format!("Failed to parse permissions configuration: {}\n\nExample usage:\n{}\nstruct MyStruct {{ ... }}", err, PermissionsConfig::EXAMPLE)
                     )
                     .to_compile_error();
             }

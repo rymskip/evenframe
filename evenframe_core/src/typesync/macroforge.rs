@@ -726,8 +726,6 @@ fn render_field_block(
     Ok(lines.join("\n"))
 }
 
-/// Format the `@derive(...)` JSDoc line from a list of macro names.
-/// Falls back to `["Decode"]` when no derives are configured.
 /// What a struct or enum with no derives of its own and no `default_derives`
 /// renders.
 static DECODE: LazyLock<Vec<String>> = LazyLock::new(|| vec!["Decode".to_owned()]);

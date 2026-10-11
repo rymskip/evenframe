@@ -1,5 +1,6 @@
 use crate::{
     error::{EvenframeError, Result},
+    schemasync::PermissionsConfig,
     schemasync::database::surql::shape::DefineContext,
     schemasync::table::{TableConfig, surql_ident},
     types::FieldOwner,
@@ -48,26 +49,11 @@ pub fn generate_define_statements(
             debug!(table_name = %table_name, "Table is normal type");
             "NORMAL".to_string()
         };
-        let select_permissions = table_config
-            .permissions
-            .as_ref()
-            .and_then(|p| p.select_permissions.as_deref())
-            .unwrap_or("FULL");
-        let create_permissions = table_config
-            .permissions
-            .as_ref()
-            .and_then(|p| p.create_permissions.as_deref())
-            .unwrap_or("FULL");
-        let update_permissions = table_config
-            .permissions
-            .as_ref()
-            .and_then(|p| p.update_permissions.as_deref())
-            .unwrap_or("FULL");
-        let delete_permissions = table_config
-            .permissions
-            .as_ref()
-            .and_then(|p| p.delete_permissions.as_deref())
-            .unwrap_or("FULL");
+        let permissions = table_config.permissions.as_ref();
+        let select_permissions = permissions.map_or("FULL", PermissionsConfig::select);
+        let create_permissions = permissions.map_or("FULL", PermissionsConfig::create);
+        let update_permissions = permissions.map_or("FULL", PermissionsConfig::update);
+        let delete_permissions = permissions.map_or("FULL", PermissionsConfig::delete);
 
         // A record whose keys are partly known only from a value cannot list
         // them all, so its table takes any key.

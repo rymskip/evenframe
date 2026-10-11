@@ -53,6 +53,36 @@ impl ToTokens for PermissionsConfig {
 }
 
 impl PermissionsConfig {
+    /// A `#[permissions(...)]` attribute as it is written, for the messages
+    /// that show one.
+    pub const EXAMPLE: &str = "#[permissions(\n    select(\"true\"),\n    create(\"$auth.role = 'admin'\"),\n    update(\"$auth.id = id\"),\n    delete(\"false\")\n)]";
+
+    /// The condition for `select`: its own, else `all`'s, else `FULL`.
+    pub fn select(&self) -> &str {
+        self.condition(&self.select_permissions)
+    }
+
+    /// The condition for `create`: its own, else `all`'s, else `FULL`.
+    pub fn create(&self) -> &str {
+        self.condition(&self.create_permissions)
+    }
+
+    /// The condition for `update`: its own, else `all`'s, else `FULL`.
+    pub fn update(&self) -> &str {
+        self.condition(&self.update_permissions)
+    }
+
+    /// The condition for `delete`: its own, else `all`'s, else `FULL`.
+    pub fn delete(&self) -> &str {
+        self.condition(&self.delete_permissions)
+    }
+
+    fn condition<'a>(&'a self, own: &'a Option<String>) -> &'a str {
+        own.as_deref()
+            .or(self.all_permissions.as_deref())
+            .unwrap_or("FULL")
+    }
+
     pub fn parse(attrs: &[syn::Attribute]) -> syn::Result<Option<PermissionsConfig>> {
         debug!(
             "Parsing permissions configuration from {} attributes",
@@ -164,5 +194,51 @@ impl PermissionsConfig {
 
         debug!("No permissions attribute found");
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PermissionsConfig;
+
+    fn permissions(source: &str) -> PermissionsConfig {
+        let item: syn::DeriveInput =
+            syn::parse_str(&format!("{source} struct Item;")).expect("the attribute parses");
+        PermissionsConfig::parse(&item.attrs)
+            .expect("the permissions are valid")
+            .expect("the item has permissions")
+    }
+
+    #[test]
+    fn the_example_is_an_attribute_the_parser_reads() {
+        let parsed = permissions(PermissionsConfig::EXAMPLE);
+        assert_eq!(parsed.select(), "true");
+        assert_eq!(parsed.create(), "$auth.role = 'admin'");
+        assert_eq!(parsed.update(), "$auth.id = id");
+        assert_eq!(parsed.delete(), "false");
+    }
+
+    #[test]
+    fn all_covers_each_action_without_a_condition_of_its_own() {
+        let parsed = permissions(r#"#[permissions(all("false"), select("true"))]"#);
+        assert_eq!(parsed.select(), "true");
+        assert_eq!(parsed.create(), "false");
+        assert_eq!(parsed.update(), "false");
+        assert_eq!(parsed.delete(), "false");
+    }
+
+    #[test]
+    fn an_action_left_out_is_full() {
+        let parsed = permissions(r#"#[permissions(delete("false"))]"#);
+        assert_eq!(parsed.select(), "FULL");
+        assert_eq!(parsed.delete(), "false");
+    }
+
+    #[test]
+    fn the_assignment_form_is_refused() {
+        let item: syn::DeriveInput =
+            syn::parse_str(r#"#[permissions(select = "true")] struct Item;"#)
+                .expect("the attribute parses");
+        assert!(PermissionsConfig::parse(&item.attrs).is_err());
     }
 }

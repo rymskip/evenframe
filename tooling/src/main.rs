@@ -47,9 +47,15 @@ enum Cmd {
         action: SnapshotAction,
     },
 
-    /// Run full verification: fmt, clippy, and all tests. Each run keeps
-    /// its progress in `.verify/`.
+    /// Run full verification: fmt, clippy, and all tests, applying the
+    /// formatter and clippy's fixes first. Each run keeps its progress in
+    /// `.verify/`.
     Verify {
+        /// Leave the tree as it is: report formatting and lints instead of
+        /// fixing them
+        #[arg(long)]
+        check: bool,
+
         /// Stop on the first failure instead of running all steps
         #[arg(long)]
         fail_fast: bool,
@@ -115,6 +121,7 @@ fn main() -> ExitCode {
         } => cmd_test(snapshot, e2e, derive, &features, &extra),
         Cmd::Snapshot { action } => cmd_snapshot(action),
         Cmd::Verify {
+            check,
             fail_fast,
             resume,
             pipeline,
@@ -122,6 +129,11 @@ fn main() -> ExitCode {
             match resume {
                 Some(id) => verify::Source::Resume(id),
                 None => verify::Source::Pipeline(pipeline),
+            },
+            if check {
+                verify::Fixes::Check
+            } else {
+                verify::Fixes::Apply
             },
             fail_fast,
         ),

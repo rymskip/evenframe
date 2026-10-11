@@ -1,0 +1,20 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!!**/node_modules",
+			"!!**/.svelte-kit",
+			"!!**/build",
+			"!!**/.wrangler",
+			"!!**/test-results",
+			"!!**/playwright-report",
+			"!!deno.lock"
+		]
+	},
+	"css": { "parser": { "tailwindDirectives": true } },
+	"html": {
+		"experimentalFullSupportEnabled": true,
+		"formatter": { "enabled": true }
+	}
+}
