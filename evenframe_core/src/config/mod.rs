@@ -449,30 +449,6 @@ impl EvenframeConfig {
         })
     }
 
-    /// Best-effort early .env load for use before full config is parsed:
-    /// every `.env` the configuration's chain names, or a `.env` found from
-    /// the current directory when there is no project yet.
-    pub fn load_env_early() {
-        match Self::find_config_file() {
-            Ok(nearest) => {
-                let links: Result<Vec<_>> = chain_ending_at(&nearest)
-                    .iter()
-                    .map(|path| chain::Link::read(path))
-                    .collect();
-                match links {
-                    Ok(links) => chain::load_envs(&links),
-                    // The full load reports it, with the command's context.
-                    Err(error) => warn!("Skipped the early .env load: {error}"),
-                }
-            }
-            Err(_) => match dotenvy::dotenv() {
-                Ok(path) => debug!("Loaded environment variables from {:?}", path),
-                Err(e) if e.not_found() => debug!("No .env file found"),
-                Err(e) => warn!("Failed to load .env file: {e}"),
-            },
-        }
-    }
-
     /// Load configuration by searching for evenframe.toml in the current
     /// directory and its ancestors.
     pub fn new() -> Result<EvenframeConfig> {

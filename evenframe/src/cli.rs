@@ -203,15 +203,15 @@ pub struct SchemasyncArgs {
     pub command: Option<SchemasyncCommands>,
 
     /// Database URL override
-    #[arg(long, env = "SURREALDB_URL")]
+    #[arg(long)]
     pub url: Option<String>,
 
     /// Database namespace override
-    #[arg(long, env = "SURREALDB_NS")]
+    #[arg(long)]
     pub namespace: Option<String>,
 
     /// Database name override
-    #[arg(long, env = "SURREALDB_DB")]
+    #[arg(long)]
     pub database: Option<String>,
 
     /// Skip mock data generation
@@ -302,15 +302,15 @@ pub struct MockmakeArgs {
     pub tables: Option<Vec<String>>,
 
     /// Database URL override
-    #[arg(long, env = "SURREALDB_URL")]
+    #[arg(long)]
     pub url: Option<String>,
 
     /// Database namespace override
-    #[arg(long, env = "SURREALDB_NS")]
+    #[arg(long)]
     pub namespace: Option<String>,
 
     /// Database name override
-    #[arg(long, env = "SURREALDB_DB")]
+    #[arg(long)]
     pub database: Option<String>,
 }
 
@@ -431,8 +431,8 @@ pub struct TestPluginArgs {
     #[arg(long)]
     pub type_name: Option<String>,
 
-    /// Only show types where the plugin produced output
-    #[arg(long, default_value = "true")]
+    /// Only show types where the plugin produced output; `false` shows every type
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub changed_only: bool,
 }
 

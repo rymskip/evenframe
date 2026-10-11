@@ -13,10 +13,8 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // `--config` picks the project whose `.env` loads early, and that `.env`
-    // may set variables that logging and some arguments default from, so the
-    // arguments are parsed again once it is loaded. EvenframeConfig::new()
-    // does the authoritative load later.
+    // A `.env` is read only by the configuration that names it, so it never
+    // supplies an argument.
     let cli = Cli::parse();
     if let Some(path) = &cli.config
         && let Err(e) = EvenframeConfig::use_config_file(path)
@@ -24,8 +22,6 @@ async fn main() -> ExitCode {
         eprintln!("Evenframe failed: {e}");
         return ExitCode::FAILURE;
     }
-    EvenframeConfig::load_env_early();
-    let cli = Cli::parse();
 
     init_logging(&cli);
 

@@ -1,0 +1,85 @@
+---
+source: evenframe/tests/cli.rs
+expression: transcript
+---
+$ evenframe check
+status: Some(1)
+--- stdout ---
+Project app
+No scan cache at [PROJECT]/app/.evenframe/cache.json
+  Run `evenframe validate --types-only` to write it
+Project auth
+No scan cache at [PROJECT]/auth/.evenframe/cache.json
+  Run `evenframe validate --types-only` to write it
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe validate --types-only
+status: Some(0)
+--- stdout ---
+Types: OK
+  tables: 2, objects: 3, enums: 0
+Validation passed
+--- stderr ---
+
+$ evenframe check
+status: Some(0)
+--- stdout ---
+Project app
+Types are in sync with [PROJECT]/app/.evenframe/cache.json
+  tables: 1, objects: 2, enums: 0
+Project auth
+Types are in sync with [PROJECT]/auth/.evenframe/cache.json
+  tables: 1, objects: 2, enums: 0
+--- stderr ---
+
+$ evenframe check
+status: Some(1)
+--- stdout ---
+Project app
+Types are in sync with [PROJECT]/app/.evenframe/cache.json
+  tables: 1, objects: 2, enums: 0
+Project auth
+Types are out of sync: src/lib.rs changed
+  Run `evenframe validate --types-only` to refresh [PROJECT]/auth/.evenframe/cache.json
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe check --json
+status: Some(1)
+--- stdout ---
+[
+  {
+    "project": "app",
+    "cache_path": "[PROJECT]/app/.evenframe/cache.json",
+    "status": "in_sync",
+    "types": {
+      "tables": 1,
+      "objects": 2,
+      "enums": 0
+    }
+  },
+  {
+    "project": "auth",
+    "cache_path": "[PROJECT]/auth/.evenframe/cache.json",
+    "status": "stale",
+    "reason": "src/lib.rs changed"
+  }
+]
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Validation error: the scan cache is not current
+
+$ evenframe check --json
+status: Some(0)
+--- stdout ---
+{
+  "project": "app",
+  "cache_path": "[PROJECT]/app/.evenframe/cache.json",
+  "status": "in_sync",
+  "types": {
+    "tables": 1,
+    "objects": 2,
+    "enums": 0
+  }
+}
+--- stderr ---

@@ -73,8 +73,8 @@ pub enum CollisionStrategy {
     /// Stop with a diagnostic error naming both files (default).
     #[default]
     Error,
-    /// Automatically prefix the colliding type with its source filename in PascalCase.
-    /// e.g. `PaymentMethod` in `invoice.rs` → `InvoicePaymentMethod`.
+    /// Prefix the later type with the end of its module path in PascalCase,
+    /// e.g. `PaymentMethod` in the `invoice` module → `InvoicePaymentMethod`.
     AutoRename,
 }
 

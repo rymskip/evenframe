@@ -952,6 +952,9 @@ impl WorkspaceScanner {
             .scopes
             .insert(rust_path(module_path), ModuleScope::of(&items, module_path));
         for item in items {
+            if is_test_only(&item) {
+                continue;
+            }
             match item {
                 Item::Struct(item_struct) => {
                     let local_pipeline = detect_pipeline(&item_struct.attrs).or_else(|| {
@@ -1058,6 +1061,22 @@ fn collect_source_files(
     let mut out = Vec::new();
     walk_src(src_path, crate_name, "", excluded, &mut out, 0)?;
     Ok(out)
+}
+
+/// Whether `item` is compiled only for its crate's own tests (`#[cfg(test)]`):
+/// a stand-in a test declares is never a schema table or a generated type.
+fn is_test_only(item: &Item) -> bool {
+    let attrs = match item {
+        Item::Struct(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        _ => return false,
+    };
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && matches!(&attr.meta, Meta::List(list) if list.tokens.to_string() == "test")
+    })
 }
 
 /// `path` without `.` components, for comparing configured paths with walked ones.
@@ -1558,6 +1577,48 @@ mod tests {
         assert_eq!(types[0].module_path, "test_crate::models");
         assert_eq!(types[0].kind, TypeKind::Struct);
         assert!(types[0].has_id_field);
+    }
+
+    #[test]
+    fn test_scan_rust_file_skips_a_test_module() {
+        // A stand-in a test declares as a table compiles only under test, so
+        // it is never a schema table or a generated type.
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"
+            #[derive(Debug, Clone, Evenframe)]
+            pub struct User {
+                pub id: String,
+            }
+
+            #[cfg(test)]
+            mod tests {
+                #[derive(Debug, Clone, Evenframe)]
+                pub struct Fixture {
+                    pub id: String,
+                }
+
+                struct Probe {
+                    name: String,
+                }
+                impl EvenframeTable for Probe {}
+            }
+        "#;
+
+        create_rust_file(temp_dir.path(), "user.rs", content).unwrap();
+
+        let scanner = WorkspaceScanner::with_path(temp_dir.path().to_path_buf(), vec![], false);
+        let mut types = Vec::new();
+
+        scanner
+            .scan_rust_file(
+                &temp_dir.path().join("user.rs"),
+                &mut types,
+                "test_crate::models",
+            )
+            .unwrap();
+
+        let names: Vec<&str> = types.iter().map(|found| found.name.as_str()).collect();
+        assert_eq!(names, ["User"]);
     }
 
     #[test]

@@ -1,0 +1,16 @@
+---
+source: evenframe/tests/cli.rs
+assertion_line: 88
+expression: transcript
+---
+$ evenframe schemasync diff
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Environment variable not set: PROJECT_DB
+
+$ evenframe schemasync --database passed diff
+status: Some(1)
+--- stdout ---
+--- stderr ---
+[TIME] ERROR evenframe: Evenframe failed: Environment variable not set: SURREALDB_USER

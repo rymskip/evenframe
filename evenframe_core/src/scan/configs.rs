@@ -1946,6 +1946,7 @@ mod resolution_tests {
         assert_eq!(declared.newtype(&other("Status")), None);
     }
 
+    #[cfg(feature = "schemadump")]
     const POSITIONS: &str = r#"
         use evenframe::Evenframe;
         use std::collections::BTreeMap;

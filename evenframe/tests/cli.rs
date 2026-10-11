@@ -103,6 +103,26 @@ fn check_follows_the_sources() {
 }
 
 #[test]
+fn check_covers_every_project_of_a_workspace() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    copy_dir(&fixture("workspace"), root);
+    let mut transcript = run(root, &["check"]);
+    transcript += &run(root, &["validate", "--types-only"]);
+    transcript += &run(root, &["check"]);
+    let lib = root.join("auth/src/lib.rs");
+    fs::write(&lib, fs::read_to_string(&lib).unwrap() + "\n// edited\n").unwrap();
+    transcript += &run(root, &["check"]);
+    transcript += &run(root, &["check", "--json"]);
+    transcript += &run(&root.join("app"), &["check", "--json"]);
+    assert_transcript(
+        root,
+        "check_covers_every_project_of_a_workspace",
+        &transcript,
+    );
+}
+
+#[test]
 fn validate_reports_each_check() {
     let dir = project();
     let root = dir.path();
@@ -279,6 +299,31 @@ fn a_workspace_writes_one_output_for_every_project() {
     assert_transcript(
         root,
         "a_workspace_writes_one_output_for_every_project",
+        &transcript,
+    );
+}
+
+#[test]
+fn a_dotenv_never_supplies_a_connection_argument() {
+    let dir = project();
+    let root = dir.path();
+    let config = root.join("evenframe.toml");
+    fs::write(
+        &config,
+        fs::read_to_string(&config)
+            .unwrap()
+            .replace("database = \"test\"", "database = \"${PROJECT_DB}\""),
+    )
+    .unwrap();
+    // The `.env` names another database but not `PROJECT_DB`, so the
+    // project's own reference stays unresolved.
+    fs::write(root.join(".env"), "SURREALDB_DB=from_dotenv\n").unwrap();
+    let mut transcript = run(root, &["schemasync", "diff"]);
+    // A passed flag outranks the config, so this run gets as far as signing in.
+    transcript += &run(root, &["schemasync", "--database", "passed", "diff"]);
+    assert_transcript(
+        root,
+        "a_dotenv_never_supplies_a_connection_argument",
         &transcript,
     );
 }
