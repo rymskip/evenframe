@@ -19,7 +19,8 @@ The repository's Pixi environment also supplies Deno. Dependencies and tasks sha
 | `deno task lint` | Check formatting and lint, treating warnings as failures |
 | `deno task check` | Sync SvelteKit and check types, components, and accessibility |
 | `deno task build` | Prerender into `build/` |
-| `deno task preview` | Serve the build locally using Wrangler |
+| `deno task preview` | Run the Vite dev server |
+| `deno task serve` | Serve the build locally using Wrangler |
 | `deno task test` | Browser tests against the production build through Wrangler |
 | `deno task deploy:check` | Validate a Workers deployment without publishing |
 | `deno task verify` | Run lint, checks, build, browser tests, and deployment validation |
@@ -31,7 +32,7 @@ Before the first browser test, install Chromium:
 deno run -A npm:@playwright/test install chromium
 ```
 
-Tests start their own Wrangler preview on port 4173. The regular preview defaults to Wrangler's port 8787. `PLAYWRIGHT_BASE_URL` can point tests at an already-running preview, in which case the test runner does not start another server.
+Tests start their own `deno task serve` on port 4173, so they run against the production build. Run `deno task build` first. `deno task serve` alone defaults to Wrangler's port 8787. `PLAYWRIGHT_BASE_URL` can point tests at an already-running server, in which case the test runner does not start another.
 
 ## Authoring
 
@@ -49,7 +50,7 @@ Theme tokens live in `src/routes/layout.css`. shadcn-svelte components live unde
 
 ```sh
 deno task build
-deno task preview
+deno task serve
 deno task deploy:check
 deno task deploy
 ```

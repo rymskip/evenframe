@@ -15,7 +15,12 @@ function basePath(): "" | `/${string}` {
 }
 
 export default defineConfig({
-	ssr: { noExternal: ["sanitize-html", "htmlparser2"] },
+	// sanitize-html requires the ESM-only htmlparser2, which Deno cannot load
+	// through require(), so both are bundled and prebundled for dev SSR.
+	ssr: {
+		noExternal: ["sanitize-html", "htmlparser2"],
+		optimizeDeps: { include: ["sanitize-html"] },
+	},
 	plugins: [
 		tailwindcss(),
 		sveltekit({

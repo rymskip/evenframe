@@ -9,8 +9,8 @@ test("homepage links lead into the complete documentation navigation", async ({
 		if (message.type() === "error") errors.push(message.text());
 	});
 	await page.goto("/");
-	await expect(page.getByRole("heading", { level: 1 })).toContainText(
-		"Your Rust types.",
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"Rust types as the source of truth",
 	);
 	await page.getByRole("link", { name: "Get started" }).click();
 	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
@@ -145,7 +145,7 @@ test("Workers serves nested static pages and a real 404", async ({ page }) => {
 		"Page not found",
 	);
 	await page.getByRole("link", { name: "Return to Evenframe" }).click();
-	await expect(page.getByRole("heading", { level: 1 })).toContainText(
-		"Your Rust types.",
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"Rust types as the source of truth",
 	);
 });

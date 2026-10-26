@@ -7,6 +7,7 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite dev",
+		"serve": "deno run -A npm:wrangler dev",
 		"deploy": "deno task build && deno run -A npm:wrangler deploy",
 		"deploy:check": "deno run -A npm:wrangler deploy --dry-run",
 		"format": "deno run -A npm:@biomejs/biome check --write .",

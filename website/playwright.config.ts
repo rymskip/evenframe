@@ -11,7 +11,7 @@ export default defineConfig({
 	webServer: process.env.PLAYWRIGHT_BASE_URL
 		? undefined
 		: {
-				command: "deno task preview --port 4173",
+				command: "deno task serve --port 4173",
 				url: "http://localhost:4173",
 				timeout: 60_000,
 			},
