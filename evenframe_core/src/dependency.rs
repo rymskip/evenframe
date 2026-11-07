@@ -625,6 +625,7 @@ mod tests {
             format: None,
             morphs: Vec::new(),
             validators: Vec::new(),
+            validator_message: None,
             always_regenerate: false,
             doccom: None,
             annotations: vec![],

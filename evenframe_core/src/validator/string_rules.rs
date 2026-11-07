@@ -79,6 +79,7 @@ impl StringValidator {
             StringValidator::StartsWith(pattern) => text_holds(pattern, Anchoring::Start, value),
             StringValidator::EndsWith(pattern) => text_holds(pattern, Anchoring::End, value),
             StringValidator::Includes(pattern) => text_holds(pattern, Anchoring::Anywhere, value),
+            StringValidator::Excludes(pattern) => !text_holds(pattern, Anchoring::Anywhere, value),
             StringValidator::Trimmed => keywords::trim(value) == value,
             StringValidator::Lowercased => value.to_lowercase() == value,
             StringValidator::Uppercased => value.to_uppercase() == value,
@@ -103,6 +104,9 @@ impl StringValidator {
             }
             StringValidator::Includes(pattern) => {
                 format!("a value containing {}", pattern.describe())
+            }
+            StringValidator::Excludes(pattern) => {
+                format!("a value without {}", pattern.describe())
             }
             other => other.description().to_owned(),
         }
@@ -202,6 +206,7 @@ impl StringValidator {
             StringValidator::StartsWith(_) => "a prefix",
             StringValidator::EndsWith(_) => "a suffix",
             StringValidator::Includes(_) => "a substring",
+            StringValidator::Excludes(_) => "no forbidden substring",
             StringValidator::Lowercased => "lowercase",
             StringValidator::Uppercased => "uppercase",
             StringValidator::Capitalized => "capitalized",

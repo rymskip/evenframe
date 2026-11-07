@@ -203,6 +203,19 @@ pub fn string_check(validator: &StringValidator) -> Result<Option<JsCheck>> {
         StringValidator::StartsWith(pattern) => text_check(pattern, Anchoring::Start)?,
         StringValidator::EndsWith(pattern) => text_check(pattern, Anchoring::End)?,
         StringValidator::Includes(pattern) => text_check(pattern, Anchoring::Anywhere)?,
+        StringValidator::Excludes(pattern) => {
+            JsCheck::Predicate(match text_check(pattern, Anchoring::Anywhere)? {
+                JsCheck::Pattern { source, flags } => {
+                    format!("!{}.test(value)", regexp(&source, &flags)?)
+                }
+                JsCheck::Predicate(holds) => format!("!{holds}"),
+                JsCheck::Length(_) => {
+                    return Err(EvenframeError::config(
+                        "a text check is a pattern or a predicate".to_owned(),
+                    ));
+                }
+            })
+        }
         StringValidator::Trimmed => JsCheck::Predicate("value.trim() === value".to_owned()),
         StringValidator::Lowercased => {
             JsCheck::Predicate("value.toLowerCase() === value".to_owned())

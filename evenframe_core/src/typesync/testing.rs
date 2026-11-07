@@ -133,6 +133,7 @@ pub fn test_field(name: &str, field_type: crate::types::FieldType) -> StructFiel
         format: None,
         morphs: Vec::new(),
         validators: vec![],
+        validator_message: None,
         always_regenerate: false,
         doccom: None,
         annotations: vec![],

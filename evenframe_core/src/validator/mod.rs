@@ -27,16 +27,27 @@ pub enum Validator {
     DurationValidator(DurationValidator),
 }
 
-/// A value's morphs and validators, which run in that order.
+/// A value's morphs and validators, which run in that order, and the
+/// message a refused validator reports.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ValueRules<'a> {
     pub morphs: &'a [morph::Morph],
     pub validators: &'a [Validator],
+    pub message: Option<&'a str>,
 }
 
 impl<'a> ValueRules<'a> {
     pub fn new(morphs: &'a [morph::Morph], validators: &'a [Validator]) -> Self {
-        Self { morphs, validators }
+        Self {
+            morphs,
+            validators,
+            message: None,
+        }
+    }
+
+    /// These rules, reporting `message` when a validator refuses the value.
+    pub fn with_message(self, message: Option<&'a str>) -> Self {
+        Self { message, ..self }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -58,6 +69,7 @@ impl<'a> ValueRules<'a> {
             .map(|position| ValueRules {
                 morphs: morphs.get(position).map_or(&[], Vec::as_slice),
                 validators: validators.get(position).map_or(&[], Vec::as_slice),
+                message: None,
             })
             .collect()
     }
@@ -258,6 +270,9 @@ pub enum StringValidator {
 
     /// String includes text or a format
     Includes(TextPattern),
+
+    /// String holds no occurrence of text or a format
+    Excludes(TextPattern),
 
     /// String has no leading or trailing whitespace (validation only)
     Trimmed,
@@ -885,6 +900,9 @@ impl ToTokens for StringValidator {
             }
             StringValidator::Includes(pattern) => {
                 quote! { ::evenframe::validator::StringValidator::Includes(#pattern) }
+            }
+            StringValidator::Excludes(pattern) => {
+                quote! { ::evenframe::validator::StringValidator::Excludes(#pattern) }
             }
             StringValidator::Trimmed => {
                 quote! { ::evenframe::validator::StringValidator::Trimmed }

@@ -1,0 +1,13 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Folder {
+  /** @endec({ validate: [{ validate: "minLength(3)", message: "must be a short name" }, { validate: "maxLength(9)", message: "must be a short name" }] }) */
+  name: string;
+  slug: Slug;
+}
+
+/** @endec({ validate: [{ validate: "pattern(^[a-z]+$)", message: "must be lowercase letters" }] }) */
+export type Slug = $Newtype<string>;

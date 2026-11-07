@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Folder {
+    name: string (validate: "minLength(3), maxLength(9)");
+    slug: string (validate: "pattern(\"^[a-z]+$\")");
+}

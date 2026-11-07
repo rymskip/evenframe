@@ -1,0 +1,19 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Folder: {
+  name: [[['string', '&', 'string >= 3'], '&', 'string <= 9'], '@', { message: (ctx) => (ctx.propString ? `${ctx.propString} ` : '') + "must be a short name" }],
+  slug: 'Slug'
+},
+"#Slug__value": [['string', '&', new RegExp("^[a-z]+$")], '@', { message: (ctx) => (ctx.propString ? `${ctx.propString} ` : '') + "must be lowercase letters" }],
+Slug: "Slug__value#Slug",
+
+});
+
+const exported = bindings.export();
+
+export type Folder = typeof exported.Folder.infer;
+export type Slug = typeof exported.Slug.infer;

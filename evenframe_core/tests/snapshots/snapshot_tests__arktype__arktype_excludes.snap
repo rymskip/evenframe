@@ -1,0 +1,16 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const bindings = scope({
+
+Segment: {
+  name: [[[['string', '&', 'string >= 1'], ':', (value) => !value.includes("/")], ':', (value) => !value.includes("\\")], ':', (value) => !new RegExp("(?:[\\x00-\\x1f\\x7f])").test(value)],
+  code: ['string', ':', (value) => !new RegExp("(?:[0-9])").test(value)]
+},
+
+});
+
+const exported = bindings.export();
+
+export type Segment = typeof exported.Segment.infer;

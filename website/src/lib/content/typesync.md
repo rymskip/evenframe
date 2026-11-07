@@ -41,6 +41,8 @@ outputs = [
 ]
 ```
 
+FlatBuffers writes a field's validators as rules in its `validate` attribute, such as `minLength(3), excludes("/")`. A text argument is a double-quoted literal with `\` and `"` escaped, and the rule list is escaped again as the attribute's string. A format argument becomes the pattern it stands for: `pattern("...")` where the value must match it, and `notPattern("...")` for `excludes`.
+
 ## Source ownership
 
 Generated files are outputs. Make changes in Rust attributes, generator configuration, or plugins and regenerate. Editing a generated file directly will lose the change on the next sync.

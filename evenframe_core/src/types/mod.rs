@@ -352,6 +352,9 @@ pub struct StructField {
     #[serde(default)]
     pub morphs: Vec<Morph>,
     pub validators: Vec<Validator>,
+    /// What a refused validator reports in place of its own description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator_message: Option<String>,
     /// Lists replacing `validators` in one pipeline.
     #[serde(default, skip_serializing_if = "ValidatorOverrides::is_empty")]
     pub validator_overrides: ValidatorOverrides,
@@ -1225,6 +1228,7 @@ mod tests {
             format: None,
             morphs: Vec::new(),
             validators: vec![],
+            validator_message: None,
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
@@ -1271,6 +1275,7 @@ mod tests {
                     format: None,
                     morphs: Vec::new(),
                     validators: vec![],
+                    validator_message: None,
                     always_regenerate: false,
                     doccom: None,
                     annotations: vec![],
@@ -1288,6 +1293,7 @@ mod tests {
                     format: None,
                     morphs: Vec::new(),
                     validators: vec![],
+                    validator_message: None,
                     always_regenerate: false,
                     doccom: None,
                     annotations: vec![],
@@ -1475,6 +1481,7 @@ mod tests {
             format: None,
             morphs: Vec::new(),
             validators: vec![Validator::StringValidator(StringValidator::Email)],
+            validator_message: None,
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
@@ -1641,6 +1648,7 @@ mod tests {
             format: None,
             morphs: Vec::new(),
             validators: vec![],
+            validator_message: None,
             always_regenerate: false,
             doccom: None,
             annotations: vec![],
@@ -1746,6 +1754,7 @@ mod tests {
             format: None,
             morphs: Vec::new(),
             validators: vec![],
+            validator_message: None,
             always_regenerate: false,
             doccom: None,
             annotations: vec![],

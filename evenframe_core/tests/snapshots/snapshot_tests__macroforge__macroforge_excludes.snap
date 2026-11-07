@@ -1,0 +1,28 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+/** @derive(Decode) */
+export interface Segment {
+  /** @endec({ validate: ["nonEmpty", "custom({ function: \"excludesText_faad767b\", source: \"./helpers\" })", "custom({ function: \"excludesText_555f979d\", source: \"./helpers\" })", "custom({ function: \"excludesText_0b1bcbd5\", source: \"./helpers\" })"] }) */
+  name: string;
+  /** @endec({ validate: ["custom({ function: \"excludesText_84e42d8e\", source: \"./helpers\" })"] }) */
+  code: string;
+}
+
+// helpers
+export function excludesText_0b1bcbd5(value: unknown): boolean {
+	return typeof value === "string" && (!new RegExp("(?:[\\x00-\\x1f\\x7f])").test(value));
+}
+
+export function excludesText_555f979d(value: unknown): boolean {
+	return typeof value === "string" && (!value.includes("\\"));
+}
+
+export function excludesText_84e42d8e(value: unknown): boolean {
+	return typeof value === "string" && (!new RegExp("(?:[0-9])").test(value));
+}
+
+export function excludesText_faad767b(value: unknown): boolean {
+	return typeof value === "string" && (!value.includes("/"));
+}

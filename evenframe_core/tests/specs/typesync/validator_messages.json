@@ -1,0 +1,30 @@
+{
+  "description": "A message replacing what a field's validators report, and one on a newtype's validators",
+  "structs": {
+    "Folder": {
+      "struct_name": "Folder",
+      "fields": [
+        {
+          "field_name": "name",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": { "MinLength": 3 } },
+            { "StringValidator": { "MaxLength": 9 } }
+          ],
+          "validator_message": "must be a short name",
+          "always_regenerate": false
+        },
+        { "field_name": "slug", "field_type": { "Other": "Slug" }, "validators": [], "always_regenerate": false }
+      ]
+    }
+  },
+  "enums": {},
+  "newtypes": {
+    "Slug": {
+      "name": "Slug",
+      "inner": "String",
+      "validators": [{ "StringValidator": { "RegexLiteral": { "Custom": "^[a-z]+$" } } }],
+      "validator_message": "must be lowercase letters"
+    }
+  }
+}

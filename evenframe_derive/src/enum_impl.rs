@@ -88,12 +88,15 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                         };
                         let field_name = naming::unraw(member);
                         let field_type = FieldType::parse_syn_ty(&field.ty);
-                        let (morphs, validators) = match parse_field_validators(&field.attrs) {
-                            Ok(validators) => {
-                                (validators.morph_tokens(), validators.config_tokens())
-                            }
-                            Err(err) => return err.to_compile_error(),
-                        };
+                        let (morphs, validators, validator_message) =
+                            match parse_field_validators(&field.attrs) {
+                                Ok(validators) => (
+                                    validators.morph_tokens(),
+                                    validators.config_tokens(),
+                                    validators.message_tokens(),
+                                ),
+                                Err(err) => return err.to_compile_error(),
+                            };
                         let validator_overrides = match parse_validator_overrides(&field.attrs) {
                             Ok(overrides) => overrides,
                             Err(err) => return err.to_compile_error(),
@@ -108,6 +111,7 @@ pub fn generate_enum_impl(input: DeriveInput, pipeline: PipelineKind) -> TokenSt
                                 format: None,
                                 morphs: vec![#(#morphs),*],
                                 validators: vec![#(#validators),*],
+                                validator_message: #validator_message,
                                 validator_overrides: #validator_overrides,
                                 always_regenerate: false,
                                 doccom: None,

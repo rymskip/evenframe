@@ -285,6 +285,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
             let morphs_tokens = quote! { vec![#(#morph_tokens),*] };
             let config_tokens = field_validators.config_tokens();
             let validators_tokens = quote! { vec![#(#config_tokens),*] };
+            let validator_message_tokens = field_validators.message_tokens();
             fields_validators.push(field_validators);
 
             let field_annotations_tokens = if field_annotations.is_empty() {
@@ -303,6 +304,7 @@ pub fn generate_struct_impl(input: DeriveInput, pipeline: PipelineKind) -> Token
                     format: #format_tokens,
                     morphs: #morphs_tokens,
                     validators: #validators_tokens,
+                    validator_message: #validator_message_tokens,
                     validator_overrides: #validator_overrides,
                     always_regenerate: false,
                     doccom: None,

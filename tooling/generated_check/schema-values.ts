@@ -15,6 +15,10 @@ import { validator as flattenValidator } from "./arktype_flatten.ts";
 import { Event, Post, Settings } from "./effect_flatten.ts";
 import { validator as tupleValidator } from "./arktype_tuple_elements.ts";
 import { Range, Shape } from "./effect_tuple_elements.ts";
+import { validator as segmentValidator } from "./arktype_excludes.ts";
+import { Segment } from "./effect_excludes.ts";
+import { validator as folderValidator } from "./arktype_validator_messages.ts";
+import { Folder } from "./effect_validator_messages.ts";
 import { Schema } from "effect";
 import { type } from "arktype";
 
@@ -35,7 +39,8 @@ const base = {
   initial: "😀",
 };
 
-type Case = { name: string; value: unknown; accepted: boolean };
+// A rejected case with a `message` also requires the refusal to report it.
+type Case = { name: string; value: unknown; accepted: boolean; message?: string };
 
 const cases: Array<Case> = [
   { name: "every field valid", value: base, accepted: true },
@@ -441,6 +446,37 @@ const rangeCases: Array<Case> = [
   { name: "a tuple struct element failing its validator", value: [-1, "x"], accepted: false },
 ];
 
+const segmentCases: Array<Case> = [
+  { name: "a segment holding no excluded text", value: { name: "a.b", code: "x" }, accepted: true },
+  { name: "a segment holding a slash", value: { name: "a/b", code: "x" }, accepted: false },
+  { name: "a segment holding a backslash", value: { name: "a\\b", code: "x" }, accepted: false },
+  { name: "a segment holding a control character", value: { name: "a\u0001b", code: "x" }, accepted: false },
+  { name: "a segment holding a delete character", value: { name: "a\u007fb", code: "x" }, accepted: false },
+  { name: "a code holding a digit", value: { name: "a", code: "x1" }, accepted: false },
+];
+
+const folderCases: Array<Case> = [
+  { name: "a folder meeting its validators", value: { name: "notes", slug: "notes" }, accepted: true },
+  {
+    name: "a name too short, reported by its message",
+    value: { name: "ab", slug: "notes" },
+    accepted: false,
+    message: "must be a short name",
+  },
+  {
+    name: "a name too long, reported by its message",
+    value: { name: "a-long-name", slug: "notes" },
+    accepted: false,
+    message: "must be a short name",
+  },
+  {
+    name: "a newtype refusing its value, reported by its message",
+    value: { name: "notes", slug: "a b" },
+    accepted: false,
+    message: "must be lowercase letters",
+  },
+];
+
 let failures = 0;
 const check = <Decoded, Encoded>(
   cases: Array<Case>,
@@ -465,7 +501,9 @@ const check = <Decoded, Encoded>(
       },
     ];
     for (const { library, accepted, detail } of outcomes) {
-      const ok = accepted === testCase.accepted;
+      const reported = testCase.message === undefined ||
+        detail.includes(testCase.message);
+      const ok = accepted === testCase.accepted && reported;
       if (!ok) failures += 1;
       console.log(
         `${ok ? "ok  " : "FAIL"} ${library} ${testCase.name}: ${
@@ -475,7 +513,7 @@ const check = <Decoded, Encoded>(
             ? ""
             : ` (expected ${
               testCase.accepted ? "accepted" : "rejected"
-            }) ${detail}`
+            }${reported ? "" : `, reporting "${testCase.message}"`}) ${detail}`
         }`,
       );
     }
@@ -491,6 +529,8 @@ check(settingsCases, (value) => flattenValidator.Settings(value), Settings);
 check(eventCases, (value) => flattenValidator.Event(value), Event);
 check(shapeCases, (value) => tupleValidator.Shape(value), Shape);
 check(rangeCases, (value) => tupleValidator.Range(value), Range);
+check(segmentCases, (value) => segmentValidator.Segment(value), Segment);
+check(folderCases, (value) => folderValidator.Folder(value), Folder);
 console.log(
   failures === 0
     ? "all generated schema cases passed"

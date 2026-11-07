@@ -186,6 +186,7 @@ fn newtype_impl(
 
     let morph_tokens = validators.morph_tokens();
     let validator_tokens = validators.config_tokens();
+    let validator_message_tokens = validators.message_tokens();
     let storage = evenframe_core::types::Storage {
         tuple: wire.stored_tuple,
         opaque_elements: wire.opaque_elements.clone(),
@@ -226,6 +227,7 @@ fn newtype_impl(
                             kind: #kind,
                             morphs: vec![#(#morph_tokens),*],
                             validators: vec![#(#validator_tokens),*],
+                            validator_message: #validator_message_tokens,
                             validator_overrides: #validator_overrides,
                             element_morphs: #element_morphs,
                             element_validators: #element_validators_tokens,

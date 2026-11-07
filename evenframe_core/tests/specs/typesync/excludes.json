@@ -1,0 +1,28 @@
+{
+  "description": "Text a value must not hold: two plain substrings and a custom format, beside a format excluded alone",
+  "structs": {
+    "Segment": {
+      "struct_name": "Segment",
+      "fields": [
+        {
+          "field_name": "name",
+          "field_type": "String",
+          "validators": [
+            { "StringValidator": "NonEmpty" },
+            { "StringValidator": { "Excludes": "/" } },
+            { "StringValidator": { "Excludes": "\\" } },
+            { "StringValidator": { "Excludes": { "Format": { "Custom": "[\\x00-\\x1f\\x7f]" } } } }
+          ],
+          "always_regenerate": false
+        },
+        {
+          "field_name": "code",
+          "field_type": "String",
+          "validators": [{ "StringValidator": { "Excludes": { "Format": "Digit" } } }],
+          "always_regenerate": false
+        }
+      ]
+    }
+  },
+  "enums": {}
+}

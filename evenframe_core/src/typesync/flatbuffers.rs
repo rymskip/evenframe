@@ -196,7 +196,7 @@ impl Fbs<'_> {
             let validators = collect_validators_for_field(&field.validators);
             if !validators.is_empty() {
                 self.uses_validate = true;
-                attributes.push(format!("validate: \"{validators}\""));
+                attributes.push(format!("validate: \"{}\"", escape_for_fbs(&validators)));
             }
             if !field.morphs.is_empty() {
                 let steps = field
@@ -500,46 +500,66 @@ fn string_validator_to_flatbuffers(sv: &StringValidator) -> Option<String> {
         StringValidator::NormalizeNfkdPreformatted => Some("normalizedNFKD".to_string()),
 
         // Substring validators, a format argument as its anchored pattern
-        StringValidator::StartsWith(pattern) => {
-            Some(text_argument("startsWith", pattern, Anchoring::Start))
-        }
-        StringValidator::EndsWith(pattern) => {
-            Some(text_argument("endsWith", pattern, Anchoring::End))
-        }
-        StringValidator::Includes(pattern) => {
-            Some(text_argument("includes", pattern, Anchoring::Anywhere))
-        }
+        StringValidator::StartsWith(pattern) => Some(text_argument(
+            "startsWith",
+            "pattern",
+            pattern,
+            Anchoring::Start,
+        )),
+        StringValidator::EndsWith(pattern) => Some(text_argument(
+            "endsWith",
+            "pattern",
+            pattern,
+            Anchoring::End,
+        )),
+        StringValidator::Includes(pattern) => Some(text_argument(
+            "includes",
+            "pattern",
+            pattern,
+            Anchoring::Anywhere,
+        )),
+        StringValidator::Excludes(pattern) => Some(text_argument(
+            "excludes",
+            "notPattern",
+            pattern,
+            Anchoring::Anywhere,
+        )),
 
         // Pattern validators
-        StringValidator::RegexLiteral(Format::Custom(custom))
-            if custom.flags().is_some_and(|flags| !flags.is_empty()) =>
-        {
-            Some(format!(
-                "pattern(\\\"{}\\\", \\\"{}\\\")",
-                escape_for_fbs(custom.as_str()),
-                escape_for_fbs(custom.flags().unwrap_or_default())
-            ))
+        StringValidator::RegexLiteral(Format::Custom(custom)) => {
+            Some(pattern_rule("pattern", custom.as_str(), custom.flags()))
         }
-        StringValidator::RegexLiteral(format) => Some(format!(
-            "pattern(\\\"{}\\\")",
-            escape_for_fbs(&format.pattern())
-        )),
-        StringValidator::Literal(s) => Some(format!("literal(\\\"{}\\\")", escape_for_fbs(s))),
+        StringValidator::RegexLiteral(format) => {
+            Some(pattern_rule("pattern", &format.pattern(), None))
+        }
+        StringValidator::Literal(s) => Some(format!("literal({})", quoted(s))),
     }
 }
 
-/// A text validator's attribute: `name("text")`, or a format's pattern.
-fn text_argument(name: &str, pattern: &TextPattern, anchoring: Anchoring) -> String {
+/// A text validator's rule: `text_rule("text")`, or for a format its pattern
+/// under `pattern_rule`, which says whether the value must or must not match.
+fn text_argument(
+    text_rule: &str,
+    pattern_rule_name: &str,
+    pattern: &TextPattern,
+    anchoring: Anchoring,
+) -> String {
     match pattern {
-        TextPattern::Text(text) => format!("{name}(\\\"{}\\\")", escape_for_fbs(text)),
-        TextPattern::Format(_) => match pattern.regex(anchoring) {
-            (source, Some(flags)) if !flags.is_empty() => format!(
-                "pattern(\\\"{}\\\", \\\"{}\\\")",
-                escape_for_fbs(&source),
-                escape_for_fbs(flags)
-            ),
-            (source, _) => format!("pattern(\\\"{}\\\")", escape_for_fbs(&source)),
-        },
+        TextPattern::Text(text) => format!("{text_rule}({})", quoted(text)),
+        TextPattern::Format(_) => {
+            let (source, flags) = pattern.regex(anchoring);
+            pattern_rule(pattern_rule_name, &source, flags)
+        }
+    }
+}
+
+/// A pattern rule: `rule("source")`, with its flags when it has any.
+fn pattern_rule(rule: &str, source: &str, flags: Option<&str>) -> String {
+    match flags {
+        Some(flags) if !flags.is_empty() => {
+            format!("{rule}({}, {})", quoted(source), quoted(flags))
+        }
+        _ => format!("{rule}({})", quoted(source)),
     }
 }
 
@@ -573,25 +593,17 @@ fn array_validator_to_flatbuffers(av: &ArrayValidator) -> Option<String> {
 fn date_validator_to_flatbuffers(dv: &DateValidator) -> Option<String> {
     match dv {
         DateValidator::ValidDate => Some("validDate".to_string()),
-        DateValidator::GreaterThanDate(d) => {
-            Some(format!("greaterThanDate(\\\"{}\\\")", escape_for_fbs(d)))
+        DateValidator::GreaterThanDate(d) => Some(format!("greaterThanDate({})", quoted(d))),
+        DateValidator::GreaterThanOrEqualToDate(d) => {
+            Some(format!("greaterThanOrEqualToDate({})", quoted(d)))
         }
-        DateValidator::GreaterThanOrEqualToDate(d) => Some(format!(
-            "greaterThanOrEqualToDate(\\\"{}\\\")",
-            escape_for_fbs(d)
-        )),
-        DateValidator::LessThanDate(d) => {
-            Some(format!("lessThanDate(\\\"{}\\\")", escape_for_fbs(d)))
+        DateValidator::LessThanDate(d) => Some(format!("lessThanDate({})", quoted(d))),
+        DateValidator::LessThanOrEqualToDate(d) => {
+            Some(format!("lessThanOrEqualToDate({})", quoted(d)))
         }
-        DateValidator::LessThanOrEqualToDate(d) => Some(format!(
-            "lessThanOrEqualToDate(\\\"{}\\\")",
-            escape_for_fbs(d)
-        )),
-        DateValidator::BetweenDate(start, end) => Some(format!(
-            "betweenDate(\\\"{}\\\", \\\"{}\\\")",
-            escape_for_fbs(start),
-            escape_for_fbs(end)
-        )),
+        DateValidator::BetweenDate(start, end) => {
+            Some(format!("betweenDate({}, {})", quoted(start), quoted(end)))
+        }
     }
 }
 
@@ -601,25 +613,17 @@ fn bigint_validator_to_flatbuffers(biv: &BigIntValidator) -> Option<String> {
         BigIntValidator::NegativeBigInt => Some("negativeBigInt".to_string()),
         BigIntValidator::NonPositiveBigInt => Some("nonPositiveBigInt".to_string()),
         BigIntValidator::NonNegativeBigInt => Some("nonNegativeBigInt".to_string()),
-        BigIntValidator::GreaterThanBigInt(n) => {
-            Some(format!("greaterThanBigInt(\\\"{}\\\")", escape_for_fbs(n)))
+        BigIntValidator::GreaterThanBigInt(n) => Some(format!("greaterThanBigInt({})", quoted(n))),
+        BigIntValidator::GreaterThanOrEqualToBigInt(n) => {
+            Some(format!("greaterThanOrEqualToBigInt({})", quoted(n)))
         }
-        BigIntValidator::GreaterThanOrEqualToBigInt(n) => Some(format!(
-            "greaterThanOrEqualToBigInt(\\\"{}\\\")",
-            escape_for_fbs(n)
-        )),
-        BigIntValidator::LessThanBigInt(n) => {
-            Some(format!("lessThanBigInt(\\\"{}\\\")", escape_for_fbs(n)))
+        BigIntValidator::LessThanBigInt(n) => Some(format!("lessThanBigInt({})", quoted(n))),
+        BigIntValidator::LessThanOrEqualToBigInt(n) => {
+            Some(format!("lessThanOrEqualToBigInt({})", quoted(n)))
         }
-        BigIntValidator::LessThanOrEqualToBigInt(n) => Some(format!(
-            "lessThanOrEqualToBigInt(\\\"{}\\\")",
-            escape_for_fbs(n)
-        )),
-        BigIntValidator::BetweenBigInt(start, end) => Some(format!(
-            "betweenBigInt(\\\"{}\\\", \\\"{}\\\")",
-            escape_for_fbs(start),
-            escape_for_fbs(end)
-        )),
+        BigIntValidator::BetweenBigInt(start, end) => {
+            Some(format!("betweenBigInt({}, {})", quoted(start), quoted(end)))
+        }
     }
 }
 
@@ -629,64 +633,63 @@ fn bigdecimal_validator_to_flatbuffers(bdv: &BigDecimalValidator) -> Option<Stri
         BigDecimalValidator::NegativeBigDecimal => Some("negativeBigDecimal".to_string()),
         BigDecimalValidator::NonPositiveBigDecimal => Some("nonPositiveBigDecimal".to_string()),
         BigDecimalValidator::NonNegativeBigDecimal => Some("nonNegativeBigDecimal".to_string()),
-        BigDecimalValidator::GreaterThanBigDecimal(n) => Some(format!(
-            "greaterThanBigDecimal(\\\"{}\\\")",
-            escape_for_fbs(n)
-        )),
-        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(n) => Some(format!(
-            "greaterThanOrEqualToBigDecimal(\\\"{}\\\")",
-            escape_for_fbs(n)
-        )),
-        BigDecimalValidator::LessThanBigDecimal(n) => {
-            Some(format!("lessThanBigDecimal(\\\"{}\\\")", escape_for_fbs(n)))
+        BigDecimalValidator::GreaterThanBigDecimal(n) => {
+            Some(format!("greaterThanBigDecimal({})", quoted(n)))
         }
-        BigDecimalValidator::LessThanOrEqualToBigDecimal(n) => Some(format!(
-            "lessThanOrEqualToBigDecimal(\\\"{}\\\")",
-            escape_for_fbs(n)
-        )),
+        BigDecimalValidator::GreaterThanOrEqualToBigDecimal(n) => {
+            Some(format!("greaterThanOrEqualToBigDecimal({})", quoted(n)))
+        }
+        BigDecimalValidator::LessThanBigDecimal(n) => {
+            Some(format!("lessThanBigDecimal({})", quoted(n)))
+        }
+        BigDecimalValidator::LessThanOrEqualToBigDecimal(n) => {
+            Some(format!("lessThanOrEqualToBigDecimal({})", quoted(n)))
+        }
         BigDecimalValidator::BetweenBigDecimal(start, end) => Some(format!(
-            "betweenBigDecimal(\\\"{}\\\", \\\"{}\\\")",
-            escape_for_fbs(start),
-            escape_for_fbs(end)
+            "betweenBigDecimal({}, {})",
+            quoted(start),
+            quoted(end)
         )),
     }
 }
 
 fn duration_validator_to_flatbuffers(dv: &DurationValidator) -> Option<String> {
     match dv {
-        DurationValidator::GreaterThanDuration(d) => Some(format!(
-            "greaterThanDuration(\\\"{}\\\")",
-            escape_for_fbs(d)
-        )),
-        DurationValidator::GreaterThanOrEqualToDuration(d) => Some(format!(
-            "greaterThanOrEqualToDuration(\\\"{}\\\")",
-            escape_for_fbs(d)
-        )),
-        DurationValidator::LessThanDuration(d) => {
-            Some(format!("lessThanDuration(\\\"{}\\\")", escape_for_fbs(d)))
+        DurationValidator::GreaterThanDuration(d) => {
+            Some(format!("greaterThanDuration({})", quoted(d)))
         }
-        DurationValidator::LessThanOrEqualToDuration(d) => Some(format!(
-            "lessThanOrEqualToDuration(\\\"{}\\\")",
-            escape_for_fbs(d)
-        )),
+        DurationValidator::GreaterThanOrEqualToDuration(d) => {
+            Some(format!("greaterThanOrEqualToDuration({})", quoted(d)))
+        }
+        DurationValidator::LessThanDuration(d) => Some(format!("lessThanDuration({})", quoted(d))),
+        DurationValidator::LessThanOrEqualToDuration(d) => {
+            Some(format!("lessThanOrEqualToDuration({})", quoted(d)))
+        }
         DurationValidator::BetweenDuration(start, end) => Some(format!(
-            "betweenDuration(\\\"{}\\\", \\\"{}\\\")",
-            escape_for_fbs(start),
-            escape_for_fbs(end)
+            "betweenDuration({}, {})",
+            quoted(start),
+            quoted(end)
         )),
     }
 }
 
-/// Escape special characters for FlatBuffers attribute strings.
+/// Escape special characters for FlatBuffers attribute strings, and for a
+/// rule's quoted argument, which shares their escapes.
 fn escape_for_fbs(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// A rule's argument as a quoted literal. The rule list is escaped again as a
+/// whole when it becomes the attribute's string.
+fn quoted(text: &str) -> String {
+    format!("\"{}\"", escape_for_fbs(text))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ArrayValidator, BTreeMap, BTreeSet, BigIntValidator, DateValidator, DurationValidator, Fbs,
-        FieldType, NumberValidator, StringValidator, StructConfig, TaggedUnion, Validator,
+        FieldType, Format, NumberValidator, StringValidator, StructConfig, TaggedUnion, Validator,
         collect_validators_for_field, escape_for_fbs, generate_flatbuffers_schema_string,
         validator_to_flatbuffers_string,
     };
@@ -1188,7 +1191,7 @@ mod tests {
             validator_to_flatbuffers_string(&Validator::DateValidator(
                 DateValidator::GreaterThanDate("2024-01-01".to_string())
             )),
-            Some("greaterThanDate(\\\"2024-01-01\\\")".to_string())
+            Some("greaterThanDate(\"2024-01-01\")".to_string())
         );
     }
 
@@ -1204,7 +1207,7 @@ mod tests {
             validator_to_flatbuffers_string(&Validator::BigIntValidator(
                 BigIntValidator::GreaterThanBigInt("1000000".to_string())
             )),
-            Some("greaterThanBigInt(\\\"1000000\\\")".to_string())
+            Some("greaterThanBigInt(\"1000000\")".to_string())
         );
     }
 
@@ -1214,13 +1217,13 @@ mod tests {
             validator_to_flatbuffers_string(&Validator::DurationValidator(
                 DurationValidator::GreaterThanDuration("1h".to_string())
             )),
-            Some("greaterThanDuration(\\\"1h\\\")".to_string())
+            Some("greaterThanDuration(\"1h\")".to_string())
         );
         assert_eq!(
             validator_to_flatbuffers_string(&Validator::DurationValidator(
                 DurationValidator::BetweenDuration("1m".to_string(), "1h".to_string())
             )),
-            Some("betweenDuration(\\\"1m\\\", \\\"1h\\\")".to_string())
+            Some("betweenDuration(\"1m\", \"1h\")".to_string())
         );
     }
 
@@ -1229,5 +1232,58 @@ mod tests {
         assert_eq!(escape_for_fbs("hello"), "hello");
         assert_eq!(escape_for_fbs("hello\"world"), "hello\\\"world");
         assert_eq!(escape_for_fbs("path\\to\\file"), "path\\\\to\\\\file");
+    }
+
+    /// A rule's argument is a literal of its own inside the attribute's
+    /// string, so a backslash or quote in it is escaped once for each, and an
+    /// excluded format is a pattern the value must not match.
+    #[test]
+    fn an_argument_is_escaped_as_a_literal_and_again_as_the_attribute() {
+        use crate::validator::text_pattern::TextPattern;
+        let name = vec![
+            Validator::StringValidator(StringValidator::Excludes(TextPattern::Text(
+                "\\".to_owned(),
+            ))),
+            Validator::StringValidator(StringValidator::Includes(TextPattern::Text(
+                "\"".to_owned(),
+            ))),
+        ];
+        let code = vec![Validator::StringValidator(StringValidator::Excludes(
+            TextPattern::Format(Format::Digit),
+        ))];
+        assert_eq!(
+            collect_validators_for_field(&name),
+            r#"excludes("\\"), includes("\"")"#
+        );
+        assert_eq!(
+            collect_validators_for_field(&code),
+            r#"notPattern("(?:[0-9])")"#
+        );
+        let mut structs = BTreeMap::new();
+        structs.insert(
+            "Segment".to_owned(),
+            StructConfig {
+                struct_name: "Segment".to_owned(),
+                fields: vec![StructField {
+                    field_name: "name".to_owned(),
+                    field_type: FieldType::String,
+                    validators: name,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        let output = generate_flatbuffers_schema_string(
+            &structs,
+            &BTreeMap::new(),
+            None,
+            &crate::types::ForeignTypeRegistry::default(),
+        )
+        .expect("the schema generates");
+        assert!(
+            output
+                .contains(r#"name: string (validate: "excludes(\"\\\\\"), includes(\"\\\"\")");"#),
+            "{output}"
+        );
     }
 }
