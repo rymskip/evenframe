@@ -218,6 +218,13 @@ fn string_assertion(
         StringValidator::Includes(pattern @ TextPattern::Format(_)) => {
             format_argument(value_var, pattern, Anchoring::Anywhere)
         }
+        // The value holds none of it: the inclusion check, negated.
+        StringValidator::Excludes(pattern) => string_assertion(
+            &StringValidator::Includes(pattern.clone()),
+            value_var,
+            allow_scripting,
+        )
+        .map(|holds| format!("!({holds})")),
         StringValidator::Trimmed => script("return v.trim() === v;")
             .or_else(|| Some(format!("{value_var} = string::trim({value_var})"))),
         StringValidator::Lowercased => {
@@ -602,6 +609,18 @@ mod tests {
                 crate::validator::text_pattern::TextPattern::Format(Format::Digit)
             ))),
             "string::matches($value, \"(?:[0-9])\")"
+        );
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::Excludes(
+                "/".into()
+            ))),
+            "!(string::contains($value, \"/\"))"
+        );
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::Excludes(
+                crate::validator::text_pattern::TextPattern::Format(Format::Digit)
+            ))),
+            "!(string::matches($value, \"(?:[0-9])\"))"
         );
         assert_eq!(
             gen_assert(Validator::StringValidator(StringValidator::Literal(

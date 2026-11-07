@@ -1,0 +1,10 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+attribute "validate";
+
+table Segment {
+    name: string (validate: "nonEmpty, excludes(\"/\"), excludes(\"\\\\\"), notPattern(\"(?:[\\\\x00-\\\\x1f\\\\x7f])\")");
+    code: string (validate: "notPattern(\"(?:[0-9])\")");
+}

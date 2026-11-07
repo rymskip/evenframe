@@ -85,20 +85,28 @@ impl<'a> CheckedField<'a> {
     /// `with_transforms`; `validate` has an immutable value to check.
     pub fn chain(&self, place: &TokenStream, with_transforms: bool) -> syn::Result<TokenStream> {
         let path = &self.path;
+        // A refused check reports the field's message when it has one; a
+        // morph that cannot rewrite the value reports why.
+        let message = self.validators.message.as_deref();
         let steps: Vec<TokenStream> = self
             .runtime_steps(place)?
             .into_iter()
             .filter_map(|step| match step {
-                RuntimeStep::Check(expression) => Some(expression),
-                RuntimeStep::Transform(expression) if with_transforms => Some(expression),
+                RuntimeStep::Check(expression) => Some((expression, message)),
+                RuntimeStep::Transform(expression) if with_transforms => Some((expression, None)),
                 RuntimeStep::Transform(_) => None,
             })
-            .map(|expression| {
-                quote! {
+            .map(|(expression, message)| match message {
+                Some(message) => quote! {
+                    if ::std::result::Result::is_err(&#expression) {
+                        __errors.push(#path, #message);
+                    }
+                },
+                None => quote! {
                     if let ::std::result::Result::Err(__rejection) = #expression {
                         __errors.push(#path, __rejection);
                     }
-                }
+                },
             })
             .collect();
         Ok(steps

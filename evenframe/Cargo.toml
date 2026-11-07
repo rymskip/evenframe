@@ -1,6 +1,6 @@
 [package]
 name = "evenframe"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -112,12 +112,12 @@ full = ["evenframe_core/full", "build-fullstack"]
 [dependencies]
 
 # workspace dependencies
-evenframe_core = { version = "0.6.0", path = "../evenframe_core", default-features = false }
+evenframe_core = { version = "0.6.1", path = "../evenframe_core", default-features = false }
 convert_case = { workspace = true }
 regex = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-evenframe_derive = { version = "0.6.0", path = "../evenframe_derive" }
+evenframe_derive = { version = "0.6.1", path = "../evenframe_derive" }
 linkme = "0.3.37"
 
 # The evenframe binary (the `cli` feature)

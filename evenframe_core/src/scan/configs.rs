@@ -899,39 +899,45 @@ fn parse_newtype_config(
             ));
         }
     };
-    let (morphs, validators, validator_overrides) = match kind {
+    let (rules, validator_overrides) = match kind {
         NewtypeKind::Branded => {
-            let container = parse_field_validators(&item_struct.attrs)?;
-            let mut morphs = container.morphs;
-            let mut validators = container.validators;
             let mut overrides = parse_container_validator_overrides(&item_struct.attrs)?;
-            // The field's own validators check the same value.
-            if let naming::ItemShape::Newtype { member } = shape
-                && let Some(field) =
-                    item_struct
-                        .fields
-                        .iter()
-                        .enumerate()
-                        .find_map(|(position, field)| match (member, &field.ident) {
-                            (syn::Member::Named(name), Some(ident)) if name == ident => Some(field),
-                            (syn::Member::Unnamed(index), None)
-                                if index.index as usize == position =>
-                            {
-                                Some(field)
-                            }
-                            _ => None,
-                        })
-            {
-                let own = parse_field_validators(&field.attrs)?;
-                morphs.extend(own.morphs);
-                validators.extend(own.validators);
+            // The field's own validators check the same value, after the
+            // container's; read together, as the derive reads them.
+            let field = match shape {
+                naming::ItemShape::Newtype { member } => item_struct
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find_map(|(position, field)| match (member, &field.ident) {
+                        (syn::Member::Named(name), Some(ident)) if name == ident => Some(field),
+                        (syn::Member::Unnamed(index), None) if index.index as usize == position => {
+                            Some(field)
+                        }
+                        _ => None,
+                    }),
+                naming::ItemShape::Tuple(_)
+                | naming::ItemShape::Unit
+                | naming::ItemShape::Named => None,
+            };
+            let attributes: Vec<syn::Attribute> = item_struct
+                .attrs
+                .iter()
+                .chain(
+                    field
+                        .map(|field| field.attrs.as_slice())
+                        .unwrap_or_default(),
+                )
+                .cloned()
+                .collect();
+            if let Some(field) = field {
                 overrides = overrides.followed_by(parse_validator_overrides(&field.attrs)?);
             }
-            (morphs, validators, overrides)
+            (parse_field_validators(&attributes)?, overrides)
         }
         NewtypeKind::Alias => {
             refuse_container_validators(&item_struct.attrs)?;
-            (Vec::new(), Vec::new(), ValidatorOverrides::default())
+            (FieldValidators::default(), ValidatorOverrides::default())
         }
     };
     let elements = match shape {
@@ -949,8 +955,9 @@ fn parse_newtype_config(
         name: item_struct.ident.to_string(),
         inner,
         kind,
-        morphs,
-        validators,
+        morphs: rules.morphs,
+        validators: rules.validators,
+        validator_message: rules.message,
         doccom: parse_doccom_attribute(&item_struct.attrs)?,
         annotations,
         macroforge_derives,
@@ -1088,7 +1095,9 @@ fn process_struct_fields(
         let define_config = DefineConfig::parse(field)?;
         let format = parse_format_attribute_bin(&field.attrs)?;
         let FieldValidators {
-            morphs, validators, ..
+            morphs,
+            validators,
+            message: validator_message,
         } = parse_field_validators(&field.attrs)?;
         let doccom = parse_doccom_attribute(&field.attrs)?;
         let annotations = TypesyncAttributes::parse(&field.attrs, Position::Field)?.annotations;
@@ -1109,6 +1118,7 @@ fn process_struct_fields(
             format,
             morphs,
             validators,
+            validator_message,
             always_regenerate: false,
             doccom,
             annotations,

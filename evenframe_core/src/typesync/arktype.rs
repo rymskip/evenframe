@@ -549,7 +549,8 @@ fn newtype_entries(
         registry,
         helpers,
     )?;
-    let rules = ValueRules::new(&newtype.morphs, &newtype.validators);
+    let rules = ValueRules::new(&newtype.morphs, &newtype.validators)
+        .with_message(newtype.validator_message.as_deref());
     let value = renewed(
         validated_arktype(inner, rules, &newtype.inner, index, type_name, helpers)?,
         &newtype.inner,
@@ -605,7 +606,8 @@ fn field_arktype(
     registry: &crate::types::ForeignTypeRegistry,
     helpers: &mut Helpers,
 ) -> Result<String> {
-    let rules = ValueRules::new(&field.morphs, &field.validators);
+    let rules = ValueRules::new(&field.morphs, &field.validators)
+        .with_message(field.validator_message.as_deref());
     let validated = |field_type: &FieldType, helpers: &mut Helpers| {
         renewed(
             validated_arktype(
@@ -722,6 +724,16 @@ fn validated_arktype(
                 Step::Narrow(predicate) => format!("[{definition}, ':', (value) => {predicate}]"),
             };
         }
+    }
+    // ArkType reports the message for any refusal of the value, a value of
+    // the wrong kind included, after its path as its own messages are.
+    if let Some(message) = rules.message
+        && !rules.validators.is_empty()
+    {
+        definition = format!(
+            "[{definition}, '@', {{ message: (ctx) => (ctx.propString ? `${{ctx.propString}} ` : '') + {} }}]",
+            js_checks::string_literal(message)?
+        );
     }
     Ok(definition)
 }
@@ -922,5 +934,43 @@ mod tests {
             error.contains("a map keyed by `()` has no JSON object key"),
             "{error}"
         );
+    }
+
+    /// A value's message is what ArkType and Effect report when a validator
+    /// refuses it, as the Rust check and Macroforge do.
+    #[test]
+    fn a_message_replaces_what_the_validators_report() {
+        use crate::types::StructConfig;
+        use crate::validator::{StringValidator, Validator};
+        let mut field = crate::typesync::testing::test_field("slug", FieldType::String);
+        field.validators = vec![Validator::StringValidator(StringValidator::MinLength(3))];
+        field.validator_message = Some("must be three letters or more".to_owned());
+        let mut structs = BTreeMap::new();
+        structs.insert(
+            "page".to_owned(),
+            StructConfig {
+                struct_name: "page".to_owned(),
+                fields: vec![field],
+                ..Default::default()
+            },
+        );
+        let enums = BTreeMap::new();
+        let index = TypeIndex::new(&structs, &enums).unwrap();
+        let registry = ForeignTypeRegistry::default();
+        let arktype = super::generate_arktype_type_string(&index, &registry).unwrap();
+        assert!(
+            arktype.contains(
+                "'@', { message: (ctx) => (ctx.propString ? `${ctx.propString} ` : '') + \"must be three letters or more\" }]"
+            ),
+            "{arktype}"
+        );
+        let effect =
+            crate::typesync::effect::generate_effect_schema_string(&index, false, &registry)
+                .unwrap();
+        assert!(
+            effect.contains("message: () => `'Slug' must be three letters or more`"),
+            "{effect}"
+        );
+        assert!(!effect.contains("at least 3 characters"), "{effect}");
     }
 }

@@ -71,6 +71,9 @@ pub struct FieldValidators {
     /// Rewrite the value before the validators check it.
     pub morphs: Vec<Morph>,
     pub validators: Vec<Validator>,
+    /// What a failed validator reports in place of its own description:
+    /// `#[validators(..., message = "...")]`.
+    pub message: Option<String>,
 }
 
 impl FieldValidators {
@@ -81,6 +84,14 @@ impl FieldValidators {
     /// The morphs as tokens for the field's static config.
     pub fn morph_tokens(&self) -> Vec<TokenStream> {
         self.morphs.iter().map(|morph| quote! { #morph }).collect()
+    }
+
+    /// The message as tokens for the field's static config.
+    pub fn message_tokens(&self) -> TokenStream {
+        match &self.message {
+            Some(message) => quote! { ::std::option::Option::Some(#message.to_string()) },
+            None => quote! { ::std::option::Option::None },
+        }
     }
 
     /// The validators as tokens for the field's static config.
@@ -149,6 +160,7 @@ pub fn parse_field_validators(attrs: &[Attribute]) -> Result<FieldValidators> {
     }
 
     let mut validators = Vec::new();
+    let mut message: Option<String> = None;
     for attr in attrs
         .iter()
         .filter(|attr| attr.path().is_ident("validators"))
@@ -168,10 +180,56 @@ pub fn parse_field_validators(attrs: &[Attribute]) -> Result<FieldValidators> {
                 )
             })?;
         for expression in &expressions {
-            collect_validators(expression, PatternDialect::Portable, &mut validators)?;
+            match message_assignment(expression)? {
+                Some(text) if message.is_some() => {
+                    return Err(Error::new_spanned(
+                        expression,
+                        format!(
+                            "a value reports one message when its validators refuse it; \
+                             this one already has one, so `message = {text:?}` would replace it"
+                        ),
+                    ));
+                }
+                Some(text) => message = Some(text),
+                None => collect_validators(expression, PatternDialect::Portable, &mut validators)?,
+            }
         }
     }
-    Ok(FieldValidators { morphs, validators })
+    if message.is_some() && validators.is_empty() {
+        return Err(Error::new_spanned(
+            attrs.iter().find(|attr| attr.path().is_ident("validators")),
+            "a message describes the validators beside it, and this `#[validators]` lists none",
+        ));
+    }
+    Ok(FieldValidators {
+        morphs,
+        validators,
+        message,
+    })
+}
+
+/// The text of `message = "..."`, the one entry of `#[validators]` that is
+/// not a validator, or `None` for any other entry.
+fn message_assignment(expression: &syn::Expr) -> Result<Option<String>> {
+    let syn::Expr::Assign(assign) = expression else {
+        return Ok(None);
+    };
+    let syn::Expr::Path(path) = assign.left.as_ref() else {
+        return Ok(None);
+    };
+    if !path.path.is_ident("message") {
+        return Ok(None);
+    }
+    match assign.right.as_ref() {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(text),
+            ..
+        }) if !text.value().trim().is_empty() => Ok(Some(text.value())),
+        other => Err(Error::new_spanned(
+            other,
+            "`message` takes the text to report, as a non-empty string literal",
+        )),
+    }
 }
 
 /// Each tuple element's morphs, validators and overrides, one entry per
@@ -216,11 +274,19 @@ pub fn parse_validator_list(
 ) -> Result<FieldValidators> {
     let mut validators = Vec::new();
     for expression in expressions {
+        if message_assignment(expression)?.is_some() {
+            return Err(Error::new_spanned(
+                expression,
+                "a message is written in `#[validators(...)]`, which every pipeline reports it \
+                 from; an override replaces only the validators",
+            ));
+        }
         collect_validators(expression, dialect, &mut validators)?;
     }
     Ok(FieldValidators {
         morphs: Vec::new(),
         validators,
+        message: None,
     })
 }
 
@@ -287,7 +353,8 @@ fn collect_validators(
             if let Validator::StringValidator(
                 StringValidator::StartsWith(TextPattern::Format(Format::Custom(custom)))
                 | StringValidator::EndsWith(TextPattern::Format(Format::Custom(custom)))
-                | StringValidator::Includes(TextPattern::Format(Format::Custom(custom))),
+                | StringValidator::Includes(TextPattern::Format(Format::Custom(custom)))
+                | StringValidator::Excludes(TextPattern::Format(Format::Custom(custom))),
             ) = &mut validator
             {
                 *custom = CustomPattern::parse(custom.as_str(), dialect)
@@ -391,5 +458,62 @@ mod tests {
         let error = validators(r#"#[validators(regex_literal = format(custom = r"^\d+$"))]"#)
             .expect_err("`\\d` is not portable");
         assert!(error.to_string().contains("[0-9]"), "{error}");
+    }
+
+    fn parsed(source: &str) -> syn::Result<super::FieldValidators> {
+        let item: syn::DeriveInput =
+            syn::parse_str(&format!("{source} struct Item;")).expect("the attributes parse");
+        parse_field_validators(&item.attrs)
+    }
+
+    #[test]
+    fn a_message_is_read_beside_its_validators() {
+        let rules =
+            parsed(r#"#[validators(non_empty, max_length = 9, message = "must be a short name")]"#)
+                .expect("the validators parse");
+        assert_eq!(rules.message.as_deref(), Some("must be a short name"));
+        assert_eq!(rules.validators.len(), 2);
+    }
+
+    #[test]
+    fn a_message_is_refused_where_it_would_be_lost_or_ambiguous() {
+        for (source, refusal) in [
+            (
+                r#"#[validators(message = "must be anything")]"#,
+                "lists none",
+            ),
+            (
+                r#"#[validators(non_empty, message = "one")] #[validators(email, message = "two")]"#,
+                "already has one",
+            ),
+            (
+                r#"#[validators(non_empty, message = "")]"#,
+                "non-empty string literal",
+            ),
+            (
+                "#[validators(non_empty, message = 3)]",
+                "non-empty string literal",
+            ),
+        ] {
+            let error = parsed(source).expect_err(source);
+            assert!(error.to_string().contains(refusal), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_override_takes_no_message() {
+        let list: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]> =
+            syn::parse_quote!(non_empty, message = "must be set");
+        let error = super::parse_validator_list(
+            &list,
+            crate::schemasync::mockmake::format::PatternDialect::Portable,
+        )
+        .expect_err("an override's message is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("an override replaces only the validators"),
+            "{error}"
+        );
     }
 }

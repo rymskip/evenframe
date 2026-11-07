@@ -1,0 +1,21 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export const Slug = Schema.String.pipe(Schema.pattern(new RegExp("^[a-z]+$"), { message: () => `'Slug' must be lowercase letters` })).pipe(Schema.brand("Slug")).annotations({ identifier: `Slug` });
+export class Folder extends Schema.Class<Folder>("Folder")( { 
+  name: Schema.propertySignature(Schema.String.pipe(Schema.minLength(3, { message: () => `'Name' must be a short name` })).pipe(Schema.maxLength(9, { message: () => `'Name' must be a short name` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  slug: Schema.propertySignature(Slug).annotations({ missingMessage: () => `'Slug' is required` })
+}) {[key: string]: unknown}
+
+
+export type SlugEncoded = string;
+
+export interface FolderEncoded {
+  readonly name: string;
+  readonly slug: SlugEncoded;
+}
+
+
+export type SlugType = typeof Slug.Type;
+export type FolderType = typeof Folder.Type;

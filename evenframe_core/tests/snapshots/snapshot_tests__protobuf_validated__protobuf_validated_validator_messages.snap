@@ -1,0 +1,15 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Folder {
+    string name = 1 [(validate.rules).string = {min_len: 3, max_len: 9}];
+    string slug = 2 [(validate.rules).string = {pattern: "^[a-z]+$"}];
+}

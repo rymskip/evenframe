@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+export class Segment extends Schema.Class<Segment>("Segment")( { 
+  name: Schema.propertySignature(Schema.String.pipe(Schema.minLength(1, { message: () => `'Name' must be at least 1 characters long` })).pipe(Schema.filter((value) => !value.includes("/"), { message: () => `'Name' must be a value without "/"` })).pipe(Schema.filter((value) => !value.includes("\\"), { message: () => `'Name' must be a value without "\\"` })).pipe(Schema.filter((value) => !new RegExp("(?:[\\x00-\\x1f\\x7f])").test(value), { message: () => `'Name' must be a value without matching /[\\x00-\\x1f\\x7f]/` }))).annotations({ missingMessage: () => `'Name' is required` }),
+  code: Schema.propertySignature(Schema.String.pipe(Schema.filter((value) => !new RegExp("(?:[0-9])").test(value), { message: () => `'Code' must be a value without a digit` }))).annotations({ missingMessage: () => `'Code' is required` })
+}) {[key: string]: unknown}
+
+
+export interface SegmentEncoded {
+  readonly name: string;
+  readonly code: string;
+}
+
+
+export type SegmentType = typeof Segment.Type;

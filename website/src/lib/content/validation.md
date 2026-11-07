@@ -32,9 +32,24 @@ Container validators belong on newtypes. Put checks on fields or tuple elements 
 
 ## Text patterns
 
-`starts_with`, `ends_with`, and `includes` accept quoted text or a format. Formats include `uppercase`, `lowercase`, `digit`, `symbol`, `relative_path`, and `slug`, along with the mock-data formats.
+`starts_with`, `ends_with`, `includes`, and `excludes` accept quoted text or a format. Formats include `uppercase`, `lowercase`, `digit`, `symbol`, `relative_path`, and `slug`, along with the mock-data formats. `excludes` refuses a value holding the text, or any match of the format, anywhere in it.
 
 A custom format used in these positional checks may not include its own `^` or `$`: the validator anchors it at the appropriate position.
+
+## Messages
+
+A failed validator reports what it expected, such as `must be at least 8 characters`. A `message` in the same `#[validators(...)]` replaces that for every validator it lists:
+
+```rust
+#[validators(
+    non_empty,
+    regex_literal = format(custom = r"^[^/]+$"),
+    message = "must be one path segment"
+)]
+pub name: String,
+```
+
+The Rust check reports `name: must be one path segment`, and each TypeScript output reports the same text in its own form. ArkType reports it for a value of the wrong kind as well; the others keep their own type errors. A value has one message, so a newtype's container and its field cannot both set one, and a pipeline override cannot set one at all. SurrealDB assertions carry no message.
 
 ## Portable regular expressions
 

@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "clap",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "bon",
@@ -1620,7 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_derive"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "chrono",
  "convert_case",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "evenframe_plugin"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "serde_json",

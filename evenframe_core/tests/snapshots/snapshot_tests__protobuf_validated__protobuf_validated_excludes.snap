@@ -1,0 +1,17 @@
+---
+source: evenframe_core/tests/snapshot_tests.rs
+expression: output
+---
+syntax = "proto3";
+
+import "validate/validate.proto";
+
+// protoc-gen-validate counts string lengths in code points; the validators count
+// UTF-16 units, so the two differ for characters outside the Basic Multilingual Plane.
+
+message Segment {
+    // protoc-gen-validate cannot check: a value without "\"; a value without matching /[\x00-\x1f\x7f]/
+    string name = 1 [(validate.rules).string = {min_len: 1, not_contains: "/"}];
+    // protoc-gen-validate cannot check: a value without a digit
+    string code = 2;
+}

@@ -24,6 +24,9 @@ pub struct NewtypeConfig {
     /// Checked on the inner value, before any validators of a field holding it.
     #[serde(default)]
     pub validators: Vec<Validator>,
+    /// What a refused validator reports in place of its own description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator_message: Option<String>,
     /// Lists replacing `validators` in one pipeline.
     #[serde(default, skip_serializing_if = "ValidatorOverrides::is_empty")]
     pub validator_overrides: ValidatorOverrides,

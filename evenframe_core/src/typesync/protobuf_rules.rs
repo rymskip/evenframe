@@ -155,6 +155,8 @@ struct Rules {
     prefix: Option<String>,
     suffix: Option<String>,
     contains: Option<String>,
+    /// protovalidate takes one `not_contains`; a further one is unenforced.
+    not_contains: Option<String>,
     constant: Option<String>,
     // number and timestamp
     lower: Option<Bound>,
@@ -312,6 +314,15 @@ fn string_rule(
                     rules.contains = Some(existing);
                     false
                 }
+            });
+        }
+        StringValidator::Excludes(TextPattern::Text(substring)) => {
+            return Ok(match &rules.not_contains {
+                None => {
+                    rules.not_contains = Some(substring.clone());
+                    true
+                }
+                Some(existing) => existing == substring,
             });
         }
         StringValidator::Literal(literal) => {
@@ -491,6 +502,9 @@ fn render(
             }
             if let Some(contains) = &rules.contains {
                 entries.push(format!("contains: \"{}\"", escape(contains)));
+            }
+            if let Some(not_contains) = &rules.not_contains {
+                entries.push(format!("not_contains: \"{}\"", escape(not_contains)));
             }
             if let Some(constant) = &rules.constant {
                 entries.push(format!("const: \"{}\"", escape(constant)));

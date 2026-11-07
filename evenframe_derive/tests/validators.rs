@@ -372,3 +372,67 @@ fn every_morph_family_rewrites_the_value_it_applies_to() {
     assert_eq!(rounded.level, 2.3);
     assert_eq!(rounded.rating, 1);
 }
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Folder {
+    #[validators(
+        non_empty,
+        regex_literal = format(custom = r"^[^/]+$"),
+        message = "must be one path segment"
+    )]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Evenframe)]
+#[validators(regex_literal = format(custom = r"^[a-z]+$"), message = "must be lowercase letters")]
+pub struct Slug(String);
+
+#[test]
+fn a_refused_value_reports_its_message() {
+    let error = serde_json::from_value::<Folder>(serde_json::json!({ "name": "a/b" })).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("name: must be one path segment"),
+        "{error}"
+    );
+    let error = serde_json::from_value::<Folder>(serde_json::json!({ "name": "" })).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("name: must be one path segment"),
+        "{error}"
+    );
+    assert!(serde_json::from_value::<Folder>(serde_json::json!({ "name": "docs" })).is_ok());
+}
+
+#[test]
+fn a_refused_newtype_reports_its_message() {
+    let error = Slug::try_from("Not A Slug").unwrap_err();
+    assert_eq!(error.to_string(), "must be lowercase letters");
+    assert_eq!(
+        Slug::try_from("slug").map(|slug| slug.0),
+        Ok("slug".to_owned())
+    );
+}
+
+#[derive(Debug, Clone, Serialize, Evenframe)]
+pub struct Segment {
+    #[validators(excludes = "/", excludes = format(custom = "[\\x00-\\x1f]"))]
+    pub name: String,
+}
+
+#[test]
+fn excludes_refuses_a_value_holding_its_text_or_format() {
+    for refused in ["a/b", "tab\tname"] {
+        let error =
+            serde_json::from_value::<Segment>(serde_json::json!({ "name": refused })).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("name: must be a value without"),
+            "{error}"
+        );
+    }
+    assert!(serde_json::from_value::<Segment>(serde_json::json!({ "name": "notes.txt" })).is_ok());
+}

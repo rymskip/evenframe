@@ -267,7 +267,8 @@ fn generate_newtype_block(
     let declared = match newtype.kind {
         NewtypeKind::Branded => {
             let options = endec_options(
-                ValueRules::new(&newtype.morphs, &newtype.validators),
+                ValueRules::new(&newtype.morphs, &newtype.validators)
+                    .with_message(newtype.validator_message.as_deref()),
                 &newtype.inner,
                 name,
                 helpers,
@@ -644,7 +645,8 @@ fn inline_struct_type(
         .map(|field| {
             let field = field.effective();
             let options = endec_options(
-                ValueRules::new(&field.morphs, &field.validators),
+                ValueRules::new(&field.morphs, &field.validators)
+                    .with_message(field.validator_message.as_deref()),
                 &field.field_type,
                 &field.field_name,
                 helpers,
@@ -688,7 +690,8 @@ fn render_field_block(
 
     // 2. Compute the morphs, validators and endec annotation
     let options = endec_options(
-        ValueRules::new(&field.morphs, &field.validators),
+        ValueRules::new(&field.morphs, &field.validators)
+            .with_message(field.validator_message.as_deref()),
         &field.field_type,
         &field.field_name,
         helpers,
@@ -946,8 +949,13 @@ fn endec_options(
             .collect::<Result<Vec<_>>>()?;
         options.push(format!("normalize: [{}]", steps.join(", ")));
     }
-    let validators =
-        collect_validators_for_field(rules.validators, field_type, field_name, helpers)?;
+    let validators = collect_validators_for_field(
+        rules.validators,
+        rules.message,
+        field_type,
+        field_name,
+        helpers,
+    )?;
     if !validators.is_empty() {
         options.push(format!("validate: [{validators}]"));
     }
@@ -1289,10 +1297,11 @@ impl HelperModule {
 }
 
 /// A field's validators as the items of a `@endec({ validate: [...] })`
-/// array, each a quoted string. A char field is held to exactly one
-/// character.
+/// array: each a quoted string, or with `message` an object reporting it.
+/// A char field is held to exactly one character.
 fn collect_validators_for_field(
     validators: &[Validator],
+    message: Option<&str>,
     field_type: &FieldType,
     field_name: &str,
     helpers: &mut HelperModule,
@@ -1317,7 +1326,13 @@ fn collect_validators_for_field(
     }
     Ok(result
         .iter()
-        .map(|item| format!("\"{item}\""))
+        .map(|item| match message {
+            Some(message) => format!(
+                "{{ validate: \"{item}\", message: \"{}\" }}",
+                escape_for_jsdoc(message)
+            ),
+            None => format!("\"{item}\""),
+        })
         .collect::<Vec<_>>()
         .join(", "))
 }
@@ -1480,6 +1495,8 @@ fn string_validator_to_macroforge(
         StringValidator::Includes(pattern @ TextPattern::Format(_)) => {
             format_argument(pattern, Anchoring::Anywhere)
         }
+        // Macroforge has no negated `includes`, so the check is a helper.
+        StringValidator::Excludes(_) => helper("excludesText", true),
         // Macroforge's `pattern` takes no flags, so a flagged pattern is checked
         // by a helper of its own.
         StringValidator::RegexLiteral(Format::Custom(custom))
@@ -1645,7 +1662,7 @@ mod tests {
     }
 
     fn collected(validators: &[Validator], field_type: &FieldType) -> String {
-        collect_validators_for_field(validators, field_type, "field", &mut helpers())
+        collect_validators_for_field(validators, None, field_type, "field", &mut helpers())
             .expect("the validators collect")
     }
 
@@ -1661,9 +1678,14 @@ mod tests {
             Validator::DurationValidator(DurationValidator::LessThanDuration("1h".to_owned())),
             Validator::StringValidator(StringValidator::Alpha),
         ];
-        let items =
-            collect_validators_for_field(&validators, &FieldType::String, "field", &mut module)
-                .expect("the validators collect");
+        let items = collect_validators_for_field(
+            &validators,
+            None,
+            &FieldType::String,
+            "field",
+            &mut module,
+        )
+        .expect("the validators collect");
         assert!(
             items.starts_with(
                 "\"custom({ function: \\\"isAlpha\\\", source: \\\"./helpers\\\" })\""
@@ -1687,6 +1709,7 @@ mod tests {
                 &[Validator::DurationValidator(
                     DurationValidator::GreaterThanDuration(bound.to_owned()),
                 )],
+                None,
                 &FieldType::Duration,
                 "field",
                 &mut module,
@@ -1704,6 +1727,7 @@ mod tests {
             &[Validator::DurationValidator(
                 DurationValidator::GreaterThanDuration("soon".to_owned()),
             )],
+            None,
             &FieldType::Duration,
             "timeout",
             &mut helpers(),
@@ -2018,6 +2042,13 @@ mod tests {
                         ],
                         ..Default::default()
                     },
+                    StructField {
+                        field_name: "nickname".to_string(),
+                        field_type: FieldType::String,
+                        validators: vec![Validator::StringValidator(StringValidator::MinLength(2))],
+                        validator_message: Some("must be \"two\" letters or more".to_string()),
+                        ..Default::default()
+                    },
                 ],
                 doccom: None,
                 macroforge_derives: vec![],
@@ -2044,6 +2075,12 @@ mod tests {
         assert!(output.contains("@endec({ validate: [\"email\"] })"));
         assert!(output.contains("@endec({ validate: [\"minLength(8)\", \"maxLength(50)\"] })"));
         assert!(output.contains("@endec({ validate: [\"int\", \"between(18, 120)\"] })"));
+        assert!(
+            output.contains(
+                r#"@endec({ validate: [{ validate: "minLength(2)", message: "must be \"two\" letters or more" }] })"#
+            ),
+            "{output}"
+        );
         assert!(output.contains("email: string"));
         assert!(output.contains("password: string"));
         assert!(output.contains("age: number"));

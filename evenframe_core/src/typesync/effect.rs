@@ -308,7 +308,8 @@ impl<'i, 'a, 's> EffectEmitter<'i, 'a, 's> {
             if let Some(doc) = &newtype.doccom {
                 self.classes.push_str(&format_jsdoc(doc, ""));
             }
-            let rules = ValueRules::new(&newtype.morphs, &newtype.validators);
+            let rules = ValueRules::new(&newtype.morphs, &newtype.validators)
+                .with_message(newtype.validator_message.as_deref());
             let schema = renewed(
                 apply_validators_to_schema(
                     payload_schema(
@@ -1055,7 +1056,8 @@ fn validated_field_schema(
     helpers: &Cell<js_checks::MorphHelpers>,
     schema_of: impl Fn(&FieldType) -> Result<String>,
 ) -> Result<String> {
-    let rules = ValueRules::new(&field.morphs, &field.validators);
+    let rules = ValueRules::new(&field.morphs, &field.validators)
+        .with_message(field.validator_message.as_deref());
     let validated = |field_type: &FieldType| {
         renewed(
             apply_validators_to_schema(
@@ -1239,10 +1241,11 @@ fn apply_validators_to_schema(
     let field_type = index.underlying(field_type);
     let validators = rules.validators;
     let title = field_name.to_case(Case::Title);
+    // A value's own message replaces what each validator would report.
     let message = |rule: &str| {
         format!(
             "{{ message: () => {} }}",
-            template_literal(&format!("'{title}' {rule}"))
+            template_literal(&format!("'{title}' {}", rules.message.unwrap_or(rule)))
         )
     };
     let expected = |expectation: &str| message(&format!("must be {expectation}"));
