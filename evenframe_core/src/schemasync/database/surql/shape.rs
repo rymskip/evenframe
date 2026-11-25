@@ -195,7 +195,7 @@ fn checked(
     optional: bool,
     options: SurqlOptions,
 ) -> Option<String> {
-    let generated = generate_assert_from_validators(validators, expr, options.allow_scripting);
+    let generated = generate_assert_from_validators(validators, expr);
     if generated.is_empty() {
         None
     } else if optional {
@@ -235,16 +235,21 @@ enum Own {
     Nested,
 }
 
-/// A position in a field's value: the expression reaching it, where it is
-/// in words, and the closures already open around it.
+/// A position in a field's value: the expression reaching it and where it is
+/// in words.
 #[derive(Debug, Clone)]
 struct Place {
     expr: String,
     location: String,
-    depth: usize,
     own: Own,
     /// Why validators here cannot be asserted, when they cannot.
     unasserted: Option<UnassertedReason>,
+}
+
+/// That no value of the array `collection` fails `assertion`, which names
+/// each value `$this`.
+fn none_failing(collection: &str, assertion: &str) -> String {
+    format!("array::len({collection}[WHERE !({assertion})]) = 0")
 }
 
 impl Place {
@@ -252,7 +257,6 @@ impl Place {
         Place {
             expr: "$value".to_owned(),
             location,
-            depth: 0,
             own: Own::Field,
             unasserted: None,
         }
@@ -263,7 +267,6 @@ impl Place {
         Place {
             expr,
             location: format!("{}{suffix}", self.location),
-            depth: self.depth,
             own: Own::Nested,
             unasserted: self.unasserted,
         }
@@ -291,18 +294,16 @@ impl Place {
         )
     }
 
-    /// The binding of a closure over the values collected here, and the
-    /// position it names.
-    fn each(&self, suffix: &str) -> (String, Self) {
-        let binding = format!("$item{}", self.depth);
-        let place = Place {
-            expr: binding.clone(),
+    /// Each value collected here, as a `[WHERE …]` filter over them names
+    /// it. A field clause cannot make a closure, so a filter does the work of
+    /// `array::all`; a filter nested in another names its own value `$this`.
+    fn each(&self, suffix: &str) -> Self {
+        Place {
+            expr: "$this".to_owned(),
             location: format!("{}{suffix}", self.location),
-            depth: self.depth + 1,
             own: Own::Nested,
             unasserted: self.unasserted,
-        };
-        (binding, place)
+        }
     }
 
     /// The value an `Option` here holds.
@@ -376,12 +377,10 @@ enum WorkItem<'a> {
     },
     AssembleVec {
         expr: String,
-        binding: String,
     },
     /// A map's value, built first, and its key.
     AssembleMap {
         expr: String,
-        binding: String,
     },
     AssembleTuple {
         count: usize,
@@ -554,24 +553,24 @@ impl<'a> Walk<'_, 'a> {
                         zero_ok: true,
                     });
                 }
-                WorkItem::AssembleVec { expr, binding } => {
+                WorkItem::AssembleVec { expr } => {
                     let element = stacks.pop("AssembleVec")?;
                     stacks.built.push(Built {
                         surql: format!("array<{}>", element.surql),
                         map_values: None,
-                        assertion: element.assertion.map(|assertion| {
-                            format!("array::all({expr}, |{binding}| {assertion})")
-                        }),
+                        assertion: element
+                            .assertion
+                            .map(|assertion| none_failing(&expr, &assertion)),
                         // An empty array holds no element to check.
                         zero_ok: true,
                     });
                 }
-                WorkItem::AssembleMap { expr, binding } => {
+                WorkItem::AssembleMap { expr } => {
                     let key = stacks.pop("AssembleMap")?;
                     let value = stacks.pop("AssembleMap")?;
                     let over = |collected: &str, assertion: Option<String>| {
                         assertion.map(|assertion| {
-                            format!("array::all({collected}({expr}), |{binding}| {assertion})")
+                            none_failing(&format!("{collected}({expr})"), &assertion)
                         })
                     };
                     stacks.built.push(Built {
@@ -697,23 +696,17 @@ impl<'a> Walk<'_, 'a> {
                 });
             }
             FieldType::Vec(inner) => {
-                let (binding, element) = place.each("[]");
-                stacks.work.push(WorkItem::AssembleVec {
-                    expr: place.expr,
-                    binding,
-                });
+                let element = place.each("[]");
+                stacks.work.push(WorkItem::AssembleVec { expr: place.expr });
                 stacks.work.push(WorkItem::Process {
                     field_type: inner,
                     place: element,
                 });
             }
             FieldType::HashMap(key, value) | FieldType::BTreeMap(key, value) => {
-                let (binding, key_place) = place.each("{key}");
-                let (_, value_place) = place.each("{}");
-                stacks.work.push(WorkItem::AssembleMap {
-                    expr: place.expr,
-                    binding,
-                });
+                let key_place = place.each("{key}");
+                let value_place = place.each("{}");
+                stacks.work.push(WorkItem::AssembleMap { expr: place.expr });
                 stacks.work.push(WorkItem::Process {
                     field_type: key,
                     place: key_place,

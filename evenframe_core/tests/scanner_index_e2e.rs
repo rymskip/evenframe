@@ -95,7 +95,7 @@ fn scanner_threads_struct_level_index_into_define_statements() {
             enums: &BTreeMap::new(),
             declared: &evenframe_core::types::DeclaredTypes::default(),
             registry: &registry,
-            options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+            options: evenframe_core::schemasync::config::SurqlOptions::default(),
         },
     )
     .unwrap();
@@ -278,7 +278,7 @@ async fn generated_schema(config: &ScanConfig) -> SchemaDefinition {
     let surql = evenframe_core::schemasync::dump::tables_surql(
         &types,
         &ForeignTypeRegistry::default(),
-        true,
+        evenframe_core::schemasync::config::SurqlOptions::default(),
     )
     .expect("the schema generates");
     let db = Surreal::new::<Mem>(())
@@ -412,7 +412,7 @@ fn named_field_unique_replaces_default_unique_index() {
             enums: &BTreeMap::new(),
             declared: &evenframe_core::types::DeclaredTypes::default(),
             registry: &ForeignTypeRegistry::default(),
-            options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+            options: evenframe_core::schemasync::config::SurqlOptions::default(),
         },
     )
     .unwrap();

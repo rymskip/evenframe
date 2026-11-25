@@ -59,8 +59,12 @@ async fn database() -> Surreal<Db> {
     .expect("the project scans")
     .into_schemasync()
     .expect("the schemasync view");
-    let schema =
-        tables_surql(&types, &ForeignTypeRegistry::default(), false).expect("the schema generates");
+    let schema = tables_surql(
+        &types,
+        &ForeignTypeRegistry::default(),
+        evenframe_core::schemasync::config::SurqlOptions::default(),
+    )
+    .expect("the schema generates");
     let db = Surreal::new::<Mem>(()).await.unwrap();
     db.use_ns("test").use_db("test").await.unwrap();
     db.query(schema.as_str())
@@ -71,13 +75,13 @@ async fn database() -> Surreal<Db> {
     db
 }
 
-/// Whether SurrealDB stores `content` as a `run` record.
-async fn stores(db: &Surreal<Db>, content: &str) -> bool {
+/// Store `content` as a `run` record, or the error SurrealDB refused it with.
+async fn store(db: &Surreal<Db>, content: &str) -> Result<(), surrealdb::Error> {
     db.query(format!("CREATE run CONTENT {content}"))
         .await
         .expect("the query is sent")
         .check()
-        .is_ok()
+        .map(drop)
 }
 
 /// A `run` record's content, with each field's value as `fields` gives it
@@ -114,7 +118,9 @@ async fn a_value_meeting_every_nested_validator_is_stored() {
             ("party", "{ first_name: 'a', last_name: 'b' }"),
         ]),
     ] {
-        assert!(stores(&db, &content).await, "{content} is stored");
+        if let Err(error) = store(&db, &content).await {
+            panic!("{content} is stored, but was refused: {error}");
+        }
     }
 }
 
@@ -134,6 +140,6 @@ async fn a_value_failing_a_nested_validator_is_refused() {
         run(&[("party", "{ company_name: '' }")]),
         run(&[("party", "{ first_name: 'a', last_name: '' }")]),
     ] {
-        assert!(!stores(&db, &content).await, "{content} is refused");
+        assert!(store(&db, &content).await.is_err(), "{content} is refused");
     }
 }

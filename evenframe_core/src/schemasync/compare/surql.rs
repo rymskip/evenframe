@@ -11,10 +11,7 @@ use super::types::{
 };
 use crate::{
     EvenframeError, Result, evenframe_log,
-    schemasync::{
-        config::AccessType, database::surql::access::access_definitions_surql,
-        dump::analyzers_reference_functions,
-    },
+    schemasync::{config::AccessType, database::surql::access::access_definitions_surql},
 };
 use futures::StreamExt;
 use std::collections::BTreeMap;
@@ -84,28 +81,20 @@ impl<'a> SurrealdbComparator<'a> {
             .as_deref()
             .filter(|functions| !functions.is_empty());
 
-        // Analyzers first: FULLTEXT indexes in the define statements reference
-        // them, and functions go before the analyzers that call them.
-        let mut functions_applied = false;
+        // In the order schemasync applies them: functions, which an analyzer
+        // or a PERMISSIONS clause may call, then analyzers, which FULLTEXT
+        // indexes in the define statements reference, then the tables.
+        if let Some(functions) = functions {
+            run_checked(&new_schema, functions, "the function definitions").await?;
+        }
         if let Some(analyzers) = resolved
             .analyzers_surql
             .as_deref()
             .filter(|analyzers| !analyzers.is_empty())
         {
-            if let Some(functions) = functions
-                && analyzers_reference_functions(analyzers)
-            {
-                run_checked(&new_schema, functions, "the function definitions").await?;
-                functions_applied = true;
-            }
             run_checked(&new_schema, analyzers, "the analyzer definitions").await?;
         }
         run_checked(&new_schema, define_statements, "the define statements").await?;
-        if let Some(functions) = functions
-            && !functions_applied
-        {
-            run_checked(&new_schema, functions, "the function definitions").await?;
-        }
         Ok(new_schema)
     }
 

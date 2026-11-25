@@ -12,3 +12,10 @@ rustflags = ["-C", "link-arg=-ld_new"]
 # it finds `mold` on PATH, provided by the mold pixi dependency (linux-64).
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Test threads run the in-memory SurrealDB the schemasync tests use, which
+# needs more than the 2 MiB default stack on a deep error path. 10 MiB is what
+# SurrealDB documents for an embedded engine; the CLI sets the same for its
+# runtime workers.
+[env]
+RUST_MIN_STACK = "10485760"

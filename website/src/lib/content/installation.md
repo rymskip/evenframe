@@ -13,7 +13,7 @@ Use a small dependency when the CLI or a build script will generate your files:
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false }
+evenframe = { version = "0.7", default-features = false }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -23,7 +23,7 @@ Without features, the derive still emits `Validate`, validated deserialization w
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["metadata"] }
+evenframe = { version = "0.7", default-features = false, features = ["metadata"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -33,7 +33,7 @@ The `metadata` feature registers each derived type's description and adds config
 
 ```toml
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["build-typesync", "arktype"] }
+evenframe = { version = "0.7", default-features = false, features = ["build-typesync", "arktype"] }
 ```
 
 Select generators explicitly: `arktype`, `effect`, `macroforge`, `protobuf`, or `flatbuffers`. `typesync-all` enables all five. `build-typesync` enables scanning and generation infrastructure, not the generators themselves.

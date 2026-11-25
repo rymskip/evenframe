@@ -546,14 +546,13 @@ impl<'a> Mockmaker<'a> {
                                 error = %error,
                                 "Failed to execute statements"
                             );
-                            #[cfg(feature = "dev-mode")]
-                            {
-                                let error_msg = format!(
-                                    "Failed to execute upsert statements for table {}: {}",
-                                    table_name, error
-                                );
-                                evenframe_log!(&error_msg, "results.log", true);
-                            }
+                            evenframe_log!(
+                                format!(
+                                    "Failed to execute upsert statements for table {table_name}: {error}"
+                                ),
+                                "results.log",
+                                true
+                            );
                             return Err(error.into());
                         }
                     }

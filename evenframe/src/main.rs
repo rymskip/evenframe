@@ -11,15 +11,34 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 use tracing::{error, info};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// Worker stack for the runtime. The in-memory SurrealDB that schema
+/// comparison runs needs more than tokio's 2 MiB default on a deep error path;
+/// 10 MiB is what SurrealDB documents for an embedded engine.
+const WORKER_STACK_BYTES: usize = 10 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Evenframe failed to start its async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(start())
+}
+
+async fn start() -> ExitCode {
     // A `.env` is read only by the configuration that names it, so it never
     // supplies an argument.
     let cli = Cli::parse();
     if let Some(path) = &cli.config
-        && let Err(e) = EvenframeConfig::use_config_file(path)
+        && let Err(error) = EvenframeConfig::use_config_file(path)
     {
-        eprintln!("Evenframe failed: {e}");
+        eprintln!("Evenframe failed: {error}");
         return ExitCode::FAILURE;
     }
 
@@ -37,8 +56,8 @@ async fn main() -> ExitCode {
             info!("Evenframe completed successfully");
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            error!("Evenframe failed: {e}");
+        Err(error) => {
+            error!("Evenframe failed: {error}");
             ExitCode::FAILURE
         }
     }

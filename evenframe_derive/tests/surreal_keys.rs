@@ -436,7 +436,7 @@ fn schema() -> String {
                 ..ForeignTypeConfig::default()
             },
         )])),
-        false,
+        evenframe::schemasync::config::SurqlOptions::default(),
     )
     .expect("the schema dump generates")
 }

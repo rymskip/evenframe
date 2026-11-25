@@ -83,7 +83,7 @@ fn each_pipeline_view_holds_its_own_validators() {
     let schema = tables_surql(
         &schemasync,
         &ForeignTypeRegistry::from_config(&BTreeMap::new()),
-        false,
+        evenframe::schemasync::config::SurqlOptions::default(),
     )
     .expect("the schema dump generates");
     let definition = |name: &str| {

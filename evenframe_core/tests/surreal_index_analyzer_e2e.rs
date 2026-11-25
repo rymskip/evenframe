@@ -15,7 +15,7 @@ use evenframe_core::scan::{ScanConfig, build_all_configs};
 use evenframe_core::schemasync::compare::surql::{SchemaImporter, export_schema};
 use evenframe_core::schemasync::compare::{Comparator, SchemaDefinition};
 use evenframe_core::schemasync::config::{
-    AccessConfig, AccessType, AccessesSource, DatabaseConfig,
+    AccessConfig, AccessType, AccessesSource, DatabaseConfig, SurqlOptions,
 };
 use evenframe_core::schemasync::database::surql::execute::validate_surql_response;
 use evenframe_core::schemasync::database::surql::remove::{
@@ -89,7 +89,12 @@ fn scan(source: &str) -> SchemasyncTypes {
 }
 
 fn define_statements(types: &SchemasyncTypes) -> String {
-    tables_surql(types, &ForeignTypeRegistry::default(), true).unwrap()
+    tables_surql(
+        types,
+        &ForeignTypeRegistry::default(),
+        SurqlOptions::default(),
+    )
+    .unwrap()
 }
 
 async fn mem_db() -> Surreal<Db> {
@@ -343,7 +348,8 @@ async fn doc_hits(db: &Surreal<Db>, term: &str) -> usize {
 
 /// Sync `live` towards (`analyzers`, `define`) in the same order schemasync
 /// uses: compare exports, run removals (orphan indexes before analyzers),
-/// apply the analyzers file, then re-apply `DEFINE INDEX` for modified tables.
+/// apply the analyzers file, then re-apply `DEFINE INDEX` for modified tables
+/// and rebuild their modified indexes.
 async fn sync(
     live: &Surreal<Db>,
     analyzers: &str,
@@ -372,6 +378,16 @@ async fn sync(
             if stmt.starts_with("DEFINE INDEX") && stmt.contains(&on_table) {
                 apply(live, stmt).await;
             }
+        }
+        for index in &table.modified_indexes {
+            apply(
+                live,
+                &format!(
+                    "REBUILD INDEX {} ON TABLE {};",
+                    index.name, table.table_name
+                ),
+            )
+            .await;
         }
     }
     changes
@@ -484,7 +500,12 @@ async fn commented_analyzer_file_validates() {
 #[tokio::test]
 async fn full_schema_dump_applies_top_to_bottom() {
     let tables = scan(POST_SOURCE);
-    let tables_surql = tables_surql(&tables, &ForeignTypeRegistry::default(), true).unwrap();
+    let tables_surql = tables_surql(
+        &tables,
+        &ForeignTypeRegistry::default(),
+        SurqlOptions::default(),
+    )
+    .unwrap();
 
     let mut database = DatabaseConfig::for_testing();
     database.accesses = AccessesSource::Inline(vec![
@@ -535,6 +556,46 @@ async fn full_schema_dump_applies_top_to_bottom() {
     );
 }
 
+/// A changed table's PERMISSIONS clause is checked against the stored body of
+/// every function it calls. A function passing `any` a variable, which could
+/// hold a closure, fails that check, so the function must be redefined before
+/// the table: schemasync applies functions first.
+#[tokio::test]
+async fn functions_are_redefined_before_the_tables_whose_permissions_call_them() {
+    let stored_table = "DEFINE TABLE OVERWRITE note SCHEMAFULL \
+                        PERMISSIONS FOR select WHERE fn::may($auth, 'read') = true;";
+    let stored_function = "DEFINE FUNCTION OVERWRITE fn::may($who: any, $action: string) { \
+                           RETURN ($who.grants ?? []).any($action) };";
+    let table = "DEFINE TABLE OVERWRITE note SCHEMAFULL \
+                 PERMISSIONS FOR select, update WHERE fn::may($auth, 'read') = true;";
+    let function = "DEFINE FUNCTION OVERWRITE fn::may($who: any, $action: string) { \
+                    RETURN ($who.grants ?? []) CONTAINS $action };";
+    let stored = || async {
+        let db = mem_db().await;
+        apply(&db, stored_table).await;
+        apply(&db, stored_function).await;
+        db
+    };
+
+    let refused = stored()
+        .await
+        .query(format!("{table}{function}"))
+        .await
+        .unwrap()
+        .check()
+        .expect_err("the changed table is checked against the stored function");
+    assert!(
+        refused.to_string().contains("must not have effects"),
+        "{refused}"
+    );
+
+    let mut database = DatabaseConfig::for_testing();
+    database.accesses = AccessesSource::Inline(Vec::new());
+    database.resolved.functions_surql = Some(function.to_string());
+    let dump = schema_surql(&database, table).unwrap();
+    apply(&stored().await, &dump).await;
+}
+
 const DEAL_WITH_NESTED_SEARCH: &str = r#"
     #[derive(Evenframe)]
     pub struct CustomerName {
@@ -574,7 +635,12 @@ async fn indexes_on_nested_paths_serve_searches() {
         .expect("build_all_configs")
         .into_schemasync()
         .expect("the schemasync view");
-    let surql = tables_surql(&types, &ForeignTypeRegistry::default(), true).unwrap();
+    let surql = tables_surql(
+        &types,
+        &ForeignTypeRegistry::default(),
+        SurqlOptions::default(),
+    )
+    .unwrap();
     assert!(
         surql.contains(
             "DEFINE INDEX OVERWRITE deal_first_name_search ON TABLE deal \

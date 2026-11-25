@@ -303,7 +303,7 @@ mod surrealql {
                     enums: &fixture.enums,
                     declared: &evenframe_core::types::DeclaredTypes::default(),
                     registry: &registry,
-                    options: evenframe_core::schemasync::config::SurqlOptions::from(true),
+                    options: evenframe_core::schemasync::config::SurqlOptions::default(),
                 },
             )
             .unwrap();

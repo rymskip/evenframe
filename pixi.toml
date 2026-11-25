@@ -1,17 +1,11 @@
 [workspace]
 authors = ["rymskip <17lochinskij@protonmail.com>"]
-channels = ["conda-forge", "https://prefix.dev/brads-forge"]
+channels = ["conda-forge", "https://prefix.dev/rymskip/theedstow"]
 name = "evenframe"
 platforms = ["osx-64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
-# One-shot per-machine bootstrap. Installs global rustup from brads-forge if
-# missing, drops cargo/rustc/etc. symlinks into ~/.cargo/bin so the rustup
-# multicall dispatch works (pixi expose wrappers don't preserve argv[0]), and
-# appends RUSTUP_HOME to ~/.zshenv. Safe to re-run.
-"setup-rust" = "bash scripts/setup-rust.sh"
-
 verify = "cargo run -p tooling -- verify"
 verify-fast = "cargo run -p tooling -- verify --fail-fast"
 test = "cargo run -p tooling -- test"
@@ -28,14 +22,15 @@ bump = "cargo run -p tooling -- bump"
 bench-fixture = "cargo run -p tooling -- bench-fixture"
 
 [dependencies]
-# Rust toolchain manager from brads-forge. The active rust version, components,
-# and targets are pinned in rust-toolchain.toml at the repo root; rustup
-# auto-installs that toolchain on first cargo invocation. RUSTUP_HOME is
-# shared with the global rustup install via [activation.env] below.
+# Rust toolchain manager, shipping the cargo, rustc and other proxies. The
+# active rust version, components, and targets are pinned in
+# rust-toolchain.toml at the repo root; rustup auto-installs that toolchain on
+# first cargo invocation. RUSTUP_HOME is shared with the global rustup install
+# via [activation.env] below.
 # NOTE: the e2e tests need a running SurrealDB, but surreal is intentionally
 # NOT a pixi dependency here (no public conda package); it's expected from a
 # global install.
-rustup = "*"
+rustup = { version = "*", channel = "https://prefix.dev/rymskip/theedstow" }
 cargo-insta = ">=1.49.0,<2"
 libprotobuf = ">=7.36.2,<8"
 flatbuffers = ">=25.12.19,<26"

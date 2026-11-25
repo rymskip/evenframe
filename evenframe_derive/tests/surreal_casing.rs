@@ -1,6 +1,5 @@
-//! Under `#[surreal(rename_all)]`, evenframe names stored keys as the SDK's
-//! `SurrealValue` derive does, except where heck 0.5 and the SDK's heck 0.4
-//! split words differently. This pins that difference to the exact names.
+//! Under `#[surreal(rename_all)]`, evenframe names stored keys exactly as the
+//! SDK's `SurrealValue` derive does, in every casing, Unicode names included.
 
 use surrealdb::types::{SurrealValue, Value};
 
@@ -170,50 +169,16 @@ fn stored_names(fields: Value, variants: [Value; 8]) -> Vec<String> {
 }
 
 #[test]
-fn stored_names_differ_from_the_sdk_only_where_heck_splits_unicode_words() {
-    let mut divergent = Vec::new();
-    let mut snake = Vec::new();
-    for (casing, sdk, ours) in names() {
-        for (rust, (sdk, ours)) in RUST_NAMES.into_iter().zip(sdk.into_iter().zip(ours)) {
-            if sdk != ours {
-                divergent.push((casing, rust));
-                if casing == "snake_case" {
-                    snake.push((rust, sdk, ours));
-                }
-            }
-        }
-    }
-
-    // The SDK's heck 0.4 splits words at every non-ASCII character and drops
-    // it; heck 0.5 keeps letters of any script. Plain lowercase and UPPERCASE
-    // do not go through heck.
-    let expected: Vec<(&str, &str)> = [
-        "PascalCase",
-        "camelCase",
-        "snake_case",
-        "SCREAMING_SNAKE_CASE",
-        "kebab-case",
-        "SCREAMING-KEBAB-CASE",
-    ]
-    .into_iter()
-    .flat_map(|casing| {
-        RUST_NAMES
-            .into_iter()
-            .filter(|name| !name.is_ascii())
-            .map(move |name| (casing, name))
-    })
-    .collect();
-    assert_eq!(divergent, expected);
-    assert_eq!(
-        snake,
-        [
-            ("größe", "gr_e", "größe"),
-            ("café_au_lait", "caf_au_lait", "café_au_lait"),
-            ("naïve_bayes", "na_ve_bayes", "naïve_bayes"),
-            ("Größe", "gr_e", "größe"),
-            ("CaféAuLait", "caf_au_lait", "café_au_lait"),
-            ("ÜberCool", "ber_cool", "über_cool"),
-        ]
-        .map(|(rust, sdk, ours)| (rust, sdk.to_owned(), ours.to_owned()))
-    );
+fn stored_names_match_the_sdk_in_every_casing() {
+    let divergent: Vec<(&str, &str, String, String)> = names()
+        .into_iter()
+        .flat_map(|(casing, sdk, ours)| {
+            RUST_NAMES
+                .into_iter()
+                .zip(sdk.into_iter().zip(ours))
+                .filter(|(_, (sdk, ours))| sdk != ours)
+                .map(move |(rust, (sdk, ours))| (casing, rust, sdk, ours))
+        })
+        .collect();
+    assert!(divergent.is_empty(), "{divergent:?}");
 }

@@ -1,6 +1,6 @@
 [package]
 name = "evenframe_core"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 authors = ["Jakob Lochinski"]
 license = "MIT"
@@ -23,12 +23,6 @@ default = []
 # type needs to be used, such as the table marker and validated
 # deserialization.
 metadata = ["dep:linkme"]
-
-# Enables file-based debug logging via the `evenframe_log!` macro.
-# Writes .log and .surql files to $ABSOLUTE_PATH_TO_EVENFRAME/evenframe/logs/
-# (the system temp directory when the variable is unset).
-# Not intended for production use.
-dev-mode = []
 
 # ---------------------------------------------------------------------------
 # Type synchronization (TypeScript / schema generation)
@@ -126,7 +120,7 @@ cli = ["mockmake", "typesync-all", "wasm-plugins", "build-typesync", "dep:clap"]
 # workspace dependencies
 serde_json = { workspace = true }
 regex = { workspace = true }
-regex-syntax = "0.8.11"
+regex-syntax = "0.8.12"
 regress = "0.12.0"
 try_from_expr = { workspace = true }
 syn = { workspace = true }
@@ -137,8 +131,8 @@ toml = { workspace = true }
 url = { workspace = true }
 
 # Database providers (optional based on features)
-surrealdb = { version = "3.3.0", features = ["kv-mem", "protocol-http"], optional = true }
-surrealdb-types = { version = "3.3.0", optional = true }
+surrealdb = { version = "4.0.1", features = ["kv-mem", "protocol-http"], optional = true }
+surrealdb-types = { version = "4.0.1", optional = true }
 tempfile = { version = "3.27", optional = true }
 # Lets the CLI use core enums as argument values.
 clap = { version = "4.6", features = ["derive"], optional = true }
@@ -152,11 +146,11 @@ chrono = "0.4.45"
 derive_more = { version = "2.1.1", features = ["from"] }
 petgraph = "0.8.3"
 thiserror = "2.0.21"
-ordered-float = { version = "5.5.0", features = ["serde"] }
-linkme = { version = "0.3.37", optional = true }
+ordered-float = { version = "5.5.1", features = ["serde"] }
+linkme = { version = "0.3.38", optional = true }
 # ArkType string keyword checks shared by derive, mockmake and typesync
-unicode-normalization = "0.1.25"
-fancy-regex = "0.19.2"
+unicode-normalization = "0.1.26"
+fancy-regex = "0.20.2"
 # Field and variant names as serde and SurrealValue write them
 serde_derive_internals = "0.30.0"
 heck = "0.5.0"
@@ -164,27 +158,27 @@ heck = "0.5.0"
 iso8601 = "0.6.6"
 
 # Always compiled (used in type definitions throughout)
-bon = "3.10.2"
+bon = "3.10.3"
 uuid = { workspace = true }
 strum = { version = "0.28.0", features = ["derive"] }
 
 # Optional: the schemasync engine
 futures = { version = "0.3.34", optional = true }
-rand = { version = "0.10.3", optional = true }
+rand = { version = "0.10.4", optional = true }
 
 # Optional: mockmake runtime dependencies
 chrono-tz = { version = "0.10.4", optional = true }
 
 # Optional: the typesync generators and workspace scanning
 rayon = { version = "1.12", optional = true }
-ignore = { version = "0.4.33", optional = true }
+ignore = { version = "0.4.34", optional = true }
 blake3 = { version = "1.8", optional = true }
 
 # Optional: WASM plugin runtime
-wasmtime = { version = "49.0.2", optional = true }
+wasmtime = { version = "51.0.0", optional = true }
 
 [dev-dependencies]
-proptest = "1.11"
+proptest = "1.12"
 mockall = "0.15"
 temp-env = "0.3"
 tempfile = "3.27"

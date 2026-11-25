@@ -1,5 +1,5 @@
 use crate::schemasync::format::Format;
-use crate::validator::keywords::{self, NormalForm};
+use crate::validator::keywords;
 use crate::validator::text_pattern::{Anchoring, TextPattern};
 use crate::validator::{
     ArrayValidator, BigDecimalValidator, BigIntValidator, DateValidator, DurationValidator,
@@ -8,46 +8,9 @@ use crate::validator::{
 use crate::validator::{bounds, runtime};
 use tracing::{debug, error, trace};
 
-// ---------------------------------------------------------------------------
-// Embedded-JavaScript ASSERT bodies (require the server `--allow-scripting` flag)
-//
-// Each body runs inside `function($value) { const v = arguments[0]; <body> }`
-// and must `return` a boolean. They are ArkType's and Effect's own predicates.
-// ---------------------------------------------------------------------------
-
-/// validator.js's `isLuhnNumber`, which ArkType's `string.creditCard` uses
-/// after its issuer pattern.
-const LUHN_JS: &str = "const d = v.replace(/[ -]+/g, ''); let sum = 0; let double = false; \
-for (let i = d.length - 1; i >= 0; i--) { let n = parseInt(d.charAt(i), 10); \
-if (double) { n *= 2; sum += n >= 10 ? (n % 10) + 1 : n; } else { sum += n; } double = !double; } \
-return sum % 10 === 0;";
-
-/// ArkType's `string.json`.
-const JSON_JS: &str = "try { JSON.parse(v); return true; } catch (e) { return false; }";
-
-/// ArkType's `string.regex`.
-const REGEX_JS: &str = "try { new RegExp(v); return true; } catch (e) { return false; }";
-
-/// ArkType's `string.date`: a string JavaScript's `Date` can parse.
-const PARSABLE_DATE_JS: &str = "return !Number.isNaN(new Date(v).valueOf());";
-
-/// Effect's `capitalized`.
-const CAPITALIZED_JS: &str = "return v[0]?.toUpperCase() === v[0];";
-
-/// Effect's `uncapitalized`.
-const UNCAPITALIZED_JS: &str = "return v[0]?.toLowerCase() === v[0];";
-
 /// Escape a string for embedding inside a double-quoted SurrealQL string literal.
 fn escape_surql_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// `pattern` as a JavaScript string literal.
-fn js_string(pattern: &str) -> String {
-    serde_json::to_string(pattern).unwrap_or_else(|failure| {
-        error!("cannot encode {pattern:?} for an ASSERT script: {failure}");
-        "\"\"".to_owned()
-    })
 }
 
 /// A native regex assertion with one of the shared keyword patterns.
@@ -79,19 +42,11 @@ fn duration_literal(bound: &str) -> Result<String, String> {
     bounds::duration(bound).map(|nanos| format!("duration::from_nanos({nanos})"))
 }
 
-/// Build an embedded-JavaScript ASSERT expression. The field value is passed in
-/// as the sole argument and read back via `arguments[0]`. Emitted single-line so
-/// it round-trips stably against SurrealDB's stored form.
-///
-/// Requires the SurrealDB server to be started with `--allow-scripting`.
-fn js_assert(value_var: &str, body: &str) -> String {
-    format!("function({value_var}) {{ const v = arguments[0]; {body} }}")
-}
-
 /// The assertion for a string validator. ArkType-named keywords use the
-/// shared patterns natively; predicates without a native form run as
-/// JavaScript when scripting is allowed. Morphs transform input rather than
-/// constrain storage, so they assert nothing.
+/// shared patterns natively. A predicate SurrealQL cannot state (a checksum,
+/// JSON or regex parsing, Unicode normal forms) asserts nothing: a schema
+/// clause may not run a script, and the Rust and TypeScript checks still hold.
+/// Morphs transform input rather than constrain storage, so they assert nothing.
 /// A format argument as the schema checks it: Rust's engine matching its
 /// body anchored where the validator looks. A JavaScript-only pattern never
 /// reaches the schema.
@@ -108,40 +63,25 @@ fn format_argument(value_var: &str, pattern: &TextPattern, anchoring: Anchoring)
     }
 }
 
-fn string_assertion(
-    validator: &StringValidator,
-    value_var: &str,
-    allow_scripting: bool,
-) -> Option<String> {
-    let script = |body: &str| allow_scripting.then(|| js_assert(value_var, body));
-    let normalized_js =
-        |form: NormalForm| script(&format!("return v.normalize('{}') === v;", form.name()));
+fn string_assertion(validator: &StringValidator, value_var: &str) -> Option<String> {
+    // The first character as it is, beside the same character recased.
+    let first_char = format!("string::slice({value_var}, 0, 1)");
     match validator {
         StringValidator::Alpha => Some(matches(value_var, keywords::ALPHA)),
         StringValidator::Alphanumeric => Some(matches(value_var, keywords::ALPHANUMERIC)),
         StringValidator::Base64 => Some(matches(value_var, keywords::BASE64)),
         StringValidator::Base64Url => Some(matches(value_var, keywords::BASE64_URL)),
         StringValidator::CapitalizePreformatted => Some(matches(value_var, keywords::CAPITALIZED)),
-        StringValidator::CreditCard => {
-            let issuer = matches(value_var, keywords::CREDIT_CARD);
-            Some(match script(LUHN_JS) {
-                Some(luhn) => format!("{issuer} AND {luhn}"),
-                None => issuer,
-            })
-        }
-        StringValidator::Date => {
-            script(PARSABLE_DATE_JS).or_else(|| Some(format!("string::is_datetime({value_var})")))
+        // The issuer pattern; the Luhn checksum has no SurrealQL form.
+        StringValidator::CreditCard => Some(matches(value_var, keywords::CREDIT_CARD)),
+        StringValidator::Date | StringValidator::DateIso => {
+            Some(format!("string::is_datetime({value_var})"))
         }
         StringValidator::DateEpoch => Some(format!(
             "{} AND math::abs(<int> {value_var}) <= {}",
             matches(value_var, keywords::INTEGER),
             keywords::MAX_EPOCH_MILLIS
         )),
-        StringValidator::DateIso => script(&format!(
-            "return new RegExp({}).test(v);",
-            js_string(keywords::ISO_8601)
-        ))
-        .or_else(|| Some(format!("string::is_datetime({value_var})"))),
         StringValidator::Digits => Some(matches(value_var, keywords::DIGITS)),
         StringValidator::Email => Some(matches(value_var, keywords::EMAIL)),
         StringValidator::Hex => Some(matches(value_var, keywords::HEX)),
@@ -153,14 +93,14 @@ fn string_assertion(
         )),
         StringValidator::IpV4 => Some(matches(value_var, keywords::IPV4)),
         StringValidator::IpV6 => Some(matches(value_var, keywords::IPV6)),
-        StringValidator::Json => script(JSON_JS),
+        StringValidator::Json
+        | StringValidator::Regex
+        | StringValidator::NormalizeNfcPreformatted
+        | StringValidator::NormalizeNfdPreformatted
+        | StringValidator::NormalizeNfkcPreformatted
+        | StringValidator::NormalizeNfkdPreformatted => None,
         StringValidator::LowerPreformatted => Some(matches(value_var, keywords::LOWER)),
-        StringValidator::NormalizeNfcPreformatted => normalized_js(NormalForm::Nfc),
-        StringValidator::NormalizeNfdPreformatted => normalized_js(NormalForm::Nfd),
-        StringValidator::NormalizeNfkcPreformatted => normalized_js(NormalForm::Nfkc),
-        StringValidator::NormalizeNfkdPreformatted => normalized_js(NormalForm::Nfkd),
         StringValidator::Numeric => Some(matches(value_var, keywords::NUMERIC)),
-        StringValidator::Regex => script(REGEX_JS),
         StringValidator::Semver => Some(matches(value_var, keywords::SEMVER)),
         StringValidator::TrimPreformatted => Some(matches(value_var, &keywords::trimmed_pattern())),
         StringValidator::UpperPreformatted => Some(matches(value_var, keywords::UPPER)),
@@ -219,47 +159,41 @@ fn string_assertion(
             format_argument(value_var, pattern, Anchoring::Anywhere)
         }
         // The value holds none of it: the inclusion check, negated.
-        StringValidator::Excludes(pattern) => string_assertion(
-            &StringValidator::Includes(pattern.clone()),
-            value_var,
-            allow_scripting,
-        )
-        .map(|holds| format!("!({holds})")),
-        StringValidator::Trimmed => script("return v.trim() === v;")
-            .or_else(|| Some(format!("{value_var} = string::trim({value_var})"))),
+        StringValidator::Excludes(pattern) => {
+            string_assertion(&StringValidator::Includes(pattern.clone()), value_var)
+                .map(|holds| format!("!({holds})"))
+        }
+        StringValidator::Trimmed => Some(format!("{value_var} = string::trim({value_var})")),
         StringValidator::Lowercased => {
             Some(format!("{value_var} = string::lowercase({value_var})"))
         }
         StringValidator::Uppercased => {
             Some(format!("{value_var} = string::uppercase({value_var})"))
         }
-        StringValidator::Capitalized => script(CAPITALIZED_JS),
-        StringValidator::Uncapitalized => script(UNCAPITALIZED_JS),
+        StringValidator::Capitalized => {
+            Some(format!("{first_char} = string::uppercase({first_char})"))
+        }
+        StringValidator::Uncapitalized => {
+            Some(format!("{first_char} = string::lowercase({first_char})"))
+        }
         StringValidator::String => None,
     }
 }
 
 /// Generate an ASSERT clause from a field's validators.
 ///
-/// Native SurrealQL is used wherever possible. Validators whose semantics have
-/// no native SurrealDB function (checksums, JSON/Unicode parsing, NaN-free
-/// checks) are emitted as embedded-JavaScript functions, but only when
-/// `allow_scripting` is true (the server must run with `--allow-scripting`);
-/// otherwise those validators contribute no assertion.
+/// Every assertion is native SurrealQL: a schema clause may not run a script.
+/// Validators with no SurrealDB function to state them (checksums, JSON or
+/// Unicode parsing) contribute no assertion.
 ///
 /// Pure transformation morphs (`Trim`, `Lower`, `Capitalize`, `*Parse`, …) and
 /// the no-op `String`/`Regex` (no pattern) variants never produce an assertion:
 /// an ASSERT validates a stored value, it cannot transform it.
-pub fn generate_assert_from_validators(
-    validators: &[Validator],
-    value_var: &str,
-    allow_scripting: bool,
-) -> String {
+pub fn generate_assert_from_validators(validators: &[Validator], value_var: &str) -> String {
     debug!(
-        "Generating ASSERT clauses from {} validators for variable: {} (allow_scripting={})",
+        "Generating ASSERT clauses from {} validators for variable: {}",
         validators.len(),
-        value_var,
-        allow_scripting
+        value_var
     );
     let mut assertions = Vec::new();
 
@@ -275,7 +209,7 @@ pub fn generate_assert_from_validators(
             // String validators
             // ---------------------------------------------------------------
             Validator::StringValidator(sv) => {
-                match string_assertion(sv, value_var, allow_scripting) {
+                match string_assertion(sv, value_var) {
                     Some(assertion) => assertions.push(assertion),
                     None => trace!("String validator {sv:?} produces no SurrealDB assertion"),
                 }
@@ -314,13 +248,9 @@ pub fn generate_assert_from_validators(
                 )),
                 // NaN never equals itself, so self-equality is a native NaN guard.
                 NumberValidator::NonNan => assertions.push(format!("{value_var} = {value_var}")),
-                NumberValidator::Finite if allow_scripting => assertions.push(js_assert(
-                    value_var,
-                    "return typeof v === 'number' ? Number.isFinite(v) : true;",
+                NumberValidator::Finite => assertions.push(format!(
+                    "({value_var} = {value_var} AND {value_var} != math::inf AND {value_var} != math::neg_inf)"
                 )),
-                NumberValidator::Finite => {
-                    trace!("Number validator Finite produces no assertion (scripting disabled)")
-                }
             },
 
             // ---------------------------------------------------------------
@@ -539,7 +469,7 @@ mod tests {
     use ordered_float::OrderedFloat;
 
     fn gen_assert(v: Validator) -> String {
-        generate_assert_from_validators(&[v], "$value", true)
+        generate_assert_from_validators(&[v], "$value")
     }
 
     #[test]
@@ -557,10 +487,6 @@ mod tests {
             "{assertion}"
         );
         assert!(!assertion.contains("$value % 0.1"), "{assertion}");
-    }
-
-    fn gen_assert_no_js(v: Validator) -> String {
-        generate_assert_from_validators(&[v], "$value", false)
     }
 
     #[test]
@@ -582,7 +508,7 @@ mod tests {
             "string::matches($value, \"^(?:0|-?[1-9][0-9]*)$\")"
         );
         assert_eq!(
-            gen_assert_no_js(Validator::StringValidator(StringValidator::Date)),
+            gen_assert(Validator::StringValidator(StringValidator::Date)),
             "string::is_datetime($value)"
         );
     }
@@ -655,36 +581,44 @@ mod tests {
     }
 
     #[test]
-    fn string_js_variants_gated_on_scripting() {
-        let cc = gen_assert(Validator::StringValidator(StringValidator::CreditCard));
-        assert!(cc.starts_with("string::matches($value, "));
-        assert!(cc.contains(" AND function($value) { const v = arguments[0]; "));
-        assert!(cc.contains("sum % 10 === 0"));
-        // No newlines: it must be single-line for a stable round-trip.
-        assert!(!cc.contains('\n'));
-
+    fn predicates_without_a_surrealql_form_assert_their_native_part_only() {
         assert_eq!(
-            gen_assert(Validator::StringValidator(StringValidator::Json)),
-            "function($value) { const v = arguments[0]; try { JSON.parse(v); return true; } catch (e) { return false; } }"
-        );
-
-        assert_eq!(
-            gen_assert(Validator::StringValidator(StringValidator::Regex)),
-            "function($value) { const v = arguments[0]; try { new RegExp(v); return true; } catch (e) { return false; } }"
-        );
-
-        // Disabling scripting keeps only the native part.
-        assert_eq!(
-            gen_assert_no_js(Validator::StringValidator(StringValidator::CreditCard)),
+            gen_assert(Validator::StringValidator(StringValidator::CreditCard)),
             format!("string::matches($value, \"{}\")", keywords::CREDIT_CARD)
         );
         assert_eq!(
-            gen_assert_no_js(Validator::StringValidator(StringValidator::Json)),
+            gen_assert(Validator::StringValidator(StringValidator::Json)),
             ""
         );
         assert_eq!(
-            gen_assert_no_js(Validator::StringValidator(StringValidator::Capitalized)),
+            gen_assert(Validator::StringValidator(StringValidator::Regex)),
             ""
+        );
+        for assertion in [
+            gen_assert(Validator::StringValidator(StringValidator::CreditCard)),
+            gen_assert(Validator::StringValidator(StringValidator::Capitalized)),
+            gen_assert(Validator::NumberValidator(NumberValidator::Finite)),
+        ] {
+            assert!(
+                !assertion.contains("function("),
+                "a schema clause ran a script: {assertion}"
+            );
+        }
+    }
+
+    #[test]
+    fn casing_and_finiteness_assert_natively() {
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::Capitalized)),
+            "string::slice($value, 0, 1) = string::uppercase(string::slice($value, 0, 1))"
+        );
+        assert_eq!(
+            gen_assert(Validator::StringValidator(StringValidator::Uncapitalized)),
+            "string::slice($value, 0, 1) = string::lowercase(string::slice($value, 0, 1))"
+        );
+        assert_eq!(
+            gen_assert(Validator::NumberValidator(NumberValidator::Finite)),
+            "($value = $value AND $value != math::inf AND $value != math::neg_inf)"
         );
     }
 
@@ -730,14 +664,6 @@ mod tests {
         assert_eq!(
             gen_assert(Validator::NumberValidator(NumberValidator::NonNan)),
             "$value = $value"
-        );
-        assert_eq!(
-            gen_assert(Validator::NumberValidator(NumberValidator::Finite)),
-            "function($value) { const v = arguments[0]; return typeof v === 'number' ? Number.isFinite(v) : true; }"
-        );
-        assert_eq!(
-            gen_assert_no_js(Validator::NumberValidator(NumberValidator::Finite)),
-            ""
         );
     }
 
@@ -830,7 +756,6 @@ mod tests {
                 Validator::StringValidator(StringValidator::MaxLength(10)),
             ],
             "$value",
-            true,
         );
         assert_eq!(out, "string::len($value) > 0 AND string::len($value) <= 10");
     }

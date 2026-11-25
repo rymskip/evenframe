@@ -42,13 +42,6 @@ table_name = "user"
 default_record_count = 100
 default_preservation_mode = "Smart"
 full_refresh_mode = false
-# Emit embedded-JavaScript ASSERTs for field validators that have no native
-# SurrealQL equivalent (credit-card/Luhn, JSON, Unicode normalization,
-# finiteness, capitalization). These require the SurrealDB server to run with
-# --allow-scripting. Set to false to skip them, so the generated schema stays
-# applicable on servers without scripting; every native assertion still
-# applies. Default: true.
-scripting_asserts = true
 
 [typesync]
 outputs = [
