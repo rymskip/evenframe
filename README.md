@@ -31,7 +31,7 @@ Metadata needs no database dependency.
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["metadata"] }
+evenframe = { version = "0.7", default-features = false, features = ["metadata"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -269,7 +269,7 @@ your outputs in `evenframe.toml` at the project root:
 
 ```toml
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["build-typesync", "arktype", "effect"] }
+evenframe = { version = "0.7", default-features = false, features = ["build-typesync", "arktype", "effect"] }
 ```
 
 ```toml

@@ -22,12 +22,11 @@
 | `wasm-plugins` | WebAssembly plugin runtime |
 | `cli` | Features used by the binary, including all generators and mock/plugin support |
 | `full` | Metadata, all generators, schemasync with mock data, plugins, and both build-script APIs |
-| `dev-mode` | Development file logging; not part of `cli` or `full` |
 
 ## Derive only
 
 ```toml
-evenframe = { version = "0.6", default-features = false }
+evenframe = { version = "0.7", default-features = false }
 ```
 
 Validation, validated deserialization, and table markers remain available. Metadata and generated files are separate concerns.
@@ -36,14 +35,14 @@ Validation, validated deserialization, and table markers remain available. Metad
 
 ```toml
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["build-typesync", "effect"] }
+evenframe = { version = "0.7", default-features = false, features = ["build-typesync", "effect"] }
 ```
 
 ## Runtime metadata and database types
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["metadata", "surrealdb-types"] }
+evenframe = { version = "0.7", default-features = false, features = ["metadata", "surrealdb-types"] }
 ```
 
 This selects runtime descriptions and SDK values without selecting live synchronization or the full client.

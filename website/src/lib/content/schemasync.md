@@ -34,13 +34,13 @@ evenframe schemasync dump
 evenframe schemasync dump tables
 ```
 
-The full dump writes `.evenframe/surql/schema.surql`, in apply order: accesses, analyzers, tables, and functions. The tables-only dump writes `.evenframe/surql/tables.surql`. Both accept `-o` for a custom path and require no database connection.
+The full dump writes `.evenframe/surql/schema.surql`, in apply order: accesses, functions, analyzers, and tables. The tables-only dump writes `.evenframe/surql/tables.surql`. Both accept `-o` for a custom path and require no database connection.
 
 Build scripts can produce the same full schema through `build::schemadump()`.
 
 ## Additional database definitions
 
-`schemasync.database.accesses` accepts inline access definitions or a `.surql` path. `functions` and `analyzers` accept paths to SurrealQL files or directories. Analyzers are applied before tables so full-text indexes can refer to them.
+`schemasync.database.accesses` accepts inline access definitions or a `.surql` path. `functions` and `analyzers` accept paths to SurrealQL files or directories. Functions are applied first, so an analyzer or a table's `PERMISSIONS` can call one, then analyzers, so full-text indexes can refer to them, then tables.
 
 ## Supported provider
 

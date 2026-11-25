@@ -28,13 +28,9 @@ enum Cmd {
         #[arg(long)]
         e2e: bool,
 
-        /// Run only derive crate trybuild tests
+        /// Run only the derive crate's tests
         #[arg(long)]
         derive: bool,
-
-        /// Feature set to use for evenframe_core tests
-        #[arg(long, default_value = "typesync-all")]
-        features: String,
 
         /// Extra arguments passed through to cargo test
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -100,11 +96,7 @@ enum SnapshotAction {
     /// Interactively review pending snapshot changes
     Review,
     /// Regenerate all snapshots by running tests then accepting
-    Update {
-        /// Feature set for snapshot tests
-        #[arg(long, default_value = "typesync-all")]
-        features: String,
-    },
+    Update,
 }
 
 fn main() -> ExitCode {
@@ -116,9 +108,8 @@ fn main() -> ExitCode {
             snapshot,
             e2e,
             derive,
-            features,
             extra,
-        } => cmd_test(snapshot, e2e, derive, &features, &extra),
+        } => cmd_test(snapshot, e2e, derive, &extra),
         Cmd::Snapshot { action } => cmd_snapshot(action),
         Cmd::Verify {
             check,
@@ -152,56 +143,45 @@ fn main() -> ExitCode {
     }
 }
 
-fn cmd_test(snapshot: bool, e2e: bool, derive: bool, features: &str, extra: &[String]) -> bool {
+/// The one feature resolution every test build uses, the one clippy checks.
+/// Cargo unifies a dependency's features only within one invocation, so an
+/// invocation selecting other packages or features rebuilds the whole tree.
+const WORKSPACE_ALL_FEATURES: [&str; 2] = ["--workspace", "--all-features"];
+
+fn cmd_test(snapshot: bool, e2e: bool, derive: bool, extra: &[String]) -> bool {
     let specific = snapshot || e2e || derive;
 
-    if !specific || snapshot {
-        header(&format!(
-            "snapshot tests (evenframe_core --features {features})"
-        ));
+    if !specific {
+        header("tests (workspace, all features)");
         if !run("cargo", |c| {
-            c.args([
-                "test",
-                "-p",
-                "evenframe_core",
-                "--features",
-                features,
-                "--test",
-                "snapshot_tests",
-            ])
-            .args(extra);
+            c.arg("test").args(WORKSPACE_ALL_FEATURES).args(extra);
         }) {
             return false;
         }
+    } else if snapshot {
+        header("snapshot tests (workspace, all features)");
+        if !run("cargo", |c| {
+            c.arg("test")
+                .args(WORKSPACE_ALL_FEATURES)
+                .args(["--test", "snapshot_tests"])
+                .args(extra);
+        }) {
+            return false;
+        }
+    }
+
+    if !specific || snapshot {
         header("generated output (deno, protoc, flatc)");
         if !generated::check() {
             return false;
         }
     }
 
-    if !specific || derive {
-        header("derive trybuild tests");
+    if derive {
+        header("derive tests (all features)");
         if !run("cargo", |c| {
-            c.args(["test", "-p", "evenframe_derive"]).args(extra);
-        }) {
-            return false;
-        }
-    }
-
-    if !specific {
-        header(&format!(
-            "evenframe_core unit tests (--features {features})"
-        ));
-        if !run("cargo", |c| {
-            c.args([
-                "test",
-                "-p",
-                "evenframe_core",
-                "--features",
-                features,
-                "--lib",
-            ])
-            .args(extra);
+            c.args(["test", "-p", "evenframe_derive", "--all-features"])
+                .args(extra);
         }) {
             return false;
         }
@@ -229,19 +209,16 @@ fn cmd_snapshot(action: SnapshotAction) -> bool {
         SnapshotAction::Review => run("cargo", |c| {
             c.args(["insta", "review"]);
         }),
-        SnapshotAction::Update { features } => {
+        SnapshotAction::Update => {
             header("regenerating snapshots");
-            let _ = run("cargo", |c| {
-                c.args([
-                    "test",
-                    "-p",
-                    "evenframe_core",
-                    "--features",
-                    &features,
-                    "--test",
-                    "snapshot_tests",
-                ]);
-            });
+            // A snapshot that changed fails its test; accepting is the point.
+            if !run("cargo", |c| {
+                c.arg("test")
+                    .args(WORKSPACE_ALL_FEATURES)
+                    .args(["--test", "snapshot_tests"]);
+            }) {
+                println!("snapshot tests reported changes; accepting them");
+            }
             header("accepting snapshots");
             run("cargo", |c| {
                 c.args(["insta", "accept"]);

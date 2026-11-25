@@ -63,6 +63,8 @@ pub fn field_type_to_surql_default<'registry>(
         FieldType::JsonText(inner) => default_of(inner),
         // An instant has no zero value, so the field is required.
         FieldType::RecordLink(_) | FieldType::IsoDate | FieldType::EpochMillis => None,
+        // A table held by value is stored as a link to it, which has no zero value.
+        FieldType::Other(name) if context.tables.contains_key(&name.to_case(Case::Snake)) => None,
         FieldType::Other(name) => {
             if let Some(ftc) = context.registry.lookup(name) {
                 // A foreign type without a configured default has no zero value.
@@ -211,29 +213,41 @@ fn struct_fields_to_surql_default_object(
     app_structs: &BTreeMap<String, StructConfig>,
     context: SurqlContext<'_>,
 ) -> Option<String> {
-    fields
-        .iter()
-        .map(|table_field| {
-            let table_field = table_field.effective();
-            let value = match table_field
-                .define_config
-                .as_ref()
-                .and_then(|dc| dc.default.as_deref())
+    let mut entries = Vec::with_capacity(fields.len());
+    for table_field in fields {
+        let table_field = table_field.effective();
+        let value = match table_field
+            .define_config
+            .as_ref()
+            .and_then(|dc| dc.default.as_deref())
+        {
+            Some(default) => default.to_string(),
+            None => field_type_to_surql_default(
+                &table_field.field_name,
+                table_name,
+                &table_field.field_type,
+                enums,
+                app_structs,
+                context,
+            )?,
+        };
+        if table_field.wire.storage.flatten {
+            // Serde writes a flattened field's keys beside its siblings: an
+            // empty map adds none, and an enum adds its default's own keys.
+            if let Some(inner) = value
+                .trim()
+                .strip_prefix('{')
+                .and_then(|rest| rest.strip_suffix('}'))
+                .map(str::trim)
+                .filter(|inner| !inner.is_empty())
             {
-                Some(default) => default.to_string(),
-                None => field_type_to_surql_default(
-                    &table_field.field_name,
-                    table_name,
-                    &table_field.field_type,
-                    enums,
-                    app_structs,
-                    context,
-                )?,
-            };
-            Some(format!("{}: {}", surql_ident(table_field.db_name()), value))
-        })
-        .collect::<Option<Vec<_>>>()
-        .map(|fields| format!("{{ {} }}", fields.join(", ")))
+                entries.push(inner.to_string());
+            }
+            continue;
+        }
+        entries.push(format!("{}: {}", surql_ident(table_field.db_name()), value));
+    }
+    Some(format!("{{ {} }}", entries.join(", ")))
 }
 
 #[cfg(test)]
@@ -256,9 +270,9 @@ mod tests {
             &std::collections::BTreeMap::new(),
             SurqlContext {
                 registry: &registry,
+                tables: &std::collections::BTreeMap::new(),
                 options: SurqlOptions {
                     option_none: OptionNone::Null,
-                    ..Default::default()
                 },
             },
         )
@@ -297,6 +311,47 @@ mod tests {
             &registry,
         );
         assert_eq!(default.as_deref(), Some("{ zipCode: '', cityName: '' }"));
+    }
+
+    #[test]
+    fn a_flattened_field_defaults_beside_its_siblings() {
+        let registry = ForeignTypeRegistry::default();
+        let flattened = |name: &str, field_type: FieldType| StructField {
+            field_name: name.to_owned(),
+            field_type,
+            wire: crate::types::Wire {
+                storage: crate::types::Storage {
+                    flatten: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let extras = StructConfig {
+            struct_name: "Extras".to_owned(),
+            fields: vec![
+                StructField {
+                    field_name: "label".to_owned(),
+                    field_type: FieldType::String,
+                    ..Default::default()
+                },
+                flattened(
+                    "rest",
+                    FieldType::BTreeMap(Box::new(FieldType::String), Box::new(FieldType::String)),
+                ),
+            ],
+            ..Default::default()
+        };
+        let default = field_type_to_surql_default(
+            "extras",
+            "post",
+            &FieldType::Other("Extras".to_owned()),
+            &BTreeMap::new(),
+            &BTreeMap::from([("Extras".to_owned(), extras)]),
+            &registry,
+        );
+        assert_eq!(default.as_deref(), Some("{ label: '' }"));
     }
 
     #[test]

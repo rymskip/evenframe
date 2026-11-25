@@ -33,7 +33,7 @@ impl DumpScope {
 }
 
 /// The SurrealQL of `scope` for the scanned types, with `config`'s foreign
-/// types, scripting setting and database definitions.
+/// types and database definitions.
 pub fn dump_surql(
     config: &EvenframeConfig,
     types: &SchemasyncTypes,
@@ -70,19 +70,13 @@ pub fn write_dump(path: &Path, surql: &str) -> Result<()> {
     })
 }
 
-/// Whether any `DEFINE ANALYZER` in `surql` uses a `FUNCTION fn::...`
-/// preprocessor, which must exist before the analyzer is defined.
-pub fn analyzers_reference_functions(surql: &str) -> bool {
-    surql.to_uppercase().contains("FUNCTION FN::")
-}
-
 /// The `DEFINE TABLE`/`FIELD`/`INDEX`/`EVENT` statements for every table,
 /// resolving each table's `output_override` and passing the full
 /// table/object/enum context and the declared types, as schemasync does.
 pub fn tables_surql(
     types: &SchemasyncTypes,
     registry: &ForeignTypeRegistry,
-    options: impl Into<crate::schemasync::config::SurqlOptions>,
+    options: crate::schemasync::config::SurqlOptions,
 ) -> Result<String> {
     let context = DefineContext {
         tables: &types.tables,
@@ -90,7 +84,7 @@ pub fn tables_surql(
         enums: &types.enums,
         declared: &types.declared,
         registry,
-        options: options.into(),
+        options,
     };
     Ok(types
         .tables
@@ -103,26 +97,23 @@ pub fn tables_surql(
 }
 
 /// Everything schemasync defines, in the order it applies it, so the result
-/// can be applied top to bottom: accesses, analyzers, tables (`tables_surql`),
-/// then functions, whose parameters may reference tables. When an analyzer
-/// uses a `FUNCTION fn::...` preprocessor the functions go before the
-/// analyzers instead. Each non-empty section starts with a `-- <name>`
-/// comment.
+/// can be applied top to bottom: accesses, functions (which analyzers and
+/// PERMISSIONS clauses call), analyzers, then tables (`tables_surql`). Each
+/// non-empty section starts with a `-- <name>` comment.
 pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> Result<String> {
     let resolved = &database.resolved;
-    let analyzers = resolved.analyzers_surql.clone().unwrap_or_default();
-    let functions = resolved.functions_surql.clone().unwrap_or_default();
-    let functions_first = analyzers_reference_functions(&analyzers);
-
-    let mut sections = vec![("Accesses", access_definitions_surql(database)?)];
-    if functions_first {
-        sections.push(("Functions", functions.clone()));
-    }
-    sections.push(("Analyzers", analyzers));
-    sections.push(("Tables", tables_surql.to_string()));
-    if !functions_first {
-        sections.push(("Functions", functions));
-    }
+    let sections = [
+        ("Accesses", access_definitions_surql(database)?),
+        (
+            "Functions",
+            resolved.functions_surql.clone().unwrap_or_default(),
+        ),
+        (
+            "Analyzers",
+            resolved.analyzers_surql.clone().unwrap_or_default(),
+        ),
+        ("Tables", tables_surql.to_string()),
+    ];
 
     Ok(sections
         .into_iter()
@@ -134,7 +125,7 @@ pub fn schema_surql(database: &DatabaseConfig, tables_surql: &str) -> Result<Str
 
 #[cfg(test)]
 mod tests {
-    use super::{DatabaseConfig, analyzers_reference_functions, schema_surql};
+    use super::{DatabaseConfig, schema_surql};
     use crate::schemasync::config::{AccessConfig, AccessType, AccessesSource};
 
     fn database(analyzers: &str, functions: &str) -> DatabaseConfig {
@@ -156,16 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn detects_function_preprocessors_in_analyzers() {
-        assert!(analyzers_reference_functions(
-            "DEFINE ANALYZER a FUNCTION fn::strip TOKENIZERS blank;"
-        ));
-        assert!(!analyzers_reference_functions(
-            "DEFINE ANALYZER a TOKENIZERS blank;"
-        ));
-    }
-
-    #[test]
     fn sections_follow_apply_order() {
         let dump = schema_surql(
             &database(
@@ -177,25 +158,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             section_order(&dump),
-            vec!["Accesses", "Analyzers", "Tables", "Functions"]
+            vec!["Accesses", "Functions", "Analyzers", "Tables"]
         );
         assert!(dump.contains("DEFINE ACCESS OVERWRITE user ON DATABASE TYPE BEARER FOR RECORD;"));
-        assert!(dump.ends_with("RETURN 'hi' };\n"), "{dump}");
-    }
-
-    #[test]
-    fn functions_used_by_analyzers_come_first() {
-        let dump = schema_surql(
-            &database(
-                "DEFINE ANALYZER OVERWRITE en FUNCTION fn::strip TOKENIZERS blank;",
-                "DEFINE FUNCTION OVERWRITE fn::strip($s: string) { RETURN $s };",
-            ),
-            "DEFINE TABLE OVERWRITE user SCHEMAFULL;",
-        )
-        .unwrap();
-        assert_eq!(
-            section_order(&dump),
-            vec!["Accesses", "Functions", "Analyzers", "Tables"]
+        assert!(
+            dump.ends_with("DEFINE TABLE OVERWRITE user SCHEMAFULL;\n"),
+            "{dump}"
         );
     }
 

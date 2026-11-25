@@ -30,9 +30,9 @@ Named struct variants produce reusable payload types. If variant names identify 
 
 A flattened map or enum introduces keys not known from the type alone. This requires an open table. Enable `warn_schemaless` to see which tables have this property, or model fixed keys as a named struct.
 
-## An assertion needs scripting
+## A validator asserts nothing in the schema
 
-Some validators lack native SurrealQL equivalents and emit JavaScript assertions. Enable scripting on the SurrealDB server, or configure `schemasync.mock_gen_config.scripting_asserts = false` with awareness that those assertions will not be emitted. Native assertions remain.
+A validator with no SurrealQL equivalent (a checksum, JSON or regex parsing, Unicode normal forms) contributes no `ASSERT`, because SurrealDB refuses a script in a schema clause. The Rust and TypeScript checks still apply it.
 
 ## Connection values are missing
 
@@ -46,4 +46,4 @@ evenframe info --types
 evenframe validate
 ```
 
-Use `-vv` or `RUST_LOG` to inspect scanning and generation diagnostics. Resolve errors at the source definition or configuration, then regenerate outputs.
+Use `-vv` or `RUST_LOG` to inspect scanning and generation diagnostics, and set `EVENFRAME_LOG_DIR` to a directory to keep the generated statements and their results as files. Resolve errors at the source definition or configuration, then regenerate outputs.

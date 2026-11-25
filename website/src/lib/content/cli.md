@@ -7,7 +7,7 @@
 | `-v`, `-vv`, `-vvv` | Info, debug, and trace logging |
 | `--quiet`, `-q` | Errors only; conflicts with verbose logging |
 
-`RUST_LOG` can set the logging filter. Use `evenframe <command> --help` for the full command-specific options.
+`RUST_LOG` can set the logging filter. `EVENFRAME_LOG_DIR` names a directory to write debug log files to, such as the statements schemasync generated and the results of running them; unset, none are written. Use `evenframe <command> --help` for the full command-specific options.
 
 ## Commands
 

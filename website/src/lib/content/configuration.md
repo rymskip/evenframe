@@ -51,7 +51,7 @@ database = "${SURREALDB_DB}"
 
 `should_generate_mocks` and `database.url` are required. The provider defaults to SurrealDB. The connection timeout defaults to 60 seconds. Accesses, analyzers, and functions can be loaded from SurrealQL paths.
 
-`option_none = "null"` changes absence from NONE to NULL. `mock_gen_config` controls counts, preservation, refresh, and scripting assertions; `plugins` configures mock modules. `[schemasync.lint]` takes `silence_unverifiable_annotations`.
+`option_none = "null"` changes absence from NONE to NULL. `mock_gen_config` controls counts, preservation and refresh; `plugins` configures mock modules. `[schemasync.lint]` takes `silence_unverifiable_annotations`.
 
 ## Narrow configurations
 

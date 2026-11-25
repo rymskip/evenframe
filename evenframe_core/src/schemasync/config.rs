@@ -116,7 +116,6 @@ impl OptionNone {
 /// Options shared by schema and database-default rendering.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SurqlOptions {
-    pub allow_scripting: bool,
     pub option_none: OptionNone,
 }
 
@@ -124,22 +123,20 @@ pub struct SurqlOptions {
 pub struct SurqlContext<'registry> {
     pub registry: &'registry crate::types::ForeignTypeRegistry,
     pub options: SurqlOptions,
+    /// The tables, by snake-case name: a field holding one by value stores a
+    /// link to it, which has no zero value.
+    pub tables: &'registry BTreeMap<String, crate::schemasync::TableConfig>,
 }
+
+/// The tables of a context rendered without a schema, such as one value's default.
+static NO_TABLES: BTreeMap<String, crate::schemasync::TableConfig> = BTreeMap::new();
 
 impl<'registry> From<&'registry crate::types::ForeignTypeRegistry> for SurqlContext<'registry> {
     fn from(registry: &'registry crate::types::ForeignTypeRegistry) -> Self {
         Self {
             registry,
             options: SurqlOptions::default(),
-        }
-    }
-}
-
-impl From<bool> for SurqlOptions {
-    fn from(allow_scripting: bool) -> Self {
-        Self {
-            allow_scripting,
-            ..Self::default()
+            tables: &NO_TABLES,
         }
     }
 }
@@ -317,18 +314,6 @@ pub struct SchemasyncMockGenConfig {
     pub default_preservation_mode: PreservationMode,
 
     pub full_refresh_mode: bool,
-
-    /// Controls how field validators that have no native SurrealQL equivalent
-    /// (credit-card/Luhn, JSON parseability, Unicode normalization, finiteness,
-    /// capitalization) are turned into `DEFINE FIELD ... ASSERT` clauses.
-    ///
-    /// When `true` (the default) they are emitted as embedded-JavaScript
-    /// `ASSERT function($value) { ... }` clauses, which require the SurrealDB
-    /// server to run with `--allow-scripting`. When `false`, those validators
-    /// contribute no assertion (every native assertion is still emitted), so
-    /// the generated schema remains applicable on servers without scripting.
-    #[builder(default = true)]
-    pub scripting_asserts: bool,
 }
 
 impl Default for SchemasyncMockGenConfig {
@@ -337,7 +322,6 @@ impl Default for SchemasyncMockGenConfig {
             default_record_count: 10,
             default_preservation_mode: PreservationMode::default(),
             full_refresh_mode: false,
-            scripting_asserts: true,
         }
     }
 }
@@ -371,7 +355,6 @@ pub struct MockOverrides {
 impl SchemasyncConfig {
     pub fn surql_options(&self) -> SurqlOptions {
         SurqlOptions {
-            allow_scripting: self.mock_gen_config.scripting_asserts,
             option_none: self.option_none,
         }
     }

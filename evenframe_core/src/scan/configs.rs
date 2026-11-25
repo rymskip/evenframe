@@ -2050,7 +2050,7 @@ mod resolution_tests {
         let types = configs.into_schemasync().expect("schemasync configs");
         let (tags, unasserted) = defined(&types, "profile", "tags");
         assert!(
-            tags.contains(" ASSERT array::all($value, |$item0| string::len($item0) > 0)"),
+            tags.contains(" ASSERT array::len($value[WHERE !(string::len($this) > 0)]) = 0"),
             "{tags}"
         );
         assert_eq!(unasserted, []);
@@ -2067,8 +2067,8 @@ mod resolution_tests {
         let (waiting, _) = defined(&types, "run", "waiting");
         assert!(
             waiting.contains(
-                " ASSERT array::all($value, |$item0| (string::len($item0.step) > 0) AND \
-                 (array::all($item0.parents, |$item1| string::len($item1) > 0)))"
+                " ASSERT array::len($value[WHERE !((string::len($this.step) > 0) AND \
+                 (array::len($this.parents[WHERE !(string::len($this) > 0)]) = 0))]) = 0"
             ),
             "{waiting}"
         );
@@ -2076,9 +2076,9 @@ mod resolution_tests {
         let (labels, _) = defined(&types, "run", "labels");
         assert!(
             labels.contains(
-                "(array::all(object::keys($value), |$item0| string::len($item0) > 0)) AND \
-                 (array::all(object::values($value), |$item0| $item0 = NONE OR \
-                 (string::len($item0) > 0)))"
+                "(array::len(object::keys($value)[WHERE !(string::len($this) > 0)]) = 0) AND \
+                 (array::len(object::values($value)[WHERE !($this = NONE OR \
+                 (string::len($this) > 0))]) = 0)"
             ),
             "{labels}"
         );
@@ -2209,7 +2209,7 @@ mod resolution_tests {
             "{schema}"
         );
         assert!(
-            schema.contains("DEFINE FIELD OVERWRITE extras ON TABLE post FLEXIBLE TYPE object"),
+            schema.contains("DEFINE FIELD OVERWRITE extras ON TABLE post TYPE object FLEXIBLE"),
             "{schema}"
         );
     }

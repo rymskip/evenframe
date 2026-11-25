@@ -1,5 +1,6 @@
 //! `tooling bump`: raise the shared version of every published workspace crate,
-//! repin the dependencies on them, and refresh every tracked lockfile.
+//! repin the dependencies on them and the version the docs tell readers to
+//! depend on, and refresh every tracked lockfile.
 
 use crate::{header, project_root, run};
 use semver::Version;
@@ -65,7 +66,7 @@ pub fn cmd_bump(level: BumpLevel) -> bool {
 
 fn bump(level: BumpLevel) -> Result<Version, String> {
     let root = project_root();
-    let mut manifests = tracked_files(&root, "Cargo.toml")?
+    let mut manifests = tracked_files(&root, |path| named(path, "Cargo.toml"))?
         .into_iter()
         .map(Manifest::read)
         .collect::<Result<Vec<_>, _>>()?;
@@ -114,7 +115,9 @@ fn bump(level: BumpLevel) -> Result<Version, String> {
         }
     }
 
-    for lockfile in tracked_files(&root, "Cargo.lock")? {
+    repin_docs(&root, &current, &next)?;
+
+    for lockfile in tracked_files(&root, |path| named(path, "Cargo.lock"))? {
         let directory = lockfile
             .parent()
             .ok_or_else(|| format!("{} has no parent directory", lockfile.display()))?;
@@ -133,8 +136,48 @@ fn bump(level: BumpLevel) -> Result<Version, String> {
     Ok(next)
 }
 
-/// Every file tracked by git whose name is exactly `file_name`, as absolute paths.
-fn tracked_files(root: &Path, file_name: &str) -> Result<Vec<PathBuf>, String> {
+fn named(path: &Path, file_name: &str) -> bool {
+    path.file_name().is_some_and(|name| name == file_name)
+}
+
+/// The requirement the docs tell readers to write: `major.minor`, which a
+/// caret requirement keeps current through every patch release.
+fn documented_requirement(version: &Version) -> String {
+    format!("{}.{}", version.major, version.minor)
+}
+
+/// Repin `evenframe = { version = "…" }` in every tracked Markdown file when the
+/// documented requirement moves. A changeset records history, so it keeps the
+/// version it was written against.
+fn repin_docs(root: &Path, current: &Version, next: &Version) -> Result<(), String> {
+    let (from, to) = (
+        documented_requirement(current),
+        documented_requirement(next),
+    );
+    if from == to {
+        return Ok(());
+    }
+    let pin = |requirement: &str| format!("evenframe = {{ version = \"{requirement}\"");
+    let (old, new) = (pin(&from), pin(&to));
+    let changesets = root.join(".changeset");
+    let docs = tracked_files(root, |path| {
+        path.extension().is_some_and(|extension| extension == "md")
+            && !path.starts_with(&changesets)
+    })?;
+    for path in docs {
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("reading {}: {error}", path.display()))?;
+        if text.contains(&old) {
+            fs::write(&path, text.replace(&old, &new))
+                .map_err(|error| format!("writing {}: {error}", path.display()))?;
+            println!("updated {}", relative(root, &path).display());
+        }
+    }
+    Ok(())
+}
+
+/// Every file tracked by git that `keep` accepts, as absolute paths.
+fn tracked_files(root: &Path, keep: impl Fn(&Path) -> bool) -> Result<Vec<PathBuf>, String> {
     let output = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -156,7 +199,7 @@ fn tracked_files(root: &Path, file_name: &str) -> Result<Vec<PathBuf>, String> {
         let path = std::str::from_utf8(entry)
             .map_err(|error| format!("git ls-files returned a non-UTF-8 path: {error}"))?;
         let path = root.join(path);
-        if path.file_name().is_some_and(|name| name == file_name) {
+        if keep(&path) {
             files.push(path);
         }
     }

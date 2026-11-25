@@ -191,7 +191,7 @@ mod tests {
                 enums: &enums,
                 declared: &crate::types::DeclaredTypes::default(),
                 registry: &crate::types::ForeignTypeRegistry::default(),
-                options: crate::schemasync::config::SurqlOptions::from(true),
+                options: crate::schemasync::config::SurqlOptions::default(),
             },
         )
         .unwrap();
@@ -246,7 +246,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &crate::types::ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -306,7 +306,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &crate::types::ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -362,7 +362,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &crate::types::ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -477,7 +477,7 @@ mod tests {
                 enums: &enums,
                 declared: &crate::types::DeclaredTypes::default(),
                 registry: &crate::types::ForeignTypeRegistry::default(),
-                options: crate::schemasync::config::SurqlOptions::from(true),
+                options: crate::schemasync::config::SurqlOptions::default(),
             },
         )
         .unwrap();
@@ -594,7 +594,7 @@ mod tests {
                 enums: &enums,
                 declared: &crate::types::DeclaredTypes::default(),
                 registry: &crate::types::ForeignTypeRegistry::default(),
-                options: crate::schemasync::config::SurqlOptions::from(true),
+                options: crate::schemasync::config::SurqlOptions::default(),
             },
         )
         .unwrap();
@@ -660,7 +660,7 @@ mod tests {
         };
 
         let reg = crate::types::ForeignTypeRegistry::default();
-        let gen_stmt = |f: StructField, allow_scripting: bool| {
+        let gen_stmt = |f: StructField| {
             f.generate_define_statement(
                 &crate::types::FieldOwner::Table("user".to_string()),
                 "user",
@@ -670,7 +670,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &reg,
-                    options: crate::schemasync::config::SurqlOptions::from(allow_scripting),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -678,16 +678,13 @@ mod tests {
         };
 
         // Validators alone -> combined native ASSERT lands in the DEFINE FIELD.
-        let stmt = gen_stmt(
-            make(
-                vec![
-                    Validator::StringValidator(StringValidator::Email),
-                    Validator::StringValidator(StringValidator::MaxLength(50)),
-                ],
-                None,
-            ),
-            true,
-        );
+        let stmt = gen_stmt(make(
+            vec![
+                Validator::StringValidator(StringValidator::Email),
+                Validator::StringValidator(StringValidator::MaxLength(50)),
+            ],
+            None,
+        ));
         assert!(
             stmt.contains(
                 "ASSERT string::matches($value, \"^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\\\.[A-Za-z]{2,}$\") AND string::len($value) <= 50"
@@ -696,13 +693,10 @@ mod tests {
         );
 
         // Manual assert + validators -> each side parenthesized and AND-joined.
-        let stmt = gen_stmt(
-            make(
-                vec![Validator::StringValidator(StringValidator::Email)],
-                Some("$value != NONE".to_string()),
-            ),
-            true,
-        );
+        let stmt = gen_stmt(make(
+            vec![Validator::StringValidator(StringValidator::Email)],
+            Some("$value != NONE".to_string()),
+        ));
         assert!(
             stmt.contains(
                 "ASSERT ($value != NONE) AND (string::matches($value, \"^[0-9A-Za-z_%+.-]+@[0-9.A-Za-z-]+\\\\.[A-Za-z]{2,}$\"))"
@@ -710,21 +704,14 @@ mod tests {
             "merged manual+validator ASSERT missing; got: {stmt}"
         );
 
-        // A scripting-only validator is emitted as embedded JS when allowed and
-        // omitted entirely when scripting is disabled.
-        let json = || {
-            make(
-                vec![Validator::StringValidator(StringValidator::Json)],
-                None,
-            )
-        };
-        assert!(
-            gen_stmt(json(), true).contains("ASSERT function($value)"),
-            "JS ASSERT missing when scripting enabled"
+        // A validator SurrealQL cannot state contributes no assertion.
+        let json = make(
+            vec![Validator::StringValidator(StringValidator::Json)],
+            None,
         );
         assert!(
-            !gen_stmt(json(), false).contains("ASSERT"),
-            "JS ASSERT must be omitted when scripting disabled"
+            !gen_stmt(json).contains("ASSERT"),
+            "a validator without a SurrealQL form asserted something"
         );
     }
 
@@ -793,7 +780,7 @@ mod tests {
                     enums: &enums,
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &crate::types::ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(false),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -837,7 +824,6 @@ mod tests {
                         registry: &crate::types::ForeignTypeRegistry::default(),
                         options: SurqlOptions {
                             option_none: OptionNone::Null,
-                            ..Default::default()
                         },
                     },
                     &mut Vec::new(),
@@ -877,10 +863,7 @@ mod tests {
             .expect("select test database");
         for option_none in [OptionNone::None, OptionNone::Null] {
             let table_name = format!("samples_{}", option_none.literal().to_lowercase());
-            let options = SurqlOptions {
-                option_none,
-                ..Default::default()
-            };
+            let options = SurqlOptions { option_none };
             let mut statements = format!("DEFINE TABLE {table_name} SCHEMAFULL;\n");
             for field in [
                 StructField {
@@ -996,7 +979,7 @@ mod tests {
                         enums: &BTreeMap::new(),
                         declared: &crate::types::DeclaredTypes::default(),
                         registry: &crate::types::ForeignTypeRegistry::default(),
-                        options: crate::schemasync::config::SurqlOptions::from(true),
+                        options: crate::schemasync::config::SurqlOptions::default(),
                     },
                     &mut Vec::new(),
                 )
@@ -1065,7 +1048,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &reg,
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )

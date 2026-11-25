@@ -4,11 +4,11 @@ The runtime dependency provides the derive; the build dependency provides scanni
 
 ```toml
 [dependencies]
-evenframe = { version = "0.6", default-features = false }
+evenframe = { version = "0.7", default-features = false }
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
-evenframe = { version = "0.6", default-features = false, features = ["build-typesync", "arktype", "effect"] }
+evenframe = { version = "0.7", default-features = false, features = ["build-typesync", "arktype", "effect"] }
 ```
 
 Configure `evenframe.toml`:

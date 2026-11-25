@@ -61,4 +61,4 @@ If one pipeline needs different regex capabilities, use a pipeline override inst
 
 Recursive structs, open shapes, and untagged variants that cannot be stated unambiguously in SurrealQL can prevent some nested assertions. Schemasync warns where a check cannot be emitted. A fallback default that fails a validator is omitted, leaving the field required.
 
-Some non-native assertions use embedded JavaScript. `schemasync.mock_gen_config.scripting_asserts` controls their emission; servers executing them need scripting enabled.
+Every assertion is native SurrealQL, since SurrealDB refuses a script in a schema clause. A validator with no SurrealQL form (a checksum, JSON or regex parsing, Unicode normal forms) contributes no assertion; the Rust and TypeScript checks still apply.

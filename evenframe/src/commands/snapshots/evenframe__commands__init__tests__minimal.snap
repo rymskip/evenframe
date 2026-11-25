@@ -39,7 +39,6 @@ EvenframeConfig {
                 default_record_count: 10,
                 default_preservation_mode: Smart,
                 full_refresh_mode: false,
-                scripting_asserts: true,
             },
             plugins: {},
             lint: LintConfig {

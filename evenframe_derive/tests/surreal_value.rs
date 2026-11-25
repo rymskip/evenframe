@@ -364,7 +364,7 @@ async fn a_record_round_trips_through_the_database() {
     let schema = tables_surql(
         &types,
         &ForeignTypeRegistry::from_config(&foreign_types()),
-        false,
+        evenframe::schemasync::config::SurqlOptions::default(),
     )
     .expect("the schema dump generates");
     db.query(schema.as_str())
@@ -665,7 +665,7 @@ fn a_field_serde_skips_one_way_is_stored_as_serde_writes_it() {
     let schema = tables_surql(
         &types,
         &ForeignTypeRegistry::from_config(&foreign_types()),
-        false,
+        evenframe::schemasync::config::SurqlOptions::default(),
     )
     .expect("the schema dump generates");
     assert!(

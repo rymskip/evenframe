@@ -57,28 +57,22 @@ pub enum Step {
     Clippy,
     TestgroundFmt,
     TestgroundClippy,
-    CoreTests,
-    Snapshots,
+    Tests,
     Generated,
-    CliTests,
-    DeriveTests,
     DeriveCheck,
     E2e,
 }
 
 impl Step {
     /// Every step, in the order a full run takes them.
-    const ALL: [Step; 12] = [
+    const ALL: [Step; 9] = [
         Step::GlobImports,
         Step::Fmt,
         Step::Clippy,
         Step::TestgroundFmt,
         Step::TestgroundClippy,
-        Step::CoreTests,
-        Step::Snapshots,
+        Step::Tests,
         Step::Generated,
-        Step::CliTests,
-        Step::DeriveTests,
         Step::DeriveCheck,
         Step::E2e,
     ];
@@ -90,11 +84,8 @@ impl Step {
             Step::Clippy => "clippy (all features, all targets)",
             Step::TestgroundFmt => "fmt (testground)",
             Step::TestgroundClippy => "clippy (testground, all features, all targets)",
-            Step::CoreTests => "evenframe_core unit tests (full)",
-            Step::Snapshots => "snapshot tests (typesync-all)",
+            Step::Tests => "tests (workspace, all features)",
             Step::Generated => "generated output (deno, protoc, flatc)",
-            Step::CliTests => "evenframe CLI tests",
-            Step::DeriveTests => "derive trybuild tests",
             Step::DeriveCheck => {
                 "derive without features, then with metadata, then with SurrealValue"
             }
@@ -125,19 +116,8 @@ impl Step {
             Step::TestgroundClippy => {
                 clippy(testground, &["--all-targets", "--all-features"], fixes)
             }
-            Step::CoreTests => cargo(&["test", "-p", "evenframe_core", "--features", "full"]),
-            Step::Snapshots => cargo(&[
-                "test",
-                "-p",
-                "evenframe_core",
-                "--features",
-                "typesync-all",
-                "--test",
-                "snapshot_tests",
-            ]),
+            Step::Tests => cargo(&["test", "--workspace", "--all-features"]),
             Step::Generated => generated::check(),
-            Step::CliTests => cargo(&["test", "-p", "evenframe"]),
-            Step::DeriveTests => cargo(&["test", "-p", "evenframe_derive"]),
             Step::DeriveCheck => {
                 cargo(&["test", "-p", "derive_check"])
                     && cargo(&["test", "-p", "derive_check", "--features", "metadata"])

@@ -442,8 +442,8 @@ impl<'a> Schemasync<'a> {
         full_refresh_mode: bool,
     ) -> Result<(BTreeMap<&'b String, String>, String)> {
         debug!(
-            "Generating table and field definition statements (full_refresh_mode: {}, allow_scripting: {})",
-            full_refresh_mode, context.options.allow_scripting
+            "Generating table and field definition statements (full_refresh_mode: {})",
+            full_refresh_mode
         );
         let mut define_statements: BTreeMap<&String, String> = BTreeMap::new();
         for (table_name, table) in context.tables {
@@ -742,10 +742,13 @@ impl<'a> Schemasync<'a> {
 
         // Execution order matters:
         // 1. Access first: defines SIGNUP/SIGNIN on the database (independent of tables)
-        // 2. Analyzers second: FULLTEXT indexes on tables reference them
-        // 3. Tables third: defines table schemas, fields, indexes, and events
-        // 4. Functions last: function params use typed references like `record<site>`
-        //    which require the referenced tables to already exist in the database
+        // 2. Functions second: a table's PERMISSIONS clause is checked against the
+        //    stored body of each function it calls, so a function must hold its
+        //    new body before the table is redefined. A function may name a table
+        //    that does not exist yet.
+        // 3. Analyzers third: an analyzer may preprocess with a function, and
+        //    FULLTEXT indexes on tables reference analyzers
+        // 4. Tables last: defines table schemas, fields, indexes, and events
 
         info!("Executing access control setup");
         execute_access_query(
@@ -755,6 +758,11 @@ impl<'a> Schemasync<'a> {
         )
         .await
         .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute access setup: {e}")))?;
+
+        info!("Executing function definitions");
+        self.execute_functions(&db, &config)
+            .await
+            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute functions: {e}")))?;
 
         info!("Executing analyzer definitions");
         self.execute_analyzers(&db, &config)
@@ -772,11 +780,6 @@ impl<'a> Schemasync<'a> {
         )
         .await
         .map_err(|e| EvenframeError::SchemaSync(format!("Failed to define tables: {e}")))?;
-
-        info!("Executing function definitions");
-        self.execute_functions(&db, &config)
-            .await
-            .map_err(|e| EvenframeError::SchemaSync(format!("Failed to execute functions: {e}")))?;
 
         #[cfg(feature = "mockmake")]
         if let Some(mut mockmaker) = mockmaker {
@@ -845,9 +848,8 @@ impl<'a> Schemasync<'a> {
     /// Execute analyzer definitions from resolved surql on the live database.
     ///
     /// Analyzers must exist before tables are defined because FULLTEXT indexes
-    /// reference them. An analyzer with a `FUNCTION fn::...` preprocessor also
-    /// needs its function first, so in that case the functions surql is applied
-    /// up front as well (it is re-applied idempotently after the tables).
+    /// reference them; the functions an analyzer preprocesses with are already
+    /// defined.
     async fn execute_analyzers(
         &self,
         db: &Surreal<Client>,
@@ -856,25 +858,6 @@ impl<'a> Schemasync<'a> {
         if let Some(ref analyzers_surql) = config.database.resolved.analyzers_surql
             && !analyzers_surql.is_empty()
         {
-            if crate::schemasync::dump::analyzers_reference_functions(analyzers_surql)
-                && let Some(ref functions_surql) = config.database.resolved.functions_surql
-                && !functions_surql.is_empty()
-            {
-                info!("Analyzers reference functions; executing function definitions first");
-                let result = execute_and_validate(db, functions_surql, "define", "functions").await;
-                if let Err(e) = result {
-                    let error_msg = format!(
-                        "Failed to execute function definitions required by analyzers: {}\n\
-                         Functions used as analyzer preprocessors run before tables are defined. \
-                         If a function references tables, move the analyzer's helper function \
-                         into the analyzers surql file instead.",
-                        e
-                    );
-                    evenframe_log!(&error_msg, "results.log", true);
-                    return Err(EvenframeError::database(error_msg));
-                }
-            }
-
             info!("Executing analyzer definitions from surql");
             evenframe_log!(analyzers_surql, "analyzer_definitions.surql");
 
@@ -980,8 +963,12 @@ impl DefineParts {
     }
 
     /// The statements a modified table needs: the table itself, its new and
-    /// modified fields, every index (each is an idempotent `OVERWRITE`) and
-    /// its new or changed events.
+    /// modified fields, every index (each is an idempotent `OVERWRITE`), a
+    /// `REBUILD` of each modified index, and its new or changed events.
+    ///
+    /// Overwriting an index with the same definition does not reindex it, so
+    /// an index whose analyzer changed would keep answering from tokens the
+    /// old analyzer produced. The rebuild reindexes it under the new one.
     fn changes(self, table_change: &crate::schemasync::compare::TableChanges) -> Transaction {
         let changed_fields: std::collections::BTreeSet<&str> = table_change
             .new_fields
@@ -1004,6 +991,13 @@ impl DefineParts {
                     .map(|(_, statement)| statement),
             )
             .chain(self.indexes)
+            .chain(table_change.modified_indexes.iter().map(|index| {
+                format!(
+                    "REBUILD INDEX {} ON TABLE {};",
+                    crate::schemasync::table::surql_ident(&index.name),
+                    crate::schemasync::table::surql_ident(&table_change.table_name)
+                )
+            }))
             .chain(table_change.new_events.iter().cloned())
             .collect();
         Transaction {

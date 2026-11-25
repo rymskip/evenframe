@@ -467,12 +467,13 @@ impl StructField {
                 type_surql(&self.field_type, self.db_name(), table_name, context)?
             };
 
-            if def.flexible.unwrap_or(false) {
-                stmt.push_str(" FLEXIBLE");
-            }
-
             if !type_str.is_empty() {
                 stmt.push_str(&format!(" TYPE {}", type_str));
+            }
+
+            // SurrealDB 4 takes FLEXIBLE only after the TYPE it relaxes.
+            if def.flexible.unwrap_or(false) {
+                stmt.push_str(" FLEXIBLE");
             }
 
             // Permissions for computed fields (select/create/update only, no delete)
@@ -530,8 +531,9 @@ impl StructField {
             }
         };
 
-        // A struct with keys known only from a value is any object, which
-        // keeps its keys only on a flexible field.
+        // A struct with keys known only from a value is any object, and so is
+        // a bare `object` with no `.*` to type its values: a schemafull table
+        // keeps the keys of either only on a flexible field.
         let flexible = self
             .define_config
             .as_ref()
@@ -542,13 +544,15 @@ impl StructField {
                 context.objects,
                 context.tables,
                 &mut HashSet::new(),
-            );
-        if flexible {
-            stmt.push_str(" FLEXIBLE");
-        }
+            )
+            || (map_values.is_none() && holds_bare_object(&type_str));
 
         if !type_str.is_empty() {
             stmt.push_str(&format!(" TYPE {}", type_str));
+        }
+        // SurrealDB 4 takes FLEXIBLE only after the TYPE it relaxes.
+        if flexible {
+            stmt.push_str(" FLEXIBLE");
         }
 
         let nullable_option = matches!(self.field_type, FieldType::Option(_))
@@ -574,6 +578,7 @@ impl StructField {
                     crate::schemasync::config::SurqlContext {
                         registry: context.registry,
                         options,
+                        tables: context.tables,
                     },
                 )
             {
@@ -683,6 +688,35 @@ pub struct StructConfig {
     /// without evenframe needing to understand them.
     #[serde(default)]
     pub raw_attributes: BTreeMap<String, Vec<String>>,
+}
+
+/// Whether a SurrealQL type names `object` itself, outside any string literal:
+/// an object whose keys the schema does not list.
+#[cfg(feature = "schemadump")]
+fn holds_bare_object(surql: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut word = String::new();
+    for ch in surql.chars().chain(std::iter::once(' ')) {
+        match quote {
+            Some(open) => {
+                if ch == open {
+                    quote = None;
+                }
+            }
+            None if ch == '\'' || ch == '"' => {
+                word.clear();
+                quote = Some(ch);
+            }
+            None if ch.is_ascii_alphanumeric() || ch == '_' => word.push(ch),
+            None => {
+                if word == "object" {
+                    return true;
+                }
+                word.clear();
+            }
+        }
+    }
+    false
 }
 
 /// Whether a value of `field_type` holds, below any link to a table, a struct
@@ -1706,7 +1740,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )
@@ -1774,7 +1808,7 @@ mod tests {
                     enums: &BTreeMap::new(),
                     declared: &crate::types::DeclaredTypes::default(),
                     registry: &ForeignTypeRegistry::default(),
-                    options: crate::schemasync::config::SurqlOptions::from(true),
+                    options: crate::schemasync::config::SurqlOptions::default(),
                 },
                 &mut Vec::new(),
             )

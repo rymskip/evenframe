@@ -540,80 +540,22 @@ impl<'a> FieldValueGenerator<'a> {
                                 // Check if this is a foreign type with a mock strategy
                                 if let Some(ftc) = self.registry.lookup(type_name) {
                                     let strategy = ftc.mock_strategy.as_str();
-                                    match strategy {
-                                        // SurrealQL-specific formats that need special encoding
-                                        "datetime" => {
-                                            value_stack.push(format!(
-                                                "d'{}'",
-                                                chrono::Utc::now().to_rfc3339()
-                                            ));
-                                            continue;
-                                        }
-                                        "duration" => {
-                                            value_stack.push(format!(
-                                                "duration::from_nanos({})",
-                                                rng.random_range(0..86_400_000_000_000i64)
-                                            ));
-                                            continue;
-                                        }
-                                        "timezone" => {
-                                            #[cfg(feature = "mockmake")]
-                                            {
-                                                let tz = &TZ_VARIANTS
-                                                    [rng.random_range(0..TZ_VARIANTS.len())];
-                                                value_stack.push(format!("'{}'", tz.name()));
-                                            }
-                                            #[cfg(not(feature = "mockmake"))]
-                                            {
-                                                let timezones = [
-                                                    "UTC",
-                                                    "America/New_York",
-                                                    "Europe/London",
-                                                    "Asia/Tokyo",
-                                                ];
-                                                value_stack.push(format!(
-                                                    "'{}'",
-                                                    timezones[rng.random_range(0..timezones.len())]
-                                                ));
-                                            }
-                                            continue;
-                                        }
-                                        "decimal" => {
-                                            value_stack.push(format!(
-                                                "{:.3}dec",
-                                                rng.random_range(0.0..100.0)
-                                            ));
-                                            continue;
-                                        }
-                                        "float" => {
-                                            value_stack.push(format!(
-                                                "{:.2}f",
-                                                rng.random_range(0.0..100.0)
-                                            ));
-                                            continue;
-                                        }
-                                        "record_id" => {
-                                            value_stack.push(self.handle_record_id(
-                                                ctx.field,
-                                                &ctx.table_config.table_name,
-                                                ctx.table_config,
-                                                &mut rng,
-                                            )?);
-                                            continue;
-                                        }
-                                        "object" => {
-                                            value_stack.push("{}".to_string());
-                                            continue;
-                                        }
-                                        _ => {
-                                            if let Ok(fmt) = strategy.parse::<Format>() {
-                                                value_stack.push(surql_string_literal(
-                                                    &fmt.generate_formatted_value()?,
-                                                ));
-                                                continue;
-                                            }
-                                            // Fall through to existing Other logic
-                                        }
+                                    if strategy == "record_id" {
+                                        value_stack.push(self.handle_record_id(
+                                            ctx.field,
+                                            &ctx.table_config.table_name,
+                                            ctx.table_config,
+                                            &mut rng,
+                                        )?);
+                                        continue;
+                                    }
+                                    if let Some(literal) = foreign_strategy_literal(
+                                        strategy,
+                                        &ftc.surrealdb,
+                                        &mut rng,
+                                    )? {
+                                        value_stack.push(literal);
+                                        continue;
                                     }
                                 }
 
@@ -1364,6 +1306,93 @@ fn generate_integer_with_retry(
         })
         .map(|candidate| candidate.to_string())
         .ok_or_else(|| unsatisfied(location, validators))
+}
+
+/// The SurrealQL literal a foreign type's `mock_strategy` generates for a
+/// column of type `column`, or `None` for a strategy that names none, which
+/// falls through to the type's own shape.
+fn foreign_strategy_literal(
+    strategy: &str,
+    column: &str,
+    rng: &mut impl RngExt,
+) -> crate::Result<Option<String>> {
+    Ok(Some(match strategy {
+        "datetime" => format!("d'{}'", chrono::Utc::now().to_rfc3339()),
+        "duration" => format!(
+            "duration::from_nanos({})",
+            rng.random_range(0..86_400_000_000_000i64)
+        ),
+        "timezone" => {
+            #[cfg(feature = "mockmake")]
+            let name = TZ_VARIANTS[rng.random_range(0..TZ_VARIANTS.len())].name();
+            #[cfg(not(feature = "mockmake"))]
+            let name =
+                ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"][rng.random_range(0..4)];
+            format!("'{name}'")
+        }
+        "decimal" => format!("{:.3}dec", rng.random_range(0.0..100.0)),
+        "float" => format!("{:.2}f", rng.random_range(0.0..100.0)),
+        "object" => "{}".to_string(),
+        other => match other.parse::<Format>() {
+            Ok(format) => {
+                let text = surql_string_literal(&format.generate_formatted_value()?);
+                match column {
+                    // A quoted string does not coerce to SurrealDB's `time` or
+                    // `date`, so the text is cast to the column's type.
+                    "time" | "date" => format!("<{column}> {text}"),
+                    _ => text,
+                }
+            }
+            Err(_) => return Ok(None),
+        },
+    }))
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::foreign_strategy_literal;
+    use regex::Regex;
+
+    fn literal(strategy: &str, column: &str) -> String {
+        let generated = foreign_strategy_literal(strategy, column, &mut rand::rng());
+        match generated {
+            Ok(Some(literal)) => literal,
+            other => panic!("{strategy} for a {column} column gave {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_formatted_value_is_cast_to_a_temporal_column() {
+        let time = literal("time", "time");
+        assert!(
+            Regex::new(r"^<time> '[0-9]{2}:[0-9]{2}:[0-9]{2}'$")
+                .is_ok_and(|shape| shape.is_match(&time)),
+            "{time}"
+        );
+        let date = literal("date", "date");
+        assert!(
+            Regex::new(r"^<date> '[0-9]{4}-[0-9]{2}-[0-9]{2}'$")
+                .is_ok_and(|shape| shape.is_match(&date)),
+            "{date}"
+        );
+    }
+
+    #[test]
+    fn a_formatted_value_stays_text_in_a_string_column() {
+        let time = literal("time", "string");
+        assert!(
+            Regex::new(r"^'[0-9]{2}:[0-9]{2}:[0-9]{2}'$").is_ok_and(|shape| shape.is_match(&time)),
+            "{time}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_strategy_falls_through() {
+        assert!(matches!(
+            foreign_strategy_literal("no_such_strategy", "string", &mut rand::rng()),
+            Ok(None)
+        ));
+    }
 }
 
 #[cfg(test)]
